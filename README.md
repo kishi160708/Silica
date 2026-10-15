@@ -25,7 +25,7 @@ cargo test --workspace
 | 4 | Community plugin compatibility | New native plugin API; existing JS plugins are out of scope |
 
 The full functional specification this project implements, derived from observing Obsidian 1.12.7's
-behavior, file formats, and public documentation, lives in `docs/`.
+behavior, file formats, and public documentation, lives in the `docs/` vault.
 
 ## Crates
 
