@@ -1,0 +1,40 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/",
+    "crates/-vault",
+    "crates/-markdown",
+    "crates/-cache",
+    "crates/-formats",
+    "crates/-commands",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+repository = "https://github.com/lw-xiong/"
+publish = false
+
+[workspace.dependencies]
+-vault = { path = "crates/-vault" }
+-markdown = { path = "crates/-markdown" }
+-cache = { path = "crates/-cache" }
+-formats = { path = "crates/-formats" }
+-commands = { path = "crates/-commands" }
+
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+serde_yaml = "0.9"
+walkdir = "2"
+tempfile = "3"
+gpui = "0.2.2"
+
+[profile.dev]
+opt-level = 0
+
+# gpui and its graphics stack are slow at opt-level 0; keep dependencies optimized in debug builds.
+[profile.dev.package."*"]
+opt-level = 2
