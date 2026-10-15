@@ -7,6 +7,7 @@ members = [
     "crates/-cache",
     "crates/-formats",
     "crates/-commands",
+    "crates/-bench",
 ]
 
 [workspace.package]
@@ -31,6 +32,9 @@ serde_json = { version = "1", features = ["preserve_order"] }
 serde_yaml = "0.9"
 walkdir = "2"
 tempfile = "3"
+rayon = "1"
+# Cargo.lock pins libc to 0.2.189: gpui 0.2.2 -> gpui_http_client -> zed-async-tar -> xattr 0.2.3
+# reads `libc::ENOATTR`, which libc 0.2.190 removed on Linux. Drop the pin once gpui moves to xattr 1.x.
 gpui = "0.2.2"
 
 [profile.dev]
