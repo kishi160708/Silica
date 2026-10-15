@@ -1,4 +1,4 @@
-# Command ids registered by Obsidian 1.12.7 (observed in app.js). Templated ids are expanded.
+# Command ids Obsidian 1.12.7 registers, as they appear in hotkeys.json and the command palette. Templated ids are expanded.
 app:delete-file
 app:go-back
 app:go-forward

@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 /// Default name of the configuration directory; overridable per vault.
 pub const DEFAULT_CONFIG_DIR: &str = ".obsidian";
 
-/// `app.json`: Editor plus Files & links settings (key names as observed in `app.js`).
+/// `app.json`: Editor plus Files & links settings (key names exactly as Obsidian writes them).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AppConfig {
     // Editor

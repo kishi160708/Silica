@@ -2,7 +2,8 @@
 
 The full specification is maintained as a living document:
 
-- Obsidian Functional Specification (Obsidian 1.12.7, derived from REA static analysis):
+- Obsidian Functional Specification (Obsidian 1.12.7, derived from observing its behavior, file
+  formats, and public documentation):
   https://claude.ai/code/artifact/6bc126ce-788f-484a-8213-c6eec1f99245
 
 Sections: purpose and evidence basis; architecture; vault and filesystem model; Obsidian Flavored

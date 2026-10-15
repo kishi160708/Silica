@@ -24,8 +24,8 @@ cargo test --workspace
 | 3 | Theme compatibility | Variable-level subset of the 1047 CSS custom properties |
 | 4 | Community plugin compatibility | New native plugin API; existing JS plugins are out of scope |
 
-The full functional specification this project implements, derived from a static analysis of
-Obsidian 1.12.7, lives in `docs/`.
+The full functional specification this project implements, derived from observing Obsidian 1.12.7's
+behavior, file formats, and public documentation, lives in `docs/`.
 
 ## Crates
 

@@ -8,7 +8,7 @@ Native Rust/GPUI clone of Obsidian's desktop app, targeting byte-level vault com
   line endings, BOMs, and unknown JSON/YAML keys (`#[serde(flatten)] extra` everywhere).
 - One Markdown parser (`-markdown`) feeds the editor, reading view, cache, and link rewriting.
   Do not add a second tokenizer for any of those.
-- Formats and behaviors are specified in `docs/spec.md`. When the spec and Obsidian disagree, test
+- Formats and behaviors are specified in `docs/Specification.md`. When the spec and Obsidian disagree, test
   against a real vault and fix the spec.
 - Command ids, config keys, and file names must match Obsidian's exactly (`-commands/data/commands.txt`,
   `-formats/src/config.rs`). Add new ones only with the observed string.
@@ -25,7 +25,7 @@ crates/-cache     CachedMetadata, LinkResolver
 crates/-formats   FileKind, config types, canvas, base
 crates/-commands  command registry, default hotkeys
 crates/-bench     spike benchmarks: synthetic vault generator, index timer (bin)
-docs/                   spec and design notes
+docs/                   Obsidian vault: spec and design notes (dogfooded by )
 ```
 
 ## Commands
@@ -49,3 +49,5 @@ cargo fmt --all && cargo clippy --workspace --all-targets
 - Vault-relative paths use `/` and keep original case; comparisons are case-insensitive.
 - Positions are zero-based line/column plus byte offset, like Obsidian's `Pos`.
 - Tests that need a vault build one in a `tempfile::tempdir()`; never depend on the developer's vault.
+- `docs/` is an Obsidian vault: write notes with wikilinks and frontmatter, and keep `.obsidian/`
+  committed except `workspace.json`.

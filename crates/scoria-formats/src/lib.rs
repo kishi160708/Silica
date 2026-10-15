@@ -21,7 +21,7 @@ pub enum FileKind {
     Other,
 }
 
-/// Extension tables observed in Obsidian 1.12.7 `app.js`.
+/// Extension tables as Obsidian 1.12.7 classifies files.
 pub const IMAGE_EXTENSIONS: &[&str] = &["bmp", "png", "jpg", "jpeg", "gif", "svg", "webp", "avif"];
 pub const AUDIO_EXTENSIONS: &[&str] = &["mp3", "wav", "m4a", "3gp", "flac", "ogg", "oga", "opus"];
 pub const VIDEO_EXTENSIONS: &[&str] = &["mp4", "webm", "ogv", "mov", "mkv"];
