@@ -31,9 +31,9 @@ docs/                   spec and design notes
 ## Commands
 
 On NixOS run these inside `nix-shell` (`shell.nix` supplies gpui's X11, Wayland, and Vulkan libraries).
-Known issue: on NVIDIA GPUs gpui 0.2.2's blade 0.7.1 requests ray-tracing extensions and `vkCreateDevice`
-fails with `ERROR_INITIALIZATION_FAILED`; until gpui is moved past that, run the app on the software
-driver: `VK_DRIVER_FILES=/run/opengl-driver/share/vulkan/icd.d/lvp_icd.x86_64.json cargo run -p  -- <vault>`.
+gpui is a git dependency pinned to a Zed release commit (see the note in `Cargo.toml`); the crates.io
+release is stale and crashes on NVIDIA. Bump the pin on its own, one release at a time, and run the
+app on a real GPU before committing.
 
 ```
 cargo test --workspace            # all library tests (fast)

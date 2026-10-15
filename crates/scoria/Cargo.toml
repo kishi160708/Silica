@@ -19,3 +19,4 @@ path = "src/main.rs"
 -formats.workspace = true
 anyhow.workspace = true
 gpui.workspace = true
+gpui_platform.workspace = true

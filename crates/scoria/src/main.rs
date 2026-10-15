@@ -5,8 +5,8 @@
 //! command line. Everything else is a placeholder for later milestones.
 
 use gpui::{
-    div, prelude::*, px, rgb, size, App, Application, Bounds, Context, SharedString,
-    TitlebarOptions, Window, WindowBounds, WindowOptions,
+    div, prelude::*, px, rgb, size, App, Bounds, Context, SharedString, TitlebarOptions, Window,
+    WindowBounds, WindowOptions,
 };
 use _commands::CommandRegistry;
 use _vault::Vault;
@@ -170,7 +170,7 @@ fn main() {
     let vault = VaultSummary::load(vault_path);
     let command_count = CommandRegistry::with_known_ids().len();
 
-    Application::new().run(move |cx: &mut App| {
+    gpui_platform::application().run(move |cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(1280.0), px(820.0)), cx);
         cx.open_window(
             WindowOptions {

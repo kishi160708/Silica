@@ -33,9 +33,14 @@ serde_yaml = "0.9"
 walkdir = "2"
 tempfile = "3"
 rayon = "1"
-# Cargo.lock pins libc to 0.2.189: gpui 0.2.2 -> gpui_http_client -> zed-async-tar -> xattr 0.2.3
-# reads `libc::ENOATTR`, which libc 0.2.190 removed on Linux. Drop the pin once gpui moves to xattr 1.x.
-gpui = "0.2.2"
+# gpui is pinned to a Zed release commit rather than the crates.io release: the crates.io 0.2.2
+# bundles blade 0.7.1, whose unconditional ray-tracing request fails vkCreateDevice on NVIDIA.
+# Zed v1.3.6 (2026) is known to run on the development machine and builds with rustc 1.95.
+# Bump deliberately, one release at a time, and re-run `cargo run -p ` on a real GPU.
+# Cargo.lock also pins libc to 0.2.189: gpui -> http_client -> async-tar -> xattr 0.2.3 reads
+# `libc::ENOATTR`, which libc 0.2.190 removed on Linux. Drop the pin once async-tar moves to xattr 1.x.
+gpui = { git = "https://github.com/zed-industries/zed", rev = "4ce18741ad2ea007cb20a1dd96d2a170d224cc01" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "4ce18741ad2ea007cb20a1dd96d2a170d224cc01", features = ["wayland", "x11"] }
 
 [profile.dev]
 opt-level = 0
