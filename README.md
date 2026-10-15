@@ -48,4 +48,4 @@ Obsidian 1.12.7, lives in `docs/`.
 
 ## License
 
-Not yet chosen. Until a license file is added, all rights are reserved.
+MIT. See [LICENSE](LICENSE).
