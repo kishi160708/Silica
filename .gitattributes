@@ -4,3 +4,6 @@
 *.md text eol=lf
 *.yml text eol=lf
 *.txt text eol=lf
+
+# The conformance corpus is byte-exact test data; one note deliberately uses CRLF.
+crates/-markdown/tests/corpus/** -text
