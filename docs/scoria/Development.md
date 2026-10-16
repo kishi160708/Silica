@@ -25,15 +25,20 @@ cargo run --release -p  -- <vault> --search "tag:#x OR y"  # open with the Searc
 cargo run --release -p  -- <vault> --switcher "spc"        # open with the quick switcher up (for screenshots)
 cargo run --release -p  -- <vault> --pane outgoing          # right dock tab: backlinks, outgoing, outline, tags
 cargo run --release -p  -- <vault> --graph [local]          # open on the graph view
+cargo run --release -p  -- <vault> --palette "open"         # open with the command palette up
+cargo run --release -p  -- <vault> --settings hotkeys       # open Settings on a tab (general, appearance, editor, ...)
 cargo run --release -p -bench -- generate <dir>
 cargo run --release -p -bench -- index <vault>
 ```
 
-In the app: click a file or a link to open it, Ctrl+E toggles reading view
-and source mode, Ctrl+Alt+Left and Right walk the tab's history, Ctrl+O opens
-the quick switcher, Ctrl+Shift+F the Search tab, Ctrl+G the graph (again to
-return), Ctrl+Q quits. In the graph: wheel zooms, drag pans, drag a node to
-move it, click a node to open it, Ctrl+0 refits the view.
+In the app: click a file or a link to open it, Ctrl+P opens the command
+palette, Ctrl+E toggles reading view and source mode, Ctrl+Alt+Left and Right
+walk the tab's history, Ctrl+O opens the quick switcher, Ctrl+Shift+F the
+Search tab, Ctrl+G the graph (again to return), Ctrl+, opens Settings, Ctrl+Q
+quits. Every shortcut except Ctrl+Q is an Obsidian command bound from its
+default hotkey, so the vault's `hotkeys.json` rebinds or unbinds it. In the
+graph: wheel zooms, drag pans, drag a node to move it, click a node to open
+it, Ctrl+0 refits the view.
 
 ## Reader (phase 2)
 
@@ -53,7 +58,38 @@ browse their real vault with no missing content.
 | Search | done: full query grammar with Obsidian's explain labels, results grouped per file with context, click opens at the line; sort options and copy results not yet |
 | Quick switcher | done: fuzzy over names, aliases and paths, recent files first, unresolved targets shown as not created; creating notes waits for the writer |
 | Graph | done: global and local graphs, filters, color groups, forces and display settings from `graph.json`; zoom, pan, drag, hover, click opens |
-| Settings, read-only | theme, fonts, base font size, readable line length, strict line breaks, show unsupported files |
+| Command palette | done: Obsidian's command names and hotkeys, pinned commands from `command-palette.json`, this session's recent commands first; lists only the commands  can run |
+| Settings, read-only | done: General, Appearance, Interface, Editor, Files and links, Hotkeys, Core plugins, Community plugins and the Quick switcher and Command palette plugin tabs, every value from `.obsidian/`; nothing is written |
+
+### Command palette and Settings, 2026-10-16
+
+`-commands` now carries the command names (`data/names.txt`) and
+default hotkeys as Obsidian 1.14.4 registers them, captured from the running
+app with a throwaway plugin that dumped `app.commands` and the settings
+tabs; the ids gained the nineteen 1.14.4 additions. `CommandRegistry`
+keeps registration order, applies `hotkeys.json` (an entry replaces the
+defaults, an empty list unbinds) and turns a binding into a label
+(`Ctrl + Shift + F`) or a GPUI keystroke. At startup the workspace binds a
+`RunCommand { id }` action for every command it can run, so the shell has
+no hard-coded shortcuts left; `Workspace::run_command` dispatches by id.
+
+The palette (`crates//src/palette.rs`) shows only runnable commands,
+the way Obsidian hides commands whose check callback fails: palette,
+switcher, search, graph and local graph, reading view toggle, back and
+forward, settings, sidebar toggles, Files, reveal, Backlinks, Outgoing
+links, Outline and Tags. Everything else stays visible in the Hotkeys tab.
+
+Settings (`crates//src/settings.rs`) is a modal with Obsidian's
+navigation and setting rows (name, description, control). Controls are
+drawn in their current state from `app.json`, `appearance.json`,
+`core-plugins.json`, `community-plugins.json` and the plugin manifests,
+`switcher.json` and `command-palette.json`; the Hotkeys tab filters all,
+assigned, unassigned and assigned-by-me over the registry and marks custom
+bindings. A banner says the view is read-only; writing settings waits for
+the writer milestone because Obsidian rewrites the whole file on every
+change. Not shown: settings whose `app.json` key is unobserved (default file
+to open, delete attachments, Mermaid, quick font size, zoom, frame style,
+URI callbacks), the Keychain tab, and options of other core plugins.
 
 ### Reading view, 2026-10-16
 

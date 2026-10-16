@@ -10,3 +10,6 @@ publish.workspace = true
 
 [dependencies]
 -formats.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

@@ -1,6 +1,8 @@
 //! The workspace shell: left dock (Files, Search), main area (reading view
 //! or source editor), right dock (Backlinks, Outgoing links, Outline, Tags),
-//! view header, status bar and the quick switcher overlay.
+//! view header, status bar, and the quick switcher, command palette and
+//! Settings overlays. Commands run by id ([`Workspace::run_command`]);
+//! hotkeys come from the command registry, so `hotkeys.json` applies.
 //!
 //! The vault is indexed on a background thread when the window opens and
 //! then kept current by a filesystem watcher: changed paths are re-read and
@@ -10,18 +12,23 @@ use crate::editor::Editor;
 use crate::explorer::{display_name, ExplorerEvent, FileExplorer, FileTree};
 use crate::graph::{GraphEvent, GraphView};
 use crate::mentions::{Finder, Name};
+use crate::palette::{CommandPalette, PaletteCommand, PaletteEvent};
 use crate::reading::{self, LinkTarget, ReadingEvent, ReadingView};
 use crate::search::{SearchEvent, SearchPane};
+use crate::settings::{self, SettingsEvent, SettingsView};
 use crate::switcher::{QuickSwitcher, SwitcherEvent};
 use crate::theme::Theme;
 use crate::watch;
 use gpui::{
-    actions, div, prelude::*, px, uniform_list, App, Context, Entity, FocusHandle, Focusable,
-    KeyBinding, SharedString, Subscription, UniformListScrollHandle, Window,
+    actions, div, prelude::*, px, rgba, uniform_list, Action, App, Context, Entity, FocusHandle,
+    Focusable, Global, KeyBinding, SharedString, Subscription, UniformListScrollHandle, Window,
 };
 use rayon::prelude::*;
 use _cache::{frontmatter_aliases, index_markdown, CachedMetadata, MetadataCache};
-use _formats::config::AppConfig;
+use _commands::{keystroke, CommandRegistry};
+use _formats::config::{
+    AppConfig, AppearanceConfig, CommandPaletteConfig, CorePlugins, PluginManifest, SwitcherConfig,
+};
 use _formats::FileKind;
 use _markdown::Subpath;
 use _vault::{FileChange, Vault};
@@ -33,27 +40,61 @@ use std::time::{Duration, Instant};
 
 actions!(
     workspace,
-    [
-        ToggleMode,
-        GoBack,
-        GoForward,
-        OpenSwitcher,
-        OpenSearch,
-        OpenGraph
-    ]
+    [ToggleMode, GoBack, GoForward, OpenSearch, OpenGraph]
 );
 
-/// Binds the shell's keys; call once at startup.
-pub fn bind_keys(cx: &mut App) {
+/// Runs the command with this Obsidian id (bound from the registry's hotkeys).
+#[derive(Debug, Clone, PartialEq, Action)]
+#[action(namespace = workspace, no_json)]
+pub struct RunCommand {
+    pub id: String,
+}
+
+/// The command registry with the vault's `hotkeys.json` applied.
+pub struct Commands(pub Arc<CommandRegistry>);
+
+impl Global for Commands {}
+
+/// Command ids the workspace can run today; the palette lists only these,
+/// the way Obsidian hides commands whose check callback fails.
+pub const RUNNABLE: &[&str] = &[
+    "command-palette:open",
+    "switcher:open",
+    "global-search:open",
+    "graph:open",
+    "graph:open-local",
+    "markdown:toggle-preview",
+    "app:go-back",
+    "app:go-forward",
+    "app:open-settings",
+    "app:toggle-left-sidebar",
+    "app:toggle-right-sidebar",
+    "file-explorer:open",
+    "file-explorer:reveal-active-file",
+    "backlink:open",
+    "backlink:open-backlinks",
+    "outgoing-links:open",
+    "outgoing-links:open-for-current",
+    "outline:open",
+    "outline:open-for-current",
+    "tag-pane:open",
+];
+
+/// Binds every runnable command's hotkeys in the Workspace context; call
+/// once at startup with the registry that has `hotkeys.json` applied.
+pub fn bind_keys(cx: &mut App, registry: &CommandRegistry) {
     let ctx = Some("Workspace");
-    cx.bind_keys([
-        KeyBinding::new("ctrl-e", ToggleMode, ctx),
-        KeyBinding::new("ctrl-alt-left", GoBack, ctx),
-        KeyBinding::new("ctrl-alt-right", GoForward, ctx),
-        KeyBinding::new("ctrl-o", OpenSwitcher, ctx),
-        KeyBinding::new("ctrl-shift-f", OpenSearch, ctx),
-        KeyBinding::new("ctrl-g", OpenGraph, ctx),
-    ]);
+    let bindings: Vec<KeyBinding> = RUNNABLE
+        .iter()
+        .filter_map(|id| registry.get(id))
+        .flat_map(|c| {
+            c.hotkeys.iter().filter_map(|h| {
+                let keys = keystroke(h)?;
+                Some(KeyBinding::new(&keys, RunCommand { id: c.id.clone() }, ctx))
+            })
+        })
+        .collect();
+    cx.bind_keys(bindings);
 }
 
 /// Everything derived from the vault folder: built once off the UI thread,
@@ -65,6 +106,12 @@ pub struct VaultState {
     /// Note text as indexed, for search and mentions.
     texts: RwLock<HashMap<String, Arc<String>>>,
     pub app: AppConfig,
+    pub appearance: AppearanceConfig,
+    pub core_plugins: Option<CorePlugins>,
+    pub community_plugins: Vec<String>,
+    pub plugin_manifests: Vec<PluginManifest>,
+    pub palette: CommandPaletteConfig,
+    pub switcher: SwitcherConfig,
     pub index_ms: f64,
 }
 
@@ -94,6 +141,12 @@ impl VaultState {
         let started = Instant::now();
         let vault = Vault::open(root).map_err(|e| e.to_string())?;
         let app = vault.app_config().unwrap_or_default();
+        let appearance = vault.appearance_config().unwrap_or_default();
+        let core_plugins = vault.core_plugins().unwrap_or_default();
+        let community_plugins = vault.community_plugins().unwrap_or_default();
+        let plugin_manifests = vault.plugin_manifests();
+        let palette = vault.command_palette_config().unwrap_or_default();
+        let switcher = vault.switcher_config().unwrap_or_default();
         let notes: Vec<String> = vault.markdown_files().map(|f| f.path.clone()).collect();
         let loaded: Vec<(String, CachedMetadata, Arc<String>)> = notes
             .par_iter()
@@ -118,6 +171,12 @@ impl VaultState {
             cache: RwLock::new(cache),
             texts: RwLock::new(texts),
             app,
+            appearance,
+            core_plugins,
+            community_plugins,
+            plugin_manifests,
+            palette,
+            switcher,
             index_ms: started.elapsed().as_secs_f64() * 1000.0,
         })
     }
@@ -290,6 +349,15 @@ struct MentionRows {
     outgoing: Vec<PaneRow>,
 }
 
+/// Which overlay is up, if any.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Modal {
+    None,
+    Switcher,
+    Palette,
+    Settings,
+}
+
 pub struct Workspace {
     focus_handle: FocusHandle,
     state: Option<Arc<VaultState>>,
@@ -298,7 +366,13 @@ pub struct Workspace {
     explorer: Entity<FileExplorer>,
     search: Entity<SearchPane>,
     switcher: Entity<QuickSwitcher>,
-    switcher_open: bool,
+    palette: Entity<CommandPalette>,
+    settings: Entity<SettingsView>,
+    modal: Modal,
+    /// Command ids run this session, most recent first.
+    recent_commands: Vec<String>,
+    left_visible: bool,
+    right_visible: bool,
     left_tab: LeftTab,
     reading: Entity<ReadingView>,
     editor: Entity<Editor>,
@@ -339,6 +413,8 @@ impl Workspace {
         let explorer = cx.new(FileExplorer::new);
         let search = cx.new(SearchPane::new);
         let switcher = cx.new(QuickSwitcher::new);
+        let palette = cx.new(CommandPalette::new);
+        let settings = cx.new(SettingsView::new);
         let reading = cx.new(ReadingView::new);
         let editor = cx.new(Editor::new);
         let graph = cx.new(GraphView::new);
@@ -373,10 +449,29 @@ impl Workspace {
                     window,
                     |this, _, event: &SwitcherEvent, window, cx| match event {
                         SwitcherEvent::Open(path) => {
-                            this.close_switcher(window, cx);
+                            this.close_modal(window, cx);
                             this.open_file(path.clone(), None, cx);
                         }
-                        SwitcherEvent::Close => this.close_switcher(window, cx),
+                        SwitcherEvent::Close => this.close_modal(window, cx),
+                    },
+                ),
+                cx.subscribe_in(
+                    &palette,
+                    window,
+                    |this, _, event: &PaletteEvent, window, cx| match event {
+                        PaletteEvent::Run(id) => {
+                            this.close_modal(window, cx);
+                            let id = id.clone();
+                            this.run_command(&id, window, cx);
+                        }
+                        PaletteEvent::Close => this.close_modal(window, cx),
+                    },
+                ),
+                cx.subscribe_in(
+                    &settings,
+                    window,
+                    |this, _, event: &SettingsEvent, window, cx| match event {
+                        SettingsEvent::Close => this.close_modal(window, cx),
                     },
                 ),
                 cx.subscribe(&reading, |this, _, event: &ReadingEvent, cx| match event {
@@ -391,7 +486,12 @@ impl Workspace {
             explorer,
             search,
             switcher,
-            switcher_open: false,
+            palette,
+            settings,
+            modal: Modal::None,
+            recent_commands: Vec::new(),
+            left_visible: true,
+            right_visible: true,
             left_tab: LeftTab::Files,
             reading,
             editor,
@@ -494,6 +594,8 @@ impl Workspace {
             .update(cx, |s, cx| s.set_state(state.clone(), cx));
         self.graph
             .update(cx, |g, cx| g.set_state(state.clone(), cx));
+        self.settings
+            .update(cx, |s, cx| s.set_state(state.clone(), cx));
         self.name_finder = None;
         cx.notify();
     }
@@ -633,27 +735,128 @@ impl Workspace {
                 recent.push(path.clone());
             }
         }
-        self.switcher_open = true;
+        self.modal = Modal::Switcher;
         self.switcher
             .update(cx, |s, cx| s.open(recent, query, window, cx));
         cx.notify();
     }
 
-    fn close_switcher(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.switcher_open {
-            self.switcher_open = false;
+    /// Opens the command palette pre-filled with `query`.
+    pub fn open_palette(&mut self, query: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let registry = cx.global::<Commands>().0.clone();
+        let pinned: Vec<String> = self
+            .state
+            .as_ref()
+            .map(|s| s.palette.pinned.clone())
+            .unwrap_or_default();
+        let commands: Vec<PaletteCommand> = registry
+            .iter()
+            .filter(|c| RUNNABLE.contains(&c.id.as_str()))
+            .map(|c| PaletteCommand::from_command(c, pinned.contains(&c.id)))
+            .collect();
+        let recent = self.recent_commands.clone();
+        self.modal = Modal::Palette;
+        self.palette
+            .update(cx, |p, cx| p.open(commands, recent, query, window, cx));
+        cx.notify();
+    }
+
+    /// Opens the Settings modal, on `tab` when given (`--settings` on the command line).
+    pub fn open_settings(
+        &mut self,
+        tab: Option<settings::Tab>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.modal = Modal::Settings;
+        self.settings.update(cx, |s, cx| s.open(tab, window, cx));
+        cx.notify();
+    }
+
+    fn close_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.modal != Modal::None {
+            self.modal = Modal::None;
             let mode = self.mode;
             self.set_mode(mode, window, cx);
         }
     }
 
-    fn open_switcher_action(
+    fn run_command_action(
         &mut self,
-        _: &OpenSwitcher,
+        action: &RunCommand,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.open_switcher("", window, cx);
+        let id = action.id.clone();
+        self.run_command(&id, window, cx);
+    }
+
+    /// Runs a command by its Obsidian id; unknown or not-yet-implemented
+    /// ids are reported in the status bar.
+    pub fn run_command(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if RUNNABLE.contains(&id) {
+            self.recent_commands.retain(|r| r != id);
+            self.recent_commands.insert(0, id.to_string());
+            self.recent_commands.truncate(20);
+        }
+        match id {
+            "command-palette:open" => self.open_palette("", window, cx),
+            "switcher:open" => self.open_switcher("", window, cx),
+            "global-search:open" => self.open_search_action(&OpenSearch, window, cx),
+            "graph:open" => self.open_graph_action(&OpenGraph, window, cx),
+            "graph:open-local" => self.show_graph(true, window, cx),
+            "markdown:toggle-preview" => self.toggle_mode(&ToggleMode, window, cx),
+            "app:go-back" => self.go_back(&GoBack, window, cx),
+            "app:go-forward" => self.go_forward(&GoForward, window, cx),
+            "app:open-settings" => self.open_settings(None, window, cx),
+            "app:toggle-left-sidebar" => {
+                self.left_visible = !self.left_visible;
+                cx.notify();
+            }
+            "app:toggle-right-sidebar" => {
+                self.right_visible = !self.right_visible;
+                cx.notify();
+            }
+            "file-explorer:open" => {
+                self.left_visible = true;
+                self.left_tab = LeftTab::Files;
+                cx.notify();
+            }
+            "file-explorer:reveal-active-file" => {
+                self.left_visible = true;
+                self.left_tab = LeftTab::Files;
+                if let Some(current) = self.current.clone() {
+                    self.explorer.update(cx, |e, cx| e.reveal(&current, cx));
+                }
+                cx.notify();
+            }
+            "backlink:open" | "backlink:open-backlinks" => {
+                self.right_visible = true;
+                self.show_right_tab("backlinks", cx);
+            }
+            "outgoing-links:open" | "outgoing-links:open-for-current" => {
+                self.right_visible = true;
+                self.show_right_tab("outgoing", cx);
+            }
+            "outline:open" | "outline:open-for-current" => {
+                self.right_visible = true;
+                self.show_right_tab("outline", cx);
+            }
+            "tag-pane:open" => {
+                self.right_visible = true;
+                self.show_right_tab("tags", cx);
+            }
+            _ => {
+                let name = cx
+                    .global::<Commands>()
+                    .0
+                    .get(id)
+                    .map(|c| c.name.clone())
+                    .unwrap_or_else(|| id.to_string());
+                self.status = format!("{name}: not available in  yet").into();
+                cx.notify();
+            }
+        }
     }
 
     fn open_search_action(&mut self, _: &OpenSearch, window: &mut Window, cx: &mut Context<Self>) {
@@ -1618,7 +1821,32 @@ impl Render for Workspace {
                             .child(self.vault_name.clone()),
                     ),
             )
-            .child(div().flex_1().overflow_hidden().child(left_body));
+            .child(div().flex_1().overflow_hidden().child(left_body))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .px_2()
+                    .py_1()
+                    .border_t_1()
+                    .border_color(theme.border)
+                    .child(
+                        div()
+                            .id("open-settings")
+                            .px_2()
+                            .py_px()
+                            .rounded_sm()
+                            .cursor_pointer()
+                            .text_size(px(11.))
+                            .text_color(theme.text_muted)
+                            .hover(|s| s.bg(theme.bg_alt))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_settings(None, window, cx)
+                            }))
+                            .child("Settings"),
+                    ),
+            );
 
         let editor_status = if self.mode == ViewMode::Source {
             let editor = self.editor.read(cx);
@@ -1656,17 +1884,53 @@ impl Render for Workspace {
                 self.words, self.chars
             )));
 
-        let overlay = self.switcher_open.then(|| {
-            div()
-                .absolute()
-                .inset_0()
-                .flex()
-                .flex_row()
-                .justify_center()
-                .items_start()
-                .pt(px(90.))
-                .child(self.switcher.clone())
-        });
+        let overlay: Option<gpui::AnyElement> = match self.modal {
+            Modal::None => None,
+            Modal::Switcher | Modal::Palette => {
+                let child: gpui::AnyElement = if self.modal == Modal::Switcher {
+                    self.switcher.clone().into_any_element()
+                } else {
+                    self.palette.clone().into_any_element()
+                };
+                Some(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .flex()
+                        .flex_row()
+                        .justify_center()
+                        .items_start()
+                        .pt(px(90.))
+                        .child(child)
+                        .into_any_element(),
+                )
+            }
+            Modal::Settings => Some(
+                div()
+                    .id("settings-backdrop")
+                    .absolute()
+                    .inset_0()
+                    .bg(rgba(0x00000080))
+                    .flex()
+                    .flex_row()
+                    .justify_center()
+                    .items_center()
+                    .py(px(40.))
+                    .px(px(40.))
+                    .on_click(cx.listener(|this, _, window, cx| this.close_modal(window, cx)))
+                    .child(
+                        div()
+                            .id("settings-frame")
+                            .h_full()
+                            .max_w_full()
+                            .on_click(|_, _, cx| cx.stop_propagation())
+                            .child(self.settings.clone()),
+                    )
+                    .into_any_element(),
+            ),
+        };
+        let left_visible = self.left_visible;
+        let right_visible = self.right_visible;
 
         div()
             .key_context("Workspace")
@@ -1674,9 +1938,9 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::toggle_mode))
             .on_action(cx.listener(Self::go_back))
             .on_action(cx.listener(Self::go_forward))
-            .on_action(cx.listener(Self::open_switcher_action))
             .on_action(cx.listener(Self::open_search_action))
             .on_action(cx.listener(Self::open_graph_action))
+            .on_action(cx.listener(Self::run_command_action))
             .relative()
             .flex()
             .flex_col()
@@ -1690,9 +1954,11 @@ impl Render for Workspace {
                     .flex_row()
                     .flex_1()
                     .overflow_hidden()
-                    .child(left)
+                    .when(left_visible, |d| d.child(left))
                     .child(main)
-                    .child(self.render_right_dock(&theme, cx)),
+                    .when(right_visible, |d| {
+                        d.child(self.render_right_dock(&theme, cx))
+                    }),
             )
             .child(status_bar)
             .children(overlay)

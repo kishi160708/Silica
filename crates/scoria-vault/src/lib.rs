@@ -3,8 +3,8 @@
 
 use _cache::LinkResolver;
 use _formats::config::{
-    AppConfig, AppearanceConfig, CommunityPlugins, CorePlugins, GraphConfig, Hotkeys,
-    PropertyTypes, DEFAULT_CONFIG_DIR,
+    AppConfig, AppearanceConfig, CommandPaletteConfig, CommunityPlugins, CorePlugins, GraphConfig,
+    Hotkeys, PluginManifest, PropertyTypes, SwitcherConfig, DEFAULT_CONFIG_DIR,
 };
 use _formats::FileKind;
 use serde::de::DeserializeOwned;
@@ -280,6 +280,39 @@ impl Vault {
         Ok(self.read_config("graph.json")?.unwrap_or_default())
     }
 
+    pub fn command_palette_config(&self) -> Result<CommandPaletteConfig, VaultError> {
+        Ok(self
+            .read_config("command-palette.json")?
+            .unwrap_or_default())
+    }
+
+    pub fn switcher_config(&self) -> Result<SwitcherConfig, VaultError> {
+        Ok(self.read_config("switcher.json")?.unwrap_or_default())
+    }
+
+    /// Manifests of the community plugins installed under `plugins/`, sorted
+    /// by folder name; folders without a readable manifest are skipped.
+    pub fn plugin_manifests(&self) -> Vec<PluginManifest> {
+        let dir = self.root.join(&self.config_dir).join("plugins");
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            return Vec::new();
+        };
+        let mut found: Vec<(String, PluginManifest)> = entries
+            .flatten()
+            .filter_map(|e| {
+                let folder = e.file_name().to_string_lossy().into_owned();
+                let text = std::fs::read_to_string(e.path().join("manifest.json")).ok()?;
+                let mut manifest: PluginManifest = serde_json::from_str(&text).ok()?;
+                if manifest.id.is_empty() {
+                    manifest.id = folder.clone();
+                }
+                Some((folder, manifest))
+            })
+            .collect();
+        found.sort_by(|a, b| a.0.cmp(&b.0));
+        found.into_iter().map(|(_, m)| m).collect()
+    }
+
     /// The raw workspace layout; typed modelling comes with the workspace milestone.
     pub fn workspace_json(&self) -> Result<Option<serde_json::Value>, VaultError> {
         self.read_config("workspace.json")
@@ -304,6 +337,17 @@ mod tests {
         fs::write(r.join(".hidden.md"), "").unwrap();
         fs::write(r.join(".trash/old.md"), "").unwrap();
         fs::write(r.join(".obsidian/app.json"), r#"{"vimMode":true}"#).unwrap();
+        fs::write(
+            r.join(".obsidian/plugins/x/manifest.json"),
+            r#"{"id":"x","name":"X","version":"1.2.3","author":"me","description":"d"}"#,
+        )
+        .unwrap();
+        fs::create_dir_all(r.join(".obsidian/plugins/broken")).unwrap();
+        fs::write(
+            r.join(".obsidian/command-palette.json"),
+            r#"{"pinned":["switcher:open"]}"#,
+        )
+        .unwrap();
         fs::write(
             r.join(".obsidian/core-plugins.json"),
             r#"{"file-explorer":true,"graph":true,"canvas":false}"#,
@@ -339,6 +383,15 @@ mod tests {
         assert_eq!(vault.community_plugins().unwrap(), vec!["dataview"]);
         assert!(vault.hotkeys().unwrap().is_empty());
         assert!(vault.workspace_json().unwrap().is_none());
+        assert_eq!(
+            vault.command_palette_config().unwrap().pinned,
+            vec!["switcher:open"]
+        );
+        assert_eq!(vault.switcher_config().unwrap().show_attachments, None);
+        let manifests = vault.plugin_manifests();
+        assert_eq!(manifests.len(), 1);
+        assert_eq!(manifests[0].name, "X");
+        assert_eq!(manifests[0].version, "1.2.3");
         let r = vault.link_resolver();
         assert_eq!(r.resolve("plan", "Note.md"), Some("Projects/Plan.md"));
     }

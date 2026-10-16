@@ -9,8 +9,10 @@ mod editor;
 mod explorer;
 mod graph;
 mod mentions;
+mod palette;
 mod reading;
 mod search;
+mod settings;
 mod switcher;
 mod text_input;
 mod theme;
@@ -21,10 +23,12 @@ use gpui::{
     actions, prelude::*, px, size, App, Bounds, Focusable, KeyBinding, TitlebarOptions,
     WindowBounds, WindowOptions,
 };
+use _commands::CommandRegistry;
 use std::fmt::Write as _;
 use std::path::PathBuf;
+use std::sync::Arc;
 use theme::Theme;
-use workspace::{ViewMode, Workspace};
+use workspace::{Commands, ViewMode, Workspace};
 
 actions!(, [Quit]);
 
@@ -119,6 +123,10 @@ struct Args {
     pane: Option<String>,
     /// Open the graph view: `global` or `local`.
     graph: Option<String>,
+    /// Open the command palette with this query, for screenshots.
+    palette: Option<String>,
+    /// Open Settings on this tab (`hotkeys`, `appearance`, ...).
+    settings: Option<String>,
 }
 
 fn parse_args() -> Args {
@@ -131,6 +139,8 @@ fn parse_args() -> Args {
         switcher: None,
         pane: None,
         graph: None,
+        palette: None,
+        settings: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -144,6 +154,8 @@ fn parse_args() -> Args {
             "--switcher" => args.switcher = it.next(),
             "--pane" => args.pane = it.next(),
             "--graph" => args.graph = it.next().or(Some("global".into())),
+            "--palette" => args.palette = it.next().or(Some(String::new())),
+            "--settings" => args.settings = it.next().or(Some("general".into())),
             _ if args.vault.is_none() => args.vault = Some(PathBuf::from(a)),
             _ => args.note = Some(a),
         }
@@ -153,22 +165,33 @@ fn parse_args() -> Args {
 
 fn main() {
     let args = parse_args();
-    // The theme comes from appearance.json; read it before the window opens
-    // so the first frame already has the right colors.
-    let theme = args
+    // The theme comes from appearance.json and the key bindings from
+    // hotkeys.json; read both before the window opens so the first frame
+    // already has the right colors and keys.
+    let vault = args
         .vault
         .as_ref()
-        .and_then(|root| _vault::Vault::open(root).ok())
+        .and_then(|root| _vault::Vault::open(root).ok());
+    let theme = vault
+        .as_ref()
         .and_then(|v| v.appearance_config().ok())
         .map(|a| Theme::from_appearance(&a))
         .unwrap_or_else(Theme::dark);
+    let mut registry = CommandRegistry::with_known_ids();
+    if let Some(hotkeys) = vault.as_ref().and_then(|v| v.hotkeys().ok()) {
+        registry.apply_overrides(&hotkeys);
+    }
+    drop(vault);
+    let registry = Arc::new(registry);
 
     gpui_platform::application().run(move |cx: &mut App| {
         cx.set_global(theme);
         editor::bind_keys(cx);
-        workspace::bind_keys(cx);
+        workspace::bind_keys(cx, &registry);
+        cx.set_global(Commands(registry));
         text_input::bind_keys(cx);
         graph::bind_keys(cx);
+        settings::bind_keys(cx);
         cx.bind_keys([KeyBinding::new("ctrl-q", Quit, None)]);
         cx.on_action(|_: &Quit, cx| cx.quit());
 
@@ -193,6 +216,8 @@ fn main() {
         let switcher = args.switcher.clone();
         let pane = args.pane.clone();
         let graph = args.graph.clone();
+        let palette = args.palette.clone();
+        let settings_tab = args.settings.clone();
         let synthetic = args.synthetic;
         window
             .update(cx, |ws, window, cx| {
@@ -239,6 +264,12 @@ fn main() {
                         }
                         if let Some(g) = &graph {
                             ws.show_graph(g == "local", window, cx);
+                        }
+                        if let Some(q) = &palette {
+                            ws.open_palette(q, window, cx);
+                        }
+                        if let Some(t) = &settings_tab {
+                            ws.open_settings(settings::Tab::parse(t), window, cx);
                         }
                         true
                     })
