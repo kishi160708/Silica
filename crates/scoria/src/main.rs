@@ -7,6 +7,7 @@
 
 mod editor;
 mod explorer;
+mod graph;
 mod mentions;
 mod reading;
 mod search;
@@ -116,6 +117,8 @@ struct Args {
     switcher: Option<String>,
     /// Right-dock tab to show: backlinks, outgoing, outline, tags.
     pane: Option<String>,
+    /// Open the graph view: `global` or `local`.
+    graph: Option<String>,
 }
 
 fn parse_args() -> Args {
@@ -127,6 +130,7 @@ fn parse_args() -> Args {
         search: None,
         switcher: None,
         pane: None,
+        graph: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -139,6 +143,7 @@ fn parse_args() -> Args {
             "--search" => args.search = it.next(),
             "--switcher" => args.switcher = it.next(),
             "--pane" => args.pane = it.next(),
+            "--graph" => args.graph = it.next().or(Some("global".into())),
             _ if args.vault.is_none() => args.vault = Some(PathBuf::from(a)),
             _ => args.note = Some(a),
         }
@@ -163,6 +168,7 @@ fn main() {
         editor::bind_keys(cx);
         workspace::bind_keys(cx);
         text_input::bind_keys(cx);
+        graph::bind_keys(cx);
         cx.bind_keys([KeyBinding::new("ctrl-q", Quit, None)]);
         cx.on_action(|_: &Quit, cx| cx.quit());
 
@@ -186,6 +192,7 @@ fn main() {
         let search = args.search.clone();
         let switcher = args.switcher.clone();
         let pane = args.pane.clone();
+        let graph = args.graph.clone();
         let synthetic = args.synthetic;
         window
             .update(cx, |ws, window, cx| {
@@ -229,6 +236,9 @@ fn main() {
                         }
                         if let Some(p) = &pane {
                             ws.show_right_tab(p, cx);
+                        }
+                        if let Some(g) = &graph {
+                            ws.show_graph(g == "local", window, cx);
                         }
                         true
                     })

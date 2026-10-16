@@ -39,6 +39,7 @@ with the command inventory and bundle evidence.
 | Fuzzy search: query characters in order, case-insensitive, word starts and consecutive runs score higher; simple search needs every token as a substring | `-search::fuzzy` |
 | Filesystem changes: dot-folders ignored, a removed folder removes its files, a moved-in folder is walked; adding or removing a file re-resolves every link | `-vault::Vault::refresh_path`, `-cache::MetadataCache::reresolve` |
 | Unlinked mentions: whole-word, case-insensitive, names and aliases, longest name wins, not inside `[[ ]]`, `[ ]( )`, inline or fenced code | `::mentions` |
+| `graph.json`: filters (`search`, `showTags`, `showAttachments`, `hideUnresolved`, `showOrphans`), `colorGroups` with `{query, color: {a, rgb}}`, display and force keys, `scale` and `close`; `collapse-*` keys round-trip | `-formats::config::GraphConfig` |
 | Config files are sparse and optional; unknown keys round-trip | `-formats::config`, `-vault::Vault::read_config` |
 | `core-plugins.json` map and legacy array shapes | `-formats::config::CorePlugins` |
 | JSON Canvas 1.0 fields, z-order by array order, tab-indented output | `-formats::canvas` |

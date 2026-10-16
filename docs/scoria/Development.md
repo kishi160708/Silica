@@ -24,13 +24,16 @@ cargo run --release -p  -- <vault> --note "Name#Heading" # open a note, scrolled
 cargo run --release -p  -- <vault> --search "tag:#x OR y"  # open with the Search tab filled (for screenshots)
 cargo run --release -p  -- <vault> --switcher "spc"        # open with the quick switcher up (for screenshots)
 cargo run --release -p  -- <vault> --pane outgoing          # right dock tab: backlinks, outgoing, outline, tags
+cargo run --release -p  -- <vault> --graph [local]          # open on the graph view
 cargo run --release -p -bench -- generate <dir>
 cargo run --release -p -bench -- index <vault>
 ```
 
 In the app: click a file or a link to open it, Ctrl+E toggles reading view
 and source mode, Ctrl+Alt+Left and Right walk the tab's history, Ctrl+O opens
-the quick switcher, Ctrl+Shift+F the Search tab, Ctrl+Q quits.
+the quick switcher, Ctrl+Shift+F the Search tab, Ctrl+G the graph (again to
+return), Ctrl+Q quits. In the graph: wheel zooms, drag pans, drag a node to
+move it, click a node to open it, Ctrl+0 refits the view.
 
 ## Reader (phase 2)
 
@@ -49,7 +52,7 @@ browse their real vault with no missing content.
 | Tags | done: vault-wide counts merged across inline and frontmatter tags |
 | Search | done: full query grammar with Obsidian's explain labels, results grouped per file with context, click opens at the line; sort options and copy results not yet |
 | Quick switcher | done: fuzzy over names, aliases and paths, recent files first, unresolved targets shown as not created; creating notes waits for the writer |
-| Graph | not started (`resolvedLinks` is the edge list) |
+| Graph | done: global and local graphs, filters, color groups, forces and display settings from `graph.json`; zoom, pan, drag, hover, click opens |
 | Settings, read-only | theme, fonts, base font size, readable line length, strict line breaks, show unsupported files |
 
 ### Reading view, 2026-10-16
@@ -72,6 +75,24 @@ language label, display math (raw), raw HTML (as text), footnotes.
 Not yet: Live Preview, MathJax, HTML rendering, remote images, column widths
 in tables (every column is equal), checkbox toggling, heading folding, copy
 buttons, PDF export.
+
+### Graph view, 2026-10-16
+
+`crates//src/graph/layout.rs` is the force simulation: Barnes-Hut
+repulsion over a quadtree, springs along links at `linkDistance`, a weak
+pull to the center, simulated annealing that stops when cool; drags reheat
+it. `view.rs` builds nodes and edges from the cache on the background
+executor (notes, optional attachments, unresolved targets and tags, orphans
+on or off, the `search` filter and `colorGroups` from `graph.json` evaluated
+with the search grammar), steps the layout in the background, and paints
+through a canvas: one stroked path for the edges, circles for nodes, labels
+once zoomed past a threshold that grows with node count. The local graph
+keeps the current note and its depth-1 neighbors; opening another note
+re-centers it. The view auto-fits until the user zooms or pans.
+
+Not yet: depth beyond one and the local-graph side pane, arrows, the
+timelapse animation, screenshot export, writing display changes back to
+`graph.json`.
 
 ### File watching and mentions, 2026-10-16
 

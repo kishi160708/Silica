@@ -315,7 +315,7 @@ impl Render for SearchPane {
     }
 }
 
-type Inputs = (
+pub type Inputs = (
     Vec<String>,
     Vec<Range<usize>>,
     Vec<Range<usize>>,
@@ -324,7 +324,7 @@ type Inputs = (
 
 /// Per-file search inputs derived from the cache record: tags, block
 /// ranges, section ranges and task lines.
-fn inputs(meta: &CachedMetadata, text: &str) -> Inputs {
+pub fn inputs(meta: &CachedMetadata, text: &str) -> Inputs {
     let tags: Vec<String> = all_tags(meta)
         .into_iter()
         .map(|t| t.to_lowercase())

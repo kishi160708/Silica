@@ -3,8 +3,8 @@
 
 use _cache::LinkResolver;
 use _formats::config::{
-    AppConfig, AppearanceConfig, CommunityPlugins, CorePlugins, Hotkeys, PropertyTypes,
-    DEFAULT_CONFIG_DIR,
+    AppConfig, AppearanceConfig, CommunityPlugins, CorePlugins, GraphConfig, Hotkeys,
+    PropertyTypes, DEFAULT_CONFIG_DIR,
 };
 use _formats::FileKind;
 use serde::de::DeserializeOwned;
@@ -274,6 +274,10 @@ impl Vault {
 
     pub fn property_types(&self) -> Result<PropertyTypes, VaultError> {
         Ok(self.read_config("types.json")?.unwrap_or_default())
+    }
+
+    pub fn graph_config(&self) -> Result<GraphConfig, VaultError> {
+        Ok(self.read_config("graph.json")?.unwrap_or_default())
     }
 
     /// The raw workspace layout; typed modelling comes with the workspace milestone.

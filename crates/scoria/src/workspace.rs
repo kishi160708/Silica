@@ -8,6 +8,7 @@
 
 use crate::editor::Editor;
 use crate::explorer::{display_name, ExplorerEvent, FileExplorer, FileTree};
+use crate::graph::{GraphEvent, GraphView};
 use crate::mentions::{Finder, Name};
 use crate::reading::{self, LinkTarget, ReadingEvent, ReadingView};
 use crate::search::{SearchEvent, SearchPane};
@@ -32,7 +33,14 @@ use std::time::{Duration, Instant};
 
 actions!(
     workspace,
-    [ToggleMode, GoBack, GoForward, OpenSwitcher, OpenSearch]
+    [
+        ToggleMode,
+        GoBack,
+        GoForward,
+        OpenSwitcher,
+        OpenSearch,
+        OpenGraph
+    ]
 );
 
 /// Binds the shell's keys; call once at startup.
@@ -44,6 +52,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-alt-right", GoForward, ctx),
         KeyBinding::new("ctrl-o", OpenSwitcher, ctx),
         KeyBinding::new("ctrl-shift-f", OpenSearch, ctx),
+        KeyBinding::new("ctrl-g", OpenGraph, ctx),
     ]);
 }
 
@@ -230,6 +239,7 @@ impl reading::EmbedSource for VaultState {
 pub enum ViewMode {
     Reading,
     Source,
+    Graph,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -292,6 +302,9 @@ pub struct Workspace {
     left_tab: LeftTab,
     reading: Entity<ReadingView>,
     editor: Entity<Editor>,
+    graph: Entity<GraphView>,
+    /// The mode to return to when the graph closes.
+    mode_before_graph: ViewMode,
     mode: ViewMode,
     current: Option<String>,
     history: Vec<String>,
@@ -328,37 +341,48 @@ impl Workspace {
         let switcher = cx.new(QuickSwitcher::new);
         let reading = cx.new(ReadingView::new);
         let editor = cx.new(Editor::new);
-        let subscriptions = vec![
-            cx.subscribe(
-                &explorer,
-                |this, _, event: &ExplorerEvent, cx| match event {
-                    ExplorerEvent::Open(path) => this.open_file(path.clone(), None, cx),
-                },
-            ),
-            cx.subscribe(&search, |this, _, event: &SearchEvent, cx| match event {
-                SearchEvent::Open(path, offset) => {
-                    this.open_file(path.clone(), None, cx);
-                    if let Some(offset) = *offset {
-                        this.reading
-                            .update(cx, |r, cx| r.scroll_to_offset(offset, cx));
+        let graph = cx.new(GraphView::new);
+        let subscriptions =
+            vec![
+                cx.subscribe_in(&graph, window, |this, _, event: &GraphEvent, window, cx| {
+                    match event {
+                        GraphEvent::Open(path) => {
+                            let back = this.mode_before_graph;
+                            this.set_mode(back, window, cx);
+                            this.open_file(path.clone(), None, cx);
+                        }
                     }
-                }
-            }),
-            cx.subscribe_in(
-                &switcher,
-                window,
-                |this, _, event: &SwitcherEvent, window, cx| match event {
-                    SwitcherEvent::Open(path) => {
-                        this.close_switcher(window, cx);
+                }),
+                cx.subscribe(
+                    &explorer,
+                    |this, _, event: &ExplorerEvent, cx| match event {
+                        ExplorerEvent::Open(path) => this.open_file(path.clone(), None, cx),
+                    },
+                ),
+                cx.subscribe(&search, |this, _, event: &SearchEvent, cx| match event {
+                    SearchEvent::Open(path, offset) => {
                         this.open_file(path.clone(), None, cx);
+                        if let Some(offset) = *offset {
+                            this.reading
+                                .update(cx, |r, cx| r.scroll_to_offset(offset, cx));
+                        }
                     }
-                    SwitcherEvent::Close => this.close_switcher(window, cx),
-                },
-            ),
-            cx.subscribe(&reading, |this, _, event: &ReadingEvent, cx| match event {
-                ReadingEvent::OpenLink(target) => this.follow_link(target.clone(), cx),
-            }),
-        ];
+                }),
+                cx.subscribe_in(
+                    &switcher,
+                    window,
+                    |this, _, event: &SwitcherEvent, window, cx| match event {
+                        SwitcherEvent::Open(path) => {
+                            this.close_switcher(window, cx);
+                            this.open_file(path.clone(), None, cx);
+                        }
+                        SwitcherEvent::Close => this.close_switcher(window, cx),
+                    },
+                ),
+                cx.subscribe(&reading, |this, _, event: &ReadingEvent, cx| match event {
+                    ReadingEvent::OpenLink(target) => this.follow_link(target.clone(), cx),
+                }),
+            ];
         let mut ws = Workspace {
             focus_handle: cx.focus_handle(),
             state: None,
@@ -371,6 +395,8 @@ impl Workspace {
             left_tab: LeftTab::Files,
             reading,
             editor,
+            graph,
+            mode_before_graph: ViewMode::Reading,
             mode: ViewMode::Reading,
             current: None,
             history: Vec::new(),
@@ -466,6 +492,8 @@ impl Workspace {
             .update(cx, |s, cx| s.set_state(state.clone(), cx));
         self.search
             .update(cx, |s, cx| s.set_state(state.clone(), cx));
+        self.graph
+            .update(cx, |g, cx| g.set_state(state.clone(), cx));
         self.name_finder = None;
         cx.notify();
     }
@@ -614,11 +642,8 @@ impl Workspace {
     fn close_switcher(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.switcher_open {
             self.switcher_open = false;
-            match self.mode {
-                ViewMode::Reading => window.focus(&self.reading.focus_handle(cx), cx),
-                ViewMode::Source => window.focus(&self.editor.focus_handle(cx), cx),
-            }
-            cx.notify();
+            let mode = self.mode;
+            self.set_mode(mode, window, cx);
         }
     }
 
@@ -636,11 +661,30 @@ impl Workspace {
         self.show_search(&query, Some(window), cx);
     }
 
+    /// Shows the graph (`graph:open`); a second Ctrl+G returns to the note.
+    pub fn show_graph(&mut self, local: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.graph.update(cx, |g, cx| g.set_local(local, cx));
+        self.set_mode(ViewMode::Graph, window, cx);
+    }
+
+    fn open_graph_action(&mut self, _: &OpenGraph, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mode == ViewMode::Graph {
+            let back = self.mode_before_graph;
+            self.set_mode(back, window, cx);
+        } else {
+            self.show_graph(false, window, cx);
+        }
+    }
+
     pub fn set_mode(&mut self, mode: ViewMode, window: &mut Window, cx: &mut Context<Self>) {
+        if mode == ViewMode::Graph && self.mode != ViewMode::Graph {
+            self.mode_before_graph = self.mode;
+        }
         self.mode = mode;
         match mode {
             ViewMode::Reading => window.focus(&self.reading.focus_handle(cx), cx),
             ViewMode::Source => window.focus(&self.editor.focus_handle(cx), cx),
+            ViewMode::Graph => window.focus(&self.graph.focus_handle(cx), cx),
         }
         cx.notify();
     }
@@ -710,6 +754,8 @@ impl Workspace {
     fn show_file(&mut self, path: &str, state: &Arc<VaultState>, cx: &mut Context<Self>) {
         self.current = Some(path.to_string());
         self.explorer.update(cx, |e, cx| e.reveal(path, cx));
+        self.graph
+            .update(cx, |g, cx| g.set_current(Some(path.to_string()), cx));
         let kind = FileKind::from_path(path);
         match kind {
             FileKind::Markdown => match std::fs::read_to_string(state.vault().absolute(path)) {
@@ -952,7 +998,7 @@ impl Workspace {
     fn toggle_mode(&mut self, _: &ToggleMode, window: &mut Window, cx: &mut Context<Self>) {
         let mode = match self.mode {
             ViewMode::Reading => ViewMode::Source,
-            ViewMode::Source => ViewMode::Reading,
+            ViewMode::Source | ViewMode::Graph => ViewMode::Reading,
         };
         self.set_mode(mode, window, cx);
     }
@@ -1395,6 +1441,7 @@ impl Render for Workspace {
         let mode_label = match self.mode {
             ViewMode::Reading => "Reading",
             ViewMode::Source => "Source",
+            ViewMode::Graph => "Graph",
         };
         let can_back = self.history_ix > 1;
         let can_forward = self.history_ix < self.history.len();
@@ -1459,20 +1506,38 @@ impl Render for Workspace {
             )
             .child(
                 div()
-                    .id("mode")
+                    .id("graph")
                     .px_2()
                     .py_px()
                     .rounded_sm()
                     .cursor_pointer()
-                    .text_color(theme.text_muted)
+                    .text_color(if self.mode == ViewMode::Graph {
+                        theme.text
+                    } else {
+                        theme.text_muted
+                    })
                     .hover(|s| s.bg(theme.bg_alt))
-                    .on_click(
-                        cx.listener(|this, _, window, cx| {
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_graph_action(&OpenGraph, window, cx)
+                    }))
+                    .child("Graph"),
+            )
+            .when(self.mode != ViewMode::Graph, |d| {
+                d.child(
+                    div()
+                        .id("mode")
+                        .px_2()
+                        .py_px()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .text_color(theme.text_muted)
+                        .hover(|s| s.bg(theme.bg_alt))
+                        .on_click(cx.listener(|this, _, window, cx| {
                             this.toggle_mode(&ToggleMode, window, cx)
-                        }),
-                    )
-                    .child(mode_label),
-            );
+                        }))
+                        .child(mode_label),
+                )
+            });
 
         let main_body: gpui::AnyElement = if let Some(loading) = &self.loading {
             div()
@@ -1484,6 +1549,7 @@ impl Render for Workspace {
             match self.mode {
                 ViewMode::Reading => self.reading.clone().into_any_element(),
                 ViewMode::Source => self.editor.clone().into_any_element(),
+                ViewMode::Graph => self.graph.clone().into_any_element(),
             }
         };
 
@@ -1610,6 +1676,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::go_forward))
             .on_action(cx.listener(Self::open_switcher_action))
             .on_action(cx.listener(Self::open_search_action))
+            .on_action(cx.listener(Self::open_graph_action))
             .relative()
             .flex()
             .flex_col()

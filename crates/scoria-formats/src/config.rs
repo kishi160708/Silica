@@ -297,6 +297,109 @@ impl CorePlugins {
 /// `community-plugins.json`: enabled community plugin ids.
 pub type CommunityPlugins = Vec<String>;
 
+/// A color in `graph.json`: alpha plus a packed `0xRRGGBB`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GraphColor {
+    #[serde(default = "one")]
+    pub a: f32,
+    #[serde(default)]
+    pub rgb: u32,
+}
+
+fn one() -> f32 {
+    1.0
+}
+
+/// One entry of `colorGroups`: nodes matching a search query get a color.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GraphColorGroup {
+    #[serde(default)]
+    pub query: String,
+    pub color: GraphColor,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+/// `graph.json`: the global graph's filters, groups, display and force
+/// settings. `collapse-*` keys and anything newer stay in `extra`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct GraphConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search: Option<String>,
+    #[serde(default, rename = "showTags", skip_serializing_if = "Option::is_none")]
+    pub show_tags: Option<bool>,
+    #[serde(
+        default,
+        rename = "showAttachments",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub show_attachments: Option<bool>,
+    #[serde(
+        default,
+        rename = "hideUnresolved",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub hide_unresolved: Option<bool>,
+    #[serde(
+        default,
+        rename = "showOrphans",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub show_orphans: Option<bool>,
+    #[serde(default, rename = "colorGroups", skip_serializing_if = "Vec::is_empty")]
+    pub color_groups: Vec<GraphColorGroup>,
+    #[serde(default, rename = "showArrow", skip_serializing_if = "Option::is_none")]
+    pub show_arrow: Option<bool>,
+    #[serde(
+        default,
+        rename = "textFadeMultiplier",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub text_fade_multiplier: Option<f32>,
+    #[serde(
+        default,
+        rename = "nodeSizeMultiplier",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub node_size_multiplier: Option<f32>,
+    #[serde(
+        default,
+        rename = "lineSizeMultiplier",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub line_size_multiplier: Option<f32>,
+    #[serde(
+        default,
+        rename = "centerStrength",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub center_strength: Option<f32>,
+    #[serde(
+        default,
+        rename = "repelStrength",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub repel_strength: Option<f32>,
+    #[serde(
+        default,
+        rename = "linkStrength",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub link_strength: Option<f32>,
+    #[serde(
+        default,
+        rename = "linkDistance",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub link_distance: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub close: Option<bool>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
 /// `types.json`: property name to type.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct PropertyTypes {
@@ -320,6 +423,22 @@ pub const PROPERTY_TYPES: &[&str] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn graph_json_round_trips_groups_and_collapse_keys() {
+        let text = r#"{"collapse-filter":true,"showOrphans":true,"colorGroups":[{"query":"tag:#x","color":{"a":1,"rgb":16711680}}],"repelStrength":10,"scale":1,"close":true}"#;
+        let cfg: GraphConfig = serde_json::from_str(text).unwrap();
+        assert_eq!(cfg.show_orphans, Some(true));
+        assert_eq!(cfg.color_groups[0].query, "tag:#x");
+        assert_eq!(cfg.color_groups[0].color.rgb, 0xff0000);
+        assert_eq!(cfg.extra["collapse-filter"], serde_json::json!(true));
+        let back: serde_json::Value = serde_json::to_value(&cfg).unwrap();
+        assert_eq!(back["collapse-filter"], serde_json::json!(true));
+        assert_eq!(
+            back["colorGroups"][0]["color"]["rgb"],
+            serde_json::json!(16711680)
+        );
+    }
 
     #[test]
     fn app_json_keeps_unknown_keys() {
