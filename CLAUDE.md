@@ -18,7 +18,7 @@ Native Rust/GPUI clone of Obsidian's desktop app, targeting byte-level vault com
 ## Layout
 
 ```
-crates/           GPUI app (bin)
+crates/           GPUI app (bin): workspace shell, Files view, reading view, source editor
 crates/-vault     folder scanning, .obsidian config
 crates/-markdown  OFM primitives
 crates/-cache     CachedMetadata, LinkResolver
@@ -38,7 +38,7 @@ app on a real GPU before committing.
 ```
 cargo test --workspace            # all library tests (fast)
 cargo check -p              # app, pulls gpui (slow first time)
-cargo run --release -p  -- <vault> [--note <path>]      # open a vault (release: the editor reparses on every edit)
+cargo run --release -p  -- <vault> [--note "Name#Heading"]   # open a vault (release: the editor reparses on every edit)
 cargo run --release -p  -- <vault> --synthetic 50000 --stress   # editor spike: self-driven edits, prints timings
 cargo run --release -p -bench -- generate <dir>   # synthetic 20k-note vault
 cargo run --release -p -bench -- index <vault>    # time scan/read/index/resolve, check the 2 s gate

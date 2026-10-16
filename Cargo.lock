@@ -4673,11 +4673,13 @@ dependencies = [
  "anyhow",
  "gpui",
  "gpui_platform",
+ "rayon",
  "-cache",
  "-commands",
  "-formats",
  "-markdown",
  "-vault",
+ "serde_yaml",
 ]
 
 [[package]]

@@ -7,9 +7,13 @@
 //! text into a file path with Obsidian's rules.
 
 pub mod resolver;
+pub mod vault;
 
 pub use resolver::LinkResolver;
 pub use _markdown::{LineIndex, Loc, Pos, Span};
+pub use vault::{
+    all_tags, frontmatter_aliases, frontmatter_tags, Backlink, MetadataCache, TagEntry,
+};
 
 use _markdown::{
     parse, walk_inlines, Block, BlockKind, Document, Inline, InlineKind, ListItem,

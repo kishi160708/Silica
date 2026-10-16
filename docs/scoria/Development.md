@@ -19,10 +19,60 @@ touch the `` crate inside `nix-shell` (see `shell.nix` at the repository root).
 
 ```
 cargo test --workspace
-cargo run -p  -- <vault>
+cargo run --release -p  -- <vault>                      # Files, reading view, Backlinks/Outline/Tags
+cargo run --release -p  -- <vault> --note "Name#Heading" # open a note, scrolled to a heading or ^block
 cargo run --release -p -bench -- generate <dir>
 cargo run --release -p -bench -- index <vault>
 ```
+
+In the app: click a file or a link to open it, Ctrl+E toggles reading view
+and source mode, Ctrl+Alt+Left and Right walk the tab's history, Ctrl+Q quits.
+
+## Reader (phase 2)
+
+Started 2026-10-16, after the three spike gates passed. Gate: a daily user can
+browse their real vault with no missing content.
+
+| Reader item | Status |
+| --- | --- |
+| Open a vault | done: scanned and indexed on a background thread, `.obsidian` config read |
+| Files view | done: folder tree, folders first, collapse state, auto-reveal, attachments shown, unknown kinds hidden |
+| Reading view | done for text content; see the list below |
+| Backlinks | done: linked mentions with the source line; unlinked mentions not yet |
+| Outline | done: click scrolls to the heading |
+| Tags | done: vault-wide counts merged across inline and frontmatter tags |
+| Search | not started |
+| Quick switcher | not started (the alias index is in `-cache`) |
+| Graph | not started (`resolvedLinks` is the edge list) |
+| Settings, read-only | theme, fonts, base font size, readable line length, strict line breaks, show unsupported files |
+
+### Reading view, 2026-10-16
+
+`crates//src/reading/model.rs` turns the parser tree into an owned
+render tree (styled runs with clickable ranges, resolved embeds, footnotes in
+reference order, frontmatter as properties); `view.rs` draws it with a lazily
+measured `list`, one item per top-level block, so a 50k-line note lays out
+only what is on screen. Clicks on wikilinks, markdown links, tags and footnote
+references go back to the workspace, which resolves them with the vault
+cache: `[[Note#Heading]]` and `[[Note#^id]]` scroll to the target block.
+
+Rendered: headings, paragraphs with soft breaks, emphasis, strong, strike,
+highlight, inline code, inline math (raw), tags, images (`![[pic.png|200x100]]`
+sizes), embedded notes, sections and blocks to a depth of four, lists with
+numbers and task checkboxes, block quotes, callouts with fold state and
+Obsidian's type colors, tables with column alignment, code blocks with a
+language label, display math (raw), raw HTML (as text), footnotes.
+
+Not yet: Live Preview, MathJax, HTML rendering, remote images, column widths
+in tables (every column is equal), checkbox toggling, heading folding, copy
+buttons, PDF export. Tag and alias indexes exist in the cache but the tag pane
+has no search behind it yet.
+
+> [!note] Fonts
+> The pinned gpui does not pick weights out of a variable font, so with Noto
+> Sans (one `NotoSans.ttf` for every weight) nothing renders bold. The default
+> text and interface font is Liberation Sans, which ships static Bold faces;
+> `appearance.json` fonts override it.
 
 ## Spike gates
 

@@ -32,6 +32,9 @@ with the command inventory and bundle evidence.
 | Reading-view hooks: `internal-link` with `data-href`, `tag`, `internal-embed` with `src`/`alt`, `callout` with `data-callout`/`data-callout-fold`, `task-list-item` with `data-task`, `data-heading` | `-markdown::render_html` |
 | Cache record: links, embeds, tags, headings, sections with Obsidian's type names, list items with Obsidian's `parent` encoding, blocks, footnotes, frontmatter links with key paths | `-cache::index_markdown` |
 | Link resolution: extension handling, root then relative, basename with same-folder then shortest path, case-insensitive | `-cache::LinkResolver` |
+| Vault-wide cache: `resolvedLinks` and `unresolvedLinks` counts per source (links, embeds, frontmatter links), backlinks per occurrence, tags merged case-insensitively from inline text and the `tags` property (list or comma string, `#` optional), aliases from `aliases` | `-cache::MetadataCache` |
+| Reading view from the same tree: embeds resolve to a whole note, a `#Heading` section (to the next heading of the same or higher level) or a `#^id` block, nested four deep; footnotes numbered by first reference; a single newline is a line break unless `strictLineBreaks` | `::reading::model` |
+| Files view: folders before files, names compared case-insensitively, `.md` hidden, unknown kinds hidden unless `showUnsupportedFiles` | `::explorer::FileTree` |
 | Config files are sparse and optional; unknown keys round-trip | `-formats::config`, `-vault::Vault::read_config` |
 | `core-plugins.json` map and legacy array shapes | `-formats::config::CorePlugins` |
 | JSON Canvas 1.0 fields, z-order by array order, tab-indented output | `-formats::canvas` |

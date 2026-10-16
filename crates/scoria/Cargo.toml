@@ -19,5 +19,7 @@ path = "src/main.rs"
 -commands.workspace = true
 -formats.workspace = true
 anyhow.workspace = true
+rayon.workspace = true
+serde_yaml.workspace = true
 gpui.workspace = true
 gpui_platform.workspace = true
