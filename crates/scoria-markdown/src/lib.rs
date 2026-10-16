@@ -10,12 +10,14 @@
 //! `[[wikilinks]]`, `![[embeds]]`, `#tags`, `^block-ids`, callouts,
 //! `==highlights==`, `%%comments%%`, `$math$`). Every node carries the byte
 //! span it came from. [`render_html`] renders the tree for the reading view
-//! and for conformance testing against the CommonMark spec.
+//! and for conformance testing against the CommonMark spec, and
+//! [`highlight::highlight_lines`] turns it into per-line editor decorations.
 
 pub mod ast;
 mod block;
 mod entities;
 pub mod frontmatter;
+pub mod highlight;
 pub mod html;
 mod inline;
 pub mod linktext;

@@ -30,9 +30,41 @@ The [[Specification]] sets three gates before any reader or writer work starts.
 
 | Gate | Target | Status |
 | --- | --- | --- |
-| Editor prototype | 50k-line note with wikilink and heading decorations | not started |
+| Editor prototype | 50k-line note with wikilink and heading decorations | passed, see below |
 | Parser conformance | 1000-note HTML diff corpus at 99 percent | passed: 1007/1009 notes against Obsidian 1.13.7, plus CommonMark 652/652 |
 | Index performance | 20k-file vault indexed cold in under 2 s | measured, see below |
+
+### Editor prototype, 2026-10-16
+
+`crates//src/editor.rs` is a plain-text Markdown editor over one `String`
+with a line index. A custom GPUI element shapes and paints only the visible
+lines; decorations come from `_markdown::highlight`, recomputed on a
+background thread after each edit (one parse in flight, one queued) and
+swapped in when ready, so typing never waits for the parser. Input goes
+through GPUI's input handler scoped to the cursor line, so IME composition
+works; navigation keys are actions.
+
+```
+cargo run --release -p  -- docs/ --synthetic 50000          # open a generated 50k-line note
+cargo run --release -p  -- docs/ --synthetic 50000 --stress  # 600 self-driven edits, then a report
+```
+
+Stress run on the reference machine, 50,001 lines (4.3 MB, 244k decorated
+spans; the synthetic note is far denser in syntax than a real one):
+
+| Measure | Result |
+| --- | --- |
+| Frames painted during 600 edit and navigation steps in 7 s | 616 |
+| Shaping the visible lines, per frame | 0.48 ms mean, 1.52 ms max |
+| Full reparse plus decoration pass (background) | 226 ms mean |
+| Edit to refreshed decorations | 234 ms |
+
+The frame path is the gate: scrolling and typing stay far under a frame
+budget regardless of note size. Decoration latency scales with note length
+because the whole note is reparsed; a real 50k-line note of ordinary prose is
+about half this size, and incremental reparse of the edited block is the
+planned follow-up. Not in the prototype yet: selections, wrapping, undo,
+saving, and Live Preview rendering of the decorated constructs.
 
 ### Parser, 2026-10-16
 

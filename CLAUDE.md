@@ -38,7 +38,8 @@ app on a real GPU before committing.
 ```
 cargo test --workspace            # all library tests (fast)
 cargo check -p              # app, pulls gpui (slow first time)
-cargo run -p  -- <vault>    # open a vault
+cargo run --release -p  -- <vault> [--note <path>]      # open a vault (release: the editor reparses on every edit)
+cargo run --release -p  -- <vault> --synthetic 50000 --stress   # editor spike: self-driven edits, prints timings
 cargo run --release -p -bench -- generate <dir>   # synthetic 20k-note vault
 cargo run --release -p -bench -- index <vault>    # time scan/read/index/resolve, check the 2 s gate
 cargo fmt --all && cargo clippy --workspace --all-targets
@@ -49,5 +50,9 @@ cargo fmt --all && cargo clippy --workspace --all-targets
 - Vault-relative paths use `/` and keep original case; comparisons are case-insensitive.
 - Positions are zero-based line/column plus byte offset, like Obsidian's `Pos`.
 - Tests that need a vault build one in a `tempfile::tempdir()`; never depend on the developer's vault.
+- `crates/-markdown/tests/corpus` holds Obsidian's own rendering of a 1000-note vault; the
+  corpus test and the CommonMark suite are ratchets. When Obsidian and the parser disagree, add a
+  probe note to `tests/corpus/vault/edge`, re-render with the plugin in that vault, and match the
+  observed behavior (list it in `docs//Specification.md`).
 - `docs//` is an Obsidian vault: write notes with wikilinks and frontmatter, and keep
   `.obsidian/` committed except `workspace.json`.

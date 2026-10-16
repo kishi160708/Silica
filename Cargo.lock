@@ -4676,6 +4676,7 @@ dependencies = [
  "-cache",
  "-commands",
  "-formats",
+ "-markdown",
  "-vault",
 ]
 
