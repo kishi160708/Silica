@@ -1,30 +1,34 @@
-//! The workspace shell: left dock (Files), main area (reading view or source
-//! editor), right dock (Backlinks, Outline, Tags), view header and status bar.
+//! The workspace shell: left dock (Files, Search), main area (reading view
+//! or source editor), right dock (Backlinks, Outgoing links, Outline, Tags),
+//! view header, status bar and the quick switcher overlay.
 //!
-//! The vault is indexed on a background thread when the window opens; until
-//! then the shell shows a loading line and every pane is empty.
+//! The vault is indexed on a background thread when the window opens and
+//! then kept current by a filesystem watcher: changed paths are re-read and
+//! re-indexed in place, link edges re-resolved, and every pane refreshed.
 
 use crate::editor::Editor;
 use crate::explorer::{display_name, ExplorerEvent, FileExplorer, FileTree};
+use crate::mentions::{Finder, Name};
 use crate::reading::{self, LinkTarget, ReadingEvent, ReadingView};
 use crate::search::{SearchEvent, SearchPane};
 use crate::switcher::{QuickSwitcher, SwitcherEvent};
 use crate::theme::Theme;
+use crate::watch;
 use gpui::{
     actions, div, prelude::*, px, uniform_list, App, Context, Entity, FocusHandle, Focusable,
     KeyBinding, SharedString, Subscription, UniformListScrollHandle, Window,
 };
 use rayon::prelude::*;
-use _cache::{index_markdown, MetadataCache};
+use _cache::{frontmatter_aliases, index_markdown, CachedMetadata, MetadataCache};
 use _formats::config::AppConfig;
 use _formats::FileKind;
 use _markdown::Subpath;
-use _vault::Vault;
+use _vault::{FileChange, Vault};
 use std::collections::HashMap;
 use std::ops::Range;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Instant;
+use std::sync::{Arc, RwLock, RwLockReadGuard};
+use std::time::{Duration, Instant};
 
 actions!(
     workspace,
@@ -43,14 +47,37 @@ pub fn bind_keys(cx: &mut App) {
     ]);
 }
 
-/// Everything derived from the vault folder, built once off the UI thread.
+/// Everything derived from the vault folder: built once off the UI thread,
+/// then updated in place by [`VaultState::apply`] as files change.
 pub struct VaultState {
-    pub vault: Vault,
-    pub cache: MetadataCache,
-    /// Note text as indexed, for search; files are re-read when opened.
-    pub texts: HashMap<String, Arc<String>>,
+    pub root: PathBuf,
+    vault: RwLock<Vault>,
+    cache: RwLock<MetadataCache>,
+    /// Note text as indexed, for search and mentions.
+    texts: RwLock<HashMap<String, Arc<String>>>,
     pub app: AppConfig,
     pub index_ms: f64,
+}
+
+/// One re-read note: its path and, for markdown, the new record and text.
+type Reindexed = (String, Option<(CachedMetadata, Arc<String>)>);
+
+/// What a batch of filesystem events changed.
+#[derive(Debug, Default)]
+pub struct Changes {
+    pub files: Vec<FileChange>,
+    /// Notes whose text was re-indexed.
+    pub notes: Vec<String>,
+    /// Notes that no longer exist.
+    pub removed_notes: Vec<String>,
+}
+
+impl Changes {
+    fn structural(&self) -> bool {
+        self.files
+            .iter()
+            .any(|c| !matches!(c, FileChange::Modified(_)))
+    }
 }
 
 impl VaultState {
@@ -59,7 +86,7 @@ impl VaultState {
         let vault = Vault::open(root).map_err(|e| e.to_string())?;
         let app = vault.app_config().unwrap_or_default();
         let notes: Vec<String> = vault.markdown_files().map(|f| f.path.clone()).collect();
-        let loaded: Vec<(String, _cache::CachedMetadata, Arc<String>)> = notes
+        let loaded: Vec<(String, CachedMetadata, Arc<String>)> = notes
             .par_iter()
             .map(|path| {
                 let text = std::fs::read_to_string(vault.absolute(path)).unwrap_or_default();
@@ -68,7 +95,7 @@ impl VaultState {
             })
             .collect();
         let mut texts = HashMap::with_capacity(loaded.len());
-        let metas: Vec<(String, _cache::CachedMetadata)> = loaded
+        let metas: Vec<(String, CachedMetadata)> = loaded
             .into_iter()
             .map(|(path, meta, text)| {
                 texts.insert(path.clone(), text);
@@ -77,36 +104,125 @@ impl VaultState {
             .collect();
         let cache = MetadataCache::new(vault.link_resolver(), metas);
         Ok(VaultState {
-            vault,
-            cache,
-            texts,
+            root: vault.root().to_path_buf(),
+            vault: RwLock::new(vault),
+            cache: RwLock::new(cache),
+            texts: RwLock::new(texts),
             app,
             index_ms: started.elapsed().as_secs_f64() * 1000.0,
         })
     }
-}
 
-impl VaultState {
+    pub fn vault(&self) -> RwLockReadGuard<'_, Vault> {
+        self.vault.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub fn cache(&self) -> RwLockReadGuard<'_, MetadataCache> {
+        self.cache.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub fn texts(&self) -> RwLockReadGuard<'_, HashMap<String, Arc<String>>> {
+        self.texts.read().unwrap_or_else(|e| e.into_inner())
+    }
+
     pub fn build_options(&self) -> reading::BuildOptions {
         reading::BuildOptions {
             strict_line_breaks: self.app.strict_line_breaks.unwrap_or(false),
         }
     }
+
+    /// Applies filesystem events for `paths`: refreshes the file list,
+    /// re-indexes changed notes, and re-resolves links when files came or went.
+    pub fn apply(&self, paths: &[PathBuf]) -> Changes {
+        let mut changes = Changes::default();
+        {
+            let mut vault = self.vault.write().unwrap_or_else(|e| e.into_inner());
+            for path in paths {
+                changes.files.extend(vault.refresh_path(path));
+            }
+        }
+        // Keep one change per path, the last one seen.
+        let mut last: HashMap<String, FileChange> = HashMap::new();
+        for c in changes.files.drain(..) {
+            last.insert(c.path().to_string(), c);
+        }
+        let mut files: Vec<FileChange> = last.into_values().collect();
+        files.sort_by(|a, b| a.path().cmp(b.path()));
+        if files.is_empty() {
+            return changes;
+        }
+        let reread: Vec<Reindexed> = files
+            .par_iter()
+            .map(|c| match c {
+                FileChange::Added(p) | FileChange::Modified(p)
+                    if FileKind::from_path(p) == FileKind::Markdown =>
+                {
+                    let text = std::fs::read_to_string(self.root.join(p)).unwrap_or_default();
+                    let meta = index_markdown(&text);
+                    (p.clone(), Some((meta, Arc::new(text))))
+                }
+                other => (other.path().to_string(), None),
+            })
+            .collect();
+        {
+            let mut cache = self.cache.write().unwrap_or_else(|e| e.into_inner());
+            let mut texts = self.texts.write().unwrap_or_else(|e| e.into_inner());
+            for (c, (path, indexed)) in files.iter().zip(reread) {
+                match (c, indexed) {
+                    (FileChange::Removed(_), _) => {
+                        if texts.remove(&path).is_some() {
+                            changes.removed_notes.push(path.clone());
+                        }
+                        cache.forget_path(&path);
+                    }
+                    (_, Some((meta, text))) => {
+                        cache.insert_file(path.clone(), meta);
+                        texts.insert(path.clone(), text);
+                        changes.notes.push(path);
+                    }
+                    (_, None) => cache.add_path(&path),
+                }
+            }
+            if files.iter().any(|c| !matches!(c, FileChange::Modified(_))) {
+                cache.reresolve();
+            }
+        }
+        changes.files = files;
+        changes
+    }
+
+    /// Note names and aliases, for unlinked mentions.
+    fn names(&self) -> Vec<(String, String)> {
+        let cache = self.cache();
+        let mut out = Vec::new();
+        for (path, meta) in cache.files() {
+            let base = path
+                .rsplit('/')
+                .next()
+                .unwrap_or(path)
+                .trim_end_matches(".md");
+            out.push((base.to_string(), path.to_string()));
+            for alias in frontmatter_aliases(meta) {
+                out.push((alias, path.to_string()));
+            }
+        }
+        out
+    }
 }
 
 impl reading::EmbedSource for VaultState {
     fn resolve(&self, linktext: &str, source_path: &str) -> Option<String> {
-        self.cache
+        self.cache()
             .resolve(linktext, source_path)
             .map(str::to_string)
     }
 
     fn read(&self, path: &str) -> Option<String> {
-        std::fs::read_to_string(self.vault.absolute(path)).ok()
+        std::fs::read_to_string(self.vault().absolute(path)).ok()
     }
 
     fn absolute(&self, path: &str) -> PathBuf {
-        self.vault.absolute(path)
+        self.vault().absolute(path)
     }
 }
 
@@ -125,6 +241,7 @@ enum LeftTab {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RightTab {
     Backlinks,
+    Outgoing,
     Outline,
     Tags,
 }
@@ -136,18 +253,31 @@ struct OutlineRow {
     offset: usize,
 }
 
+/// A row of the Backlinks or Outgoing links pane.
 #[derive(Clone)]
-struct BacklinkRow {
-    source: String,
-    name: SharedString,
-    context: SharedString,
-    line: u32,
+enum PaneRow {
+    Header(SharedString),
+    Item {
+        /// File to open; `None` for an unresolved link.
+        path: Option<String>,
+        label: SharedString,
+        detail: SharedString,
+        /// Byte offset to scroll to after opening.
+        offset: Option<usize>,
+    },
 }
 
 #[derive(Clone)]
 struct TagRow {
     name: SharedString,
     count: usize,
+}
+
+/// Mentions computed off the UI thread for one open note.
+struct MentionRows {
+    path: String,
+    incoming: Vec<PaneRow>,
+    outgoing: Vec<PaneRow>,
 }
 
 pub struct Workspace {
@@ -168,12 +298,20 @@ pub struct Workspace {
     history_ix: usize,
     right_tab: RightTab,
     outline: Vec<OutlineRow>,
-    backlinks: Vec<BacklinkRow>,
+    backlink_rows: Vec<PaneRow>,
+    outgoing_rows: Vec<PaneRow>,
+    /// Linked mentions, kept apart so mentions can be appended when they arrive.
+    linked: Vec<PaneRow>,
+    outgoing_links: Vec<PaneRow>,
     tags: Vec<TagRow>,
     tag_scroll: UniformListScrollHandle,
+    /// Matcher over every note name and alias, rebuilt when files change.
+    name_finder: Option<Arc<Finder>>,
+    mention_generation: u64,
     status: SharedString,
     words: usize,
     chars: usize,
+    _watcher: Option<watch::Watcher>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -239,12 +377,18 @@ impl Workspace {
             history_ix: 0,
             right_tab: RightTab::Backlinks,
             outline: Vec::new(),
-            backlinks: Vec::new(),
+            backlink_rows: Vec::new(),
+            outgoing_rows: Vec::new(),
+            linked: Vec::new(),
+            outgoing_links: Vec::new(),
             tags: Vec::new(),
             tag_scroll: UniformListScrollHandle::new(),
+            name_finder: None,
+            mention_generation: 0,
             status: "Pass a vault folder as the first argument".into(),
             words: 0,
             chars: 0,
+            _watcher: None,
             _subscriptions: subscriptions,
         };
         if let Some(root) = root {
@@ -281,14 +425,36 @@ impl Workspace {
 
     fn set_state(&mut self, state: VaultState, cx: &mut Context<Self>) {
         self.loading = None;
-        let show_unsupported = state.app.show_unsupported_files.unwrap_or(false);
-        let tree = FileTree::new(state.vault.files(), show_unsupported);
-        self.explorer.update(cx, |e, cx| e.set_tree(tree, cx));
         let readable = state.app.readable_line_length.unwrap_or(true);
         self.reading
             .update(cx, |r, _| r.set_readable_line_length(readable));
+        self.status = format!(
+            "{} files, {} notes indexed in {:.0} ms",
+            state.vault().files().len(),
+            state.cache().len(),
+            state.index_ms
+        )
+        .into();
+        let state = Arc::new(state);
+        self.state = Some(state.clone());
+        self.refresh_vault_views(cx);
+        self.start_watching(&state, cx);
+        if let Some(current) = self.current.clone() {
+            self.open_file(current, None, cx);
+        }
+        cx.notify();
+    }
+
+    /// Rebuilds everything that depends on the file list or the whole cache.
+    fn refresh_vault_views(&mut self, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let show_unsupported = state.app.show_unsupported_files.unwrap_or(false);
+        let tree = FileTree::new(state.vault().files(), show_unsupported);
+        self.explorer.update(cx, |e, cx| e.set_tree(tree, cx));
         self.tags = state
-            .cache
+            .cache()
             .tags()
             .values()
             .map(|t| TagRow {
@@ -296,27 +462,120 @@ impl Workspace {
                 count: t.count,
             })
             .collect();
-        self.status = format!(
-            "{} files, {} notes indexed in {:.0} ms",
-            state.vault.files().len(),
-            state.cache.len(),
-            state.index_ms
-        )
-        .into();
-        let state = Arc::new(state);
-        self.search
-            .update(cx, |s, cx| s.set_state(state.clone(), cx));
         self.switcher
             .update(cx, |s, cx| s.set_state(state.clone(), cx));
-        self.state = Some(state);
+        self.search
+            .update(cx, |s, cx| s.set_state(state.clone(), cx));
+        self.name_finder = None;
+        cx.notify();
+    }
+
+    fn start_watching(&mut self, state: &Arc<VaultState>, cx: &mut Context<Self>) {
+        let (watcher, rx) = match watch::start(&state.root) {
+            Ok(w) => w,
+            Err(err) => {
+                self.status = format!("File watching unavailable: {err}").into();
+                return;
+            }
+        };
+        self._watcher = Some(watcher);
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(300))
+                .await;
+            if this.upgrade().is_none() {
+                break;
+            }
+            let mut paths: Vec<PathBuf> = Vec::new();
+            while let Ok(p) = rx.try_recv() {
+                paths.push(p);
+            }
+            if paths.is_empty() {
+                continue;
+            }
+            paths.sort();
+            paths.dedup();
+            if this
+                .update(cx, |ws, cx| ws.files_changed(paths, cx))
+                .is_err()
+            {
+                break;
+            }
+        })
+        .detach();
+    }
+
+    fn files_changed(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let changes = cx
+                .background_executor()
+                .spawn(async move { state.apply(&paths) })
+                .await;
+            this.update(cx, |ws, cx| ws.after_changes(changes, cx)).ok();
+        })
+        .detach();
+    }
+
+    fn after_changes(&mut self, changes: Changes, cx: &mut Context<Self>) {
+        if changes.files.is_empty() {
+            return;
+        }
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        if changes.structural() {
+            self.refresh_vault_views(cx);
+        } else {
+            self.tags = state
+                .cache()
+                .tags()
+                .values()
+                .map(|t| TagRow {
+                    name: t.name.clone().into(),
+                    count: t.count,
+                })
+                .collect();
+            self.search.update(cx, |s, cx| s.rerun(cx));
+        }
+        let n = changes.files.len();
+        self.status = if n == 1 {
+            format!("{} changed", changes.files[0].path()).into()
+        } else {
+            format!("{n} files changed").into()
+        };
         if let Some(current) = self.current.clone() {
-            self.open_file(current, None, cx);
+            let removed = changes
+                .files
+                .iter()
+                .any(|c| matches!(c, FileChange::Removed(p) if *p == current));
+            if removed {
+                self.status = format!("{current} was deleted").into();
+                self.refresh_panes(&state, cx);
+            } else if changes.files.iter().any(|c| c.path() == current) {
+                self.show_file(&current, &state, cx);
+            } else {
+                self.refresh_panes(&state, cx);
+            }
         }
         cx.notify();
     }
 
     pub fn is_loaded(&self) -> bool {
         self.state.is_some()
+    }
+
+    /// Selects a right-dock tab by name (`--pane` on the command line).
+    pub fn show_right_tab(&mut self, name: &str, cx: &mut Context<Self>) {
+        self.right_tab = match name.to_lowercase().as_str() {
+            "outgoing" => RightTab::Outgoing,
+            "outline" => RightTab::Outline,
+            "tags" => RightTab::Tags,
+            _ => RightTab::Backlinks,
+        };
+        cx.notify();
     }
 
     pub fn editor(&self) -> &Entity<Editor> {
@@ -395,7 +654,7 @@ impl Workspace {
         let link = _markdown::parse_linktext(name);
         let wanted = link.path;
         let found = state
-            .vault
+            .vault()
             .files()
             .iter()
             .map(|f| f.path.as_str())
@@ -420,7 +679,7 @@ impl Workspace {
         let first = self
             .state
             .as_ref()
-            .and_then(|s| s.vault.markdown_files().next().map(|f| f.path.clone()));
+            .and_then(|s| s.vault().markdown_files().next().map(|f| f.path.clone()));
         if let Some(path) = first {
             self.open_file(path, None, cx);
         }
@@ -453,7 +712,7 @@ impl Workspace {
         self.explorer.update(cx, |e, cx| e.reveal(path, cx));
         let kind = FileKind::from_path(path);
         match kind {
-            FileKind::Markdown => match std::fs::read_to_string(state.vault.absolute(path)) {
+            FileKind::Markdown => match std::fs::read_to_string(state.vault().absolute(path)) {
                 Ok(text) => {
                     let started = Instant::now();
                     let model =
@@ -493,66 +752,136 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Plain text of a cached heading (markup stripped).
+    fn heading_text(raw: &str) -> String {
+        let doc = _markdown::parse(raw);
+        match doc.blocks.first().map(|b| &b.kind) {
+            Some(_markdown::BlockKind::Paragraph { content }) => {
+                _markdown::plain_text(content)
+            }
+            _ => raw.to_string(),
+        }
+        .trim()
+        .to_string()
+    }
+
     fn refresh_panes(&mut self, state: &Arc<VaultState>, cx: &mut Context<Self>) {
         let Some(path) = self.current.clone() else {
             return;
         };
-        self.outline = state
-            .cache
+        let cache = state.cache();
+        let texts = state.texts();
+        self.outline = cache
             .file(&path)
             .map(|meta| {
                 meta.headings
                     .iter()
                     .map(|h| OutlineRow {
                         level: h.level,
-                        text: _markdown::plain_text(
-                            &_markdown::parse(&h.heading)
-                                .blocks
-                                .first()
-                                .map(|b| match &b.kind {
-                                    _markdown::BlockKind::Paragraph { content } => {
-                                        content.clone()
-                                    }
-                                    _ => Vec::new(),
-                                })
-                                .unwrap_or_default(),
-                        )
-                        .into(),
+                        text: Self::heading_text(&h.heading).into(),
                         offset: h.position.start.offset,
                     })
                     .collect()
             })
             .unwrap_or_default();
-        let mut rows = Vec::new();
-        let mut last_source: Option<(String, Vec<String>)> = None;
-        for b in state.cache.backlinks(&path) {
-            let lines = match &last_source {
-                Some((s, lines)) if s == b.source => lines.clone(),
-                _ => {
-                    let lines: Vec<String> =
-                        std::fs::read_to_string(state.vault.absolute(b.source))
-                            .map(|t| t.lines().map(str::to_string).collect())
-                            .unwrap_or_default();
-                    last_source = Some((b.source.to_string(), lines.clone()));
-                    lines
-                }
-            };
-            let line = b.link.position.start.line;
-            let context = lines
-                .get(line as usize)
+
+        // Linked mentions: every link into this file, with its line as context.
+        let mut linked = Vec::new();
+        for b in cache.backlinks(&path) {
+            let context = texts
+                .get(b.source)
+                .and_then(|t| t.lines().nth(b.link.position.start.line as usize))
                 .map(|l| l.trim().to_string())
                 .unwrap_or_default();
-            rows.push(BacklinkRow {
-                source: b.source.to_string(),
-                name: display_name(b.source.rsplit('/').next().unwrap_or(b.source))
+            linked.push(PaneRow::Item {
+                path: Some(b.source.to_string()),
+                label: display_name(b.source.rsplit('/').next().unwrap_or(b.source))
                     .to_string()
                     .into(),
-                context: context.into(),
-                line,
+                detail: format!("{}: {}", b.link.position.start.line + 1, context).into(),
+                offset: Some(b.link.position.start.offset),
             });
         }
-        self.backlinks = rows;
+        let n = linked.len();
+        linked.insert(0, PaneRow::Header(format!("Linked mentions ({n})").into()));
+        self.linked = linked;
+
+        // Outgoing: resolved then unresolved links from this file.
+        let mut out = Vec::new();
+        if let Some(meta) = cache.file(&path) {
+            for link in meta.links.iter().chain(meta.embeds.iter()) {
+                match cache.resolve(&link.link, &path) {
+                    Some(target) => out.push(PaneRow::Item {
+                        path: Some(target.to_string()),
+                        label: display_name(target.rsplit('/').next().unwrap_or(target))
+                            .to_string()
+                            .into(),
+                        detail: target.to_string().into(),
+                        offset: None,
+                    }),
+                    None => out.push(PaneRow::Item {
+                        path: None,
+                        label: _markdown::parse_linktext(&link.link)
+                            .path
+                            .to_string()
+                            .into(),
+                        detail: "Not created yet".into(),
+                        offset: None,
+                    }),
+                }
+            }
+        }
+        let n = out.len();
+        out.insert(0, PaneRow::Header(format!("Links ({n})").into()));
+        self.outgoing_links = out;
+        drop(cache);
+        drop(texts);
+
+        self.backlink_rows = self.linked.clone();
+        self.outgoing_rows = self.outgoing_links.clone();
+        self.compute_mentions(&path, state, cx);
         cx.notify();
+    }
+
+    /// Finds unlinked mentions in both directions on the background executor.
+    fn compute_mentions(&mut self, path: &str, state: &Arc<VaultState>, cx: &mut Context<Self>) {
+        self.mention_generation += 1;
+        let generation = self.mention_generation;
+        let state = state.clone();
+        let path = path.to_string();
+        let finder = self.name_finder.clone();
+        cx.spawn(async move |this, cx| {
+            let (rows, finder) = cx
+                .background_executor()
+                .spawn(async move {
+                    let finder = finder.or_else(|| {
+                        let names = state.names();
+                        let refs: Vec<Name<'_>> = names
+                            .iter()
+                            .map(|(text, path)| Name { text, path })
+                            .collect();
+                        Finder::new(&refs).map(Arc::new)
+                    });
+                    (mention_rows(&state, &path, finder.as_deref()), finder)
+                })
+                .await;
+            this.update(cx, |ws, cx| {
+                ws.name_finder = finder;
+                if ws.mention_generation != generation || ws.current.as_deref() != Some(&rows.path)
+                {
+                    return;
+                }
+                let mut backlinks = ws.linked.clone();
+                backlinks.extend(rows.incoming);
+                ws.backlink_rows = backlinks;
+                let mut outgoing = ws.outgoing_links.clone();
+                outgoing.extend(rows.outgoing);
+                ws.outgoing_rows = outgoing;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn scroll_to_subpath(
@@ -562,7 +891,8 @@ impl Workspace {
         state: &Arc<VaultState>,
         cx: &mut Context<Self>,
     ) {
-        let Some(meta) = state.cache.file(path) else {
+        let cache = state.cache();
+        let Some(meta) = cache.file(path) else {
             return;
         };
         let offset = match subpath {
@@ -570,22 +900,7 @@ impl Workspace {
                 let Some(last) = names.last() else { return };
                 meta.headings
                     .iter()
-                    .find(|h| {
-                        _markdown::plain_text(
-                            &_markdown::parse(&h.heading)
-                                .blocks
-                                .first()
-                                .map(|b| match &b.kind {
-                                    _markdown::BlockKind::Paragraph { content } => {
-                                        content.clone()
-                                    }
-                                    _ => Vec::new(),
-                                })
-                                .unwrap_or_default(),
-                        )
-                        .trim()
-                        .eq_ignore_ascii_case(last.trim())
-                    })
+                    .find(|h| Self::heading_text(&h.heading).eq_ignore_ascii_case(last.trim()))
                     .map(|h| h.position.start.offset)
             }
             Subpath::Block(id) => meta
@@ -594,6 +909,7 @@ impl Workspace {
                 .or_else(|| meta.blocks.get(*id))
                 .map(|b| b.position.start.offset),
         };
+        drop(cache);
         if let Some(offset) = offset {
             self.reading
                 .update(cx, |r, cx| r.scroll_to_offset(offset, cx));
@@ -608,9 +924,9 @@ impl Workspace {
                 };
                 let source = self.current.clone().unwrap_or_default();
                 let parsed = _markdown::parse_linktext(&body);
-                match state.cache.resolve(&body, &source) {
+                let resolved = state.cache().resolve(&body, &source).map(str::to_string);
+                match resolved {
                     Some(path) => {
-                        let path = path.to_string();
                         if path == source {
                             if let Some(sub) = parsed.subpath {
                                 self.scroll_to_subpath(&path, &sub, &state, cx);
@@ -703,6 +1019,7 @@ impl Workspace {
                 Some(
                     div()
                         .id(("outline", ix))
+                        .w_full()
                         .h(px(24.))
                         .flex()
                         .items_center()
@@ -725,6 +1042,80 @@ impl Workspace {
             .collect()
     }
 
+    fn pane_row(
+        &self,
+        id: (&'static str, usize),
+        row: PaneRow,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        match row {
+            PaneRow::Header(text) => div()
+                .id(id)
+                .w_full()
+                .h(px(40.))
+                .flex()
+                .items_end()
+                .pb_1()
+                .px_2()
+                .text_size(px(10.))
+                .text_color(theme.text_muted)
+                .child(text.to_uppercase()),
+            PaneRow::Item {
+                path,
+                label,
+                detail,
+                offset,
+            } => {
+                let clickable = path.is_some();
+                div()
+                    .id(id)
+                    .w_full()
+                    .h(px(40.))
+                    .flex()
+                    .flex_col()
+                    .justify_center()
+                    .px_2()
+                    .rounded_sm()
+                    .when(clickable, |d| {
+                        d.cursor_pointer()
+                            .hover(|s| s.bg(theme.bg_alt))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if let Some(path) = path.clone() {
+                                    this.open_file(path, None, cx);
+                                    if let Some(offset) = offset {
+                                        this.reading
+                                            .update(cx, |r, cx| r.scroll_to_offset(offset, cx));
+                                    }
+                                }
+                            }))
+                    })
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .text_color(if clickable {
+                                theme.text
+                            } else {
+                                theme.text_muted
+                            })
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .overflow_hidden()
+                            .child(label),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(theme.text_muted)
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .overflow_hidden()
+                            .child(detail),
+                    )
+            }
+        }
+    }
+
     fn render_backlinks(
         &mut self,
         range: Range<usize>,
@@ -734,45 +1125,23 @@ impl Workspace {
         let theme = cx.global::<Theme>().clone();
         range
             .filter_map(|ix| {
-                let row = self.backlinks.get(ix)?.clone();
-                let source = row.source.clone();
-                Some(
-                    div()
-                        .id(("backlink", ix))
-                        .h(px(44.))
-                        .flex()
-                        .flex_col()
-                        .justify_center()
-                        .px_2()
-                        .rounded_sm()
-                        .cursor_pointer()
-                        .hover(|s| s.bg(theme.bg_alt))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.open_file(source.clone(), None, cx);
-                        }))
-                        .child(
-                            div()
-                                .text_size(px(13.))
-                                .text_color(theme.text)
-                                .whitespace_nowrap()
-                                .text_ellipsis()
-                                .overflow_hidden()
-                                .child(row.name),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(11.))
-                                .text_color(theme.text_muted)
-                                .whitespace_nowrap()
-                                .text_ellipsis()
-                                .overflow_hidden()
-                                .child(SharedString::from(format!(
-                                    "{}: {}",
-                                    row.line + 1,
-                                    row.context
-                                ))),
-                        ),
-                )
+                let row = self.backlink_rows.get(ix)?.clone();
+                Some(self.pane_row(("backlink", ix), row, &theme, cx))
+            })
+            .collect()
+    }
+
+    fn render_outgoing(
+        &mut self,
+        range: Range<usize>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<gpui::Stateful<gpui::Div>> {
+        let theme = cx.global::<Theme>().clone();
+        range
+            .filter_map(|ix| {
+                let row = self.outgoing_rows.get(ix)?.clone();
+                Some(self.pane_row(("outgoing", ix), row, &theme, cx))
             })
             .collect()
     }
@@ -791,6 +1160,7 @@ impl Workspace {
                 Some(
                     div()
                         .id(("tag", ix))
+                        .w_full()
                         .h(px(24.))
                         .flex()
                         .flex_row()
@@ -827,15 +1197,18 @@ impl Workspace {
         let tab = self.right_tab;
         let body: gpui::AnyElement = match tab {
             RightTab::Backlinks => {
-                let count = self.backlinks.len();
-                if count == 0 {
-                    empty_pane("No backlinks found.", theme)
-                } else {
-                    uniform_list("backlinks", count, cx.processor(Self::render_backlinks))
-                        .size_full()
-                        .px_1()
-                        .into_any_element()
-                }
+                let count = self.backlink_rows.len();
+                uniform_list("backlinks", count, cx.processor(Self::render_backlinks))
+                    .size_full()
+                    .px_1()
+                    .into_any_element()
+            }
+            RightTab::Outgoing => {
+                let count = self.outgoing_rows.len();
+                uniform_list("outgoing", count, cx.processor(Self::render_outgoing))
+                    .size_full()
+                    .px_1()
+                    .into_any_element()
             }
             RightTab::Outline => {
                 let count = self.outline.len();
@@ -861,6 +1234,19 @@ impl Workspace {
                 }
             }
         };
+        let tab_button =
+            |this: &mut Self, label: &'static str, which: RightTab, cx: &mut Context<Self>| {
+                this.dock_tab(
+                    label,
+                    tab == which,
+                    theme,
+                    move |this, _, cx| {
+                        this.right_tab = which;
+                        cx.notify();
+                    },
+                    cx,
+                )
+            };
         div()
             .flex()
             .flex_col()
@@ -878,38 +1264,107 @@ impl Workspace {
                     .py_1()
                     .border_b_1()
                     .border_color(theme.border)
-                    .child(self.dock_tab(
-                        "Backlinks",
-                        tab == RightTab::Backlinks,
-                        theme,
-                        |this, _, cx| {
-                            this.right_tab = RightTab::Backlinks;
-                            cx.notify();
-                        },
-                        cx,
-                    ))
-                    .child(self.dock_tab(
-                        "Outline",
-                        tab == RightTab::Outline,
-                        theme,
-                        |this, _, cx| {
-                            this.right_tab = RightTab::Outline;
-                            cx.notify();
-                        },
-                        cx,
-                    ))
-                    .child(self.dock_tab(
-                        "Tags",
-                        tab == RightTab::Tags,
-                        theme,
-                        |this, _, cx| {
-                            this.right_tab = RightTab::Tags;
-                            cx.notify();
-                        },
-                        cx,
-                    )),
+                    .child(tab_button(self, "Backlinks", RightTab::Backlinks, cx))
+                    .child(tab_button(self, "Outgoing", RightTab::Outgoing, cx))
+                    .child(tab_button(self, "Outline", RightTab::Outline, cx))
+                    .child(tab_button(self, "Tags", RightTab::Tags, cx)),
             )
             .child(div().flex_1().overflow_hidden().child(body))
+    }
+}
+
+/// Unlinked mentions for `path`: other notes mentioning its names (incoming)
+/// and names of other notes mentioned in it (outgoing).
+fn mention_rows(state: &VaultState, path: &str, finder: Option<&Finder>) -> MentionRows {
+    const MAX: usize = 200;
+    let texts = state.texts();
+    let cache = state.cache();
+    let base = path
+        .rsplit('/')
+        .next()
+        .unwrap_or(path)
+        .trim_end_matches(".md")
+        .to_string();
+    let mut own: Vec<String> = vec![base];
+    if let Some(meta) = cache.file(path) {
+        own.extend(frontmatter_aliases(meta));
+    }
+    let own_refs: Vec<Name<'_>> = own.iter().map(|t| Name { text: t, path }).collect();
+    let own_finder = Finder::new(&own_refs);
+
+    let mut incoming: Vec<PaneRow> = Vec::new();
+    if let Some(f) = &own_finder {
+        let mut found: Vec<(String, usize, String)> = texts
+            .par_iter()
+            .filter(|(p, _)| p.as_str() != path)
+            .flat_map_iter(|(p, text)| {
+                f.find(text)
+                    .into_iter()
+                    .map(|m| {
+                        let line = text[m.line_offset..]
+                            .lines()
+                            .next()
+                            .unwrap_or("")
+                            .trim()
+                            .to_string();
+                        (p.clone(), m.line_offset, line)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        found.sort();
+        for (p, offset, line) in found.into_iter().take(MAX) {
+            incoming.push(PaneRow::Item {
+                path: Some(p.clone()),
+                label: display_name(p.rsplit('/').next().unwrap_or(&p))
+                    .to_string()
+                    .into(),
+                detail: line.into(),
+                offset: Some(offset),
+            });
+        }
+    }
+    let n = incoming.len();
+    incoming.insert(
+        0,
+        PaneRow::Header(format!("Unlinked mentions ({n})").into()),
+    );
+
+    let mut outgoing: Vec<PaneRow> = Vec::new();
+    if let (Some(f), Some(text)) = (finder, texts.get(path)) {
+        let mut seen = std::collections::HashSet::new();
+        for m in f.find(text) {
+            if m.path == path || !seen.insert(m.path.clone()) {
+                continue;
+            }
+            let line = text[m.line_offset..]
+                .lines()
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            outgoing.push(PaneRow::Item {
+                path: Some(m.path.clone()),
+                label: display_name(m.path.rsplit('/').next().unwrap_or(&m.path))
+                    .to_string()
+                    .into(),
+                detail: line.into(),
+                offset: Some(m.line_offset),
+            });
+            if outgoing.len() >= MAX {
+                break;
+            }
+        }
+    }
+    let n = outgoing.len();
+    outgoing.insert(
+        0,
+        PaneRow::Header(format!("Unlinked mentions ({n})").into()),
+    );
+    MentionRows {
+        path: path.to_string(),
+        incoming,
+        outgoing,
     }
 }
 

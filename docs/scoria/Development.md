@@ -23,6 +23,7 @@ cargo run --release -p  -- <vault>                      # Files, reading view, B
 cargo run --release -p  -- <vault> --note "Name#Heading" # open a note, scrolled to a heading or ^block
 cargo run --release -p  -- <vault> --search "tag:#x OR y"  # open with the Search tab filled (for screenshots)
 cargo run --release -p  -- <vault> --switcher "spc"        # open with the quick switcher up (for screenshots)
+cargo run --release -p  -- <vault> --pane outgoing          # right dock tab: backlinks, outgoing, outline, tags
 cargo run --release -p -bench -- generate <dir>
 cargo run --release -p -bench -- index <vault>
 ```
@@ -41,7 +42,9 @@ browse their real vault with no missing content.
 | Open a vault | done: scanned and indexed on a background thread, `.obsidian` config read |
 | Files view | done: folder tree, folders first, collapse state, auto-reveal, attachments shown, unknown kinds hidden |
 | Reading view | done for text content; see the list below |
-| Backlinks | done: linked mentions with the source line; unlinked mentions not yet |
+| Backlinks | done: linked mentions with the source line, unlinked mentions (names and aliases in plain text outside links and code) |
+| Outgoing links | done: resolved and unresolved links of the note, plus unlinked mentions of other notes in it |
+| File watching | done: changed, added, removed and moved files re-index in place, links re-resolve, panes and search refresh, an open note reloads keeping its scroll position |
 | Outline | done: click scrolls to the heading |
 | Tags | done: vault-wide counts merged across inline and frontmatter tags |
 | Search | done: full query grammar with Obsidian's explain labels, results grouped per file with context, click opens at the line; sort options and copy results not yet |
@@ -69,6 +72,18 @@ language label, display math (raw), raw HTML (as text), footnotes.
 Not yet: Live Preview, MathJax, HTML rendering, remote images, column widths
 in tables (every column is equal), checkbox toggling, heading folding, copy
 buttons, PDF export.
+
+### File watching and mentions, 2026-10-16
+
+`notify` watches the vault root; the workspace drains the event channel every
+300 ms, so a burst of writes becomes one batch. `Vault::refresh_path` turns
+each path into added, modified or removed files (walking a moved-in folder,
+dropping everything under a removed one, ignoring dot-folders), then
+`VaultState::apply` re-reads and re-indexes the notes among them under write
+locks and calls `MetadataCache::reresolve` when files appeared or vanished,
+because links elsewhere may now resolve. Unlinked mentions use one regex
+alternation over every note name and alias (`mentions::Finder`), skipping
+matches inside wikilinks, markdown links, inline code and fenced code.
 
 ### Search and quick switcher, 2026-10-16
 

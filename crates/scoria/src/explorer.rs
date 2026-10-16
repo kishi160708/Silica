@@ -111,6 +111,21 @@ impl FileTree {
         self.visible.len()
     }
 
+    /// Folders currently expanded, to carry over to a rebuilt tree.
+    pub fn expanded_folders(&self) -> HashSet<String> {
+        self.all
+            .iter()
+            .filter(|r| r.is_folder && !self.collapsed.contains(&r.path))
+            .map(|r| r.path.clone())
+            .collect()
+    }
+
+    /// Expands the given folders (unknown ones are ignored).
+    pub fn expand_folders(&mut self, folders: &HashSet<String>) {
+        self.collapsed.retain(|f| !folders.contains(f));
+        self.recompute();
+    }
+
     pub fn is_collapsed(&self, folder: &str) -> bool {
         self.collapsed.contains(folder)
     }
@@ -224,7 +239,9 @@ impl FileExplorer {
         }
     }
 
-    pub fn set_tree(&mut self, tree: FileTree, cx: &mut Context<Self>) {
+    pub fn set_tree(&mut self, mut tree: FileTree, cx: &mut Context<Self>) {
+        let expanded = self.tree.expanded_folders();
+        tree.expand_folders(&expanded);
         self.tree = tree;
         if let Some(active) = self.active.clone() {
             self.reveal(&active, cx);
@@ -376,5 +393,9 @@ mod tests {
         assert_eq!(tree.len(), 2);
         tree.expand_all();
         assert_eq!(tree.len(), 6);
+        let expanded = tree.expanded_folders();
+        let mut rebuilt = FileTree::new(&files, false);
+        rebuilt.expand_folders(&expanded);
+        assert_eq!(rebuilt.len(), 6);
     }
 }

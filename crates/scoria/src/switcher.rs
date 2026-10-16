@@ -93,7 +93,9 @@ impl QuickSwitcher {
     pub fn set_state(&mut self, state: Arc<VaultState>, cx: &mut Context<Self>) {
         let mut candidates = Vec::new();
         let show_unsupported = state.app.show_unsupported_files.unwrap_or(false);
-        for file in state.vault.files() {
+        let vault = state.vault();
+        let cache = state.cache();
+        for file in vault.files() {
             if file.kind == FileKind::Other && !show_unsupported {
                 continue;
             }
@@ -108,7 +110,7 @@ impl QuickSwitcher {
                 label,
                 kind: ItemKind::File,
             });
-            if let Some(meta) = state.cache.file(&file.path) {
+            if let Some(meta) = cache.file(&file.path) {
                 for alias in frontmatter_aliases(meta) {
                     candidates.push(Candidate {
                         path: file.path.clone(),
@@ -118,12 +120,10 @@ impl QuickSwitcher {
                 }
             }
         }
-        let mut unresolved: Vec<String> = state
-            .cache
+        let mut unresolved: Vec<String> = cache
             .files()
             .flat_map(|(p, _)| {
-                state
-                    .cache
+                cache
                     .unresolved_links(p)
                     .map(|m| m.keys().cloned().collect::<Vec<_>>())
                     .unwrap_or_default()
@@ -139,6 +139,8 @@ impl QuickSwitcher {
                 kind: ItemKind::Unresolved,
             });
         }
+        drop(vault);
+        drop(cache);
         self.candidates = candidates;
         self.state = Some(state);
         self.refresh(cx);

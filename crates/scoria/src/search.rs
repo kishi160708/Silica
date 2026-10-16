@@ -100,6 +100,11 @@ impl SearchPane {
         self.input.read(cx).text().to_string()
     }
 
+    /// Runs the current query again, after the vault changed.
+    pub fn rerun(&mut self, cx: &mut Context<Self>) {
+        self.run(cx);
+    }
+
     fn run(&mut self, cx: &mut Context<Self>) {
         let query = self.input.read(cx).text().trim().to_string();
         self.generation += 1;
@@ -354,11 +359,13 @@ fn inputs(meta: &CachedMetadata, text: &str) -> Inputs {
 
 /// Runs `search` over every note; results sorted by file name.
 pub fn run_search(search: &Search, state: &VaultState) -> Vec<FileResult> {
-    let files: Vec<(&str, &CachedMetadata)> = state.cache.files().collect();
+    let cache = state.cache();
+    let texts = state.texts();
+    let files: Vec<(&str, &CachedMetadata)> = cache.files().collect();
     let mut results: Vec<FileResult> = files
         .par_iter()
         .filter_map(|(path, meta)| {
-            let text = state.texts.get(*path)?;
+            let text = texts.get(*path)?;
             let (tags, blocks, sections, tasks) = inputs(meta, text);
             let file = SearchFile {
                 path,

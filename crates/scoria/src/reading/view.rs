@@ -57,8 +57,14 @@ impl ReadingView {
     }
 
     pub fn set_note(&mut self, path: Option<String>, model: Model, cx: &mut Context<Self>) {
+        let same = path.is_some() && self.path == path;
+        let top = self.list.logical_scroll_top();
         self.path = path;
         self.list.reset(model.blocks.len());
+        if same {
+            // A reload after a change on disk keeps the reader's place.
+            self.list.scroll_to(top);
+        }
         self.model = Arc::new(model);
         self.toggled.clear();
         cx.notify();

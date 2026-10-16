@@ -36,6 +36,22 @@ pub struct VaultFile {
     pub size: u64,
 }
 
+/// What [`Vault::refresh_path`] found; paths are vault-relative.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileChange {
+    Added(String),
+    Modified(String),
+    Removed(String),
+}
+
+impl FileChange {
+    pub fn path(&self) -> &str {
+        match self {
+            FileChange::Added(p) | FileChange::Modified(p) | FileChange::Removed(p) => p,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Vault {
     root: PathBuf,
@@ -132,6 +148,87 @@ impl Vault {
         files.sort_by(|a, b| a.path.cmp(&b.path));
         self.files = files;
         Ok(())
+    }
+
+    /// Re-checks one path after a filesystem event and updates the file
+    /// list: a file that exists is added or refreshed, a folder that exists
+    /// is walked, and anything missing is removed together with everything
+    /// under it. Paths inside dot-folders (the config directory, `.trash`)
+    /// are ignored.
+    pub fn refresh_path(&mut self, path: &Path) -> Vec<FileChange> {
+        let Ok(rel_path) = path.strip_prefix(&self.root) else {
+            return Vec::new();
+        };
+        let rel = rel_path.to_string_lossy().replace('\\', "/");
+        if rel.is_empty() {
+            return Vec::new();
+        }
+        if rel.split('/').any(|part| part.starts_with('.')) {
+            return Vec::new();
+        }
+        let mut changes = Vec::new();
+        match std::fs::metadata(path) {
+            Ok(meta) if meta.is_file() => {
+                let file = VaultFile {
+                    kind: FileKind::from_path(&rel),
+                    path: rel.clone(),
+                    size: meta.len(),
+                };
+                match self.files.binary_search_by(|f| f.path.cmp(&rel)) {
+                    Ok(ix) => {
+                        self.files[ix] = file;
+                        changes.push(FileChange::Modified(rel));
+                    }
+                    Err(ix) => {
+                        self.files.insert(ix, file);
+                        changes.push(FileChange::Added(rel));
+                    }
+                }
+            }
+            Ok(meta) if meta.is_dir() => {
+                let prefix = format!("{rel}/");
+                let before: Vec<String> = self
+                    .files
+                    .iter()
+                    .filter(|f| f.path.starts_with(&prefix))
+                    .map(|f| f.path.clone())
+                    .collect();
+                let mut seen = Vec::new();
+                for entry in walkdir::WalkDir::new(path)
+                    .follow_links(false)
+                    .into_iter()
+                    .filter_entry(|e| {
+                        !(e.depth() > 0 && e.file_name().to_string_lossy().starts_with('.'))
+                    })
+                    .flatten()
+                {
+                    if entry.file_type().is_file() {
+                        seen.push(entry.path().to_path_buf());
+                    }
+                }
+                for file in seen {
+                    changes.extend(self.refresh_path(&file));
+                }
+                for old in before {
+                    if !self.root.join(&old).is_file() {
+                        changes.extend(self.refresh_path(&self.root.join(&old)));
+                    }
+                }
+            }
+            _ => {
+                let prefix = format!("{rel}/");
+                let removed: Vec<String> = self
+                    .files
+                    .iter()
+                    .filter(|f| f.path == rel || f.path.starts_with(&prefix))
+                    .map(|f| f.path.clone())
+                    .collect();
+                self.files
+                    .retain(|f| !(f.path == rel || f.path.starts_with(&prefix)));
+                changes.extend(removed.into_iter().map(FileChange::Removed));
+            }
+        }
+        changes
     }
 
     /// Builds a link resolver over every file currently known.
@@ -240,6 +337,47 @@ mod tests {
         assert!(vault.workspace_json().unwrap().is_none());
         let r = vault.link_resolver();
         assert_eq!(r.resolve("plan", "Note.md"), Some("Projects/Plan.md"));
+    }
+
+    #[test]
+    fn refresh_path_tracks_files_folders_and_removals() {
+        let dir = sample_vault();
+        let mut vault = Vault::open(dir.path()).unwrap();
+        let r = dir.path();
+        fs::write(r.join("Projects/New.md"), "x").unwrap();
+        assert_eq!(
+            vault.refresh_path(&r.join("Projects/New.md")),
+            vec![FileChange::Added("Projects/New.md".into())]
+        );
+        assert_eq!(
+            vault.refresh_path(&r.join("Projects/New.md")),
+            vec![FileChange::Modified("Projects/New.md".into())]
+        );
+        fs::create_dir_all(r.join("Moved/in")).unwrap();
+        fs::write(r.join("Moved/in/a.md"), "a").unwrap();
+        fs::write(r.join("Moved/.hidden.md"), "a").unwrap();
+        assert_eq!(
+            vault.refresh_path(&r.join("Moved")),
+            vec![FileChange::Added("Moved/in/a.md".into())]
+        );
+        fs::remove_dir_all(r.join("Projects")).unwrap();
+        let mut removed = vault.refresh_path(&r.join("Projects"));
+        removed.sort_by(|a, b| a.path().cmp(b.path()));
+        assert_eq!(
+            removed,
+            vec![
+                FileChange::Removed("Projects/New.md".into()),
+                FileChange::Removed("Projects/Plan.md".into())
+            ]
+        );
+        assert!(vault.refresh_path(&r.join(".obsidian/app.json")).is_empty());
+        assert!(vault.refresh_path(&r.join(".trash/x.md")).is_empty());
+        assert!(vault.refresh_path(Path::new("/elsewhere/x.md")).is_empty());
+        let paths: Vec<&str> = vault.files().iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec!["Board.canvas", "Moved/in/a.md", "Note.md", "pic.PNG"]
+        );
     }
 
     #[test]

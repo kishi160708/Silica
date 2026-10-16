@@ -82,40 +82,16 @@ impl MetadataCache {
         self.resolver.resolve(linktext, source_path)
     }
 
+    /// Makes a non-note file (an attachment) known to link resolution.
+    pub fn add_path(&mut self, path: &str) {
+        self.resolver.insert(path);
+    }
+
     /// Replaces (or adds) one note's record and re-derives its edges.
     pub fn insert_file(&mut self, path: String, meta: CachedMetadata) {
         self.remove_file(&path);
         self.resolver.insert(&path);
-        let mut resolved: BTreeMap<String, usize> = BTreeMap::new();
-        let mut unresolved: BTreeMap<String, usize> = BTreeMap::new();
-        let links = meta
-            .links
-            .iter()
-            .chain(meta.embeds.iter())
-            .map(|l| l.link.as_str())
-            .chain(meta.frontmatter_links.iter().map(|l| l.link.as_str()));
-        for link in links {
-            match self.resolver.resolve(link, &path) {
-                Some(target) => {
-                    let target = target.to_string();
-                    self.backlinks
-                        .entry(target.clone())
-                        .or_default()
-                        .insert(path.clone());
-                    *resolved.entry(target).or_default() += 1;
-                }
-                None => {
-                    let target = _markdown::parse_linktext(link).path.to_string();
-                    *unresolved.entry(target).or_default() += 1;
-                }
-            }
-        }
-        if !resolved.is_empty() {
-            self.resolved.insert(path.clone(), resolved);
-        }
-        if !unresolved.is_empty() {
-            self.unresolved.insert(path.clone(), unresolved);
-        }
+        self.link_edges(&path, &meta);
         for tag in all_tags(&meta) {
             let entry = self.tags.entry(tag.to_lowercase()).or_default();
             if entry.name.is_empty() {
@@ -127,12 +103,40 @@ impl MetadataCache {
         self.files.insert(path, meta);
     }
 
-    /// Drops one note and every edge it contributed. The file stays known to
-    /// the resolver only if `forget_path` is called too.
-    pub fn remove_file(&mut self, path: &str) {
-        let Some(meta) = self.files.remove(path) else {
-            return;
-        };
+    fn link_edges(&mut self, path: &str, meta: &CachedMetadata) {
+        let mut resolved: BTreeMap<String, usize> = BTreeMap::new();
+        let mut unresolved: BTreeMap<String, usize> = BTreeMap::new();
+        let links = meta
+            .links
+            .iter()
+            .chain(meta.embeds.iter())
+            .map(|l| l.link.as_str())
+            .chain(meta.frontmatter_links.iter().map(|l| l.link.as_str()));
+        for link in links {
+            match self.resolver.resolve(link, path) {
+                Some(target) => {
+                    let target = target.to_string();
+                    self.backlinks
+                        .entry(target.clone())
+                        .or_default()
+                        .insert(path.to_string());
+                    *resolved.entry(target).or_default() += 1;
+                }
+                None => {
+                    let target = _markdown::parse_linktext(link).path.to_string();
+                    *unresolved.entry(target).or_default() += 1;
+                }
+            }
+        }
+        if !resolved.is_empty() {
+            self.resolved.insert(path.to_string(), resolved);
+        }
+        if !unresolved.is_empty() {
+            self.unresolved.insert(path.to_string(), unresolved);
+        }
+    }
+
+    fn unlink_edges(&mut self, path: &str) {
         if let Some(targets) = self.resolved.remove(path) {
             for target in targets.keys() {
                 if let Some(sources) = self.backlinks.get_mut(target) {
@@ -144,6 +148,31 @@ impl MetadataCache {
             }
         }
         self.unresolved.remove(path);
+    }
+
+    /// Re-derives every link edge, after files were added or removed and
+    /// links elsewhere may resolve differently.
+    pub fn reresolve(&mut self) {
+        self.resolved.clear();
+        self.unresolved.clear();
+        self.backlinks.clear();
+        let files: Vec<(String, CachedMetadata)> = self
+            .files
+            .iter()
+            .map(|(p, m)| (p.clone(), m.clone()))
+            .collect();
+        for (path, meta) in &files {
+            self.link_edges(path, meta);
+        }
+    }
+
+    /// Drops one note and every edge it contributed. The file stays known to
+    /// the resolver only if `forget_path` is called too.
+    pub fn remove_file(&mut self, path: &str) {
+        let Some(meta) = self.files.remove(path) else {
+            return;
+        };
+        self.unlink_edges(path);
         for tag in all_tags(&meta) {
             let key = tag.to_lowercase();
             if let Some(entry) = self.tags.get_mut(&key) {
@@ -369,5 +398,12 @@ mod tests {
             c.unresolved_links("Projects/Plan.md").unwrap().get("Home"),
             Some(&1)
         );
+        // Home comes back: re-resolving turns the unresolved link into a backlink.
+        c.insert_file("Home.md".into(), index_markdown("# Home"));
+        c.reresolve();
+        assert!(c.unresolved_links("Projects/Plan.md").is_none());
+        assert_eq!(c.backlinks("Home.md").len(), 1);
+        c.add_path("Assets/new.png");
+        assert_eq!(c.resolve("new.png", "Home.md"), Some("Assets/new.png"));
     }
 }

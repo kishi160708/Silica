@@ -7,11 +7,13 @@
 
 mod editor;
 mod explorer;
+mod mentions;
 mod reading;
 mod search;
 mod switcher;
 mod text_input;
 mod theme;
+mod watch;
 mod workspace;
 
 use gpui::{
@@ -112,6 +114,8 @@ struct Args {
     search: Option<String>,
     /// Open the quick switcher with this query, for screenshots.
     switcher: Option<String>,
+    /// Right-dock tab to show: backlinks, outgoing, outline, tags.
+    pane: Option<String>,
 }
 
 fn parse_args() -> Args {
@@ -122,6 +126,7 @@ fn parse_args() -> Args {
         stress: None,
         search: None,
         switcher: None,
+        pane: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -133,6 +138,7 @@ fn parse_args() -> Args {
             "--note" => args.note = it.next(),
             "--search" => args.search = it.next(),
             "--switcher" => args.switcher = it.next(),
+            "--pane" => args.pane = it.next(),
             _ if args.vault.is_none() => args.vault = Some(PathBuf::from(a)),
             _ => args.note = Some(a),
         }
@@ -179,6 +185,7 @@ fn main() {
         let note = args.note.clone();
         let search = args.search.clone();
         let switcher = args.switcher.clone();
+        let pane = args.pane.clone();
         let synthetic = args.synthetic;
         window
             .update(cx, |ws, window, cx| {
@@ -219,6 +226,9 @@ fn main() {
                         }
                         if let Some(q) = &switcher {
                             ws.open_switcher(q, window, cx);
+                        }
+                        if let Some(p) = &pane {
+                            ws.show_right_tab(p, cx);
                         }
                         true
                     })
