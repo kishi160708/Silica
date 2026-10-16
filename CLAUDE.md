@@ -24,6 +24,7 @@ crates/-markdown  OFM primitives
 crates/-cache     CachedMetadata, LinkResolver
 crates/-formats   FileKind, config types, canvas, base
 crates/-commands  command registry, default hotkeys
+crates/-search    search query grammar and matcher, fuzzy search
 crates/-bench     spike benchmarks: synthetic vault generator, index timer (bin)
 docs/             Obsidian vault: spec and design notes (dogfooded by )
 ```

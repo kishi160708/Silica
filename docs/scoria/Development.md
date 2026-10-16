@@ -21,12 +21,15 @@ touch the `` crate inside `nix-shell` (see `shell.nix` at the repository root).
 cargo test --workspace
 cargo run --release -p  -- <vault>                      # Files, reading view, Backlinks/Outline/Tags
 cargo run --release -p  -- <vault> --note "Name#Heading" # open a note, scrolled to a heading or ^block
+cargo run --release -p  -- <vault> --search "tag:#x OR y"  # open with the Search tab filled (for screenshots)
+cargo run --release -p  -- <vault> --switcher "spc"        # open with the quick switcher up (for screenshots)
 cargo run --release -p -bench -- generate <dir>
 cargo run --release -p -bench -- index <vault>
 ```
 
 In the app: click a file or a link to open it, Ctrl+E toggles reading view
-and source mode, Ctrl+Alt+Left and Right walk the tab's history, Ctrl+Q quits.
+and source mode, Ctrl+Alt+Left and Right walk the tab's history, Ctrl+O opens
+the quick switcher, Ctrl+Shift+F the Search tab, Ctrl+Q quits.
 
 ## Reader (phase 2)
 
@@ -41,8 +44,8 @@ browse their real vault with no missing content.
 | Backlinks | done: linked mentions with the source line; unlinked mentions not yet |
 | Outline | done: click scrolls to the heading |
 | Tags | done: vault-wide counts merged across inline and frontmatter tags |
-| Search | not started |
-| Quick switcher | not started (the alias index is in `-cache`) |
+| Search | done: full query grammar with Obsidian's explain labels, results grouped per file with context, click opens at the line; sort options and copy results not yet |
+| Quick switcher | done: fuzzy over names, aliases and paths, recent files first, unresolved targets shown as not created; creating notes waits for the writer |
 | Graph | not started (`resolvedLinks` is the edge list) |
 | Settings, read-only | theme, fonts, base font size, readable line length, strict line breaks, show unsupported files |
 
@@ -65,8 +68,25 @@ language label, display math (raw), raw HTML (as text), footnotes.
 
 Not yet: Live Preview, MathJax, HTML rendering, remote images, column widths
 in tables (every column is equal), checkbox toggling, heading folding, copy
-buttons, PDF export. Tag and alias indexes exist in the cache but the tag pane
-has no search behind it yet.
+buttons, PDF export.
+
+### Search and quick switcher, 2026-10-16
+
+`crates/-search` implements the query grammar once: implicit AND,
+uppercase `OR`, parentheses, `-` negation, quoted phrases with `\"`,
+`/regex/flags`, the `file:` `path:` `content:` `tag:` `line:` `block:`
+`section:` `task:` `task-todo:` `task-done:` `match-case:` `ignore-case:`
+operators, and `[prop]`, `[prop:value]`, `[prop:null]`, `[prop:true]`,
+`[prop:>n]` properties. `Query::explain` prints the tree with the labels
+Obsidian's "Explain search terms" shows, which the tests check. Matching is
+regex-based (case-insensitive unless `match-case:`) and returns byte ranges
+for highlighting; scoped operators evaluate per line, block, section or task.
+The Search tab runs the compiled query over the indexed note texts on the
+background executor with rayon and lists results per file. The fuzzy scorer
+(`fuzzy_match`) rewards word starts, consecutive runs and short candidates;
+the switcher ranks file names, aliases and paths with it. The text field is a
+single-line `TextInput` painted through a canvas element with GPUI's input
+handler, so IME works.
 
 > [!note] Fonts
 > The pinned gpui does not pick weights out of a variable font, so with Noto

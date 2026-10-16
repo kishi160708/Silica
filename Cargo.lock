@@ -4678,6 +4678,7 @@ dependencies = [
  "-commands",
  "-formats",
  "-markdown",
+ "-search",
  "-vault",
  "serde_yaml",
 ]
@@ -4721,6 +4722,14 @@ dependencies = [
 [[package]]
 name = "-markdown"
 version = "0.1.0"
+
+[[package]]
+name = "-search"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde_yaml",
+]
 
 [[package]]
 name = "-vault"

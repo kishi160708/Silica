@@ -7,6 +7,7 @@ members = [
     "crates/-cache",
     "crates/-formats",
     "crates/-commands",
+    "crates/-search",
     "crates/-bench",
 ]
 
@@ -24,6 +25,7 @@ publish = false
 -cache = { path = "crates/-cache" }
 -formats = { path = "crates/-formats" }
 -commands = { path = "crates/-commands" }
+-search = { path = "crates/-search" }
 
 anyhow = "1"
 thiserror = "2"
@@ -33,6 +35,7 @@ serde_yaml = "0.9"
 walkdir = "2"
 tempfile = "3"
 rayon = "1"
+regex = "1"
 # gpui is pinned to a Zed release commit rather than the crates.io release: the crates.io 0.2.2
 # bundles blade 0.7.1, whose unconditional ray-tracing request fails vkCreateDevice on NVIDIA.
 # Zed v1.3.6 (2026) is known to run on the development machine and builds with rustc 1.95.

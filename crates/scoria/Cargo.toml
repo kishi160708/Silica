@@ -18,6 +18,7 @@ path = "src/main.rs"
 -cache.workspace = true
 -commands.workspace = true
 -formats.workspace = true
+-search.workspace = true
 anyhow.workspace = true
 rayon.workspace = true
 serde_yaml.workspace = true

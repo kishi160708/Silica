@@ -7,6 +7,8 @@
 use crate::editor::Editor;
 use crate::explorer::{display_name, ExplorerEvent, FileExplorer, FileTree};
 use crate::reading::{self, LinkTarget, ReadingEvent, ReadingView};
+use crate::search::{SearchEvent, SearchPane};
+use crate::switcher::{QuickSwitcher, SwitcherEvent};
 use crate::theme::Theme;
 use gpui::{
     actions, div, prelude::*, px, uniform_list, App, Context, Entity, FocusHandle, Focusable,
@@ -18,12 +20,16 @@ use _formats::config::AppConfig;
 use _formats::FileKind;
 use _markdown::Subpath;
 use _vault::Vault;
+use std::collections::HashMap;
 use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-actions!(workspace, [ToggleMode, GoBack, GoForward]);
+actions!(
+    workspace,
+    [ToggleMode, GoBack, GoForward, OpenSwitcher, OpenSearch]
+);
 
 /// Binds the shell's keys; call once at startup.
 pub fn bind_keys(cx: &mut App) {
@@ -32,6 +38,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-e", ToggleMode, ctx),
         KeyBinding::new("ctrl-alt-left", GoBack, ctx),
         KeyBinding::new("ctrl-alt-right", GoForward, ctx),
+        KeyBinding::new("ctrl-o", OpenSwitcher, ctx),
+        KeyBinding::new("ctrl-shift-f", OpenSearch, ctx),
     ]);
 }
 
@@ -39,6 +47,8 @@ pub fn bind_keys(cx: &mut App) {
 pub struct VaultState {
     pub vault: Vault,
     pub cache: MetadataCache,
+    /// Note text as indexed, for search; files are re-read when opened.
+    pub texts: HashMap<String, Arc<String>>,
     pub app: AppConfig,
     pub index_ms: f64,
 }
@@ -49,19 +59,27 @@ impl VaultState {
         let vault = Vault::open(root).map_err(|e| e.to_string())?;
         let app = vault.app_config().unwrap_or_default();
         let notes: Vec<String> = vault.markdown_files().map(|f| f.path.clone()).collect();
-        let metas: Vec<(String, _cache::CachedMetadata)> = notes
+        let loaded: Vec<(String, _cache::CachedMetadata, Arc<String>)> = notes
             .par_iter()
             .map(|path| {
-                let meta = std::fs::read_to_string(vault.absolute(path))
-                    .map(|s| index_markdown(&s))
-                    .unwrap_or_default();
-                (path.clone(), meta)
+                let text = std::fs::read_to_string(vault.absolute(path)).unwrap_or_default();
+                let meta = index_markdown(&text);
+                (path.clone(), meta, Arc::new(text))
+            })
+            .collect();
+        let mut texts = HashMap::with_capacity(loaded.len());
+        let metas: Vec<(String, _cache::CachedMetadata)> = loaded
+            .into_iter()
+            .map(|(path, meta, text)| {
+                texts.insert(path.clone(), text);
+                (path, meta)
             })
             .collect();
         let cache = MetadataCache::new(vault.link_resolver(), metas);
         Ok(VaultState {
             vault,
             cache,
+            texts,
             app,
             index_ms: started.elapsed().as_secs_f64() * 1000.0,
         })
@@ -99,6 +117,12 @@ pub enum ViewMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LeftTab {
+    Files,
+    Search,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RightTab {
     Backlinks,
     Outline,
@@ -132,6 +156,10 @@ pub struct Workspace {
     vault_name: SharedString,
     loading: Option<SharedString>,
     explorer: Entity<FileExplorer>,
+    search: Entity<SearchPane>,
+    switcher: Entity<QuickSwitcher>,
+    switcher_open: bool,
+    left_tab: LeftTab,
     reading: Entity<ReadingView>,
     editor: Entity<Editor>,
     mode: ViewMode,
@@ -156,8 +184,10 @@ impl Focusable for Workspace {
 }
 
 impl Workspace {
-    pub fn new(root: Option<PathBuf>, cx: &mut Context<Self>) -> Workspace {
+    pub fn new(root: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Workspace {
         let explorer = cx.new(FileExplorer::new);
+        let search = cx.new(SearchPane::new);
+        let switcher = cx.new(QuickSwitcher::new);
         let reading = cx.new(ReadingView::new);
         let editor = cx.new(Editor::new);
         let subscriptions = vec![
@@ -165,6 +195,26 @@ impl Workspace {
                 &explorer,
                 |this, _, event: &ExplorerEvent, cx| match event {
                     ExplorerEvent::Open(path) => this.open_file(path.clone(), None, cx),
+                },
+            ),
+            cx.subscribe(&search, |this, _, event: &SearchEvent, cx| match event {
+                SearchEvent::Open(path, offset) => {
+                    this.open_file(path.clone(), None, cx);
+                    if let Some(offset) = *offset {
+                        this.reading
+                            .update(cx, |r, cx| r.scroll_to_offset(offset, cx));
+                    }
+                }
+            }),
+            cx.subscribe_in(
+                &switcher,
+                window,
+                |this, _, event: &SwitcherEvent, window, cx| match event {
+                    SwitcherEvent::Open(path) => {
+                        this.close_switcher(window, cx);
+                        this.open_file(path.clone(), None, cx);
+                    }
+                    SwitcherEvent::Close => this.close_switcher(window, cx),
                 },
             ),
             cx.subscribe(&reading, |this, _, event: &ReadingEvent, cx| match event {
@@ -177,6 +227,10 @@ impl Workspace {
             vault_name: "No vault".into(),
             loading: None,
             explorer,
+            search,
+            switcher,
+            switcher_open: false,
+            left_tab: LeftTab::Files,
             reading,
             editor,
             mode: ViewMode::Reading,
@@ -249,7 +303,12 @@ impl Workspace {
             state.index_ms
         )
         .into();
-        self.state = Some(Arc::new(state));
+        let state = Arc::new(state);
+        self.search
+            .update(cx, |s, cx| s.set_state(state.clone(), cx));
+        self.switcher
+            .update(cx, |s, cx| s.set_state(state.clone(), cx));
+        self.state = Some(state);
         if let Some(current) = self.current.clone() {
             self.open_file(current, None, cx);
         }
@@ -262,6 +321,60 @@ impl Workspace {
 
     pub fn editor(&self) -> &Entity<Editor> {
         &self.editor
+    }
+
+    /// Shows the Search tab with `query`; focuses the field when a window is at hand.
+    pub fn show_search(
+        &mut self,
+        query: &str,
+        window: Option<&mut Window>,
+        cx: &mut Context<Self>,
+    ) {
+        self.left_tab = LeftTab::Search;
+        self.search.update(cx, |s, cx| s.set_query(query, cx));
+        if let Some(window) = window {
+            window.focus(&self.search.focus_handle(cx), cx);
+        }
+        cx.notify();
+    }
+
+    /// Opens the quick switcher pre-filled with `query`.
+    pub fn open_switcher(&mut self, query: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let mut recent: Vec<String> = Vec::new();
+        for path in self.history.iter().rev() {
+            if !recent.contains(path) {
+                recent.push(path.clone());
+            }
+        }
+        self.switcher_open = true;
+        self.switcher
+            .update(cx, |s, cx| s.open(recent, query, window, cx));
+        cx.notify();
+    }
+
+    fn close_switcher(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.switcher_open {
+            self.switcher_open = false;
+            match self.mode {
+                ViewMode::Reading => window.focus(&self.reading.focus_handle(cx), cx),
+                ViewMode::Source => window.focus(&self.editor.focus_handle(cx), cx),
+            }
+            cx.notify();
+        }
+    }
+
+    fn open_switcher_action(
+        &mut self,
+        _: &OpenSwitcher,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_switcher("", window, cx);
+    }
+
+    fn open_search_action(&mut self, _: &OpenSearch, window: &mut Window, cx: &mut Context<Self>) {
+        let query = self.search.read(cx).query(cx);
+        self.show_search(&query, Some(window), cx);
     }
 
     pub fn set_mode(&mut self, mode: ViewMode, window: &mut Window, cx: &mut Context<Self>) {
@@ -513,15 +626,7 @@ impl Workspace {
                 }
             }
             LinkTarget::External(url) => cx.open_url(&url),
-            LinkTarget::Tag(tag) => {
-                self.right_tab = RightTab::Tags;
-                let key = tag.to_lowercase();
-                if let Some(ix) = self.tags.iter().position(|t| t.name.to_lowercase() == key) {
-                    self.tag_scroll
-                        .scroll_to_item(ix, gpui::ScrollStrategy::Center);
-                }
-                cx.notify();
-            }
+            LinkTarget::Tag(tag) => self.show_search(&format!("tag:#{tag}"), None, cx),
             LinkTarget::Footnote(_) => {
                 self.reading.update(cx, |r, cx| r.scroll_to_end(cx));
             }
@@ -682,6 +787,7 @@ impl Workspace {
         range
             .filter_map(|ix| {
                 let row = self.tags.get(ix)?.clone();
+                let name = row.name.clone();
                 Some(
                     div()
                         .id(("tag", ix))
@@ -692,8 +798,12 @@ impl Workspace {
                         .justify_between()
                         .px_2()
                         .rounded_sm()
+                        .cursor_pointer()
                         .text_size(px(13.))
                         .hover(|s| s.bg(theme.bg_alt))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.show_search(&format!("tag:#{name}"), None, cx);
+                        }))
                         .child(
                             div()
                                 .text_color(theme.tag)
@@ -932,34 +1042,62 @@ impl Render for Workspace {
             .child(header)
             .child(div().flex_1().overflow_hidden().child(main_body));
 
+        let left_tab = self.left_tab;
+        let left_body: gpui::AnyElement = match left_tab {
+            LeftTab::Files => self.explorer.clone().into_any_element(),
+            LeftTab::Search => self.search.clone().into_any_element(),
+        };
         let left = div()
             .flex()
             .flex_col()
-            .w(px(260.))
+            .w(px(280.))
             .h_full()
             .bg(theme.bg_secondary)
             .border_r_1()
             .border_color(theme.border)
             .child(
                 div()
-                    .px_3()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_1()
+                    .px_2()
                     .py_1()
                     .border_b_1()
                     .border_color(theme.border)
-                    .text_size(px(11.))
-                    .text_color(theme.text_muted)
-                    .flex()
-                    .flex_row()
-                    .justify_between()
-                    .child("FILES")
-                    .child(self.vault_name.clone()),
+                    .child(self.dock_tab(
+                        "Files",
+                        left_tab == LeftTab::Files,
+                        &theme,
+                        |this, _, cx| {
+                            this.left_tab = LeftTab::Files;
+                            cx.notify();
+                        },
+                        cx,
+                    ))
+                    .child(self.dock_tab(
+                        "Search",
+                        left_tab == LeftTab::Search,
+                        &theme,
+                        |this, window, cx| {
+                            let q = this.search.read(cx).query(cx);
+                            this.show_search(&q, Some(window), cx);
+                        },
+                        cx,
+                    ))
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_size(px(11.))
+                            .text_color(theme.text_muted)
+                            .text_right()
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .child(self.vault_name.clone()),
+                    ),
             )
-            .child(
-                div()
-                    .flex_1()
-                    .overflow_hidden()
-                    .child(self.explorer.clone()),
-            );
+            .child(div().flex_1().overflow_hidden().child(left_body));
 
         let editor_status = if self.mode == ViewMode::Source {
             let editor = self.editor.read(cx);
@@ -997,12 +1135,27 @@ impl Render for Workspace {
                 self.words, self.chars
             )));
 
+        let overlay = self.switcher_open.then(|| {
+            div()
+                .absolute()
+                .inset_0()
+                .flex()
+                .flex_row()
+                .justify_center()
+                .items_start()
+                .pt(px(90.))
+                .child(self.switcher.clone())
+        });
+
         div()
             .key_context("Workspace")
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::toggle_mode))
             .on_action(cx.listener(Self::go_back))
             .on_action(cx.listener(Self::go_forward))
+            .on_action(cx.listener(Self::open_switcher_action))
+            .on_action(cx.listener(Self::open_search_action))
+            .relative()
             .flex()
             .flex_col()
             .size_full()
@@ -1020,5 +1173,6 @@ impl Render for Workspace {
                     .child(self.render_right_dock(&theme, cx)),
             )
             .child(status_bar)
+            .children(overlay)
     }
 }

@@ -8,6 +8,9 @@
 mod editor;
 mod explorer;
 mod reading;
+mod search;
+mod switcher;
+mod text_input;
 mod theme;
 mod workspace;
 
@@ -105,6 +108,10 @@ struct Args {
     synthetic: Option<usize>,
     /// Number of self-driven edit and navigation steps to run before quitting.
     stress: Option<usize>,
+    /// Pre-filled Search query, for screenshots.
+    search: Option<String>,
+    /// Open the quick switcher with this query, for screenshots.
+    switcher: Option<String>,
 }
 
 fn parse_args() -> Args {
@@ -113,6 +120,8 @@ fn parse_args() -> Args {
         note: None,
         synthetic: None,
         stress: None,
+        search: None,
+        switcher: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -122,6 +131,8 @@ fn parse_args() -> Args {
             }
             "--stress" => args.stress = it.next().and_then(|n| n.parse().ok()).or(Some(600)),
             "--note" => args.note = it.next(),
+            "--search" => args.search = it.next(),
+            "--switcher" => args.switcher = it.next(),
             _ if args.vault.is_none() => args.vault = Some(PathBuf::from(a)),
             _ => args.note = Some(a),
         }
@@ -145,6 +156,7 @@ fn main() {
         cx.set_global(theme);
         editor::bind_keys(cx);
         workspace::bind_keys(cx);
+        text_input::bind_keys(cx);
         cx.bind_keys([KeyBinding::new("ctrl-q", Quit, None)]);
         cx.on_action(|_: &Quit, cx| cx.quit());
 
@@ -160,11 +172,13 @@ fn main() {
                     }),
                     ..Default::default()
                 },
-                |_, cx| cx.new(|cx| Workspace::new(vault, cx)),
+                |window, cx| cx.new(|cx| Workspace::new(vault, window, cx)),
             )
             .expect("open main window");
 
         let note = args.note.clone();
+        let search = args.search.clone();
+        let switcher = args.switcher.clone();
         let synthetic = args.synthetic;
         window
             .update(cx, |ws, window, cx| {
@@ -188,7 +202,7 @@ fn main() {
                     .timer(std::time::Duration::from_millis(16))
                     .await;
                 let done = window
-                    .update(cx, |ws, _, cx| {
+                    .update(cx, |ws, window, cx| {
                         if !ws.is_loaded() {
                             return false;
                         }
@@ -199,6 +213,12 @@ fn main() {
                                 }
                             }
                             None => ws.open_first(cx),
+                        }
+                        if let Some(q) = &search {
+                            ws.show_search(q, Some(window), cx);
+                        }
+                        if let Some(q) = &switcher {
+                            ws.open_switcher(q, window, cx);
                         }
                         true
                     })
