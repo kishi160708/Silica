@@ -558,7 +558,8 @@ impl<'a, 'o> BlockParser<'a, 'o> {
             },
             NodeKind::BlockQuote => {
                 let mut children = node.children;
-                if let Some(callout) = self.callout_from(&mut children) {
+                if let Some((callout, callout_id)) = self.callout_from(&mut children) {
+                    id = callout_id;
                     callout
                 } else {
                     RawKind::BlockQuote { children }
@@ -666,8 +667,12 @@ impl<'a, 'o> BlockParser<'a, 'o> {
         Some((bid, whole_line))
     }
 
-    /// Converts a blockquote's children into a callout if the first line is a header.
-    fn callout_from(&self, children: &mut Vec<RawBlock<'a>>) -> Option<RawKind<'a>> {
+    /// Converts a blockquote's children into a callout if the first line is a
+    /// header; a ` ^id` at the end of the header becomes the callout's block id.
+    fn callout_from(
+        &self,
+        children: &mut Vec<RawBlock<'a>>,
+    ) -> Option<(RawKind<'a>, Option<BlockId<'a>>)> {
         if !self.opts.callouts {
             return None;
         }
@@ -682,7 +687,19 @@ impl<'a, 'o> BlockParser<'a, 'o> {
         let title_text = &self.src[title_start..line.end];
         let trimmed_start = title_start + (title_text.len() - title_text.trim_start().len());
         let trimmed_end = trimmed_start + title_text.trim().len();
-        let title = Span::new(trimmed_start, trimmed_end);
+        let mut title = Span::new(trimmed_start, trimmed_end);
+        let mut block_id = None;
+        if self.opts.block_ids {
+            let mut title_lines = vec![title];
+            if let Some((bid, whole)) = self.take_block_id(&mut title_lines) {
+                block_id = Some(bid);
+                title = if whole {
+                    Span::new(trimmed_start, trimmed_start)
+                } else {
+                    title_lines[0]
+                };
+            }
+        }
         let fold = match fold {
             Some(true) => Some(Fold::Collapsed),
             Some(false) => Some(Fold::Expanded),
@@ -694,12 +711,15 @@ impl<'a, 'o> BlockParser<'a, 'o> {
         } else {
             first.span.start = lines[0].start;
         }
-        Some(RawKind::Callout {
-            callout_type,
-            fold,
-            title,
-            children: std::mem::take(children),
-        })
+        Some((
+            RawKind::Callout {
+                callout_type,
+                fold,
+                title,
+                children: std::mem::take(children),
+            },
+            block_id,
+        ))
     }
 
     /// Parses one link reference definition from the start of the paragraph
@@ -951,8 +971,16 @@ impl<'a, 'o> BlockParser<'a, 'o> {
                     Continue::Matched
                 }
             }
-            NodeKind::Paragraph { .. } | NodeKind::Table { .. } => {
+            NodeKind::Paragraph { .. } => {
                 if self.blank {
+                    Continue::NotMatched
+                } else {
+                    Continue::Matched
+                }
+            }
+            NodeKind::Table { .. } => {
+                // A row must contain a pipe; Obsidian ends the table otherwise.
+                if self.blank || !self.rest().contains('|') {
                     Continue::NotMatched
                 } else {
                     Continue::Matched
@@ -1003,6 +1031,17 @@ impl<'a, 'o> BlockParser<'a, 'o> {
             self.advance_offset(1, false);
             if self.byte(self.offset).is_some_and(is_space_or_tab) {
                 self.advance_offset(1, true);
+            }
+            // Obsidian keeps a quote that directly follows a list item's text
+            // inside that item, where CommonMark would end the list.
+            if self.opts.quirks
+                && !self.all_closed
+                && self.open.len() == self.last_matched + 3
+                && matches!(self.open[self.last_matched].kind, NodeKind::List { .. })
+                && matches!(self.open[self.last_matched + 1].kind, NodeKind::Item { .. })
+                && self.tip().is_paragraph()
+            {
+                self.last_matched += 1;
             }
             self.close_unmatched_blocks();
             self.add_child(NodeKind::BlockQuote, start);
@@ -1082,8 +1121,13 @@ impl<'a, 'o> BlockParser<'a, 'o> {
             }
         }
 
-        // Table (GFM): the paragraph's last line is the header row.
-        if self.opts.tables && tip_is_paragraph && matches!(c, b'|' | b'-' | b':') {
+        // Table (GFM): a one-line paragraph followed by a delimiter row. Obsidian
+        // does not let a table interrupt a longer paragraph.
+        let single_line_paragraph = matches!(
+            &self.open[container].kind,
+            NodeKind::Paragraph { lines } if lines.len() == 1
+        );
+        if self.opts.tables && single_line_paragraph && matches!(c, b'|' | b'-' | b':') {
             if let Some(alignments) = parse_delimiter_row(self.rest()) {
                 let (header_line, header_cells) = {
                     let NodeKind::Paragraph { lines } = &self.open[container].kind else {
@@ -1121,8 +1165,9 @@ impl<'a, 'o> BlockParser<'a, 'o> {
             }
         }
 
-        // Setext heading underline.
-        if !self.indented && tip_is_paragraph && (c == b'=' || c == b'-') {
+        // Setext heading underline. Obsidian only underlines a one-line paragraph.
+        let setext_ok = tip_is_paragraph && (!self.opts.quirks || single_line_paragraph);
+        if !self.indented && setext_ok && (c == b'=' || c == b'-') {
             let rest = self.rest();
             let run = rest.bytes().take_while(|&b| b == c).count();
             if rest[run..].bytes().all(is_space_or_tab) {
@@ -1166,29 +1211,12 @@ impl<'a, 'o> BlockParser<'a, 'o> {
             return Some(Start::Leaf);
         }
 
-        // Math block.
+        // Math block: `$$` opening a line without closing on it. A `$$...$$`
+        // pair on one line is inline display math inside a paragraph.
         if self.opts.math && !self.indented && c == b'$' && self.rest().starts_with("$$") {
             let rest = &self.rest()[2..];
             let start = self.next_nonspace;
-            if let Some(i) = rest.find("$$") {
-                if rest[i + 2..].trim().is_empty() {
-                    let content = Span::new(start + 2, start + 2 + i);
-                    self.close_unmatched_blocks();
-                    let lines = if content.of(self.src).trim().is_empty() {
-                        Vec::new()
-                    } else {
-                        vec![RawLine {
-                            span: content,
-                            pad: 0,
-                        }]
-                    };
-                    self.add_child(NodeKind::Math { lines }, start);
-                    self.offset = self.line.end;
-                    self.open.last_mut().unwrap().end = self.line.end;
-                    self.finalize();
-                    return Some(Start::Leaf);
-                }
-            } else {
+            if !rest.contains("$$") {
                 self.close_unmatched_blocks();
                 let lines = if rest.trim().is_empty() {
                     Vec::new()
@@ -1205,24 +1233,12 @@ impl<'a, 'o> BlockParser<'a, 'o> {
             }
         }
 
-        // Comment block.
+        // Comment block: `%%` opening a line without closing on it. A closed
+        // `%%...%%` on one line is an inline comment inside a paragraph.
         if self.opts.comments && !self.indented && c == b'%' && self.rest().starts_with("%%") {
             let rest = &self.rest()[2..];
             let start = self.next_nonspace;
             match rest.find("%%") {
-                Some(i) if rest[i + 2..].trim().is_empty() => {
-                    self.close_unmatched_blocks();
-                    self.add_child(
-                        NodeKind::Comment {
-                            lines: vec![Span::new(start + 2, start + 2 + i)],
-                        },
-                        start,
-                    );
-                    self.offset = self.line.end;
-                    self.open.last_mut().unwrap().end = self.line.end;
-                    self.finalize();
-                    return Some(Start::Leaf);
-                }
                 Some(_) => {}
                 None => {
                     self.close_unmatched_blocks();
@@ -1260,7 +1276,7 @@ impl<'a, 'o> BlockParser<'a, 'o> {
         // List item.
         let in_list = matches!(self.open[container].kind, NodeKind::List { .. });
         if (!self.indented || in_list) && (matches!(c, b'-' | b'+' | b'*') || c.is_ascii_digit()) {
-            if let Some(item) = self.parse_list_marker(tip_is_paragraph) {
+            if let Some(item) = self.parse_list_marker(tip_is_paragraph, in_list) {
                 self.close_unmatched_blocks();
                 let needs_list = match &self.tip().kind {
                     NodeKind::List { kind, .. } => !lists_match(*kind, item.kind),
@@ -1300,8 +1316,8 @@ impl<'a, 'o> BlockParser<'a, 'o> {
         None
     }
 
-    fn parse_list_marker(&mut self, tip_is_paragraph: bool) -> Option<ListMarker> {
-        if self.indent >= 4 {
+    fn parse_list_marker(&mut self, tip_is_paragraph: bool, in_list: bool) -> Option<ListMarker> {
+        if self.indent >= 4 && !(self.opts.quirks && in_list) {
             return None;
         }
         let rest = self.rest();
@@ -1365,8 +1381,9 @@ impl<'a, 'o> BlockParser<'a, 'o> {
         if self.opts.task_lists && !blank_item {
             let after = &self.src[self.offset..self.line.end];
             let ab = after.as_bytes();
-            if ab.len() >= 3 && ab[0] == b'[' && ab[2] == b']' && ab[1] != b'\n' {
-                let ok = ab.len() == 3 || is_space_or_tab(ab[3]);
+            if ab.len() > 3 && ab[0] == b'[' && ab[2] == b']' && ab[1] != b'\n' {
+                // Obsidian needs whitespace after the bracket; `- [ ]` alone is text.
+                let ok = is_space_or_tab(ab[3]);
                 if ok {
                     task = Some(ab[1] as char);
                     self.advance_offset(3, false);
@@ -1552,8 +1569,9 @@ fn parse_callout_header_raw(line: &str) -> Option<(&str, Option<bool>, usize)> {
     let lead = line.len() - line.trim_start().len();
     let rest = line[lead..].strip_prefix("[!")?;
     let close = rest.find(']')?;
-    let ty = &rest[..close];
-    if ty.is_empty() || ty.contains(char::is_whitespace) || ty.contains('[') {
+    // Obsidian trims the type, so `[! bad]` is a `bad` callout.
+    let ty = rest[..close].trim();
+    if ty.is_empty() || ty.contains('[') {
         return None;
     }
     let after = &rest[close + 1..];

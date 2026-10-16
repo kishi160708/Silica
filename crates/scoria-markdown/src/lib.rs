@@ -26,7 +26,7 @@ pub mod span;
 pub use ast::*;
 pub use frontmatter::{extract_frontmatter, FrontMatter};
 pub use html::{render_html, render_html_with, HtmlOptions};
-pub use linktext::{parse_linktext, LinkText, Subpath};
+pub use linktext::{link_target, parse_linktext, LinkText, Subpath};
 pub use span::{LineIndex, Loc, Pos, Span};
 
 use block::{RawBlock, RawItem, RawKind};
@@ -62,6 +62,13 @@ pub struct Options {
     pub footnotes: bool,
     /// Bare `https://` and `www.` URLs become links.
     pub bare_urls: bool,
+    /// Obsidian's observed departures from CommonMark and GFM: an unclosed
+    /// backtick run retries one backtick shorter, `~~~` and `===` runs
+    /// delimit with their first two characters, a `#` right after a tag
+    /// starts another tag, legacy entities decode without a semicolon, a
+    /// list marker indented four or more columns inside a list is a sibling
+    /// item, and `[^x]` without a definition renders as `x`.
+    pub quirks: bool,
 }
 
 impl Options {
@@ -80,6 +87,7 @@ impl Options {
             task_lists: true,
             footnotes: true,
             bare_urls: true,
+            quirks: true,
         }
     }
 
@@ -98,6 +106,7 @@ impl Options {
             task_lists: false,
             footnotes: false,
             bare_urls: false,
+            quirks: false,
         }
     }
 }
@@ -153,14 +162,14 @@ fn lower_block<'a>(cx: &InlineContext<'a, '_>, raw: RawBlock<'a>) -> Block<'a> {
             .into_iter()
             .map(|s| TableCell {
                 span: s,
-                content: inline::parse_inlines(cx, &[s], true),
+                content: inline::parse_inlines(cx, &[s]),
             })
             .collect()
     };
     let kind = match raw.kind {
         RawKind::Yaml { yaml } => BlockKind::Yaml { yaml },
         RawKind::Paragraph { lines } => BlockKind::Paragraph {
-            content: inline::parse_inlines(cx, &lines, false),
+            content: inline::parse_inlines(cx, &lines),
         },
         RawKind::Heading {
             level,
@@ -168,7 +177,7 @@ fn lower_block<'a>(cx: &InlineContext<'a, '_>, raw: RawBlock<'a>) -> Block<'a> {
             setext,
         } => BlockKind::Heading {
             level,
-            content: inline::parse_inlines(cx, &lines, false),
+            content: inline::parse_inlines(cx, &lines),
             setext,
         },
         RawKind::ThematicBreak => BlockKind::ThematicBreak,
@@ -196,7 +205,7 @@ fn lower_block<'a>(cx: &InlineContext<'a, '_>, raw: RawBlock<'a>) -> Block<'a> {
             title: if title.is_empty() {
                 Vec::new()
             } else {
-                inline::parse_inlines(cx, &[title], false)
+                inline::parse_inlines(cx, &[title])
             },
             children: lower_blocks(cx, children),
         },

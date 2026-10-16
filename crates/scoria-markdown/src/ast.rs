@@ -187,6 +187,8 @@ pub enum InlineKind<'a> {
     Image {
         destination: Cow<'a, str>,
         title: Option<Cow<'a, str>>,
+        /// `Inline` for `![alt](src)`, `Reference` for `![alt][label]`.
+        kind: LinkKind,
         /// The alt text as inline content.
         children: Vec<Inline<'a>>,
     },

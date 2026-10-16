@@ -33,6 +33,23 @@ pub(crate) fn named_entity(name: &str) -> Option<&'static str> {
         .map(|i| ENTITIES[i].1)
 }
 
+/// Looks up a legacy entity that needs no semicolon (`&copy`); returns the
+/// longest matching name length and its text.
+pub(crate) fn legacy_entity(s: &str) -> Option<(usize, &'static str)> {
+    use crate::entities::LEGACY_ENTITIES;
+    let max = s
+        .bytes()
+        .take(8)
+        .take_while(|b| b.is_ascii_alphanumeric())
+        .count();
+    for len in (2..=max).rev() {
+        if let Ok(i) = LEGACY_ENTITIES.binary_search_by(|(n, _)| (*n).cmp(&s[..len])) {
+            return Some((len, LEGACY_ENTITIES[i].1));
+        }
+    }
+    None
+}
+
 /// Scans an entity or numeric character reference starting at `&`. Returns
 /// the total length and the decoded text.
 pub(crate) fn scan_entity(s: &str) -> Option<(usize, Cow<'static, str>)> {
@@ -372,7 +389,8 @@ pub(crate) fn scan_inline_html(s: &str) -> Option<usize> {
 }
 
 /// Scans an autolink `<scheme:…>` or `<email>`; returns `(len, is_email)`.
-pub(crate) fn scan_autolink(s: &str) -> Option<(usize, bool)> {
+/// `min_scheme` is 2 for CommonMark; Obsidian accepts one-letter schemes.
+pub(crate) fn scan_autolink(s: &str, min_scheme: usize) -> Option<(usize, bool)> {
     let b = s.as_bytes();
     if b.first() != Some(&b'<') {
         return None;
@@ -386,7 +404,7 @@ pub(crate) fn scan_autolink(s: &str) -> Option<(usize, bool)> {
         {
             i += 1;
         }
-        if i >= 3 && b.get(i) == Some(&b':') {
+        if i > min_scheme && b.get(i) == Some(&b':') {
             let mut j = i + 1;
             while j < b.len() && !matches!(b[j], b'<' | b'>') && b[j] > b' ' && b[j] != 0x7f {
                 j += 1;
@@ -600,8 +618,10 @@ mod tests {
         assert_eq!(scan_open_tag("<33>"), None);
         assert_eq!(scan_closing_tag("</div >"), Some(7));
         assert_eq!(scan_html_special("<!-- c -->"), Some(10));
-        assert_eq!(scan_autolink("<https://x.y/z>"), Some((15, false)));
-        assert_eq!(scan_autolink("<a@b.co>"), Some((8, true)));
+        assert_eq!(scan_autolink("<https://x.y/z>", 2), Some((15, false)));
+        assert_eq!(scan_autolink("<a@b.co>", 2), Some((8, true)));
+        assert_eq!(scan_autolink("<a://b>", 2), None);
+        assert_eq!(scan_autolink("<a://b>", 1), Some((7, false)));
         assert_eq!(html_block_start("<div class=x>", true), Some(6));
         assert_eq!(html_block_start("<span>", true), None);
         assert_eq!(html_block_start("<span>", false), Some(7));

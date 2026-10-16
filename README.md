@@ -9,7 +9,8 @@ and is not affiliated with Obsidian.
 
 Parser foundation. `-markdown` parses CommonMark (all 652 spec examples), the GitHub
 extensions Obsidian uses, and Obsidian's own syntax into one tree with byte spans, and renders
-it to reading-view HTML; the metadata cache is built from that tree. The application opens a
+it to reading-view HTML that matches Obsidian 1.13.7 on 1007 of 1009 corpus notes; the
+metadata cache is built from that tree. The application opens a
 window with the three-pane shell and reports the vault it was given.
 
 ```

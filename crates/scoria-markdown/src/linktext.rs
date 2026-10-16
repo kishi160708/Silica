@@ -18,8 +18,9 @@ pub struct LinkText<'a> {
     pub alias: Option<&'a str>,
 }
 
-/// Splits `Note#Heading|Alias` into its parts. The first `|` ends the target;
-/// a `\|` inside tables is unescaped by the caller before reaching here.
+/// Splits `Note#Heading|Alias` into its parts. The first `|` ends the target,
+/// so `[[Note\|alias]]` is the alias form with a trailing backslash on the
+/// path; see [`link_target`] for the resolvable form.
 pub fn parse_linktext(text: &str) -> LinkText<'_> {
     let (target, alias) = match text.find('|') {
         Some(i) => (&text[..i], Some(text[i + 1..].trim())),
@@ -48,6 +49,13 @@ pub fn parse_linktext(text: &str) -> LinkText<'_> {
         subpath,
         alias,
     }
+}
+
+/// The target of a wikilink body as Obsidian resolves it: everything before
+/// the first `|`, trimmed, with a trailing backslash (from `\|`) dropped.
+pub fn link_target(body: &str) -> &str {
+    let target = body.split('|').next().unwrap_or("").trim();
+    target.trim_end_matches('\\')
 }
 
 #[cfg(test)]

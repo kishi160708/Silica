@@ -11,12 +11,7 @@ fn html(src: &str) -> String {
 }
 
 fn plain_html(src: &str) -> String {
-    render_html_with(
-        &parse(src),
-        &HtmlOptions {
-            obsidian_attributes: false,
-        },
-    )
+    render_html_with(&parse(src), &HtmlOptions::commonmark())
 }
 
 fn paragraph_inlines(src: &str) -> Vec<Inline<'_>> {
@@ -49,7 +44,7 @@ fn wikilinks_and_embeds() {
     assert_eq!(&src[28..44], "![[pic.png|200]]");
     assert_eq!(
         html(src),
-        "<p>See <a data-href=\"Note#Head\" href=\"Note#Head\" class=\"internal-link\" target=\"_blank\" rel=\"noopener nofollow\">alias</a> and <span class=\"internal-embed\" src=\"pic.png\" alt=\"200\"></span>.</p>\n"
+        "<p>See <a data-tooltip-position=\"top\" aria-label=\"Note#Head\" data-href=\"Note#Head\" href=\"Note#Head\" class=\"internal-link\" target=\"_blank\" rel=\"noopener nofollow\">alias</a> and <span alt=\"pic.png\" src=\"pic.png\" class=\"internal-embed\"></span>.</p>\n"
     );
 }
 
@@ -63,9 +58,7 @@ fn wikilinks_inside_code_and_links_without_alias() {
     assert_eq!(
         render_html_with(
             &_markdown::parse_with("[[x]]", &_markdown::Options::commonmark()),
-            &HtmlOptions {
-                obsidian_attributes: false
-            }
+            &HtmlOptions::commonmark()
         ),
         "<p>[[x]]</p>\n"
     );
@@ -143,11 +136,11 @@ fn callouts() {
     assert!(matches!(doc.blocks[2].kind, BlockKind::BlockQuote { .. }));
     assert_eq!(
         html("> [!note] Hi\n> there"),
-        "<div data-callout=\"note\" class=\"callout\"><div class=\"callout-title\"><div class=\"callout-title-inner\">Hi</div></div><div class=\"callout-content\">\n<p>there</p>\n</div></div>\n"
+        "<div data-callout-metadata=\"\" data-callout-fold=\"\" data-callout=\"note\" class=\"callout\"><div class=\"callout-title\"><div class=\"callout-title-inner\">Hi</div></div><div class=\"callout-content\">\n<p>there</p>\n</div></div>\n"
     );
     assert_eq!(
         html("> [!warning]"),
-        "<div data-callout=\"warning\" class=\"callout\"><div class=\"callout-title\"><div class=\"callout-title-inner\">Warning</div></div></div>\n"
+        "<div data-callout-metadata=\"\" data-callout-fold=\"\" data-callout=\"warning\" class=\"callout\"><div class=\"callout-title\"><div class=\"callout-title-inner\">Warning</div></div></div>\n"
     );
 }
 
@@ -155,11 +148,11 @@ fn callouts() {
 fn highlight_strikethrough_and_math() {
     assert_eq!(
         plain_html("==hi== ~~gone~~ $x^2$ $$a+b$$ not $5 and $6"),
-        "<p><mark>hi</mark> <del>gone</del> <span class=\"math math-inline\">$x^2$</span> <span class=\"math math-block\">$$a+b$$</span> not $5 and $6</p>\n"
+        "<p><mark>hi</mark> <del>gone</del> <span class=\"math math-inline\">x^2</span> <span class=\"math math-block\">a+b</span> not $5 and $6</p>\n"
     );
     assert_eq!(
         plain_html("$$\n\\int_0^1 x\n$$\n"),
-        "<div class=\"math math-block\">$$\\int_0^1 x$$</div>\n"
+        "<div class=\"math math-block\">\\int_0^1 x</div>\n"
     );
     let doc = parse("$$\nx\n$$");
     assert_eq!(doc.blocks[0].span, Span::new(0, 7));
@@ -187,10 +180,13 @@ fn tables_with_escaped_pipes() {
     };
     assert_eq!(header.len(), 2);
     assert_eq!(rows.len(), 1);
+    // The body keeps `\|`; the resolvable target drops the backslash.
     assert!(
-        matches!(&rows[0][0].content[0].kind, InlineKind::Wikilink { body, .. } if body == "x|y")
+        matches!(&rows[0][0].content[0].kind, InlineKind::Wikilink { body, .. } if body == r"x\|y")
     );
-    assert!(matches!(&rows[0][1].content[0].kind, InlineKind::Code(c) if c == "c|d"));
+    assert_eq!(_markdown::link_target(r"x\|y"), "x");
+    assert_eq!(_markdown::parse_linktext(r"x\|y").alias, Some("y"));
+    assert!(matches!(&rows[0][1].content[0].kind, InlineKind::Code(c) if c == "c\\|d"));
     assert_eq!(rows[0][0].span, Span::new(24, 32));
     assert_eq!(&src[24..32], "[[x\\|y]]");
     assert_eq!(
@@ -207,10 +203,8 @@ fn task_lists() {
     };
     assert_eq!(*kind, ListKind::Bullet { marker: b'-' });
     let tasks: Vec<_> = items.iter().map(|i| i.task).collect();
-    assert_eq!(
-        tasks,
-        vec![Some(' '), Some('x'), Some('?'), Some(' '), None]
-    );
+    // `- [ ]` with nothing after it is plain text in Obsidian.
+    assert_eq!(tasks, vec![Some(' '), Some('x'), Some('?'), None, None]);
     assert_eq!(items[1].marker, Span::new(11, 12));
     assert_eq!(
         plain_html("- [x] done"),
@@ -218,7 +212,7 @@ fn task_lists() {
     );
     assert_eq!(
         html("- [ ] a"),
-        "<ul class=\"contains-task-list\">\n<li data-task=\" \" class=\"task-list-item\"><input type=\"checkbox\" class=\"task-list-item-checkbox\"> a</li>\n</ul>\n"
+        "<ul class=\"contains-task-list\">\n<li data-task=\"\" class=\"task-list-item\"><input type=\"checkbox\" class=\"task-list-item-checkbox\">a</li>\n</ul>\n"
     );
 }
 
@@ -227,7 +221,7 @@ fn footnotes() {
     let src = "Text[^1] and inline^[note here].\n\n[^1]: The *def*.\n";
     assert_eq!(
         plain_html(src),
-        "<p>Text<sup id=\"fnref-1\" class=\"footnote-ref\"><a href=\"#fn-1\" class=\"footnote-link\">[1]</a></sup> and inline<sup id=\"fnref-2\" class=\"footnote-ref\"><a href=\"#fn-2\" class=\"footnote-link\">[2]</a></sup>.</p>\n<section class=\"footnotes\">\n<ol>\n<li id=\"fn-1\" class=\"footnote\">\n<p>The <em>def</em>. <a href=\"#fnref-1\" class=\"footnote-backref footnote-link\">\u{21a9}\u{fe0e}</a></p>\n</li>\n<li id=\"fn-2\" class=\"footnote\">\n<p>note here <a href=\"#fnref-2\" class=\"footnote-backref footnote-link\">\u{21a9}\u{fe0e}</a></p>\n</li>\n</ol>\n</section>\n"
+        "<p>Text<sup data-footnote-id=\"fnref-1\" class=\"footnote-ref\" id=\"fnref-1\"><a data-footref=\"1\" href=\"#fn-1\" class=\"footnote-link\" target=\"_blank\" rel=\"noopener nofollow\">[1]</a></sup> and inline<sup data-footnote-id=\"fnref-2\" class=\"footnote-ref\" id=\"fnref-2\"><a data-footref=\"inline-1\" href=\"#fn-2\" class=\"footnote-link\" target=\"_blank\" rel=\"noopener nofollow\">[2]</a></sup>.</p>\n<section class=\"footnotes\"><hr><ol>\n<li data-footnote-id=\"fn-1\" id=\"fn-1\">\n<p>The <em>def</em>.<a href=\"#fnref-1\" class=\"footnote-backref footnote-link\" target=\"_blank\" rel=\"noopener nofollow\">\u{21a9}\u{fe0e}</a></p>\n</li>\n<li data-footnote-id=\"fn-2\" id=\"fn-2\">note here<a href=\"#fnref-2\" class=\"footnote-backref footnote-link\" target=\"_blank\" rel=\"noopener nofollow\">\u{21a9}\u{fe0e}</a></li>\n</ol></section>\n"
     );
     let doc = parse(src);
     assert_eq!(doc.footnote_labels, vec!["1"]);
@@ -235,8 +229,8 @@ fn footnotes() {
         &doc.blocks[1].kind,
         BlockKind::FootnoteDefinition { label: "1", .. }
     ));
-    // An undefined reference stays literal text.
-    assert_eq!(plain_html("x[^nope]"), "<p>x[^nope]</p>\n");
+    // An undefined reference renders as its label, as Obsidian does.
+    assert_eq!(plain_html("x[^nope]"), "<p>xnope</p>\n");
 }
 
 #[test]

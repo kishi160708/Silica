@@ -1,0 +1,9 @@
+{
+  "id": "-corpus",
+  "name": " corpus renderer",
+  "version": "0.1.0",
+  "minAppVersion": "1.4.0",
+  "description": "Renders every note in this vault to HTML for 's parser conformance tests.",
+  "author": "",
+  "isDesktopOnly": true
+}

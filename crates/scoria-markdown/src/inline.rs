@@ -61,7 +61,6 @@ struct Parser<'a, 'o, 'c> {
     text: Cow<'a, str>,
     /// `(text offset, source span)` for every line segment.
     segs: Vec<(usize, Span)>,
-    table_cell: bool,
     pos: usize,
     end: usize,
     nodes: Vec<Inline<'a>>,
@@ -71,11 +70,7 @@ struct Parser<'a, 'o, 'c> {
 }
 
 /// Parses the inline content of `lines`.
-pub(crate) fn parse_inlines<'a>(
-    cx: &InlineContext<'a, '_>,
-    lines: &[Span],
-    table_cell: bool,
-) -> Vec<Inline<'a>> {
+pub(crate) fn parse_inlines<'a>(cx: &InlineContext<'a, '_>, lines: &[Span]) -> Vec<Inline<'a>> {
     if lines.is_empty() {
         return Vec::new();
     }
@@ -100,7 +95,6 @@ pub(crate) fn parse_inlines<'a>(
         cx,
         text,
         segs,
-        table_cell,
         pos: trimmed_start,
         end: trimmed_end.max(trimmed_start),
         nodes: Vec::new(),
@@ -276,6 +270,12 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
         let start = self.pos;
         let b = self.text.as_bytes();
         let bare_urls = self.cx.opts.bare_urls;
+        if bare_urls {
+            if let Some((len, prefix)) = self.scan_bare_url(start) {
+                self.emit_bare_link(start, start + len, prefix);
+                return;
+            }
+        }
         let mut i = self.pos;
         // Always consume at least one byte so unhandled specials become text.
         i += self.text[i..].chars().next().map_or(1, char::len_utf8);
@@ -284,49 +284,69 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
             if is_special(c) {
                 break;
             }
-            if bare_urls
-                && (c == b'h' || c == b'w')
-                && self.bare_url_boundary(i)
-                && self.scan_bare_url(i).is_some()
-            {
+            if bare_urls && (c == b'h' || c == b'w') && self.scan_bare_url(i).is_some() {
                 break;
             }
-            i += 1;
-        }
-        if bare_urls && self.bare_url_boundary(start) {
-            if let Some((len, dest_prefix)) = self.scan_bare_url(start) {
-                let dest = format!("{dest_prefix}{}", &self.text[start..start + len]);
-                let text = self.slice(start, start + len);
-                let span = self.span(start, start + len);
-                self.nodes.push(Inline {
-                    kind: InlineKind::Link {
-                        destination: Cow::Owned(dest),
-                        title: None,
-                        kind: LinkKind::BareUrl,
-                        children: vec![Inline {
-                            kind: InlineKind::Text(text),
-                            span,
-                        }],
-                    },
-                    span,
-                });
-                self.pos = start + len;
-                return;
+            if bare_urls && c == b'@' {
+                if let Some((local_start, len)) = self.scan_email(start, i) {
+                    self.push_text(start, local_start);
+                    self.emit_bare_link(local_start, local_start + len, "mailto:");
+                    return;
+                }
             }
+            i += 1;
         }
         self.push_text(start, i);
         self.pos = i;
     }
 
-    fn bare_url_boundary(&self, i: usize) -> bool {
-        i == 0
-            || self.text[..i]
-                .chars()
-                .next_back()
-                .is_some_and(|c| is_unicode_whitespace(c) || matches!(c, '*' | '_' | '~' | '('))
+    fn emit_bare_link(&mut self, start: usize, end: usize, dest_prefix: &str) {
+        let dest = format!("{dest_prefix}{}", &self.text[start..end]);
+        let text = self.slice(start, end);
+        let span = self.span(start, end);
+        self.nodes.push(Inline {
+            kind: InlineKind::Link {
+                destination: Cow::Owned(dest),
+                title: None,
+                kind: LinkKind::BareUrl,
+                children: vec![Inline {
+                    kind: InlineKind::Text(text),
+                    span,
+                }],
+            },
+            span,
+        });
+        self.pos = end;
+    }
+
+    /// An email address around the `@` at `at`; the local part may start no
+    /// earlier than `run_start`. Returns its start and length.
+    fn scan_email(&self, run_start: usize, at: usize) -> Option<(usize, usize)> {
+        let b = self.text.as_bytes();
+        let is_local = |c: u8| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b'-' | b'+');
+        let mut ls = at;
+        while ls > run_start && is_local(b[ls - 1]) {
+            ls -= 1;
+        }
+        if ls == at {
+            return None;
+        }
+        let mut de = at + 1;
+        while de < self.end && (b[de].is_ascii_alphanumeric() || matches!(b[de], b'.' | b'-')) {
+            de += 1;
+        }
+        while de > at + 1 && matches!(b[de - 1], b'.' | b'-') {
+            de -= 1;
+        }
+        let domain = &self.text[at + 1..de];
+        if domain.is_empty() || !domain.contains('.') || domain.starts_with('.') {
+            return None;
+        }
+        Some((ls, de - ls))
     }
 
     /// Returns the URL length and the prefix to add to the destination.
+    /// Obsidian links `https://`, `http://` and `www.` wherever they appear.
     fn scan_bare_url(&self, i: usize) -> Option<(usize, &'static str)> {
         let rest = &self.text[i..self.end];
         let (prefix, scheme_len) = if rest.starts_with("https://") {
@@ -334,7 +354,7 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
         } else if rest.starts_with("http://") {
             ("", 7)
         } else if rest.starts_with("www.") {
-            ("http://", 0)
+            ("http://", 4)
         } else {
             return None;
         };
@@ -345,8 +365,8 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
         let domain_end = body[..len].find(['/', '?', '#']).unwrap_or(len);
         let domain = &body[..domain_end];
         if domain.is_empty()
-            || !domain.contains('.')
-            || domain.ends_with('.')
+            || domain.starts_with('.')
+            || (prefix == "http://" && !domain.contains('.'))
             || domain
                 .chars()
                 .any(|c| !(c.is_alphanumeric() || matches!(c, '-' | '_' | '.')))
@@ -360,10 +380,7 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
                 break;
             }
             let last = b[len - 1];
-            if matches!(
-                last,
-                b'?' | b'!' | b'.' | b',' | b':' | b'*' | b'_' | b'~' | b'\'' | b'"'
-            ) {
+            if matches!(last, b'?' | b'!' | b'.' | b',' | b':' | b'*' | b'_' | b'~') {
                 len -= 1;
             } else if last == b')' {
                 let open = body[..len].bytes().filter(|&c| c == b'(').count();
@@ -391,7 +408,7 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
                 break;
             }
         }
-        if len < domain.len().min(1) {
+        if len == 0 {
             return None;
         }
         Some((scheme_len + len, prefix))
@@ -465,7 +482,7 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
                 let run = b[i..self.end].iter().take_while(|&&c| c == b'`').count();
                 if run == n {
                     let inner = self.slice(start + n, i);
-                    let content = normalize_code(inner, self.table_cell);
+                    let content = normalize_code(inner);
                     self.push_node(InlineKind::Code(content), start, i + run);
                     self.pos = i + run;
                     return true;
@@ -475,9 +492,11 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
                 i += 1;
             }
         }
-        // No closer: the run is literal text.
-        self.push_text(start, start + n);
-        self.pos = start + n;
+        // No closer: the run is literal text. Obsidian retries from the next
+        // backtick instead of skipping the whole run.
+        let literal = if self.cx.opts.quirks { 1 } else { n };
+        self.push_text(start, start + literal);
+        self.pos = start + literal;
         true
     }
 
@@ -535,14 +554,16 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
         self.pos = end;
     }
 
-    /// `~~` and `==`: exactly two characters.
+    /// `~~` and `==`: exactly two characters. With quirks on, a longer run
+    /// delimits with its first two characters and the rest is text, as
+    /// Obsidian renders `~~~x~~~` as `<del>~x</del>~`.
     fn double_delimiter(&mut self, ch: u8) -> bool {
         let start = self.pos;
         let n = self.text.as_bytes()[start..self.end]
             .iter()
             .take_while(|&&c| c == ch)
             .count();
-        if n != 2 {
+        if n == 1 || (n > 2 && !self.cx.opts.quirks) {
             self.push_text(start, start + n);
             self.pos = start + n;
             return true;
@@ -629,7 +650,10 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
                     let o_count = self.delims[o].text_end - self.delims[o].text_start;
                     let c_count = self.delims[c].text_end - self.delims[c].text_start;
                     let is_double = ch == b'~' || ch == b'=';
-                    let use_count = if is_double || (o_count >= 2 && c_count >= 2) {
+                    // Obsidian nests `***x***` as strong outside em, so with
+                    // quirks on a three-on-three match takes one delimiter first.
+                    let triple = self.cx.opts.quirks && o_count >= 3 && c_count >= 3;
+                    let use_count = if is_double || (o_count >= 2 && c_count >= 2 && !triple) {
                         2
                     } else {
                         1
@@ -779,10 +803,7 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
 
     fn emit_wikilink(&mut self, start: usize, end: usize, embed: bool) {
         let body_start = if embed { start + 3 } else { start + 2 };
-        let mut body = self.slice(body_start, end - 2);
-        if self.table_cell && body.contains("\\|") {
-            body = Cow::Owned(body.replace("\\|", "|"));
-        }
+        let body = self.slice(body_start, end - 2);
         self.push_node(InlineKind::Wikilink { body, embed }, start, end);
         self.pos = end;
     }
@@ -794,7 +815,7 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
         if label.is_empty() || label.bytes().any(|b| b.is_ascii_whitespace() || b == b'[') {
             return None;
         }
-        if !self.cx.footnote_labels.contains(&label) {
+        if !self.cx.opts.quirks && !self.cx.footnote_labels.contains(&label) {
             return None;
         }
         Some(2 + close + 1)
@@ -868,6 +889,7 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
                     BracketKind::Image => InlineKind::Image {
                         destination,
                         title,
+                        kind,
                         children,
                     },
                     BracketKind::Footnote => InlineKind::InlineFootnote(children),
@@ -918,7 +940,8 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
     fn angle(&mut self) -> bool {
         let start = self.pos;
         let rest = self.rest();
-        if let Some((len, email)) = scan::scan_autolink(rest) {
+        let min_scheme = if self.cx.opts.quirks { 1 } else { 2 };
+        if let Some((len, email)) = scan::scan_autolink(rest, min_scheme) {
             let inner = self.slice(start + 1, start + len - 1);
             let dest = if email {
                 Cow::Owned(format!("mailto:{inner}"))
@@ -955,22 +978,41 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
             self.pos = start + len;
             return true;
         }
+        if self.cx.opts.quirks {
+            if let Some((len, text)) = scan::legacy_entity(&self.rest()[1..]) {
+                self.push_node(
+                    InlineKind::Text(Cow::Borrowed(text)),
+                    start,
+                    start + 1 + len,
+                );
+                self.pos = start + 1 + len;
+                return true;
+            }
+        }
         false
     }
 
     fn tag(&mut self) -> bool {
         let start = self.pos;
-        let prev_ok = self.text[..start]
-            .chars()
-            .next_back()
-            .is_none_or(|c| !c.is_alphanumeric() && c != '#');
+        let prev = self.text[..start].chars().next_back();
+        // Obsidian starts a tag after whitespace or right after another
+        // inline construct (a link, code span, tag, or emphasis delimiter).
+        let after_node = self.cx.opts.quirks
+            && self.nodes.last().is_some_and(|n| {
+                n.span.end == self.src_pos(start)
+                    && (!matches!(n.kind, InlineKind::Text(_))
+                        || self
+                            .delim_top
+                            .is_some_and(|d| self.delims[d].node + 1 == self.nodes.len()))
+            });
+        let prev_ok = prev.is_none_or(is_unicode_whitespace) || after_node;
         if !prev_ok {
             return false;
         }
         let rest = &self.text[start + 1..self.end];
         let len = rest
             .chars()
-            .take_while(|&c| c.is_alphanumeric() || matches!(c, '_' | '-' | '/'))
+            .take_while(|&c| is_tag_char(c))
             .map(char::len_utf8)
             .sum::<usize>();
         let name = &rest[..len];
@@ -1042,7 +1084,9 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
         let Some(inner) = rest.strip_prefix("%%") else {
             return false;
         };
-        let Some(i) = inner.find("%%") else {
+        // An inline comment does not cross a line break.
+        let line_end = inner.find('\n').unwrap_or(inner.len());
+        let Some(i) = inner[..line_end].find("%%") else {
             return false;
         };
         let content = self.slice(start + 2, start + 2 + i);
@@ -1050,6 +1094,14 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
         self.pos = start + 4 + i;
         true
     }
+}
+
+/// Tag characters: letters, digits, `_`, `-`, `/`, and any non-ASCII
+/// character that is not whitespace (Obsidian allows emoji in tags).
+fn is_tag_char(c: char) -> bool {
+    c.is_alphanumeric()
+        || matches!(c, '_' | '-' | '/')
+        || (!c.is_ascii() && !is_unicode_whitespace(c))
 }
 
 fn first_delim(delims: &[Delim], top: Option<usize>) -> Option<usize> {
@@ -1075,13 +1127,11 @@ fn skip_spnl(b: &[u8], mut i: usize) -> usize {
 
 /// Code span content: line endings become spaces; one leading and trailing
 /// space are stripped when both are present and the content is not all spaces.
-fn normalize_code(inner: Cow<'_, str>, table_cell: bool) -> Cow<'_, str> {
+/// Unlike GFM, `\|` inside a table cell's code span stays as written (Obsidian).
+fn normalize_code(inner: Cow<'_, str>) -> Cow<'_, str> {
     let mut s = inner;
     if s.contains('\n') {
         s = Cow::Owned(s.replace('\n', " "));
-    }
-    if table_cell && s.contains("\\|") {
-        s = Cow::Owned(s.replace("\\|", "|"));
     }
     let bytes = s.as_bytes();
     if bytes.len() >= 2

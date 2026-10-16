@@ -343,10 +343,7 @@ impl<'a> Indexer<'a> {
         walk_inlines(inlines, &mut |inline| match &inline.kind {
             InlineKind::Wikilink { body, embed } => {
                 let parsed = _markdown::parse_linktext(body);
-                let link = match body.find('|') {
-                    Some(i) => body[..i].trim().to_string(),
-                    None => body.trim().to_string(),
-                };
+                let link = _markdown::link_target(body).to_string();
                 let entry = LinkCache {
                     link,
                     original: inline.span.of(src).to_string(),
@@ -406,10 +403,7 @@ impl<'a> Indexer<'a> {
                         walk_inlines(content, &mut |inline| {
                             if let InlineKind::Wikilink { body, .. } = &inline.kind {
                                 let parsed = _markdown::parse_linktext(body);
-                                let link = match body.find('|') {
-                                    Some(i) => body[..i].trim().to_string(),
-                                    None => body.trim().to_string(),
-                                };
+                                let link = _markdown::link_target(body).to_string();
                                 found.push(FrontmatterLinkCache {
                                     key: key.to_string(),
                                     link,

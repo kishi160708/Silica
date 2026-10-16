@@ -31,7 +31,7 @@ The [[Specification]] sets three gates before any reader or writer work starts.
 | Gate | Target | Status |
 | --- | --- | --- |
 | Editor prototype | 50k-line note with wikilink and heading decorations | not started |
-| Parser conformance | 1000-note HTML diff corpus at 99 percent | CommonMark suite at 652/652; Obsidian corpus not started |
+| Parser conformance | 1000-note HTML diff corpus at 99 percent | passed: 1007/1009 notes against Obsidian 1.13.7, plus CommonMark 652/652 |
 | Index performance | 20k-file vault indexed cold in under 2 s | measured, see below |
 
 ### Parser, 2026-10-16
@@ -40,9 +40,23 @@ The [[Specification]] sets three gates before any reader or writer work starts.
 footnotes and bare URLs, and Obsidian's wikilinks, embeds, tags, block ids,
 callouts, highlights, comments and math into one tree with byte spans. All 652
 examples of the CommonMark 0.31.2 spec render byte-identical HTML
-(`tests/commonmark.rs`, a ratchet that must not go down). The Obsidian
-constructs are covered by `tests/obsidian.rs`; the next step for this gate is
-a corpus of real notes rendered by Obsidian to diff against.
+(`tests/commonmark.rs`, a ratchet that must not go down).
+
+The Obsidian side of the gate is `tests/corpus.rs`: `tests/corpus/vault` is a
+vault of 1000 generated notes (`-bench generate --notes 1000`) and nine
+hand-written edge-case notes, and `tests/corpus/expected` holds the HTML
+Obsidian 1.13.7 produced for each through the `-corpus` plugin that
+ships inside the vault. Both sides are reduced to a canonical token stream
+(no copy buttons, icons, MathJax output or `dir` attributes) before
+comparison. 1007 of 1009 notes match; the two left are pathological
+delimiter runs and a wikilink inside markdown link text. The observed
+behaviors are listed in [[Specification]].
+
+To regenerate the expected HTML after changing the corpus: set the corpus
+vault as the open vault in `~/.config/obsidian/obsidian.json` (or open it from
+Obsidian's vault switcher), create an empty `.-autorun` file in the vault,
+start Obsidian, and trust the plugin when asked the first time. The plugin
+writes `../expected`, then closes its window.
 
 ### Index benchmark, 2026-10-15
 

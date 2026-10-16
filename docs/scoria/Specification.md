@@ -20,6 +20,7 @@ with the command inventory and bundle evidence.
 | Forbidden file-name characters `* " \ / < > : \| ?` and no leading dot | `-formats::validate_file_name` |
 | One parser for editor, reading view, cache, and link rewriting; every node carries its byte span | `-markdown::parse` |
 | CommonMark 0.31.2: all 652 spec examples render byte-identical HTML | `-markdown/tests/commonmark.rs` (ratchet) |
+| Obsidian 1.13.7 reading view: 1007 of 1009 corpus notes render the same canonical HTML | `-markdown/tests/corpus.rs` (ratchet; vault and expected HTML under `tests/corpus`) |
 | GFM tables (`\|` does not split a cell, even in code), strikethrough, task items with any single character, footnotes, bare URLs | `-markdown::Options` |
 | Frontmatter only on line 1, BOM and CRLF tolerated | `-markdown::extract_frontmatter` |
 | Wikilink body grammar `path#heading#heading\|alias`, `#^block` | `-markdown::parse_linktext` |
@@ -49,12 +50,64 @@ with them off.
 
 Decisions taken from observation that the spec text does not spell out:
 
-- A table's header row is the last line of the preceding paragraph; earlier
-  lines stay a paragraph. The header or delimiter row must contain a pipe.
+- A table's header row must be a one-line paragraph followed by the delimiter
+  row, and the header or delimiter row must contain a pipe. A table cannot
+  interrupt a longer paragraph, and a row line without a pipe ends the table.
 - A paragraph that is only `^id` attaches the id to the previous block at the
-  same level, which is how Obsidian ids tables and code blocks.
-- An unterminated `$$` or `%%` block runs to the end of the file.
-- Footnote references to undefined labels stay literal text; inline footnotes
-  `^[text]` are numbered in order of appearance after referenced definitions.
+  same level, which is how Obsidian ids tables and code blocks. A ` ^id` at
+  the end of a callout header ids the callout.
+- An unterminated `$$` or `%%` block runs to the end of the file. `$$x$$` or
+  `%%x%%` closed on one line stays inline inside a paragraph.
+- Footnote references to undefined labels render as the bare label; inline
+  footnotes `^[text]` are numbered in order of appearance after referenced
+  definitions.
 - Markdown links count as vault links in the cache when the destination has
   no URL scheme; the destination is percent-decoded.
+
+## Observed Obsidian behavior
+
+Every item below was seen in Obsidian 1.13.7's output for the corpus under
+`crates/-markdown/tests/corpus` and is reproduced by the parser, most
+behind `Options::quirks` so the CommonMark suite still runs clean.
+
+Blocks:
+
+- A single newline inside a paragraph renders as `<br>` (strict line breaks off).
+- A setext underline only applies to a one-line paragraph; after a longer
+  paragraph `---` is a thematic break.
+- `- [ ]` with nothing after the bracket is plain text, not a task.
+- A list marker indented four or more columns inside a list is a sibling
+  item; CommonMark would make it a lazy continuation line.
+- A `>` line directly after a list item's text stays inside that item.
+- The callout type is trimmed, so `[! bad]` is a `bad` callout; `[!tip]Title`
+  without a space is an ordinary quote.
+- Frontmatter renders as a hidden `pre.frontmatter`; `<script>` is removed;
+  unknown elements are unwrapped; raw `<a>` gains `target` and `rel`.
+
+Inlines:
+
+- `#` starts a tag after whitespace or right after another inline construct
+  (`[[link]]#tag`, `` `code`#tag ``, `**b**#tag`, `#a#b`), not after a letter
+  or `(`. Tags may contain emoji and any non-ASCII letters.
+- `~~~x~~~` and `===x===` delimit with their first two characters; the third
+  stays inside. `***x***` nests strong outside em.
+- A single `_` cannot close before a letter or digit, so `snake_case_name`
+  stays plain while `a_b_ ` emphasizes `b`.
+- A backtick run without a closer retries one backtick shorter.
+- Legacy entities decode without a semicolon (`&copy` is ©).
+- One-letter URL schemes autolink (`<a://b>`); bare `https://`, `http://`,
+  `www.` and email addresses link wherever they appear, even mid-word; a
+  trailing `"` stays in the URL while `?!.,:*_~` and unbalanced `)` do not.
+- `[[Note\|alias]]` is the alias form: the target is the text before the first
+  `|` with a trailing backslash dropped. Inside code spans `\|` stays literal.
+- An inline `%%comment%%` does not cross a line break.
+- `$...$` closes at a `$` preceded by a non-space and not followed by a digit.
+- `![alt](path)` without a scheme is an internal embed whose `alt` is the raw
+  alt text up to a `|`; `![alt][ref]` is always an `<img>`. For `![[x|a|200]]`
+  the alt is the first alias part that is not a size hint, else the display
+  text (`Note > Heading`).
+- `[[Note#H]]` displays as `Note > H`; an alias adds `aria-label`.
+
+Not reproduced (two corpus notes): nested runs such as `****a****` and
+`==== four ==x===y==`, and a wikilink inside markdown link text, which splits
+the link in Obsidian.

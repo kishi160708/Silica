@@ -128,9 +128,7 @@ fn commonmark_spec() {
     let examples = load();
     assert_eq!(examples.len(), 652, "spec example count");
     let opts = Options::commonmark();
-    let html_opts = HtmlOptions {
-        obsidian_attributes: false,
-    };
+    let html_opts = HtmlOptions::commonmark();
     let verbose = std::env::var_os("COMMONMARK_VERBOSE").is_some();
     let mut passed = 0;
     let mut failed_by_section: Vec<(String, Vec<usize>)> = Vec::new();
