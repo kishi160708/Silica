@@ -1,33 +1,63 @@
 //! Metadata cache.
 //!
 //! `index_markdown` turns one note into a `CachedMetadata` record that mirrors
-//! Obsidian's public `CachedMetadata` shape. `LinkResolver` holds the vault-wide
-//! indexes needed to turn link text into a file path with Obsidian's rules.
+//! Obsidian's public `CachedMetadata` shape, built from the `-markdown`
+//! tree so that the cache, the editor and the reading view agree on every
+//! edge case. `LinkResolver` holds the vault-wide indexes needed to turn link
+//! text into a file path with Obsidian's rules.
 
 pub mod resolver;
 
 pub use resolver::LinkResolver;
+pub use _markdown::{LineIndex, Loc, Pos, Span};
 
-use _markdown::{extract_frontmatter, scan_inlines, Inline, Span};
+use _markdown::{
+    parse, walk_inlines, Block, BlockKind, Document, Inline, InlineKind, ListItem,
+};
 use std::collections::BTreeMap;
 
-/// Line and column are zero-based; `offset` is a byte offset into the file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct Pos {
-    pub line: u32,
-    pub col: u32,
-    pub offset: usize,
+/// Obsidian's `SectionCache.type` vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SectionKind {
+    Paragraph,
+    Heading,
+    List,
+    Code,
+    Blockquote,
+    Table,
+    ThematicBreak,
+    Yaml,
+    Html,
+    FootnoteDefinition,
+    Callout,
+    Math,
+    Comment,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct Loc {
-    pub start: Pos,
-    pub end: Pos,
+impl SectionKind {
+    /// The string Obsidian stores in `SectionCache.type`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SectionKind::Paragraph => "paragraph",
+            SectionKind::Heading => "heading",
+            SectionKind::List => "list",
+            SectionKind::Code => "code",
+            SectionKind::Blockquote => "blockquote",
+            SectionKind::Table => "table",
+            SectionKind::ThematicBreak => "thematicBreak",
+            SectionKind::Yaml => "yaml",
+            SectionKind::Html => "html",
+            SectionKind::FootnoteDefinition => "footnoteDefinition",
+            SectionKind::Callout => "callout",
+            SectionKind::Math => "math",
+            SectionKind::Comment => "comment",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkCache {
-    /// Parsed target (`Note#Heading`), without the alias.
+    /// Parsed target (`Note#Heading`), without the alias; percent-decoded for markdown links.
     pub link: String,
     /// The full original text including brackets.
     pub original: String,
@@ -44,13 +74,49 @@ pub struct TagCache {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeadingCache {
+    /// The heading text as written, with inline markup left in place.
     pub heading: String,
     pub level: u8,
     pub position: Loc,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SectionCache {
+    pub kind: SectionKind,
+    /// `^id` attached to the section.
+    pub id: Option<String>,
+    pub position: Loc,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListItemCache {
+    /// Start line of the parent item, or for a root item the negative of the
+    /// start line of the list's first item (Obsidian's encoding).
+    pub parent: i64,
+    /// The character inside `[ ]` for task items.
+    pub task: Option<char>,
+    pub id: Option<String>,
+    pub position: Loc,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockCache {
+    pub id: String,
+    /// Covers the whole block the id belongs to.
+    pub position: Loc,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrontmatterLinkCache {
+    /// Property path such as `related` or `aliases.1`.
+    pub key: String,
+    pub link: String,
+    pub original: String,
+    pub display_text: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FootnoteCache {
     pub id: String,
     pub position: Loc,
 }
@@ -61,162 +127,338 @@ pub struct CachedMetadata {
     pub embeds: Vec<LinkCache>,
     pub tags: Vec<TagCache>,
     pub headings: Vec<HeadingCache>,
+    pub sections: Vec<SectionCache>,
+    pub list_items: Vec<ListItemCache>,
     pub blocks: BTreeMap<String, BlockCache>,
     pub frontmatter: Option<serde_yaml::Value>,
     pub frontmatter_position: Option<Loc>,
-}
-
-struct LineIndex {
-    starts: Vec<usize>,
-}
-
-impl LineIndex {
-    fn new(src: &str) -> LineIndex {
-        let mut starts = vec![0];
-        starts.extend(src.match_indices('\n').map(|(i, _)| i + 1));
-        LineIndex { starts }
-    }
-
-    fn pos(&self, offset: usize) -> Pos {
-        let line = match self.starts.binary_search(&offset) {
-            Ok(i) => i,
-            Err(i) => i - 1,
-        };
-        Pos {
-            line: line as u32,
-            col: (offset - self.starts[line]) as u32,
-            offset,
-        }
-    }
-
-    fn loc(&self, span: Span) -> Loc {
-        Loc {
-            start: self.pos(span.start),
-            end: self.pos(span.end),
-        }
-    }
-}
-
-/// Returns `(fence_char, fence_len)` if the line opens or closes a fenced code block.
-fn fence(line: &str) -> Option<(u8, usize)> {
-    let t = line.trim_start();
-    let b = t.as_bytes();
-    let c = *b.first()?;
-    if c != b'`' && c != b'~' {
-        return None;
-    }
-    let n = b.iter().take_while(|&&x| x == c).count();
-    (n >= 3).then_some((c, n))
+    pub frontmatter_links: Vec<FrontmatterLinkCache>,
+    /// Footnote definitions.
+    pub footnotes: Vec<FootnoteCache>,
+    pub footnote_refs: Vec<FootnoteCache>,
 }
 
 /// Builds the metadata record for one markdown file.
 pub fn index_markdown(src: &str) -> CachedMetadata {
-    let lines = LineIndex::new(src);
-    let mut meta = CachedMetadata::default();
+    let doc = parse(src);
+    index_document(&doc)
+}
 
-    let mut body_start = 0;
-    if let Some(fm) = extract_frontmatter(src) {
-        meta.frontmatter = serde_yaml::from_str::<serde_yaml::Value>(fm.yaml)
-            .ok()
-            .filter(|v| v.is_mapping());
-        meta.frontmatter_position = Some(lines.loc(Span {
-            start: fm.start,
-            end: fm.end,
-        }));
-        body_start = fm.end;
+/// Builds the metadata record from an already parsed note.
+pub fn index_document(doc: &Document<'_>) -> CachedMetadata {
+    let mut ix = Indexer {
+        src: doc.source,
+        lines: LineIndex::new(doc.source),
+        meta: CachedMetadata::default(),
+    };
+    for block in &doc.blocks {
+        ix.meta.sections.push(SectionCache {
+            kind: section_kind(block),
+            id: block.id.map(|i| i.id.to_string()),
+            position: ix.lines.loc(block.span),
+        });
     }
+    ix.blocks(&doc.blocks);
+    ix.meta
+}
 
-    // Walk lines: track fenced code blocks, record headings, collect prose ranges.
-    let mut in_fence: Option<(u8, usize)> = None;
-    let mut offset = body_start;
-    let mut prose: Vec<(usize, usize)> = Vec::new();
-    for line in src[body_start..].split_inclusive('\n') {
-        let line_start = offset;
-        offset += line.len();
-        let content = line.trim_end_matches(['\n', '\r']);
-        if let Some((c, n)) = fence(content) {
-            match in_fence {
-                Some((fc, fnn)) if fc == c && n >= fnn => in_fence = None,
-                Some(_) => {}
-                None => in_fence = Some((c, n)),
+fn section_kind(block: &Block<'_>) -> SectionKind {
+    match &block.kind {
+        BlockKind::Yaml { .. } => SectionKind::Yaml,
+        BlockKind::Paragraph { .. } => SectionKind::Paragraph,
+        BlockKind::Heading { .. } => SectionKind::Heading,
+        BlockKind::ThematicBreak => SectionKind::ThematicBreak,
+        BlockKind::CodeBlock { .. } => SectionKind::Code,
+        BlockKind::HtmlBlock { .. } => SectionKind::Html,
+        BlockKind::BlockQuote { .. } => SectionKind::Blockquote,
+        BlockKind::Callout { .. } => SectionKind::Callout,
+        BlockKind::List { .. } => SectionKind::List,
+        BlockKind::Table { .. } => SectionKind::Table,
+        BlockKind::Math { .. } => SectionKind::Math,
+        BlockKind::Comment { .. } => SectionKind::Comment,
+        BlockKind::FootnoteDefinition { .. } => SectionKind::FootnoteDefinition,
+    }
+}
+
+struct Indexer<'a> {
+    src: &'a str,
+    lines: LineIndex,
+    meta: CachedMetadata,
+}
+
+/// Whether a markdown link destination points into the vault rather than at a URL.
+fn is_vault_destination(dest: &str) -> bool {
+    let b = dest.as_bytes();
+    if b.first().is_some_and(|c| c.is_ascii_alphabetic()) {
+        let scheme_len = b
+            .iter()
+            .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'.' | b'-'))
+            .count();
+        if scheme_len >= 2 && b.get(scheme_len) == Some(&b':') {
+            return false;
+        }
+    }
+    true
+}
+
+fn percent_decode(s: &str) -> String {
+    if !s.contains('%') {
+        return s.to_string();
+    }
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let (Some(h), Some(l)) = (hex(b.get(i + 1)), hex(b.get(i + 2))) {
+                out.push(h << 4 | l);
+                i += 3;
+                continue;
             }
-            continue;
         }
-        if in_fence.is_some() {
-            continue;
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
+}
+
+fn hex(c: Option<&u8>) -> Option<u8> {
+    (*c? as char).to_digit(16).map(|d| d as u8)
+}
+
+impl<'a> Indexer<'a> {
+    fn blocks(&mut self, blocks: &[Block<'a>]) {
+        for block in blocks {
+            self.block(block);
         }
-        let hashes = content.bytes().take_while(|&b| b == b'#').count();
-        if (1..=6).contains(&hashes) && content[hashes..].starts_with([' ', '\t']) {
-            let text = content[hashes..].trim().trim_end_matches('#').trim();
-            meta.headings.push(HeadingCache {
-                heading: text.to_string(),
-                level: hashes as u8,
-                position: lines.loc(Span {
-                    start: line_start,
-                    end: line_start + content.len(),
-                }),
-            });
-            continue;
-        }
-        prose.push((line_start, line_start + content.len()));
     }
 
-    for (start, end) in prose {
-        for inline in scan_inlines(&src[start..end]) {
-            match inline {
-                Inline::Link { text, embed, span } => {
-                    let parsed = _markdown::parse_linktext(text);
-                    let link = match text.find('|') {
-                        Some(i) => text[..i].trim().to_string(),
-                        None => text.trim().to_string(),
-                    };
-                    let abs = Span {
-                        start: start + span.start,
-                        end: start + span.end,
-                    };
-                    let entry = LinkCache {
-                        link,
-                        original: src[abs.start..abs.end].to_string(),
-                        display_text: parsed.alias.map(str::to_string),
-                        position: lines.loc(abs),
-                    };
-                    if embed {
-                        meta.embeds.push(entry);
-                    } else {
-                        meta.links.push(entry);
+    fn block(&mut self, block: &Block<'a>) {
+        if let Some(id) = block.id {
+            self.meta.blocks.insert(
+                id.id.to_string(),
+                BlockCache {
+                    id: id.id.to_string(),
+                    position: self.lines.loc(block.span),
+                },
+            );
+        }
+        match &block.kind {
+            BlockKind::Yaml { yaml } => {
+                self.meta.frontmatter = serde_yaml::from_str::<serde_yaml::Value>(yaml)
+                    .ok()
+                    .filter(|v| v.is_mapping());
+                self.meta.frontmatter_position = Some(self.lines.loc(block.span));
+                if let Some(fm) = self.meta.frontmatter.clone() {
+                    self.frontmatter_links("", &fm);
+                }
+            }
+            BlockKind::Paragraph { content } => self.inlines(content),
+            BlockKind::Heading { level, content, .. } => {
+                let text = match (content.first(), content.last()) {
+                    (Some(f), Some(l)) => self.src[f.span.start..l.span.end].trim().to_string(),
+                    _ => String::new(),
+                };
+                self.meta.headings.push(HeadingCache {
+                    heading: text,
+                    level: *level,
+                    position: self.lines.loc(block.span),
+                });
+                self.inlines(content);
+            }
+            BlockKind::BlockQuote { children } | BlockKind::FootnoteDefinition { children, .. } => {
+                if let BlockKind::FootnoteDefinition { label, .. } = &block.kind {
+                    self.meta.footnotes.push(FootnoteCache {
+                        id: label.to_string(),
+                        position: self.lines.loc(block.span),
+                    });
+                }
+                self.blocks(children);
+            }
+            BlockKind::Callout {
+                title, children, ..
+            } => {
+                self.inlines(title);
+                self.blocks(children);
+            }
+            BlockKind::List { items, .. } => self.list(items, None),
+            BlockKind::Table { header, rows, .. } => {
+                for cell in header.iter().chain(rows.iter().flatten()) {
+                    self.inlines(&cell.content);
+                }
+            }
+            BlockKind::ThematicBreak
+            | BlockKind::CodeBlock { .. }
+            | BlockKind::HtmlBlock { .. }
+            | BlockKind::Math { .. }
+            | BlockKind::Comment { .. } => {}
+        }
+    }
+
+    fn list(&mut self, items: &[ListItem<'a>], parent_line: Option<u32>) {
+        let first_line = items
+            .first()
+            .map(|i| self.lines.pos(i.span.start).line)
+            .unwrap_or(0);
+        for item in items {
+            let position = self.lines.loc(item.span);
+            let parent = match parent_line {
+                Some(l) => l as i64,
+                None => -(first_line as i64),
+            };
+            let id = item.children.first().and_then(|b| match &b.kind {
+                BlockKind::Paragraph { .. } => b.id.map(|i| i.id.to_string()),
+                _ => None,
+            });
+            if let Some(id) = &id {
+                self.meta.blocks.insert(
+                    id.clone(),
+                    BlockCache {
+                        id: id.clone(),
+                        position,
+                    },
+                );
+            }
+            self.meta.list_items.push(ListItemCache {
+                parent,
+                task: item.task,
+                id,
+                position,
+            });
+            for child in &item.children {
+                match &child.kind {
+                    BlockKind::List { items, .. } => {
+                        self.list(items, Some(position.start.line));
+                    }
+                    _ => self.block(child),
+                }
+            }
+        }
+    }
+
+    fn inlines(&mut self, inlines: &[Inline<'a>]) {
+        let src = self.src;
+        let lines = &self.lines;
+        let meta = &mut self.meta;
+        walk_inlines(inlines, &mut |inline| match &inline.kind {
+            InlineKind::Wikilink { body, embed } => {
+                let parsed = _markdown::parse_linktext(body);
+                let link = match body.find('|') {
+                    Some(i) => body[..i].trim().to_string(),
+                    None => body.trim().to_string(),
+                };
+                let entry = LinkCache {
+                    link,
+                    original: inline.span.of(src).to_string(),
+                    display_text: parsed.alias.map(str::to_string),
+                    position: lines.loc(inline.span),
+                };
+                if *embed {
+                    meta.embeds.push(entry);
+                } else {
+                    meta.links.push(entry);
+                }
+            }
+            InlineKind::Link {
+                destination,
+                kind: _markdown::LinkKind::Inline | _markdown::LinkKind::Reference,
+                children,
+                ..
+            } if is_vault_destination(destination) => {
+                meta.links.push(LinkCache {
+                    link: percent_decode(destination),
+                    original: inline.span.of(src).to_string(),
+                    display_text: Some(_markdown::plain_text(children)),
+                    position: lines.loc(inline.span),
+                });
+            }
+            InlineKind::Image {
+                destination,
+                children,
+                ..
+            } if is_vault_destination(destination) => {
+                meta.embeds.push(LinkCache {
+                    link: percent_decode(destination),
+                    original: inline.span.of(src).to_string(),
+                    display_text: Some(_markdown::plain_text(children)),
+                    position: lines.loc(inline.span),
+                });
+            }
+            InlineKind::Tag(name) => meta.tags.push(TagCache {
+                tag: format!("#{name}"),
+                position: lines.loc(inline.span),
+            }),
+            InlineKind::FootnoteReference(label) => meta.footnote_refs.push(FootnoteCache {
+                id: label.to_string(),
+                position: lines.loc(inline.span),
+            }),
+            _ => {}
+        });
+    }
+
+    fn frontmatter_links(&mut self, key: &str, value: &serde_yaml::Value) {
+        match value {
+            serde_yaml::Value::String(s) => {
+                let doc = _markdown::parse(s);
+                let mut found = Vec::new();
+                for block in &doc.blocks {
+                    if let BlockKind::Paragraph { content } = &block.kind {
+                        walk_inlines(content, &mut |inline| {
+                            if let InlineKind::Wikilink { body, .. } = &inline.kind {
+                                let parsed = _markdown::parse_linktext(body);
+                                let link = match body.find('|') {
+                                    Some(i) => body[..i].trim().to_string(),
+                                    None => body.trim().to_string(),
+                                };
+                                found.push(FrontmatterLinkCache {
+                                    key: key.to_string(),
+                                    link,
+                                    original: inline.span.of(s).to_string(),
+                                    display_text: parsed.alias.map(str::to_string),
+                                });
+                            }
+                        });
                     }
                 }
-                Inline::Tag { name, span } => meta.tags.push(TagCache {
-                    tag: format!("#{name}"),
-                    position: lines.loc(Span {
-                        start: start + span.start,
-                        end: start + span.end,
-                    }),
-                }),
-                Inline::BlockId { id, span } => {
-                    meta.blocks.insert(
-                        id.to_string(),
-                        BlockCache {
-                            id: id.to_string(),
-                            position: lines.loc(Span {
-                                start: start + span.start,
-                                end: start + span.end,
-                            }),
-                        },
-                    );
+                self.meta.frontmatter_links.extend(found);
+            }
+            serde_yaml::Value::Sequence(items) => {
+                for (i, item) in items.iter().enumerate() {
+                    let k = if key.is_empty() {
+                        i.to_string()
+                    } else {
+                        format!("{key}.{i}")
+                    };
+                    self.frontmatter_links(&k, item);
                 }
             }
+            serde_yaml::Value::Mapping(map) => {
+                for (k, v) in map {
+                    let name = match k {
+                        serde_yaml::Value::String(s) => s.clone(),
+                        other => serde_yaml::to_string(other)
+                            .unwrap_or_default()
+                            .trim()
+                            .to_string(),
+                    };
+                    let k = if key.is_empty() {
+                        name
+                    } else {
+                        format!("{key}.{name}")
+                    };
+                    self.frontmatter_links(&k, v);
+                }
+            }
+            _ => {}
         }
     }
-
-    meta
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const NOTE: &str = "---\ntags: [x]\naliases:\n  - Alt\n---\n# Title\n\nSee [[Other#Part|there]] and ![[pic.png]] #tag ^blk1\n\n```\n[[not indexed]] #no\n```\n\n## Second\n";
+    const NOTE: &str = "---\ntags: [x]\naliases:\n  - Alt\nrelated: \"[[Other|shown]]\"\n---\n# Title\n\nSee [[Other#Part|there]] and ![[pic.png]] #tag ^blk1\n\n```\n[[not indexed]] #no\n```\n\n## Second\n\n- [ ] task [[In List]]\n  - nested\n- plain ^item\n\n[md](Some%20Note.md) and [ext](https://x.y) ![img](a.png)\n\nNote[^1].\n\n[^1]: Def\n";
 
     #[test]
     fn indexes_everything_outside_code() {
@@ -224,16 +466,64 @@ mod tests {
         assert_eq!(m.headings.len(), 2);
         assert_eq!(m.headings[0].heading, "Title");
         assert_eq!(m.headings[1].level, 2);
-        assert_eq!(m.links.len(), 1);
-        assert_eq!(m.links[0].link, "Other#Part");
+        let links: Vec<&str> = m.links.iter().map(|l| l.link.as_str()).collect();
+        assert_eq!(links, vec!["Other#Part", "In List", "Some Note.md"]);
         assert_eq!(m.links[0].display_text.as_deref(), Some("there"));
         assert_eq!(m.links[0].original, "[[Other#Part|there]]");
-        assert_eq!(m.embeds.len(), 1);
+        let embeds: Vec<&str> = m.embeds.iter().map(|l| l.link.as_str()).collect();
+        assert_eq!(embeds, vec!["pic.png", "a.png"]);
         assert_eq!(m.tags.len(), 1);
         assert_eq!(m.tags[0].tag, "#tag");
         assert!(m.blocks.contains_key("blk1"));
-        let fm = m.frontmatter.unwrap();
+        assert!(m.blocks.contains_key("item"));
+        let fm = m.frontmatter.as_ref().unwrap();
         assert_eq!(fm["aliases"][0], "Alt");
+        assert_eq!(m.frontmatter_links.len(), 1);
+        assert_eq!(m.frontmatter_links[0].key, "related");
+        assert_eq!(m.frontmatter_links[0].link, "Other");
+        assert_eq!(
+            m.frontmatter_links[0].display_text.as_deref(),
+            Some("shown")
+        );
+        assert_eq!(m.footnotes.len(), 1);
+        assert_eq!(m.footnote_refs.len(), 1);
+    }
+
+    #[test]
+    fn sections_and_list_items() {
+        let m = index_markdown(NOTE);
+        let kinds: Vec<&str> = m.sections.iter().map(|s| s.kind.as_str()).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                "yaml",
+                "heading",
+                "paragraph",
+                "code",
+                "heading",
+                "list",
+                "paragraph",
+                "paragraph",
+                "footnoteDefinition"
+            ]
+        );
+        assert_eq!(m.sections[2].id.as_deref(), Some("blk1"));
+        assert_eq!(m.frontmatter_position.unwrap().end.line, 5);
+        let items: Vec<(i64, Option<char>, Option<&str>)> = m
+            .list_items
+            .iter()
+            .map(|i| (i.parent, i.task, i.id.as_deref()))
+            .collect();
+        // The list starts on line 16; the nested item's parent is line 16.
+        assert_eq!(
+            items,
+            vec![
+                (-16, Some(' '), None),
+                (16, None, None),
+                (-16, None, Some("item"))
+            ]
+        );
+        assert_eq!(m.blocks["item"].position.start.line, 18);
     }
 
     #[test]
