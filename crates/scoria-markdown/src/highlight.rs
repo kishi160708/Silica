@@ -53,6 +53,8 @@ pub enum HighlightKind {
     Html,
     /// Footnote references and inline footnotes.
     Footnote,
+    /// One `>` of a block quote or callout line, with the space after it.
+    QuoteMarker,
 }
 
 /// A highlighted byte range within one line.
@@ -67,7 +69,7 @@ pub struct HighlightSpan {
 pub fn highlight_lines(doc: &Document<'_>) -> Vec<Vec<HighlightSpan>> {
     let lines = LineIndex::new(doc.source);
     let mut global: Vec<(Span, HighlightKind)> = Vec::new();
-    collect_blocks(doc.source, &doc.blocks, &lines, &mut global);
+    collect_blocks(doc.source, &doc.blocks, &lines, 0, &mut global);
     global.sort_by(|a, b| a.0.start.cmp(&b.0.start).then(b.0.end.cmp(&a.0.end)));
 
     let mut out: Vec<Vec<HighlightSpan>> = vec![Vec::new(); lines.line_count()];
@@ -132,10 +134,58 @@ fn line_range_at(src: &str, lines: &LineIndex, offset: usize) -> Span {
     Span::new(start, end)
 }
 
+/// The `>` (plus one space) that opens quote level `depth` on `line`,
+/// skipping the markers of the enclosing quotes.
+fn quote_marker(line: &str, depth: usize) -> Option<Range<usize>> {
+    let b = line.as_bytes();
+    let mut i = 0;
+    for level in 0..=depth {
+        let mut spaces = 0;
+        while i < b.len() && b[i] == b' ' && spaces < 3 {
+            i += 1;
+            spaces += 1;
+        }
+        if i >= b.len() || b[i] != b'>' {
+            return None;
+        }
+        let start = i;
+        i += 1;
+        if i < b.len() && b[i] == b' ' {
+            i += 1;
+        }
+        if level == depth {
+            return Some(start..i);
+        }
+    }
+    None
+}
+
+/// Marks the quote markers of every line a quote block spans.
+fn collect_quote_markers(
+    src: &str,
+    span: Span,
+    lines: &LineIndex,
+    depth: usize,
+    out: &mut Vec<(Span, HighlightKind)>,
+) {
+    let first = lines.pos(span.start).line as usize;
+    let last = lines.pos(span.end.saturating_sub(1).max(span.start)).line as usize;
+    for line in first..=last {
+        let range = line_range_at(src, lines, lines.line_start(line));
+        if let Some(m) = quote_marker(&src[range.start..range.end], depth) {
+            out.push((
+                Span::new(range.start + m.start, range.start + m.end),
+                HighlightKind::QuoteMarker,
+            ));
+        }
+    }
+}
+
 fn collect_blocks(
     src: &str,
     blocks: &[Block<'_>],
     lines: &LineIndex,
+    quote_depth: usize,
     out: &mut Vec<(Span, HighlightKind)>,
 ) {
     for block in blocks {
@@ -152,7 +202,10 @@ fn collect_blocks(
             BlockKind::ThematicBreak => out.push((block.span, HighlightKind::ThematicBreak)),
             BlockKind::CodeBlock { .. } => out.push((block.span, HighlightKind::CodeBlock)),
             BlockKind::HtmlBlock { .. } => out.push((block.span, HighlightKind::Html)),
-            BlockKind::BlockQuote { children } => collect_blocks(src, children, lines, out),
+            BlockKind::BlockQuote { children } => {
+                collect_quote_markers(src, block.span, lines, quote_depth, out);
+                collect_blocks(src, children, lines, quote_depth + 1, out);
+            }
             BlockKind::Callout {
                 title, children, ..
             } => {
@@ -160,8 +213,9 @@ fn collect_blocks(
                     line_range_at(src, lines, block.span.start),
                     HighlightKind::Callout,
                 ));
+                collect_quote_markers(src, block.span, lines, quote_depth, out);
                 collect_inlines(title, out);
-                collect_blocks(src, children, lines, out);
+                collect_blocks(src, children, lines, quote_depth + 1, out);
             }
             BlockKind::List { items, .. } => {
                 for item in items {
@@ -173,7 +227,7 @@ fn collect_blocks(
                             out.push((Span::new(start, end), HighlightKind::Task));
                         }
                     }
-                    collect_blocks(src, &item.children, lines, out);
+                    collect_blocks(src, &item.children, lines, quote_depth, out);
                 }
             }
             BlockKind::Table { header, rows, .. } => {
@@ -184,7 +238,7 @@ fn collect_blocks(
             BlockKind::Math { .. } => out.push((block.span, HighlightKind::Math)),
             BlockKind::Comment { .. } => out.push((block.span, HighlightKind::Comment)),
             BlockKind::FootnoteDefinition { children, .. } => {
-                collect_blocks(src, children, lines, out)
+                collect_blocks(src, children, lines, quote_depth, out)
             }
         }
     }
@@ -244,6 +298,26 @@ fn collect_inlines(inlines: &[Inline<'_>], out: &mut Vec<(Span, HighlightKind)>)
 mod tests {
     use super::*;
     use crate::parse;
+
+    #[test]
+    fn quote_markers_are_marked_per_level() {
+        let src = "> one\n> > two\n\n> [!note] Title\n> body\n";
+        let doc = parse(src);
+        let lines = highlight_lines(&doc);
+        let markers = |l: usize| -> Vec<Range<usize>> {
+            lines[l]
+                .iter()
+                .filter(|s| s.kind == HighlightKind::QuoteMarker)
+                .map(|s| s.range.clone())
+                .collect()
+        };
+        assert_eq!(markers(0), vec![0..2]);
+        assert_eq!(markers(1), vec![0..2, 2..4]);
+        assert_eq!(markers(2), vec![]);
+        assert_eq!(markers(3), vec![0..2]);
+        assert_eq!(markers(4), vec![0..2]);
+        assert!(lines[3].iter().any(|s| s.kind == HighlightKind::Callout));
+    }
 
     #[test]
     fn spans_are_per_line_and_nested() {

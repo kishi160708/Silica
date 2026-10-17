@@ -27,18 +27,20 @@ cargo run --release -p  -- <vault> --pane outgoing          # right dock tab: ba
 cargo run --release -p  -- <vault> --graph [local]          # open on the graph view
 cargo run --release -p  -- <vault> --palette "open"         # open with the command palette up
 cargo run --release -p  -- <vault> --settings hotkeys       # open Settings on a tab (general, appearance, editor, ...)
-cargo run --release -p  -- <vault> --note X --source        # open a note in the source editor
+cargo run --release -p  -- <vault> --note X --source        # open a note in Source mode (--reading for reading view; the default is the vault's defaultViewMode)
 cargo run --release -p  -- <vault> --note X --stress 40     # self-driven edits on that note, then autosave (use a scratch vault)
 cargo run --release -p -bench -- generate <dir>
 cargo run --release -p -bench -- index <vault>
 ```
 
 In the app: click a file or a link to open it, Ctrl+P opens the command
-palette, Ctrl+E toggles reading view and source mode, Ctrl+Alt+Left and Right
-walk the tab's history, Ctrl+O opens the quick switcher, Ctrl+Shift+F the
-Search tab, Ctrl+G the graph (again to return), Ctrl+, opens Settings, Ctrl+S
-saves (edits also save on their own two seconds after the last keystroke),
-Ctrl+Q quits. Every shortcut except Ctrl+Q is an Obsidian command bound from its
+palette, Ctrl+E toggles reading view and editing (Live Preview unless
+`livePreview` is off), `editor:toggle-source` from the palette switches Live
+Preview and Source mode, Ctrl+Alt+Left and Right walk the tab's history,
+Ctrl+O opens the quick switcher, Ctrl+Shift+F the Search tab, Ctrl+G the
+graph (again to return), Ctrl+, opens Settings, Ctrl+S saves (edits also save
+on their own two seconds after the last keystroke), Ctrl+Q quits. A note
+opens in the vault's `defaultViewMode` (editing unless it says `preview`). Every shortcut except Ctrl+Q is an Obsidian command bound from its
 default hotkey, so the vault's `hotkeys.json` rebinds or unbinds it. In the
 graph: wheel zooms, drag pans, drag a node to move it, click a node to open
 it, Ctrl+0 refits the view.
@@ -253,9 +255,54 @@ The frame path is the gate: scrolling and typing stay far under a frame
 budget regardless of note size. Decoration latency scales with note length
 because the whole note is reparsed; a real 50k-line note of ordinary prose is
 about half this size, and incremental reparse of the edited block is the
-planned follow-up. Not yet: Live Preview rendering of the decorated
-constructs, list and quote continuation on Enter, find and replace, multiple
-cursors, and a vertical scrollbar.
+planned follow-up. Not yet: find and replace, multiple cursors, auto-pair
+of brackets and markdown markers, renumbering on indent, and Ctrl+click
+page previews.
+
+### Smart lists and the scrollbar, 2026-10-16
+
+Enter with `smartIndentList` continues what the line started: its quote
+markers, its bullet or the next number, and an empty checkbox after a task;
+the rest of a split item moves to the new line and the ordered items that
+follow renumber in the same undo step. Enter on an empty item clears it, or
+outdents it when nested. Shift+Enter is a plain newline. Tab indents a list
+item (or every selected line) by one step, a tab or `tabSize` spaces per
+`useTab`, and Shift+Tab removes one. `crates//src/lists.rs` holds the
+prefix parser and the rules as pure functions with tests.
+
+The vertical scrollbar is line-based like the scroll position: the thumb
+sits at the first visible line's share of the note and is as tall as the
+visible lines' share, so it never needs the height of every line. Dragging
+it or clicking the track scrolls to that line.
+
+### Live Preview, 2026-10-16
+
+Live Preview is the same editor and buffer with a per-line display
+transform (`crates//src/preview.rs`): from the line's highlight spans
+it hides markers or substitutes glyphs, and returns the display text with a
+piece map between source and display offsets. Every construct the cursor
+or selection touches keeps its source, so a line's markers appear as the
+cursor enters them and go when it leaves, per construct rather than per
+line, as in Obsidian. The editor shapes the display text and maps clicks,
+the cursor, the selection and IME bounds through the pieces; Source mode is
+the identity transform.
+
+Rendered today: heading markers hidden and the line scaled (Obsidian's h1
+to h6 sizes at a tighter line height, so rows now have per-line heights
+and all scroll math walks those), bold, italic, strikethrough, highlight and
+inline code markers, wikilinks shown as their alias or target, markdown
+links and images as their text, autolink brackets, footnote brackets,
+comments and block ids hidden, bullets as dots, task markers as checkboxes
+(click toggles them without moving the cursor), quote markers as a left bar
+per level, callout type blocks folded into the title, thematic breaks as a
+rule, and code blocks and frontmatter on a band. Clicking a rendered link
+follows it (Ctrl+click in both editing modes). Tables, embeds, images and
+math show their source with decorations.
+
+`crates/-markdown::highlight` gained a `QuoteMarker` span per `>` so
+the transform knows where each level's marker sits. The 300-step stress run
+on a 530-line note in Live Preview shaped in 0.07 ms per frame; the 50k-line
+Source mode gate is unchanged at 0.17 ms.
 
 ### Parser, 2026-10-16
 

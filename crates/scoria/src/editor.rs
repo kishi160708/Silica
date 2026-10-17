@@ -17,6 +17,8 @@
 //! changes nothing but the edited bytes.
 
 use crate::lists::{self, Continuation};
+use crate::preview::{self, DisplayLine, Piece};
+use crate::reading::model::LinkTarget;
 use crate::theme::Theme;
 use gpui::{
     actions, div, fill, point, prelude::*, px, relative, size, App, Bounds, ClipboardItem, Context,
@@ -137,6 +139,8 @@ const SCROLLBAR_MIN_THUMB: f32 = 24.0;
 pub enum EditorEvent {
     /// The buffer changed; the owner schedules a save.
     Edited,
+    /// A rendered link was clicked in Live Preview (or Ctrl+clicked).
+    OpenLink(LinkTarget),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -226,6 +230,7 @@ struct Palette {
     code_bg: Hsla,
     highlight_bg: Hsla,
     selection: Hsla,
+    border: Hsla,
     mono: SharedString,
 }
 
@@ -242,6 +247,7 @@ impl Palette {
             code_bg: t.bg_alt,
             highlight_bg: t.highlight_bg,
             selection,
+            border: t.border,
             mono: t.mono_font.clone(),
         }
     }
@@ -260,6 +266,57 @@ struct VisibleLine {
     /// Top of the line relative to the element's origin.
     top: Pixels,
     rows: usize,
+    /// Height of each row: the body line height, more for a heading.
+    row_height: Pixels,
+}
+
+impl VisibleLine {
+    fn height(&self) -> Pixels {
+        self.row_height * self.rows as f32
+    }
+}
+
+/// One line shaped for the screen, with the mapping between its source
+/// bytes and the display text that was shaped (they differ in Live Preview).
+struct Shaped {
+    display: DisplayLine,
+    line: WrappedLine,
+    row_height: Pixels,
+}
+
+impl Shaped {
+    fn rows(&self) -> usize {
+        self.line.wrap_boundaries().len() + 1
+    }
+
+    fn height(&self) -> Pixels {
+        self.row_height * self.rows() as f32
+    }
+
+    /// The wrapped row and x of source byte `col`.
+    fn row_and_x(&self, col: usize) -> (usize, Pixels) {
+        let d = self.display.to_display(col);
+        match self.line.position_for_index(d, self.row_height) {
+            Some(p) if self.row_height > px(0.) => ((p.y / self.row_height).round() as usize, p.x),
+            _ => (0, px(0.)),
+        }
+    }
+
+    /// The display byte nearest `x` on `row`.
+    fn display_index_at(&self, x: Pixels, row: usize) -> usize {
+        let row = row.min(self.rows() - 1);
+        self.line
+            .closest_index_for_position(
+                point(x.max(px(0.)), self.row_height * row as f32),
+                self.row_height,
+            )
+            .unwrap_or_else(|i| i)
+    }
+
+    /// The source byte nearest `x` on `row`.
+    fn index_at(&self, x: Pixels, row: usize) -> usize {
+        self.display.to_source(self.display_index_at(x, row))
+    }
 }
 
 /// Geometry recorded at paint time so input handling can map points to text.
@@ -273,7 +330,7 @@ struct Layout {
     /// Left edge of the text.
     content_x: Pixels,
     visible: Vec<VisibleLine>,
-    cursor_line: Option<Arc<WrappedLine>>,
+    cursor_line: Option<Arc<Shaped>>,
     /// Top of the cursor's line in window coordinates.
     cursor_top: Pixels,
     /// The scrollbar's track and thumb, when the note overflows the view.
@@ -372,6 +429,9 @@ pub struct Editor {
     /// The file started with a byte order mark; restored on save.
     bom: bool,
     readable_line_length: bool,
+    /// Live Preview: markers hidden and constructs rendered in place,
+    /// except where the cursor is.
+    live_preview: bool,
     /// Enter continues list and quote markers (`smartIndentList`).
     smart_indent_list: bool,
     /// Tab inserts a tab (`useTab`) or `tab_size` spaces.
@@ -415,6 +475,7 @@ impl Editor {
             crlf: false,
             bom: false,
             readable_line_length: true,
+            live_preview: false,
             smart_indent_list: true,
             use_tab: true,
             tab_size: 4,
@@ -485,6 +546,15 @@ impl Editor {
 
     pub fn set_readable_line_length(&mut self, on: bool) {
         self.readable_line_length = on;
+    }
+
+    /// Switches between Live Preview and Source mode.
+    pub fn set_live_preview(&mut self, on: bool, cx: &mut Context<Self>) {
+        if self.live_preview != on {
+            self.live_preview = on;
+            self.pending_reveal = true;
+            cx.notify();
+        }
     }
 
     /// Editor settings from `app.json`: smart lists, and tabs or spaces.
@@ -681,43 +751,53 @@ impl Editor {
 
     // ----- shaping outside a frame ----------------------------------------------
 
+    /// The part of the selection (or the cursor) on `line`, line-relative;
+    /// Live Preview reveals the source of the constructs it touches.
+    fn touch_on_line(&self, line: usize) -> Option<Range<usize>> {
+        let range = self.line_range(line);
+        let sel = self.selection();
+        if sel.end < range.start || sel.start > range.end {
+            return None;
+        }
+        Some(sel.start.max(range.start) - range.start..sel.end.min(range.end) - range.start)
+    }
+
+    /// What `line` shows: its source, or Live Preview's rendering of it.
+    fn display_for(&self, line: usize) -> DisplayLine {
+        let text = self.line_text(line);
+        if self.live_preview {
+            let spans = self.highlights.get(line).map(Vec::as_slice).unwrap_or(&[]);
+            preview::display_line(text, spans, self.touch_on_line(line))
+        } else {
+            DisplayLine::verbatim(text, 1.0, Default::default())
+        }
+    }
+
     /// Shapes `line` the way the last frame did (same style and wrap width).
-    fn shape(&self, window: &mut Window, line: usize) -> Option<WrappedLine> {
+    fn shape(&self, window: &mut Window, line: usize) -> Option<Shaped> {
         let style = self.layout.text_style.as_ref()?;
         let spans = self.highlights.get(line).map(Vec::as_slice).unwrap_or(&[]);
-        Some(shape_line(
+        Some(shape_display(
             window,
             style,
             self.layout.font_size,
+            self.layout.line_height,
             self.layout.wrap_width,
-            self.line_text(line),
+            self.display_for(line),
             spans,
             &self.palette,
         ))
     }
 
     fn rows_of(&self, window: &mut Window, line: usize) -> usize {
+        self.shape(window, line).map(|l| l.rows()).unwrap_or(1)
+    }
+
+    /// Height of `line` on screen: its wrapped rows at its row height.
+    fn height_of(&self, window: &mut Window, line: usize) -> Pixels {
         self.shape(window, line)
-            .map(|l| l.wrap_boundaries().len() + 1)
-            .unwrap_or(1)
-    }
-
-    /// The wrapped row of `col` within `line` and its x.
-    fn row_and_x(&self, shaped: &WrappedLine, col: usize) -> (usize, Pixels) {
-        let lh = self.layout.line_height;
-        match shaped.position_for_index(col, lh) {
-            Some(p) if lh > px(0.) => ((p.y / lh).round() as usize, p.x),
-            _ => (0, px(0.)),
-        }
-    }
-
-    fn index_at(&self, shaped: &WrappedLine, x: Pixels, row: usize) -> usize {
-        let lh = self.layout.line_height;
-        let rows = shaped.wrap_boundaries().len() + 1;
-        let row = row.min(rows - 1);
-        shaped
-            .closest_index_for_position(point(x.max(px(0.)), lh * row as f32), lh)
-            .unwrap_or_else(|i| i)
+            .map(|l| l.height())
+            .unwrap_or(self.layout.line_height)
     }
 
     fn visible_rows(&self) -> usize {
@@ -744,10 +824,10 @@ impl Editor {
                 break;
             }
             self.scroll_line -= 1;
-            self.scroll_px += lh * self.rows_of(window, self.scroll_line) as f32;
+            self.scroll_px += self.height_of(window, self.scroll_line);
         }
         loop {
-            let height = lh * self.rows_of(window, self.scroll_line) as f32;
+            let height = self.height_of(window, self.scroll_line);
             if self.scroll_px >= height && self.scroll_line + 1 < self.line_count() {
                 self.scroll_px -= height;
                 self.scroll_line += 1;
@@ -770,7 +850,7 @@ impl Editor {
         let mut filled = -self.scroll_px;
         let mut line = self.scroll_line;
         while line < self.line_count() && filled < h {
-            filled += lh * self.rows_of(window, line) as f32;
+            filled += self.height_of(window, line);
             line += 1;
         }
         if filled < h {
@@ -851,8 +931,9 @@ impl Editor {
             self.pending_reveal = true;
             return;
         };
-        let (row, _) = self.row_and_x(&shaped, c.col);
-        let row_px = lh * row as f32;
+        let (row, _) = shaped.row_and_x(c.col);
+        let rh = shaped.row_height;
+        let row_px = rh * row as f32;
         if c.line < self.scroll_line || (c.line == self.scroll_line && row_px < self.scroll_px) {
             self.scroll_line = c.line;
             self.scroll_px = row_px;
@@ -867,16 +948,16 @@ impl Editor {
                 cursor_y = Some(y + row_px);
                 break;
             }
-            y += lh * self.rows_of(window, line) as f32;
+            y += self.height_of(window, line);
             line += 1;
         }
         if let Some(cy) = cursor_y {
-            if cy + lh <= h {
+            if cy + rh <= h {
                 return;
             }
         }
         // Put the cursor's row at the bottom of the view.
-        let mut need = h - lh;
+        let mut need = h - rh;
         let mut line = c.line;
         let mut px_in_line = row_px;
         loop {
@@ -892,7 +973,7 @@ impl Editor {
                 break;
             }
             line -= 1;
-            px_in_line = lh * self.rows_of(window, line) as f32;
+            px_in_line = self.height_of(window, line);
         }
     }
 
@@ -1131,11 +1212,11 @@ impl Editor {
             self.move_to(at, select, window, cx);
             return;
         };
-        let (start_row, x) = self.row_and_x(&shaped, c.col);
+        let (start_row, x) = shaped.row_and_x(c.col);
         let goal = self.goal_x.unwrap_or(x);
         let mut line = c.line;
         let mut row = start_row;
-        let mut rows = shaped.wrap_boundaries().len() + 1;
+        let mut rows = shaped.rows();
         let mut remaining = delta;
         while remaining != 0 {
             if remaining < 0 {
@@ -1178,7 +1259,7 @@ impl Editor {
                     None => return,
                 }
             };
-            let col = self.clamp_col(line, self.index_at(&shaped, goal, row));
+            let col = self.clamp_col(line, shaped.index_at(goal, row));
             self.line_starts[line] + col
         };
         self.move_to(target, select, window, cx);
@@ -1196,9 +1277,9 @@ impl Editor {
         let c = self.cursor_at(self.head);
         let target = match self.shape(window, c.line) {
             Some(shaped) if self.layout.line_height > px(0.) => {
-                let (row, _) = self.row_and_x(&shaped, c.col);
+                let (row, _) = shaped.row_and_x(c.col);
                 let x = if end { px(f32::MAX / 4.) } else { px(0.) };
-                let col = self.clamp_col(c.line, self.index_at(&shaped, x, row));
+                let col = self.clamp_col(c.line, shaped.index_at(x, row));
                 self.line_starts[c.line] + col
             }
             _ => {
@@ -1579,11 +1660,15 @@ impl Editor {
 
     // ----- mouse ---------------------------------------------------------------
 
-    /// The buffer offset under a window point, using the last frame's layout.
-    fn offset_at_point(&self, window: &mut Window, position: Point<Pixels>) -> Option<usize> {
+    /// The visible line under a window point, shaped as painted, and the
+    /// display byte nearest the point.
+    fn display_hit(
+        &self,
+        window: &mut Window,
+        position: Point<Pixels>,
+    ) -> Option<(usize, Shaped, usize)> {
         let layout = &self.layout;
-        let lh = layout.line_height;
-        if lh <= px(0.) || layout.visible.is_empty() {
+        if layout.line_height <= px(0.) || layout.visible.is_empty() {
             return None;
         }
         let y = position.y - layout.bounds.origin.y;
@@ -1591,9 +1676,9 @@ impl Editor {
         let (vl, row) = match layout
             .visible
             .iter()
-            .find(|v| y >= v.top && y < v.top + lh * v.rows as f32)
+            .find(|v| y >= v.top && y < v.top + v.height())
         {
-            Some(v) => (*v, ((y - v.top) / lh).floor() as usize),
+            Some(v) => (*v, ((y - v.top) / v.row_height).floor() as usize),
             None if y < layout.visible[0].top => (layout.visible[0], 0),
             None => {
                 let last = *layout.visible.last()?;
@@ -1601,13 +1686,118 @@ impl Editor {
             }
         };
         let shaped = self.shape(window, vl.line)?;
-        let col = self.clamp_col(vl.line, self.index_at(&shaped, x, row));
-        Some(self.line_starts[vl.line] + col)
+        let d = shaped.display_index_at(x, row);
+        Some((vl.line, shaped, d))
+    }
+
+    /// The buffer offset under a window point, using the last frame's layout.
+    fn offset_at_point(&self, window: &mut Window, position: Point<Pixels>) -> Option<usize> {
+        let (line, shaped, d) = self.display_hit(window, position)?;
+        let col = self.clamp_col(line, shaped.display.to_source(d));
+        Some(self.line_starts[line] + col)
+    }
+
+    /// The link under source byte `col` of `line`. With `rendered_only`,
+    /// only a link Live Preview shows rendered counts (a revealed one is
+    /// being edited).
+    fn link_at(&self, line: usize, col: usize, rendered_only: bool) -> Option<LinkTarget> {
+        let spans = self.highlights.get(line)?;
+        let touch = self.touch_on_line(line);
+        let text = self.line_text(line);
+        for s in spans {
+            if !(s.range.start <= col && col < s.range.end) {
+                continue;
+            }
+            let revealed = touch
+                .as_ref()
+                .is_some_and(|t| t.start <= s.range.end && t.end >= s.range.start);
+            if rendered_only && revealed {
+                continue;
+            }
+            let t = text.get(s.range.clone())?;
+            let target = match s.kind {
+                HighlightKind::Wikilink | HighlightKind::Embed => {
+                    let inner = t
+                        .trim_start_matches('!')
+                        .trim_start_matches("[[")
+                        .trim_end_matches("]]");
+                    let body = inner.split('|').next().unwrap_or(inner);
+                    LinkTarget::Internal(body.to_string())
+                }
+                HighlightKind::Link => {
+                    // `[text](dest "title")`; reference links are not followed.
+                    let Some(open) = t.rfind("](") else {
+                        continue;
+                    };
+                    let dest = t[open + 2..].trim_end_matches(')');
+                    let dest = dest.split_whitespace().next().unwrap_or(dest);
+                    let dest = dest.trim_matches(|c| c == '<' || c == '>');
+                    if _markdown::html::is_vault_destination(dest) {
+                        LinkTarget::Internal(
+                            _markdown::html::percent_decode(dest).into_owned(),
+                        )
+                    } else {
+                        LinkTarget::External(dest.to_string())
+                    }
+                }
+                HighlightKind::Url => {
+                    LinkTarget::External(t.trim_matches(|c| c == '<' || c == '>').to_string())
+                }
+                HighlightKind::Tag => LinkTarget::Tag(t.trim_start_matches('#').to_string()),
+                _ => continue,
+            };
+            return Some(target);
+        }
+        None
+    }
+
+    /// Live Preview clicks on rendered constructs: a checkbox toggles, a
+    /// link opens (Ctrl+click opens a link in Source mode too). Returns
+    /// true when the click was consumed.
+    fn click_rendered(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if event.click_count != 1 || event.modifiers.shift {
+            return false;
+        }
+        let Some((line, shaped, d)) = self.display_hit(window, event.position) else {
+            return false;
+        };
+        if self.live_preview {
+            if let Some((src, HighlightKind::Task)) = shaped.display.sub_at(d) {
+                let start = self.line_starts[line];
+                let checked = self.text.as_bytes().get(start + src.start + 1) != Some(&b' ');
+                let with = if checked { "[ ]" } else { "[x]" };
+                let (head, anchor) = (self.head, self.anchor);
+                self.edit_many(
+                    vec![(start + src.start..start + src.end, with.to_string())],
+                    head,
+                    Some(anchor),
+                    window,
+                    cx,
+                );
+                return true;
+            }
+        }
+        if self.live_preview || event.modifiers.control {
+            let col = shaped.display.to_source(d);
+            if let Some(target) = self.link_at(line, col, !event.modifiers.control) {
+                cx.emit(EditorEvent::OpenLink(target));
+                return true;
+            }
+        }
+        false
     }
 
     fn mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus_handle, cx);
         if self.scrollbar_mouse_down(event.position, window, cx) {
+            return;
+        }
+        if self.click_rendered(event, window, cx) {
             return;
         }
         let Some(at) = self.offset_at_point(window, event.position) else {
@@ -1917,14 +2107,14 @@ impl EntityInputHandler for Editor {
         let line = self.line_text(self.cursor().line);
         let start = Self::utf16_to_byte(line, range_utf16.start);
         let end = Self::utf16_to_byte(line, range_utf16.end);
-        let lh = self.layout.line_height;
-        let (row, x0) = self.row_and_x(&shaped, start);
-        let (_, x1) = self.row_and_x(&shaped, end);
-        let y = self.layout.cursor_top + lh * row as f32;
+        let rh = shaped.row_height;
+        let (row, x0) = shaped.row_and_x(start);
+        let (_, x1) = shaped.row_and_x(end);
+        let y = self.layout.cursor_top + rh * row as f32;
         let x = self.layout.content_x;
         Some(Bounds::from_corners(
             point(x + x0, y),
-            point(x + x1.max(x0), y + lh),
+            point(x + x1.max(x0), y + rh),
         ))
     }
 
@@ -2041,6 +2231,7 @@ fn run_for(kinds: &[HighlightKind], base: &TextStyle, len: usize, p: &Palette) -
             | HighlightKind::Frontmatter
             | HighlightKind::BlockId
             | HighlightKind::ThematicBreak
+            | HighlightKind::QuoteMarker
             | HighlightKind::Html => color = p.muted,
             HighlightKind::Math => color = p.accent,
             HighlightKind::Callout | HighlightKind::ListMarker | HighlightKind::Task => {
@@ -2058,28 +2249,57 @@ fn run_for(kinds: &[HighlightKind], base: &TextStyle, len: usize, p: &Palette) -
     }
 }
 
-/// Builds runs covering the whole line, plain text between highlighted segments.
-fn runs_for_line(
-    text: &str,
+/// Builds runs covering the display text: the source's highlighted
+/// segments carried through copied pieces, a substitution styled as the
+/// construct it stands for.
+fn runs_for_display(
+    display: &DisplayLine,
     spans: &[HighlightSpan],
     base: &TextStyle,
     p: &Palette,
 ) -> Vec<TextRun> {
-    let mut runs = Vec::new();
-    let mut at = 0;
-    for (range, kinds) in flatten(spans) {
-        let start = range.start.min(text.len());
-        let end = range.end.min(text.len());
-        if start > at {
-            runs.push(base.to_run(start - at));
+    let flat = flatten(spans);
+    let mut runs: Vec<TextRun> = Vec::new();
+    let mut push = |run: TextRun| {
+        if run.len > 0 {
+            runs.push(run);
         }
-        if end > start {
-            runs.push(run_for(&kinds, base, end - start, p));
+    };
+    for piece in &display.pieces {
+        match piece {
+            Piece::Copy { source, len, .. } => {
+                let (s0, s1) = (*source, source + len);
+                let mut at = s0;
+                for (range, kinds) in &flat {
+                    let start = range.start.max(s0);
+                    let end = range.end.min(s1);
+                    if end <= start || start < at {
+                        continue;
+                    }
+                    if start > at {
+                        push(base.to_run(start - at));
+                    }
+                    push(run_for(kinds, base, end - start, p));
+                    at = end;
+                }
+                if at < s1 {
+                    push(base.to_run(s1 - at));
+                }
+            }
+            Piece::Sub {
+                source, len, kind, ..
+            } => {
+                if *len == 0 {
+                    continue;
+                }
+                let kinds = flat
+                    .iter()
+                    .find(|(r, _)| r.start <= source.start && source.start < r.end)
+                    .map(|(_, k)| k.clone())
+                    .unwrap_or_else(|| vec![*kind]);
+                push(run_for(&kinds, base, *len, p));
+            }
         }
-        at = at.max(end);
-    }
-    if at < text.len() {
-        runs.push(base.to_run(text.len() - at));
     }
     if runs.is_empty() {
         runs.push(base.to_run(0));
@@ -2087,29 +2307,43 @@ fn runs_for_line(
     runs
 }
 
-fn shape_line(
+/// Shapes a display line at the editor's font, scaled for a heading.
+#[allow(clippy::too_many_arguments)]
+fn shape_display(
     window: &mut Window,
     style: &TextStyle,
     font_size: Pixels,
+    line_height: Pixels,
     wrap_width: Option<Pixels>,
-    text: &str,
+    display: DisplayLine,
     spans: &[HighlightSpan],
     p: &Palette,
-) -> WrappedLine {
-    let display = text.trim_end_matches('\r');
-    let runs = runs_for_line(display, spans, style, p);
-    window
+) -> Shaped {
+    let runs = runs_for_display(&display, spans, style, p);
+    let size = font_size * display.scale;
+    // Headings keep Obsidian's tighter line height, never below the body's.
+    let row_height = if display.scale > 1.0 {
+        (size * 1.2).max(line_height)
+    } else {
+        line_height
+    };
+    let line = window
         .text_system()
         .shape_text(
-            SharedString::from(display.to_string()),
-            font_size,
+            SharedString::from(display.text.clone()),
+            size,
             &runs,
             wrap_width,
             None,
         )
         .ok()
         .and_then(|lines| lines.into_iter().next())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    Shaped {
+        display,
+        line,
+        row_height,
+    }
 }
 
 struct EditorElement {
@@ -2117,7 +2351,9 @@ struct EditorElement {
 }
 
 struct Prepaint {
-    lines: Vec<(VisibleLine, WrappedLine)>,
+    lines: Vec<(VisibleLine, Shaped)>,
+    /// Quote bars, code block bands and rules, behind the text.
+    decor: Vec<PaintQuad>,
     line_height: Pixels,
     font_size: Pixels,
     text_style: TextStyle,
@@ -2125,7 +2361,7 @@ struct Prepaint {
     content_x: Pixels,
     selection: Vec<PaintQuad>,
     cursor: Option<PaintQuad>,
-    cursor_line: Option<Arc<WrappedLine>>,
+    cursor_line: Option<Arc<Shaped>>,
     cursor_top: Pixels,
     /// `scroll_px` was past the anchor line's rows; the clamped value.
     scroll_px: Pixels,
@@ -2200,31 +2436,55 @@ impl Element for EditorElement {
         let content_x = bounds.origin.x + (bounds.size.width - content_width) / 2.;
         let wrap_width = Some(content_width);
 
-        let mut lines = Vec::new();
+        let live = editor.live_preview;
+        let mut lines: Vec<(VisibleLine, Shaped)> = Vec::new();
+        let mut decor_quads = Vec::new();
         let mut selection_quads = Vec::new();
         let mut cursor_quad = None;
-        let mut cursor_line = None;
         let mut cursor_top = px(0.);
         let mut y = bounds.origin.y - scroll_px;
         let mut line = scroll_line;
         while line < count && y < bounds.bottom_left().y {
-            let text = editor.line_text(line);
             let spans = highlights.get(line).map(Vec::as_slice).unwrap_or(&[]);
-            let shaped = shape_line(
+            let shaped = shape_display(
                 window,
                 &text_style,
                 font_size,
+                lh,
                 wrap_width,
-                text,
+                editor.display_for(line),
                 spans,
                 &palette,
             );
-            let rows = shaped.wrap_boundaries().len() + 1;
-            if line == scroll_line {
-                let height = lh * rows as f32;
-                if scroll_px >= height {
-                    scroll_px = (height - lh).max(px(0.));
-                    y = bounds.origin.y - scroll_px;
+            let rows = shaped.rows();
+            let rh = shaped.row_height;
+            let height = shaped.height();
+            if line == scroll_line && scroll_px >= height {
+                scroll_px = (height - rh).max(px(0.));
+                y = bounds.origin.y - scroll_px;
+            }
+            if live {
+                let d = shaped.display.decor;
+                if d.code_block || d.frontmatter {
+                    decor_quads.push(fill(
+                        Bounds::new(
+                            point(content_x - px(8.), y),
+                            size(content_width + px(16.), height),
+                        ),
+                        palette.code_bg,
+                    ));
+                }
+                for level in 0..d.quote_depth {
+                    let x = content_x - px(10.) * (d.quote_depth - level) as f32;
+                    let mut bar = palette.muted;
+                    bar.a = 0.6;
+                    decor_quads.push(fill(Bounds::new(point(x, y), size(px(2.), height)), bar));
+                }
+                if d.rule {
+                    decor_quads.push(fill(
+                        Bounds::new(point(content_x, y + rh / 2.), size(content_width, px(1.))),
+                        palette.border,
+                    ));
                 }
             }
             let range = editor.line_range(line);
@@ -2234,21 +2494,19 @@ impl Element for EditorElement {
             {
                 let s = selection.start.max(range.start) - range.start;
                 let e = selection.end.min(range.end) - range.start;
-                let ps = shaped.position_for_index(s, lh).unwrap_or_default();
-                let pe = shaped.position_for_index(e, lh).unwrap_or_default();
-                let rs = (ps.y / lh).round() as usize;
-                let re = (pe.y / lh).round() as usize;
+                let (rs, xs) = shaped.row_and_x(s);
+                let (re, xe) = shaped.row_and_x(e);
                 for r in rs..=re {
-                    let x0 = if r == rs { ps.x } else { px(0.) };
-                    let mut x1 = if r == re { pe.x } else { content_width };
+                    let x0 = if r == rs { xs } else { px(0.) };
+                    let mut x1 = if r == re { xe } else { content_width };
                     if r == re && selection.end > range.end {
                         x1 += font_size * 0.4;
                     }
                     if x1 > x0 {
                         selection_quads.push(fill(
                             Bounds::new(
-                                point(content_x + x0, y + lh * r as f32),
-                                size(x1 - x0, lh),
+                                point(content_x + x0, y + rh * r as f32),
+                                size(x1 - x0, rh),
                             ),
                             palette.selection,
                         ));
@@ -2256,11 +2514,9 @@ impl Element for EditorElement {
                 }
             }
             if head >= range.start && head <= range.end {
-                let p = shaped
-                    .position_for_index(head - range.start, lh)
-                    .unwrap_or_default();
+                let (row, x) = shaped.row_and_x(head - range.start);
                 cursor_quad = Some(fill(
-                    Bounds::new(point(content_x + p.x, y + p.y), size(px(2.), lh)),
+                    Bounds::new(point(content_x + x, y + rh * row as f32), size(px(2.), rh)),
                     palette.text,
                 ));
                 cursor_top = y;
@@ -2270,29 +2526,34 @@ impl Element for EditorElement {
                     line,
                     top: y - bounds.origin.y,
                     rows,
+                    row_height: rh,
                 },
                 shaped,
             ));
-            y += lh * rows as f32;
+            y += height;
             line += 1;
         }
         let cursor_line_ix = editor.cursor().line;
-        if lines.iter().any(|(v, _)| v.line == cursor_line_ix) {
-            // The input handler needs the cursor line's layout between
-            // frames; shaping it again hits GPUI's per-frame layout cache.
-            cursor_line = Some(Arc::new(shape_line(
-                window,
-                &text_style,
-                font_size,
-                wrap_width,
-                editor.line_text(cursor_line_ix),
-                highlights
-                    .get(cursor_line_ix)
-                    .map(Vec::as_slice)
-                    .unwrap_or(&[]),
-                &palette,
-            )));
-        }
+        let cursor_line = lines
+            .iter()
+            .any(|(v, _)| v.line == cursor_line_ix)
+            .then(|| {
+                // The input handler needs the cursor line's layout between
+                // frames; shaping it again hits GPUI's per-frame layout cache.
+                Arc::new(shape_display(
+                    window,
+                    &text_style,
+                    font_size,
+                    lh,
+                    wrap_width,
+                    editor.display_for(cursor_line_ix),
+                    highlights
+                        .get(cursor_line_ix)
+                        .map(Vec::as_slice)
+                        .unwrap_or(&[]),
+                    &palette,
+                ))
+            });
         if !focused {
             cursor_quad = None;
         }
@@ -2308,6 +2569,7 @@ impl Element for EditorElement {
         let scrollbar = Scrollbar::layout(track, count, scroll_line, lines.len(), fits);
         Prepaint {
             lines,
+            decor: decor_quads,
             line_height: lh,
             font_size,
             text_style,
@@ -2343,12 +2605,31 @@ impl Element for EditorElement {
         let line_height = prepaint.line_height;
         let content_x = prepaint.content_x;
         window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
+            for quad in prepaint.decor.drain(..) {
+                window.paint_quad(quad);
+            }
             for quad in prepaint.selection.drain(..) {
                 window.paint_quad(quad);
             }
-            for (visible, line) in prepaint.lines.iter() {
+            for (visible, shaped) in prepaint.lines.iter() {
                 let origin = point(content_x, bounds.origin.y + visible.top);
-                let _ = line.paint(origin, line_height, TextAlign::Left, None, window, cx);
+                // Run backgrounds (code, highlights) are a separate pass.
+                let _ = shaped.line.paint_background(
+                    origin,
+                    visible.row_height,
+                    TextAlign::Left,
+                    None,
+                    window,
+                    cx,
+                );
+                let _ = shaped.line.paint(
+                    origin,
+                    visible.row_height,
+                    TextAlign::Left,
+                    None,
+                    window,
+                    cx,
+                );
             }
             if let Some(cursor) = prepaint.cursor.take() {
                 window.paint_quad(cursor);

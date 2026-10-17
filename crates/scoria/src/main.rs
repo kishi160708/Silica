@@ -11,6 +11,7 @@ mod graph;
 mod lists;
 mod mentions;
 mod palette;
+mod preview;
 mod reading;
 mod search;
 mod settings;
@@ -130,6 +131,8 @@ struct Args {
     settings: Option<String>,
     /// Open the note in source mode.
     source: bool,
+    /// Open the note in reading view, whatever `defaultViewMode` says.
+    reading: bool,
 }
 
 fn parse_args() -> Args {
@@ -145,6 +148,7 @@ fn parse_args() -> Args {
         palette: None,
         settings: None,
         source: false,
+        reading: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -161,6 +165,7 @@ fn parse_args() -> Args {
             "--palette" => args.palette = it.next().or(Some(String::new())),
             "--settings" => args.settings = it.next().or(Some("general".into())),
             "--source" => args.source = true,
+            "--reading" => args.reading = true,
             _ if args.vault.is_none() => args.vault = Some(PathBuf::from(a)),
             _ => args.note = Some(a),
         }
@@ -228,6 +233,7 @@ fn main() {
         let palette = args.palette.clone();
         let settings_tab = args.settings.clone();
         let source = args.source;
+        let reading = args.reading;
         let synthetic = args.synthetic;
         window
             .update(cx, |ws, window, cx| {
@@ -255,6 +261,15 @@ fn main() {
                         if !ws.is_loaded() {
                             return false;
                         }
+                        // The vault's default view mode, unless a flag says otherwise.
+                        let mode = if source {
+                            ViewMode::Source
+                        } else if reading {
+                            ViewMode::Reading
+                        } else {
+                            ws.default_mode()
+                        };
+                        ws.set_mode(mode, window, cx);
                         match &note {
                             Some(n) => {
                                 if !ws.open_by_name(n, cx) {
@@ -281,9 +296,6 @@ fn main() {
                         if let Some(t) = &settings_tab {
                             ws.open_settings(settings::Tab::parse(t), window, cx);
                         }
-                        if source {
-                            ws.set_mode(ViewMode::Source, window, cx);
-                        }
                         true
                     })
                     .unwrap_or(true);
@@ -305,7 +317,7 @@ fn main() {
                     let ready = window
                         .update(cx, |ws, window, cx| {
                             let open = ws.is_loaded() && ws.current().is_some();
-                            if open {
+                            if open && !ws.mode().is_editing() {
                                 ws.set_mode(ViewMode::Source, window, cx);
                             }
                             open

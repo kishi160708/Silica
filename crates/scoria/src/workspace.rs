@@ -61,6 +61,7 @@ impl Global for Commands {}
 pub const RUNNABLE: &[&str] = &[
     "command-palette:open",
     "editor:save-file",
+    "editor:toggle-source",
     "switcher:open",
     "global-search:open",
     "graph:open",
@@ -299,8 +300,18 @@ impl reading::EmbedSource for VaultState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewMode {
     Reading,
+    /// Editing with markers hidden and constructs rendered in place.
+    LivePreview,
+    /// Editing the raw text.
     Source,
     Graph,
+}
+
+impl ViewMode {
+    /// Both editing modes show the editor.
+    pub fn is_editing(self) -> bool {
+        matches!(self, ViewMode::LivePreview | ViewMode::Source)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -483,6 +494,7 @@ impl Workspace {
                 }),
                 cx.subscribe(&editor, |this, _, event: &EditorEvent, cx| match event {
                     EditorEvent::Edited => this.schedule_save(cx),
+                    EditorEvent::OpenLink(target) => this.follow_link(target.clone(), cx),
                 }),
             ];
         // Closing the window must not lose edits waiting for the autosave.
@@ -737,6 +749,10 @@ impl Workspace {
         &self.editor
     }
 
+    pub fn mode(&self) -> ViewMode {
+        self.mode
+    }
+
     /// The vault path shown in the main area.
     pub fn current(&self) -> Option<&str> {
         self.current.as_deref()
@@ -832,6 +848,13 @@ impl Workspace {
         match id {
             "command-palette:open" => self.open_palette("", window, cx),
             "editor:save-file" => self.flush_save(cx),
+            "editor:toggle-source" => {
+                let mode = match self.mode {
+                    ViewMode::LivePreview => ViewMode::Source,
+                    _ => ViewMode::LivePreview,
+                };
+                self.set_mode(mode, window, cx);
+            }
             "switcher:open" => self.open_switcher("", window, cx),
             "global-search:open" => self.open_search_action(&OpenSearch, window, cx),
             "graph:open" => self.open_graph_action(&OpenGraph, window, cx),
@@ -914,7 +937,7 @@ impl Workspace {
         if mode == ViewMode::Graph && self.mode != ViewMode::Graph {
             self.mode_before_graph = self.mode;
         }
-        if mode != ViewMode::Source && self.mode == ViewMode::Source {
+        if !mode.is_editing() && self.mode.is_editing() {
             // The reading view shows what the editor has: save and rebuild now
             // rather than waiting for the autosave and the watcher.
             if self.editor.read(cx).is_dirty() {
@@ -925,12 +948,49 @@ impl Workspace {
             }
         }
         self.mode = mode;
+        if mode.is_editing() {
+            self.editor.update(cx, |e, cx| {
+                e.set_live_preview(mode == ViewMode::LivePreview, cx)
+            });
+        }
         match mode {
             ViewMode::Reading => window.focus(&self.reading.focus_handle(cx), cx),
-            ViewMode::Source => window.focus(&self.editor.focus_handle(cx), cx),
+            ViewMode::LivePreview | ViewMode::Source => {
+                window.focus(&self.editor.focus_handle(cx), cx)
+            }
             ViewMode::Graph => window.focus(&self.graph.focus_handle(cx), cx),
         }
         cx.notify();
+    }
+
+    /// The editing mode the vault asks for: Live Preview unless
+    /// `livePreview` is off.
+    pub fn editing_mode(&self) -> ViewMode {
+        let live = self
+            .state
+            .as_ref()
+            .and_then(|s| s.app.live_preview)
+            .unwrap_or(true);
+        if live {
+            ViewMode::LivePreview
+        } else {
+            ViewMode::Source
+        }
+    }
+
+    /// The mode a note opens in at startup: `defaultViewMode` (`preview`
+    /// is reading view; anything else, Obsidian's default included, edits).
+    pub fn default_mode(&self) -> ViewMode {
+        let preview = self
+            .state
+            .as_ref()
+            .and_then(|s| s.app.default_view_mode.as_deref())
+            == Some("preview");
+        if preview {
+            ViewMode::Reading
+        } else {
+            self.editing_mode()
+        }
     }
 
     /// Opens a vault path by exact match or by suffix (`--note` on the command
@@ -1260,8 +1320,8 @@ impl Workspace {
 
     fn toggle_mode(&mut self, _: &ToggleMode, window: &mut Window, cx: &mut Context<Self>) {
         let mode = match self.mode {
-            ViewMode::Reading => ViewMode::Source,
-            ViewMode::Source | ViewMode::Graph => ViewMode::Reading,
+            ViewMode::Reading => self.editing_mode(),
+            ViewMode::LivePreview | ViewMode::Source | ViewMode::Graph => ViewMode::Reading,
         };
         self.set_mode(mode, window, cx);
     }
@@ -1744,6 +1804,7 @@ impl Render for Workspace {
             .into();
         let mode_label = match self.mode {
             ViewMode::Reading => "Reading",
+            ViewMode::LivePreview => "Live Preview",
             ViewMode::Source => "Source",
             ViewMode::Graph => "Graph",
         };
@@ -1852,7 +1913,7 @@ impl Render for Workspace {
         } else {
             match self.mode {
                 ViewMode::Reading => self.reading.clone().into_any_element(),
-                ViewMode::Source => self.editor.clone().into_any_element(),
+                ViewMode::LivePreview | ViewMode::Source => self.editor.clone().into_any_element(),
                 ViewMode::Graph => self.graph.clone().into_any_element(),
             }
         };
@@ -1949,7 +2010,7 @@ impl Render for Workspace {
                     ),
             );
 
-        let (editor_status, words, chars) = if self.mode == ViewMode::Source {
+        let (editor_status, words, chars) = if self.mode.is_editing() {
             let editor = self.editor.read(cx);
             let cursor = editor.cursor();
             let line_status = format!(
