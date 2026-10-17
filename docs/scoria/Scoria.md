@@ -15,6 +15,18 @@ browse a vault, open it in  too. Anything the two apps disagree on here is a bug
 - [[Specification]] — what the app implements and where the full specification lives.
 - [[Development]] — machine setup, build commands, pinned dependencies, and benchmark results.
 
+## Brand colors
+
+The logo (`bitmap.svg` at the repository root, a  rock) is filled with the brand orange.
+Picked on 2026-10-17 for an ember look that holds on both base themes and stays apart from
+Obsidian's purple accent.
+
+| Role | Hex |
+| --- | --- |
+| Brand, logo fill, large marks | `#E8590C` |
+| Text and links on light backgrounds (5.2:1 on white) | `#C2410C` |
+| Accent on dark backgrounds, hover states (5.4:1 on the dark theme) | `#F2691F` |
+
 ## Rules for this vault
 
 - Write notes the way Obsidian would: wikilinks, YAML frontmatter, `#tags`, callouts.
