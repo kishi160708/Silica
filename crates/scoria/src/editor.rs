@@ -644,6 +644,11 @@ impl Editor {
         cx.notify();
     }
 
+    /// The buffer's file moved: keep the text, remember the new path.
+    pub fn set_name(&mut self, name: impl Into<SharedString>) {
+        self.name = name.into();
+    }
+
     /// Replaces the buffer after the file changed on disk, keeping the
     /// cursor and scroll position where they were (clamped to the new text).
     pub fn reload(&mut self, raw: String, cx: &mut Context<Self>) {

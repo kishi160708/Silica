@@ -4771,6 +4771,7 @@ dependencies = [
  "-search",
  "-vault",
  "serde_yaml",
+ "tempfile",
 ]
 
 [[package]]

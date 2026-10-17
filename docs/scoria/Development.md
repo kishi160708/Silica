@@ -30,6 +30,8 @@ cargo run --release -p  -- <vault> --settings hotkeys       # open Settings on a
 cargo run --release -p  -- <vault> --note X --source        # open a note in Source mode (--reading for reading view; the default is the vault's defaultViewMode)
 cargo run --release -p  -- <vault> --note X --stress 40     # self-driven edits on that note, then autosave (use a scratch vault)
 cargo run --release -p  -- <vault> --note X --find word     # open with the find panel up and the query matched
+cargo run --release -p  -- <vault> --note X --prompt rename  # open the rename prompt (move, delete, folder) for screenshots
+cargo run --release -p  -- <vault> --note X --rename "New"   # rename the note at startup, rewriting links (use a scratch vault)
 cargo run --release -p -bench -- generate <dir>
 cargo run --release -p -bench -- index <vault>
 ```
@@ -41,11 +43,15 @@ Preview and Source mode, Ctrl+F and Ctrl+H find and replace in the note,
 Ctrl+Alt+Left and Right walk the tab's history,
 Ctrl+O opens the quick switcher, Ctrl+Shift+F the Search tab, Ctrl+G the
 graph (again to return), Ctrl+, opens Settings, Ctrl+S saves (edits also save
-on their own two seconds after the last keystroke), Ctrl+Q quits. A note
-opens in the vault's `defaultViewMode` (editing unless it says `preview`). Every shortcut except Ctrl+Q is an Obsidian command bound from its
-default hotkey, so the vault's `hotkeys.json` rebinds or unbinds it. In the
-graph: wheel zooms, drag pans, drag a node to move it, click a node to open
-it, Ctrl+0 refits the view.
+on their own two seconds after the last keystroke), Ctrl+N creates a note,
+F2 renames the open one, Ctrl+Q quits. A note opens in the vault's
+`defaultViewMode` (editing unless it says `preview`). Every shortcut except
+Ctrl+Q is an Obsidian command bound from its default hotkey, so the vault's
+`hotkeys.json` rebinds or unbinds it. Right-click a file or folder in Files
+for new note, new folder, rename, move, copy and delete; clicking a link to a
+note that does not exist, or pressing Enter in the switcher on a name nothing
+matches, creates it. In the graph: wheel zooms, drag pans, drag a node to
+move it, click a node to open it, Ctrl+0 refits the view.
 
 ## Reader (phase 2)
 
@@ -64,10 +70,95 @@ browse their real vault with no missing content. Passed 2026-10-16, see
 | Outline | done: click scrolls to the heading |
 | Tags | done: vault-wide counts merged across inline and frontmatter tags |
 | Search | done: full query grammar with Obsidian's explain labels, results grouped per file with context, click opens at the line; sort options and copy results not yet |
-| Quick switcher | done: fuzzy over names, aliases and paths, recent files first, unresolved targets shown as not created; creating notes waits for the writer |
+| Quick switcher | done: fuzzy over names, aliases and paths, recent files first, unresolved targets shown as not created; Enter on one creates the note |
 | Graph | done: global and local graphs, filters, color groups, forces and display settings from `graph.json`; zoom, pan, drag, hover, click opens |
 | Command palette | done: Obsidian's command names and hotkeys, pinned commands from `command-palette.json`, this session's recent commands first; lists only the commands  can run |
 | Settings, read-only | done: General, Appearance, Interface, Editor, Files and links, Hotkeys, Core plugins, Community plugins and the Quick switcher and Command palette plugin tabs, every value from `.obsidian/`; nothing is written |
+
+## Writer (phase 3)
+
+Started 2026-10-17. Gate: the vault round-trips byte-identical after a week
+of mixed use in both apps.
+
+| Writer item | Status |
+| --- | --- |
+| Source mode | done, see [[#Source editor, 2026-10-16]] |
+| Live Preview | done, see [[#Live Preview, 2026-10-16]] |
+| File operations and link rewriting | done, see [[#File operations, 2026-10-17]] |
+| Tables (editing) | not started: widgets render, cells are not editable |
+| Properties | not started |
+| Autocompletion | not started |
+| Templates, daily notes, file recovery | not started |
+| Writing settings back | not started |
+
+### File operations, 2026-10-17
+
+New note (Ctrl+N, `file-explorer:new-file`, the Files menu, a click on a
+link nobody has created, Enter in the switcher), new folder, rename (F2,
+`workspace:edit-file-title`), move (`file-explorer:move-file`, a fuzzy
+folder picker), make a copy, and delete (`app:delete-file`) exist, each
+through a small prompt modal (`crates//src/prompt.rs`) or the
+explorer's right-click menu. `-vault::ops` does the disk work and
+updates the file and folder lists (the vault now tracks folders, so empty
+ones show in Files); `-cache::links` plans the link rewrites;
+`VaultState` in `workspace.rs` runs both and brings the index up to date
+before the watcher's events arrive (they then find nothing to change).
+
+The rules were taken from Obsidian 1.14.4 directly: a throwaway plugin in a
+scratch vault (`-probe`, kept in the session's scratch space, not the
+repository) renamed files through `fileManager.renameFile` under every
+`newLinkFormat`, resolved links through `getFirstLinkpathDest`, created and
+trashed files, and dumped the resulting notes. What it showed, now encoded
+in the two modules' tests:
+
+- Every link that resolved to the renamed file is regenerated with the
+  vault's `newLinkFormat` whatever form it had (`[[a]]`, `[[A.md]]`,
+  `[[Sub/A]]`, `[A](./A.md)`, `[A](/A.md)` all become `[[A2]]` or
+  `[A2](A2.md)`); a link whose written path already matches is left byte
+  for byte, so moving a note with a unique name changes nothing. Shortest
+  format falls back to the full path when the basename is ambiguous.
+- The style survives: wikilink or markdown, embed or link, angle-bracketed
+  destination or not. Markdown destinations keep `.md` and encode only
+  spaces (`Ä%20(b)%20100%.md`). The subpath is kept; the alias is kept
+  verbatim, except that an alias equal to the old basename and different
+  from the written path follows the new basename (`[[Sub/S|S]]` becomes
+  `[[S2|S2]]`, `[[S|S]]` becomes `[[S2|S]]`). A markdown link's text follows
+  the new basename when it was the old one, or the new link path when it was
+  the old destination without `.md`.
+- Code spans and fenced code are untouched; reference-style links and their
+  definitions are not updated; `[[#Heading]]` self links are not touched.
+- Links inside a moved note are regenerated only when they would stop
+  resolving (`[B](../B.md)` after the note moved into a subfolder).
+- Frontmatter links update. Obsidian re-serializes the whole YAML block when
+  it does (`aliases: [Bee]` became a block list);  replaces the link
+  text in place instead, keeping the file's bytes.
+- `newFileLocation`: a new note is `Untitled.md`, `Untitled 1.md`, ... at
+  the root, in the open note's folder, or in `newFileFolderPath` (falling
+  back to the root when that folder is missing); a `folder/Name` link
+  creates the folders. Creating over an existing path fails with "File
+  already exists.", renaming onto one with "Destination file already
+  exists!"; a case-only rename succeeds.
+- `trashOption` defaults to `system` (freedesktop trash on Linux, with a
+  `.trashinfo` record; the vault's `.trash` is the fallback elsewhere);
+  `local` moves a file flat into `.trash/` and a folder with its contents,
+  numbering collisions ` 2`, ` 3`. `promptDelete` defaults to on.
+- `alwaysUpdateLinks` defaults to on; off asks first ("Update links?" with a
+  "Don't update" button), as Obsidian's dialog does.
+
+The same probe corrected link resolution: with duplicate basenames Obsidian
+picks a file at the vault root first, then one in the source's own folder,
+then the shortest path, then path order (`[[Zed]]` from `Long/Way/Down/C.md`
+is `Zed.md`, not the sibling `Long/Way/Down/Zed.md`; `[[X]]` there is the
+sibling `Long/Way/Down/X.md` over `Mid/X.md`). `./` and `../` paths resolve
+relative to the source only, `/path` from the root only. The spec's
+"same folder first" rule was wrong and is fixed in [[Specification]].
+
+`crates/-cache/tests/rename_corpus.rs` renames every note of the
+1000-note corpus, moves its folders under every format and renames its
+attachments, and checks that every resolved link still resolves to the same
+file, no link appears or disappears, and nothing outside the links changes.
+Not yet: drag and drop in Files, inline title editing, attachment
+pasting, the system trash on Windows and macOS.
 
 ### Reader gate, 2026-10-16
 

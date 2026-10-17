@@ -652,7 +652,7 @@ impl SettingsView {
             toggle(
                 "Automatically update internal links",
                 "Turn off to be prompted to update links after renaming a file.",
-                app.always_update_links.unwrap_or(false),
+                app.always_update_links.unwrap_or(true),
             ),
             toggle(
                 "Use [[Wikilinks]]",

@@ -2,12 +2,14 @@
 //!
 //! [`FileTree`] is the pure model (ordering, collapse state, visible rows)
 //! and [`FileExplorer`] the GPUI entity that draws it with a uniform list, so
-//! a 20k-file vault costs one row element per visible line.
+//! a 20k-file vault costs one row element per visible line. A right click
+//! opens the file menu (new note, new folder, rename, move, copy, delete);
+//! the explorer only reports the choice, the workspace does the work.
 
 use crate::theme::Theme;
 use gpui::{
-    div, prelude::*, px, uniform_list, Context, EventEmitter, ScrollStrategy, SharedString,
-    UniformListScrollHandle, Window,
+    anchored, deferred, div, prelude::*, px, uniform_list, Context, EventEmitter, MouseButton,
+    Pixels, Point, ScrollStrategy, SharedString, UniformListScrollHandle, Window,
 };
 use _formats::FileKind;
 use _vault::VaultFile;
@@ -46,12 +48,20 @@ fn sort_key(name: &str) -> (String, String) {
 
 impl FileTree {
     /// Builds the tree. Files of unknown kind are hidden unless
-    /// `show_unsupported` (Obsidian's "Detect all file extensions").
+    /// `show_unsupported` (Obsidian's "Detect all file extensions");
+    /// `folders` adds the empty folders the files alone would not show.
     pub fn new<'a>(
         files: impl IntoIterator<Item = &'a VaultFile>,
+        folders: impl IntoIterator<Item = &'a String>,
         show_unsupported: bool,
     ) -> FileTree {
         let mut root = Folder::default();
+        for path in folders {
+            let mut folder = &mut root;
+            for part in path.split('/').filter(|p| !p.is_empty()) {
+                folder = folder.folders.entry(part.to_string()).or_default();
+            }
+        }
         for file in files {
             if file.kind == FileKind::Other && !show_unsupported {
                 continue;
@@ -220,12 +230,31 @@ pub fn display_name(file_name: &str) -> &str {
 
 pub enum ExplorerEvent {
     Open(String),
+    /// Context-menu actions; paths are vault-relative, folders without a
+    /// trailing slash (`""` is the vault root).
+    NewNote {
+        folder: String,
+    },
+    NewFolder {
+        parent: String,
+    },
+    Rename(String),
+    Move(String),
+    Duplicate(String),
+    Delete(String),
+}
+
+/// The right-click menu over a row.
+struct Menu {
+    position: Point<Pixels>,
+    row: Row,
 }
 
 pub struct FileExplorer {
     tree: FileTree,
     active: Option<String>,
     scroll: UniformListScrollHandle,
+    menu: Option<Menu>,
 }
 
 impl EventEmitter<ExplorerEvent> for FileExplorer {}
@@ -236,6 +265,7 @@ impl FileExplorer {
             tree: FileTree::default(),
             active: None,
             scroll: UniformListScrollHandle::new(),
+            menu: None,
         }
     }
 
@@ -268,6 +298,113 @@ impl FileExplorer {
         } else {
             cx.emit(ExplorerEvent::Open(row.path));
         }
+    }
+
+    fn open_menu(&mut self, ix: usize, position: Point<Pixels>, cx: &mut Context<Self>) {
+        if let Some(row) = self.tree.row(ix).cloned() {
+            self.menu = Some(Menu { position, row });
+            cx.notify();
+        }
+    }
+
+    fn close_menu(&mut self, cx: &mut Context<Self>) {
+        if self.menu.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    fn render_menu(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let menu = self.menu.as_ref()?;
+        let theme = cx.global::<Theme>().clone();
+        let row = menu.row.clone();
+        let folder = if row.is_folder {
+            row.path.clone()
+        } else {
+            row.path
+                .rsplit_once('/')
+                .map(|(dir, _)| dir.to_string())
+                .unwrap_or_default()
+        };
+        let items: Vec<(&'static str, ExplorerEvent)> = if row.is_folder {
+            vec![
+                (
+                    "New note",
+                    ExplorerEvent::NewNote {
+                        folder: folder.clone(),
+                    },
+                ),
+                (
+                    "New folder",
+                    ExplorerEvent::NewFolder {
+                        parent: folder.clone(),
+                    },
+                ),
+                ("Rename...", ExplorerEvent::Rename(row.path.clone())),
+                ("Move folder to...", ExplorerEvent::Move(row.path.clone())),
+                ("Delete", ExplorerEvent::Delete(row.path.clone())),
+            ]
+        } else {
+            vec![
+                (
+                    "New note",
+                    ExplorerEvent::NewNote {
+                        folder: folder.clone(),
+                    },
+                ),
+                (
+                    "New folder",
+                    ExplorerEvent::NewFolder {
+                        parent: folder.clone(),
+                    },
+                ),
+                ("Rename...", ExplorerEvent::Rename(row.path.clone())),
+                ("Move file to...", ExplorerEvent::Move(row.path.clone())),
+                ("Make a copy", ExplorerEvent::Duplicate(row.path.clone())),
+                ("Delete", ExplorerEvent::Delete(row.path.clone())),
+            ]
+        };
+        let mut list = div()
+            .id("explorer-menu")
+            .flex()
+            .flex_col()
+            .min_w(px(180.))
+            .py_1()
+            .bg(theme.bg_secondary)
+            .border_1()
+            .border_color(theme.border)
+            .rounded_md()
+            .shadow_lg()
+            .text_size(px(13.))
+            .text_color(theme.text)
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_menu(cx)));
+        for (ix, (label, event)) in items.into_iter().enumerate() {
+            let event = std::cell::Cell::new(Some(event));
+            list = list.child(
+                div()
+                    .id(("explorer-menu-item", ix))
+                    .px_3()
+                    .py_1()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme.bg_alt))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.close_menu(cx);
+                        if let Some(event) = event.take() {
+                            cx.emit(event);
+                        }
+                    }))
+                    .child(label),
+            );
+        }
+        Some(
+            deferred(
+                anchored()
+                    .position(menu.position)
+                    .snap_to_window_with_margin(px(8.))
+                    .child(list),
+            )
+            .with_priority(1)
+            .into_any_element(),
+        )
     }
 
     fn render_rows(
@@ -308,6 +445,12 @@ impl FileExplorer {
                         .when(active, |d| d.bg(theme.bg_active))
                         .hover(|s| s.bg(theme.bg_alt))
                         .on_click(cx.listener(move |this, _, _, cx| this.click(ix, cx)))
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                                this.open_menu(ix, event.position, cx)
+                            }),
+                        )
                         .child(
                             div()
                                 .w(px(14.))
@@ -333,10 +476,16 @@ impl FileExplorer {
 impl Render for FileExplorer {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let count = self.tree.len();
-        uniform_list("file-explorer", count, cx.processor(Self::render_rows))
-            .track_scroll(&self.scroll)
+        let menu = self.render_menu(cx);
+        div()
             .size_full()
-            .px_1()
+            .child(
+                uniform_list("file-explorer", count, cx.processor(Self::render_rows))
+                    .track_scroll(&self.scroll)
+                    .size_full()
+                    .px_1(),
+            )
+            .children(menu)
     }
 }
 
@@ -365,10 +514,14 @@ mod tests {
             "a/deep/y.md",
             "notes.zip",
         ]);
-        let tree = FileTree::new(&files, false);
+        let tree = FileTree::new(&files, &[], false);
         let names: Vec<(usize, &str)> = tree.rows().map(|r| (r.depth, r.name.as_str())).collect();
         assert_eq!(names, vec![(0, "a"), (0, "b"), (0, "Alpha"), (0, "zeta")]);
-        let shown = FileTree::new(&files, true);
+        let empty = vec!["Empty".to_string(), "a/void".to_string()];
+        let with_empty = FileTree::new(&files, &empty, false);
+        let names: Vec<&str> = with_empty.rows().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["a", "b", "Empty", "Alpha", "zeta"]);
+        let shown = FileTree::new(&files, &[], true);
         assert_eq!(
             shown.len(),
             5,
@@ -379,7 +532,7 @@ mod tests {
     #[test]
     fn toggle_and_reveal_expand_ancestors() {
         let files = files(&["a/deep/y.md", "a/x.png", "b/inner.md"]);
-        let mut tree = FileTree::new(&files, false);
+        let mut tree = FileTree::new(&files, &[], false);
         assert_eq!(tree.len(), 2);
         tree.toggle("a");
         let names: Vec<&str> = tree.rows().map(|r| r.name.as_str()).collect();
@@ -394,7 +547,7 @@ mod tests {
         tree.expand_all();
         assert_eq!(tree.len(), 6);
         let expanded = tree.expanded_folders();
-        let mut rebuilt = FileTree::new(&files, false);
+        let mut rebuilt = FileTree::new(&files, &[], false);
         rebuilt.expand_folders(&expanded);
         assert_eq!(rebuilt.len(), 6);
     }

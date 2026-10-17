@@ -201,6 +201,15 @@ impl MetadataCache {
         self.unresolved.get(path)
     }
 
+    /// Paths of the notes with at least one resolved link, embed or
+    /// frontmatter link to `target`.
+    pub fn sources_linking_to(&self, target: &str) -> impl Iterator<Item = &str> {
+        self.backlinks
+            .get(target)
+            .into_iter()
+            .flat_map(|s| s.iter().map(String::as_str))
+    }
+
     /// Every link and embed in other notes that resolves to `path`, grouped
     /// by source file in path order.
     pub fn backlinks(&self, path: &str) -> Vec<Backlink<'_>> {

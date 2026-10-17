@@ -3,7 +3,9 @@
 //! ` <vault> [--note <path>]` opens a vault in the three-pane shell:
 //! Files on the left, the reading view (or the source editor, Ctrl+E) in the
 //! middle, and Backlinks, Outline and Tags on the right. `--synthetic N`
-//! and `--stress` keep the editor spike from the first gate runnable.
+//! and `--stress` keep the editor spike from the first gate runnable; the
+//! other flags open the app in a given state for screenshots and smoke
+//! tests (see `docs//Development.md`).
 
 mod editor;
 mod explorer;
@@ -13,6 +15,7 @@ mod lists;
 mod mentions;
 mod palette;
 mod preview;
+mod prompt;
 mod reading;
 mod search;
 mod settings;
@@ -138,6 +141,10 @@ struct Args {
     find: Option<String>,
     /// Open the find panel with this query and select every match (Find all).
     find_all: Option<String>,
+    /// Rename the opened note to this name at startup (links rewritten).
+    rename: Option<String>,
+    /// Open a file prompt for the opened note: rename, move, delete, folder.
+    prompt: Option<String>,
 }
 
 fn parse_args() -> Args {
@@ -156,6 +163,8 @@ fn parse_args() -> Args {
         reading: false,
         find: None,
         find_all: None,
+        rename: None,
+        prompt: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -175,6 +184,8 @@ fn parse_args() -> Args {
             "--reading" => args.reading = true,
             "--find" => args.find = it.next().or(Some(String::new())),
             "--find-all" => args.find_all = it.next().or(Some(String::new())),
+            "--rename" => args.rename = it.next(),
+            "--prompt" => args.prompt = it.next().or(Some("rename".into())),
             _ if args.vault.is_none() => args.vault = Some(PathBuf::from(a)),
             _ => args.note = Some(a),
         }
@@ -211,6 +222,7 @@ fn main() {
         text_input::bind_keys(cx);
         graph::bind_keys(cx);
         settings::bind_keys(cx);
+        prompt::bind_keys(cx);
         cx.bind_keys([KeyBinding::new("ctrl-q", Quit, None)]);
 
         let bounds = Bounds::centered(None, size(px(1400.0), px(900.0)), cx);
@@ -245,6 +257,8 @@ fn main() {
         let reading = args.reading;
         let find = args.find.clone();
         let find_all = args.find_all.clone();
+        let rename = args.rename.clone();
+        let prompt = args.prompt.clone();
         let synthetic = args.synthetic;
         window
             .update(cx, |ws, window, cx| {
@@ -314,6 +328,12 @@ fn main() {
                             ws.open_find(q, false, window, cx);
                             ws.editor()
                                 .update(cx, |e, cx| e.find_all_matches(window, cx));
+                        }
+                        if let Some(name) = &rename {
+                            ws.rename_current(name, window, cx);
+                        }
+                        if let Some(kind) = &prompt {
+                            ws.open_file_prompt(kind, window, cx);
                         }
                         true
                     })

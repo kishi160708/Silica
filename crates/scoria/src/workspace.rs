@@ -13,6 +13,7 @@ use crate::explorer::{display_name, ExplorerEvent, FileExplorer, FileTree};
 use crate::graph::{GraphEvent, GraphView};
 use crate::mentions::{Finder, Name};
 use crate::palette::{CommandPalette, PaletteCommand, PaletteEvent};
+use crate::prompt::{Prompt, PromptEvent, PromptSpec};
 use crate::reading::{self, LinkTarget, ReadingEvent, ReadingView};
 use crate::search::{SearchEvent, SearchPane};
 use crate::settings::{self, SettingsEvent, SettingsView};
@@ -25,14 +26,16 @@ use gpui::{
     Window,
 };
 use rayon::prelude::*;
-use _cache::{frontmatter_aliases, index_markdown, CachedMetadata, MetadataCache};
+use _cache::{
+    basename, frontmatter_aliases, index_markdown, CachedMetadata, LinkFormat, MetadataCache,
+};
 use _commands::{keystroke, CommandRegistry};
 use _formats::config::{
     AppConfig, AppearanceConfig, CommandPaletteConfig, CorePlugins, PluginManifest, SwitcherConfig,
 };
 use _formats::FileKind;
 use _markdown::Subpath;
-use _vault::{FileChange, Vault};
+use _vault::{FileChange, TrashOption, Vault};
 use std::collections::HashMap;
 use std::ops::Range;
 use std::path::PathBuf;
@@ -78,6 +81,14 @@ pub const RUNNABLE: &[&str] = &[
     "app:toggle-right-sidebar",
     "file-explorer:open",
     "file-explorer:reveal-active-file",
+    "file-explorer:new-file",
+    "file-explorer:new-file-in-current-tab",
+    "file-explorer:new-file-in-new-pane",
+    "file-explorer:new-folder",
+    "file-explorer:move-file",
+    "file-explorer:duplicate-file",
+    "workspace:edit-file-title",
+    "app:delete-file",
     "backlink:open",
     "backlink:open-backlinks",
     "outgoing-links:open",
@@ -141,6 +152,16 @@ impl Changes {
             .iter()
             .any(|c| !matches!(c, FileChange::Modified(_)))
     }
+}
+
+/// What a rename did: the files that moved and the notes whose links
+/// were rewritten, on top of the index changes.
+#[derive(Debug, Default)]
+pub struct RenameOutcome {
+    pub changes: Changes,
+    pub renamed: Vec<(String, String)>,
+    pub rewritten_files: usize,
+    pub rewritten_links: usize,
 }
 
 impl VaultState {
@@ -209,16 +230,23 @@ impl VaultState {
     /// Applies filesystem events for `paths`: refreshes the file list,
     /// re-indexes changed notes, and re-resolves links when files came or went.
     pub fn apply(&self, paths: &[PathBuf]) -> Changes {
-        let mut changes = Changes::default();
+        let mut files = Vec::new();
         {
             let mut vault = self.vault.write().unwrap_or_else(|e| e.into_inner());
             for path in paths {
-                changes.files.extend(vault.refresh_path(path));
+                files.extend(vault.refresh_path(path));
             }
         }
+        self.absorb(files)
+    }
+
+    /// Re-reads and re-indexes the notes among `files` (already applied to
+    /// the file list) and re-resolves links when files came or went.
+    fn absorb(&self, files: Vec<FileChange>) -> Changes {
+        let mut changes = Changes::default();
         // Keep one change per path, the last one seen.
         let mut last: HashMap<String, FileChange> = HashMap::new();
-        for c in changes.files.drain(..) {
+        for c in files {
             last.insert(c.path().to_string(), c);
         }
         let mut files: Vec<FileChange> = last.into_values().collect();
@@ -264,6 +292,200 @@ impl VaultState {
         }
         changes.files = files;
         changes
+    }
+
+    pub fn link_format(&self) -> LinkFormat {
+        LinkFormat::from_config(self.app.new_link_format.as_deref())
+    }
+
+    pub fn trash_option(&self) -> TrashOption {
+        TrashOption::from_config(self.app.trash_option.as_deref())
+    }
+
+    /// `alwaysUpdateLinks`: on by default; off means ask before rewriting.
+    pub fn update_links_automatically(&self) -> bool {
+        self.app.always_update_links.unwrap_or(true)
+    }
+
+    /// `promptDelete`: on by default.
+    pub fn confirm_delete(&self) -> bool {
+        self.app.prompt_delete.unwrap_or(true)
+    }
+
+    /// Where a note created for the link text `name` goes, given the open
+    /// note (`newFileLocation`, `newFileFolderPath`).
+    pub fn new_note_path(&self, name: &str, current: Option<&str>) -> String {
+        let vault = self.vault();
+        let folder = vault.new_note_folder(
+            self.app.new_file_location.as_deref(),
+            self.app.new_file_folder_path.as_deref(),
+            current,
+        );
+        vault.new_note_path(name, &folder)
+    }
+
+    /// Creates a note (and its folders) and indexes it.
+    pub fn create_note(&self, path: &str, text: &str) -> Result<Changes, String> {
+        let files = self
+            .vault
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .create_note(path, text)
+            .map_err(|e| e.to_string())?;
+        Ok(self.absorb(files))
+    }
+
+    pub fn create_folder(&self, path: &str) -> Result<(), String> {
+        self.vault
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .create_folder(path)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Copies a file next to itself as `Name 1.ext` and indexes the copy.
+    pub fn duplicate(&self, path: &str) -> Result<(String, Changes), String> {
+        let (target, from, to) = {
+            let vault = self.vault();
+            let (folder, name) = match path.rsplit_once('/') {
+                Some((d, n)) => (d, n),
+                None => ("", path),
+            };
+            let (stem, ext) = match name.rsplit_once('.') {
+                Some((s, e)) if !s.is_empty() => (s, e),
+                _ => (name, ""),
+            };
+            let target = vault.available_path(folder, stem, ext);
+            (
+                target.clone(),
+                vault.absolute(path),
+                vault.absolute(&target),
+            )
+        };
+        std::fs::copy(&from, &to).map_err(|e| format!("Could not copy {path}: {e}"))?;
+        let files = self
+            .vault
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .refresh_path(&to);
+        Ok((target, self.absorb(files)))
+    }
+
+    /// The rewrites a rename would need, without doing anything:
+    /// `(files, links)`.
+    pub fn rename_preview(&self, from: &str, to: &str) -> (usize, usize) {
+        let plan = self.vault().rename_plan(from, to);
+        let texts = self.texts();
+        let rewrites = self
+            .cache()
+            .plan_rename_rewrites(&plan, self.link_format(), &|p| {
+                texts.get(p).map(|t| t.to_string())
+            });
+        (
+            rewrites.len(),
+            rewrites.iter().map(|r| r.links).sum::<usize>(),
+        )
+    }
+
+    /// Renames or moves a file or folder, rewrites the links to it in every
+    /// note (when `update_links`), and brings the index up to date.
+    pub fn rename(
+        &self,
+        from: &str,
+        to: &str,
+        update_links: bool,
+    ) -> Result<RenameOutcome, String> {
+        let moved = self
+            .vault
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .rename(from, to)
+            .map_err(|e| e.to_string())?;
+        let plan = if update_links {
+            let texts = self.texts();
+            self.cache()
+                .plan_rename_rewrites(&moved, self.link_format(), &|p| {
+                    texts.get(p).map(|t| t.to_string())
+                })
+        } else {
+            Vec::new()
+        };
+        for rw in &plan {
+            std::fs::write(self.root.join(&rw.new_path), rw.text.as_bytes())
+                .map_err(|e| format!("Could not update links in {}: {e}", rw.new_path))?;
+        }
+        let moved_from: HashMap<&str, &str> = moved
+            .iter()
+            .map(|(a, b)| (a.as_str(), b.as_str()))
+            .collect();
+        let mut changes = Changes::default();
+        let mut cache = self.cache.write().unwrap_or_else(|e| e.into_inner());
+        let mut texts = self.texts.write().unwrap_or_else(|e| e.into_inner());
+        for (old, new) in &moved {
+            let old_text = texts.remove(old);
+            cache.forget_path(old);
+            changes.files.push(FileChange::Removed(old.clone()));
+            if old_text.is_some() {
+                changes.removed_notes.push(old.clone());
+            }
+            if FileKind::from_path(new) == FileKind::Markdown {
+                let text = plan
+                    .iter()
+                    .find(|r| r.old_path == *old)
+                    .map(|r| Arc::new(r.text.clone()))
+                    .or(old_text)
+                    .unwrap_or_else(|| {
+                        Arc::new(std::fs::read_to_string(self.root.join(new)).unwrap_or_default())
+                    });
+                cache.insert_file(new.clone(), index_markdown(&text));
+                texts.insert(new.clone(), text);
+                changes.notes.push(new.clone());
+            } else {
+                cache.add_path(new);
+            }
+            changes.files.push(FileChange::Added(new.clone()));
+        }
+        for rw in plan
+            .iter()
+            .filter(|r| !moved_from.contains_key(r.old_path.as_str()))
+        {
+            let text = Arc::new(rw.text.clone());
+            cache.insert_file(rw.new_path.clone(), index_markdown(&text));
+            texts.insert(rw.new_path.clone(), text);
+            changes
+                .files
+                .push(FileChange::Modified(rw.new_path.clone()));
+            changes.notes.push(rw.new_path.clone());
+        }
+        cache.reresolve();
+        Ok(RenameOutcome {
+            changes,
+            renamed: moved,
+            rewritten_files: plan.len(),
+            rewritten_links: plan.iter().map(|r| r.links).sum(),
+        })
+    }
+
+    /// Deletes a file or folder per `trashOption` and drops it from the index.
+    pub fn trash(&self, path: &str) -> Result<Changes, String> {
+        let removed = self
+            .vault
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .trash(path, self.trash_option())
+            .map_err(|e| e.to_string())?;
+        let mut changes = Changes::default();
+        let mut cache = self.cache.write().unwrap_or_else(|e| e.into_inner());
+        let mut texts = self.texts.write().unwrap_or_else(|e| e.into_inner());
+        for p in removed {
+            if texts.remove(&p).is_some() {
+                changes.removed_notes.push(p.clone());
+            }
+            cache.forget_path(&p);
+            changes.files.push(FileChange::Removed(p));
+        }
+        cache.reresolve();
+        Ok(changes)
     }
 
     /// Note names and aliases, for unlinked mentions.
@@ -373,6 +595,23 @@ enum Modal {
     Switcher,
     Palette,
     Settings,
+    Prompt,
+}
+
+/// The file operation the open prompt will finish.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PendingOp {
+    Rename(String),
+    Move(String),
+    Delete(String),
+    NewFolder {
+        parent: String,
+    },
+    /// `alwaysUpdateLinks` is off: asking whether to rewrite links.
+    UpdateLinks {
+        from: String,
+        to: String,
+    },
 }
 
 pub struct Workspace {
@@ -385,6 +624,8 @@ pub struct Workspace {
     switcher: Entity<QuickSwitcher>,
     palette: Entity<CommandPalette>,
     settings: Entity<SettingsView>,
+    prompt: Entity<Prompt>,
+    pending: Option<PendingOp>,
     modal: Modal,
     /// Command ids run this session, most recent first.
     recent_commands: Vec<String>,
@@ -434,6 +675,7 @@ impl Workspace {
         let switcher = cx.new(QuickSwitcher::new);
         let palette = cx.new(CommandPalette::new);
         let settings = cx.new(SettingsView::new);
+        let prompt = cx.new(Prompt::new);
         let reading = cx.new(ReadingView::new);
         let editor = cx.new(|cx| Editor::new(window, cx));
         let graph = cx.new(GraphView::new);
@@ -448,10 +690,31 @@ impl Workspace {
                         }
                     }
                 }),
-                cx.subscribe(
+                cx.subscribe_in(
                     &explorer,
-                    |this, _, event: &ExplorerEvent, cx| match event {
+                    window,
+                    |this, _, event: &ExplorerEvent, window, cx| match event {
                         ExplorerEvent::Open(path) => this.open_file(path.clone(), None, cx),
+                        ExplorerEvent::NewNote { folder } => this.new_note(folder, window, cx),
+                        ExplorerEvent::NewFolder { parent } => {
+                            this.start_new_folder(parent, window, cx)
+                        }
+                        ExplorerEvent::Rename(path) => this.start_rename(path, window, cx),
+                        ExplorerEvent::Move(path) => this.start_move(path, window, cx),
+                        ExplorerEvent::Duplicate(path) => this.duplicate(path, cx),
+                        ExplorerEvent::Delete(path) => this.start_delete(path, window, cx),
+                    },
+                ),
+                cx.subscribe_in(
+                    &prompt,
+                    window,
+                    |this, _, event: &PromptEvent, window, cx| match event {
+                        PromptEvent::Submit(value) => this.prompt_submitted(value, window, cx),
+                        PromptEvent::Secondary => this.prompt_secondary(window, cx),
+                        PromptEvent::Cancel => {
+                            this.pending = None;
+                            this.close_modal(window, cx);
+                        }
                     },
                 ),
                 cx.subscribe(&search, |this, _, event: &SearchEvent, cx| match event {
@@ -470,6 +733,10 @@ impl Workspace {
                         SwitcherEvent::Open(path) => {
                             this.close_modal(window, cx);
                             this.open_file(path.clone(), None, cx);
+                        }
+                        SwitcherEvent::Create(name) => {
+                            this.close_modal(window, cx);
+                            this.create_from_link(name, window, cx);
                         }
                         SwitcherEvent::Close => this.close_modal(window, cx),
                     },
@@ -519,6 +786,8 @@ impl Workspace {
             switcher,
             palette,
             settings,
+            prompt,
+            pending: None,
             modal: Modal::None,
             recent_commands: Vec::new(),
             left_visible: true,
@@ -623,7 +892,10 @@ impl Workspace {
             return;
         };
         let show_unsupported = state.app.show_unsupported_files.unwrap_or(false);
-        let tree = FileTree::new(state.vault().files(), show_unsupported);
+        let tree = {
+            let vault = state.vault();
+            FileTree::new(vault.files(), vault.folders(), show_unsupported)
+        };
         self.explorer.update(cx, |e, cx| e.set_tree(tree, cx));
         self.tags = state
             .cache()
@@ -901,6 +1173,43 @@ impl Workspace {
                     self.explorer.update(cx, |e, cx| e.reveal(&current, cx));
                 }
                 cx.notify();
+            }
+            "file-explorer:new-file"
+            | "file-explorer:new-file-in-current-tab"
+            | "file-explorer:new-file-in-new-pane" => {
+                let folder = self
+                    .state
+                    .as_ref()
+                    .map(|s| {
+                        s.vault().new_note_folder(
+                            s.app.new_file_location.as_deref(),
+                            s.app.new_file_folder_path.as_deref(),
+                            self.current.as_deref(),
+                        )
+                    })
+                    .unwrap_or_default();
+                self.new_note(&folder, window, cx);
+            }
+            "file-explorer:new-folder" => self.start_new_folder("", window, cx),
+            "file-explorer:move-file" => {
+                if let Some(current) = self.current.clone() {
+                    self.start_move(&current, window, cx);
+                }
+            }
+            "file-explorer:duplicate-file" => {
+                if let Some(current) = self.current.clone() {
+                    self.duplicate(&current, cx);
+                }
+            }
+            "workspace:edit-file-title" => {
+                if let Some(current) = self.current.clone() {
+                    self.start_rename(&current, window, cx);
+                }
+            }
+            "app:delete-file" => {
+                if let Some(current) = self.current.clone() {
+                    self.start_delete(&current, window, cx);
+                }
             }
             "backlink:open" | "backlink:open-backlinks" => {
                 self.right_visible = true;
@@ -1341,8 +1650,9 @@ impl Workspace {
                         }
                     }
                     None => {
-                        self.status = format!("{} does not exist yet", parsed.path).into();
-                        cx.notify();
+                        // Obsidian creates the note a dangling link points at.
+                        let name = parsed.path.to_string();
+                        self.create_note_for(&name, None, cx);
                     }
                 }
             }
@@ -1425,6 +1735,487 @@ impl Workspace {
             }
         }
         cx.notify();
+    }
+
+    // ----- file operations -------------------------------------------------------
+
+    fn open_prompt(
+        &mut self,
+        op: PendingOp,
+        spec: PromptSpec,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.pending = Some(op);
+        self.modal = Modal::Prompt;
+        self.prompt.update(cx, |p, cx| p.open(spec, window, cx));
+        cx.notify();
+    }
+
+    fn report(&mut self, message: impl Into<SharedString>, cx: &mut Context<Self>) {
+        self.status = message.into();
+        cx.notify();
+    }
+
+    /// Creates `Untitled.md` (or the next free number) in `folder`, opens it
+    /// for editing and asks for its name, the way Ctrl+N does in Obsidian.
+    fn new_note(&mut self, folder: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let path = state.vault().available_path(folder, "Untitled", "md");
+        match state.create_note(&path, "") {
+            Ok(changes) => {
+                self.after_changes(changes, cx);
+                self.open_file(path.clone(), None, cx);
+                let mode = self.editing_mode();
+                self.set_mode(mode, window, cx);
+                self.start_rename(&path, window, cx);
+            }
+            Err(err) => self.report(err, cx),
+        }
+    }
+
+    /// Creates the note a link or the switcher names and opens it.
+    fn create_note_for(&mut self, name: &str, window: Option<&mut Window>, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let path = state.new_note_path(name, self.current.as_deref());
+        match state.create_note(&path, "") {
+            Ok(changes) => {
+                self.after_changes(changes, cx);
+                self.open_file(path.clone(), None, cx);
+                if let Some(window) = window {
+                    let mode = self.editing_mode();
+                    self.set_mode(mode, window, cx);
+                }
+                self.report(format!("Created {path}"), cx);
+            }
+            Err(err) => self.report(err, cx),
+        }
+    }
+
+    fn create_from_link(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.create_note_for(name, Some(window), cx);
+    }
+
+    fn start_rename(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let is_folder = self
+            .state
+            .as_ref()
+            .map(|s| s.vault().absolute(path).is_dir())
+            .unwrap_or(false);
+        let name = path.rsplit('/').next().unwrap_or(path);
+        let initial = if is_folder { name } else { basename(name) };
+        self.open_prompt(
+            PendingOp::Rename(path.to_string()),
+            PromptSpec {
+                title: if is_folder {
+                    "Rename folder".into()
+                } else {
+                    "Rename file".into()
+                },
+                detail: Some(path.to_string().into()),
+                input: Some(initial.to_string()),
+                placeholder: "Name".into(),
+                confirm: "Rename".into(),
+                ..PromptSpec::default()
+            },
+            window,
+            cx,
+        );
+    }
+
+    fn start_move(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let is_folder = state.vault().absolute(path).is_dir();
+        let own_prefix = format!("{path}/");
+        let parent = path.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+        let mut suggestions = vec!["/".to_string()];
+        suggestions.extend(
+            state
+                .vault()
+                .folders()
+                .iter()
+                .filter(|f| *f != path && !f.starts_with(&own_prefix) && f.as_str() != parent)
+                .cloned(),
+        );
+        if parent.is_empty() {
+            suggestions.remove(0);
+        }
+        self.open_prompt(
+            PendingOp::Move(path.to_string()),
+            PromptSpec {
+                title: if is_folder {
+                    "Move folder to...".into()
+                } else {
+                    "Move file to...".into()
+                },
+                detail: Some(path.to_string().into()),
+                input: Some(String::new()),
+                placeholder: "Type a folder".into(),
+                suggestions,
+                confirm: "Move".into(),
+                ..PromptSpec::default()
+            },
+            window,
+            cx,
+        );
+    }
+
+    fn start_new_folder(&mut self, parent: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let initial = self
+            .state
+            .as_ref()
+            .map(|s| s.vault().available_path(parent, "Untitled", ""))
+            .unwrap_or_else(|| "Untitled".to_string());
+        let initial = initial.rsplit('/').next().unwrap_or(&initial).to_string();
+        self.open_prompt(
+            PendingOp::NewFolder {
+                parent: parent.to_string(),
+            },
+            PromptSpec {
+                title: "New folder".into(),
+                detail: Some(if parent.is_empty() {
+                    "In the vault folder".into()
+                } else {
+                    format!("In {parent}").into()
+                }),
+                input: Some(initial),
+                placeholder: "Folder name".into(),
+                confirm: "Create".into(),
+                ..PromptSpec::default()
+            },
+            window,
+            cx,
+        );
+    }
+
+    fn start_delete(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        if !state.confirm_delete() {
+            self.delete_now(path, cx);
+            return;
+        }
+        let where_to = match state.trash_option() {
+            TrashOption::System => "It will be moved to the system trash.",
+            TrashOption::Local => "It will be moved to the vault's .trash folder.",
+            TrashOption::None => "It will be deleted permanently.",
+        };
+        let name = path.rsplit('/').next().unwrap_or(path);
+        self.open_prompt(
+            PendingOp::Delete(path.to_string()),
+            PromptSpec {
+                title: format!("Delete \"{name}\"?").into(),
+                detail: Some(where_to.into()),
+                input: None,
+                confirm: "Delete".into(),
+                ..PromptSpec::default()
+            },
+            window,
+            cx,
+        );
+    }
+
+    fn delete_now(&mut self, path: &str, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let was_current = self.current.as_deref() == Some(path)
+            || self
+                .current
+                .as_deref()
+                .is_some_and(|c| c.starts_with(&format!("{path}/")));
+        if was_current {
+            // Nothing may write the buffer back into a file that is gone.
+            self.save_task = None;
+            self.editor
+                .update(cx, |e, cx| e.set_text("", String::new(), cx));
+            self.reading.update(cx, |r, cx| {
+                r.set_note(
+                    None,
+                    reading::build_with("", "", state.as_ref(), state.build_options()),
+                    cx,
+                )
+            });
+            self.current = None;
+            self.words = 0;
+            self.chars = 0;
+        }
+        match state.trash(path) {
+            Ok(changes) => {
+                self.after_changes(changes, cx);
+                self.report(format!("Deleted {path}"), cx);
+            }
+            Err(err) => self.report(err, cx),
+        }
+    }
+
+    fn duplicate(&mut self, path: &str, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        match state.duplicate(path) {
+            Ok((copy, changes)) => {
+                self.after_changes(changes, cx);
+                self.open_file(copy.clone(), None, cx);
+                self.report(format!("Copied {path} to {copy}"), cx);
+            }
+            Err(err) => self.report(err, cx),
+        }
+    }
+
+    /// Enter in the prompt: finish the pending operation with `value`.
+    fn prompt_submitted(&mut self, value: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(op) = self.pending.clone() else {
+            self.close_modal(window, cx);
+            return;
+        };
+        let value = value.trim();
+        match op {
+            PendingOp::Rename(from) => {
+                let is_folder = self
+                    .state
+                    .as_ref()
+                    .map(|s| s.vault().absolute(&from).is_dir())
+                    .unwrap_or(false);
+                let folder = from.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+                let name = from.rsplit('/').next().unwrap_or(&from);
+                let ext = if is_folder {
+                    None
+                } else {
+                    name.rsplit_once('.')
+                        .map(|(_, e)| e)
+                        .filter(|_| basename(name) != name)
+                };
+                let new_name = match ext {
+                    Some(ext) => format!("{value}.{ext}"),
+                    None => value.to_string(),
+                };
+                let to = if folder.is_empty() {
+                    new_name
+                } else {
+                    format!("{folder}/{new_name}")
+                };
+                self.rename_with_links(&from, &to, window, cx);
+            }
+            PendingOp::Move(from) => {
+                let folder = value.trim_matches('/');
+                let name = from.rsplit('/').next().unwrap_or(&from);
+                let to = if folder.is_empty() {
+                    name.to_string()
+                } else {
+                    format!("{folder}/{name}")
+                };
+                self.rename_with_links(&from, &to, window, cx);
+            }
+            PendingOp::Delete(path) => {
+                self.pending = None;
+                self.close_modal(window, cx);
+                self.delete_now(&path, cx);
+            }
+            PendingOp::NewFolder { parent } => {
+                let path = if parent.is_empty() {
+                    value.to_string()
+                } else {
+                    format!("{parent}/{value}")
+                };
+                let result = self
+                    .state
+                    .as_ref()
+                    .map(|s| s.create_folder(&path))
+                    .unwrap_or(Ok(()));
+                match result {
+                    Ok(()) => {
+                        self.pending = None;
+                        self.close_modal(window, cx);
+                        self.refresh_vault_views(cx);
+                        self.explorer.update(cx, |e, cx| e.reveal(&path, cx));
+                        self.report(format!("Created folder {path}"), cx);
+                    }
+                    Err(err) => self.prompt.update(cx, |p, cx| p.set_error(err, cx)),
+                }
+            }
+            PendingOp::UpdateLinks { from, to } => self.finish_rename(&from, &to, true, window, cx),
+        }
+    }
+
+    /// The prompt's secondary button: "Don't update" the links.
+    fn prompt_secondary(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(PendingOp::UpdateLinks { from, to }) = self.pending.clone() {
+            self.finish_rename(&from, &to, false, window, cx);
+        }
+    }
+
+    /// Renames, rewriting links right away or asking first when
+    /// `alwaysUpdateLinks` is off and there are links to rewrite.
+    fn rename_with_links(
+        &mut self,
+        from: &str,
+        to: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        if from == to {
+            self.pending = None;
+            self.close_modal(window, cx);
+            return;
+        }
+        if state.update_links_automatically() {
+            self.finish_rename(from, to, true, window, cx);
+            return;
+        }
+        let (files, links) = state.rename_preview(from, to);
+        if links == 0 {
+            self.finish_rename(from, to, false, window, cx);
+            return;
+        }
+        let name = from.rsplit('/').next().unwrap_or(from);
+        self.open_prompt(
+            PendingOp::UpdateLinks {
+                from: from.to_string(),
+                to: to.to_string(),
+            },
+            PromptSpec {
+                title: "Update links?".into(),
+                detail: Some(
+                    format!(
+                        "{links} link{} in {files} file{} point to {name}. Update them to the new name?",
+                        if links == 1 { "" } else { "s" },
+                        if files == 1 { "" } else { "s" }
+                    )
+                    .into(),
+                ),
+                input: None,
+                confirm: "Update links".into(),
+                secondary: Some("Don't update".into()),
+                ..PromptSpec::default()
+            },
+            window,
+            cx,
+        );
+    }
+
+    fn finish_rename(
+        &mut self,
+        from: &str,
+        to: &str,
+        update_links: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        // The open note's edits must be on disk before its file moves or
+        // its links are rewritten.
+        self.flush_save(cx);
+        match state.rename(from, to, update_links) {
+            Ok(outcome) => {
+                self.pending = None;
+                self.close_modal(window, cx);
+                self.apply_rename(outcome, cx);
+            }
+            Err(err) => self.prompt.update(cx, |p, cx| p.set_error(err, cx)),
+        }
+    }
+
+    /// Follows the open note and the history to their new paths, then
+    /// refreshes everything the way a filesystem event would.
+    fn apply_rename(&mut self, outcome: RenameOutcome, cx: &mut Context<Self>) {
+        let renamed: HashMap<&str, &str> = outcome
+            .renamed
+            .iter()
+            .map(|(a, b)| (a.as_str(), b.as_str()))
+            .collect();
+        for entry in &mut self.history {
+            if let Some(new) = renamed.get(entry.as_str()) {
+                *entry = new.to_string();
+            }
+        }
+        if let Some(current) = self.current.clone() {
+            if let Some(new) = renamed.get(current.as_str()) {
+                let new = new.to_string();
+                self.current = Some(new.clone());
+                self.editor.update(cx, |e, _| {
+                    if e.name.as_ref() == current {
+                        e.set_name(new.clone());
+                    }
+                });
+                self.reading.update(cx, |r, _| {
+                    if r.path.as_deref() == Some(current.as_str()) {
+                        r.path = Some(new.clone());
+                    }
+                });
+            }
+        }
+        let summary = match outcome.renamed.as_slice() {
+            [(from, to)] => format!("Renamed {from} to {to}"),
+            all => format!("Moved {} files", all.len()),
+        };
+        let links = if outcome.rewritten_links > 0 {
+            format!(
+                ", updated {} link{} in {} file{}",
+                outcome.rewritten_links,
+                if outcome.rewritten_links == 1 {
+                    ""
+                } else {
+                    "s"
+                },
+                outcome.rewritten_files,
+                if outcome.rewritten_files == 1 {
+                    ""
+                } else {
+                    "s"
+                }
+            )
+        } else {
+            String::new()
+        };
+        self.after_changes(outcome.changes, cx);
+        if let Some(current) = self.current.clone() {
+            self.explorer.update(cx, |e, cx| e.reveal(&current, cx));
+        }
+        self.report(format!("{summary}{links}"), cx);
+    }
+
+    /// Renames the open note to `new_name` (same folder, same extension)
+    /// right away; `--rename` on the command line, for smoke tests.
+    pub fn rename_current(&mut self, new_name: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(from) = self.current.clone() else {
+            return;
+        };
+        let folder = from.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+        let name = from.rsplit('/').next().unwrap_or(&from);
+        let ext = name.rsplit_once('.').map(|(_, e)| e).unwrap_or("md");
+        let to = if folder.is_empty() {
+            format!("{new_name}.{ext}")
+        } else {
+            format!("{folder}/{new_name}.{ext}")
+        };
+        self.finish_rename(&from, &to, true, window, cx);
+    }
+
+    /// Opens one of the file prompts for the open note (`--prompt` on the
+    /// command line, for screenshots): `rename`, `move`, `delete`, `folder`.
+    pub fn open_file_prompt(&mut self, kind: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(current) = self.current.clone() else {
+            return;
+        };
+        match kind {
+            "move" => self.start_move(&current, window, cx),
+            "delete" => self.start_delete(&current, window, cx),
+            "folder" => self.start_new_folder("", window, cx),
+            _ => self.start_rename(&current, window, cx),
+        }
     }
 
     // ----- rendering -------------------------------------------------------------
@@ -2088,11 +2879,11 @@ impl Render for Workspace {
 
         let overlay: Option<gpui::AnyElement> = match self.modal {
             Modal::None => None,
-            Modal::Switcher | Modal::Palette => {
-                let child: gpui::AnyElement = if self.modal == Modal::Switcher {
-                    self.switcher.clone().into_any_element()
-                } else {
-                    self.palette.clone().into_any_element()
+            Modal::Switcher | Modal::Palette | Modal::Prompt => {
+                let child: gpui::AnyElement = match self.modal {
+                    Modal::Switcher => self.switcher.clone().into_any_element(),
+                    Modal::Palette => self.palette.clone().into_any_element(),
+                    _ => self.prompt.clone().into_any_element(),
                 };
                 Some(
                     div()
@@ -2164,5 +2955,128 @@ impl Render for Workspace {
             )
             .child(status_bar)
             .children(overlay)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn vault() -> (tempfile::TempDir, VaultState) {
+        let dir = tempfile::tempdir().unwrap();
+        let r = dir.path();
+        fs::create_dir_all(r.join("Sub")).unwrap();
+        fs::create_dir_all(r.join(".obsidian")).unwrap();
+        fs::write(r.join(".obsidian/app.json"), r#"{"trashOption":"local"}"#).unwrap();
+        fs::write(r.join("A.md"), "# A\n\nSee [[B]] and [S](Sub/S.md).\n").unwrap();
+        fs::write(
+            r.join("B.md"),
+            "\u{feff}---\r\nrelated: \"[[A]]\"\r\n---\r\n[[A]] and [[A#A|the a]] and `[[A]]`\r\n",
+        )
+        .unwrap();
+        fs::write(r.join("Sub/S.md"), "[A](../A.md) [[B]]\n").unwrap();
+        let state = VaultState::load(&r.to_path_buf()).unwrap();
+        (dir, state)
+    }
+
+    #[test]
+    fn rename_rewrites_links_on_disk_and_in_the_index() {
+        let (dir, state) = vault();
+        let outcome = state.rename("A.md", "Renamed A.md", true).unwrap();
+        assert_eq!(
+            outcome.renamed,
+            vec![("A.md".to_string(), "Renamed A.md".to_string())]
+        );
+        assert_eq!((outcome.rewritten_files, outcome.rewritten_links), (2, 4));
+        let b = fs::read_to_string(dir.path().join("B.md")).unwrap();
+        assert_eq!(
+            b,
+            "\u{feff}---\r\nrelated: \"[[Renamed A]]\"\r\n---\r\n[[Renamed A]] and [[Renamed A#A|the a]] and `[[A]]`\r\n",
+            "the BOM and CRLF endings survive"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join("Sub/S.md")).unwrap(),
+            "[Renamed A](Renamed%20A.md) [[B]]\n"
+        );
+        assert!(dir.path().join("Renamed A.md").is_file());
+        assert!(!dir.path().join("A.md").exists());
+        {
+            let cache = state.cache();
+            assert!(cache.file("A.md").is_none());
+            assert!(cache.file("Renamed A.md").is_some());
+            assert_eq!(cache.backlinks("Renamed A.md").len(), 3);
+            assert!(cache.unresolved_links("B.md").is_none());
+            assert_eq!(state.texts()["B.md"].as_str(), b);
+        }
+        assert!(outcome.changes.structural());
+        // The watcher's events for the same paths find nothing new.
+        let changes = state.apply(&[
+            dir.path().join("A.md"),
+            dir.path().join("Renamed A.md"),
+            dir.path().join("B.md"),
+        ]);
+        assert!(changes
+            .files
+            .iter()
+            .all(|c| matches!(c, FileChange::Modified(_))));
+        assert_eq!(state.cache().backlinks("Renamed A.md").len(), 3);
+    }
+
+    #[test]
+    fn rename_without_updating_links_leaves_them_dangling() {
+        let (dir, state) = vault();
+        let outcome = state.rename("A.md", "A2.md", false).unwrap();
+        assert_eq!(outcome.rewritten_links, 0);
+        assert!(fs::read_to_string(dir.path().join("B.md"))
+            .unwrap()
+            .contains("[[A]] and"));
+        assert_eq!(
+            state.cache().unresolved_links("B.md").unwrap().get("A"),
+            Some(&3),
+            "two body links and the frontmatter link"
+        );
+        assert!(
+            state.rename("A2.md", "B.md", true).is_err(),
+            "destination exists"
+        );
+        assert_eq!(
+            state.rename_preview("B.md", "Sub/B.md"),
+            (0, 0),
+            "a unique name moving folders changes no shortest link"
+        );
+        assert_eq!(state.rename_preview("B.md", "Sub/Bee.md"), (2, 2));
+    }
+
+    #[test]
+    fn create_duplicate_and_trash_keep_the_index_current() {
+        let (dir, state) = vault();
+        assert_eq!(
+            state.new_note_path("Missing", Some("Sub/S.md")),
+            "Missing.md"
+        );
+        assert_eq!(
+            state.new_note_path("Deep/Also Missing", None),
+            "Deep/Also Missing.md"
+        );
+        let changes = state.create_note("Deep/Also Missing.md", "").unwrap();
+        assert_eq!(
+            changes.files,
+            vec![FileChange::Added("Deep/Also Missing.md".into())]
+        );
+        assert!(state.cache().file("Deep/Also Missing.md").is_some());
+        assert!(state.vault().folders().contains(&"Deep".to_string()));
+        let (copy, _) = state.duplicate("A.md").unwrap();
+        assert_eq!(copy, "A 1.md");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("A 1.md")).unwrap(),
+            fs::read_to_string(dir.path().join("A.md")).unwrap()
+        );
+        let changes = state.trash("Sub").unwrap();
+        assert_eq!(changes.removed_notes, vec!["Sub/S.md"]);
+        assert!(dir.path().join(".trash/Sub/S.md").is_file());
+        assert!(state.cache().file("Sub/S.md").is_none());
+        assert_eq!(state.cache().backlinks("B.md").len(), 2, "A and its copy");
+        assert!(state.vault().folders().iter().all(|f| f != "Sub"));
     }
 }

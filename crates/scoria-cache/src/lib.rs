@@ -6,9 +6,11 @@
 //! edge case. `LinkResolver` holds the vault-wide indexes needed to turn link
 //! text into a file path with Obsidian's rules.
 
+pub mod links;
 pub mod resolver;
 pub mod vault;
 
+pub use links::{basename, link_path, rewrite_note, LinkFormat, Rewrite};
 pub use resolver::LinkResolver;
 pub use _markdown::{LineIndex, Loc, Pos, Span};
 pub use vault::{
@@ -205,7 +207,7 @@ fn is_vault_destination(dest: &str) -> bool {
     true
 }
 
-fn percent_decode(s: &str) -> String {
+pub(crate) fn percent_decode(s: &str) -> String {
     if !s.contains('%') {
         return s.to_string();
     }

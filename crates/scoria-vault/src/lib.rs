@@ -1,6 +1,9 @@
 //! A vault is a plain folder. This crate opens one, enumerates its files, and
 //! reads `.obsidian` configuration without ever owning data outside the folder.
 
+pub mod ops;
+
+pub use ops::{OpError, TrashOption};
 use _cache::LinkResolver;
 use _formats::config::{
     AppConfig, AppearanceConfig, CommandPaletteConfig, CommunityPlugins, CorePlugins, GraphConfig,
@@ -57,6 +60,9 @@ pub struct Vault {
     root: PathBuf,
     config_dir: String,
     files: Vec<VaultFile>,
+    /// Every folder, vault-relative and sorted, empty ones included (the
+    /// Files view shows them; the file list alone would not).
+    folders: Vec<String>,
 }
 
 impl Vault {
@@ -77,6 +83,7 @@ impl Vault {
             root,
             config_dir: config_dir.to_string(),
             files: Vec::new(),
+            folders: Vec::new(),
         };
         vault.rescan()?;
         Ok(vault)
@@ -101,6 +108,27 @@ impl Vault {
         &self.files
     }
 
+    /// Every folder in the vault (dot-folders excluded), sorted by path.
+    pub fn folders(&self) -> &[String] {
+        &self.folders
+    }
+
+    fn add_folder(&mut self, rel: &str) {
+        if let Err(ix) = self.folders.binary_search_by(|f| f.as_str().cmp(rel)) {
+            self.folders.insert(ix, rel.to_string());
+        }
+    }
+
+    /// Registers every folder above `rel` (a file or folder path).
+    fn add_ancestors(&mut self, rel: &str) {
+        let mut end = 0;
+        while let Some(i) = rel[end..].find('/') {
+            end += i;
+            self.add_folder(&rel[..end]);
+            end += 1;
+        }
+    }
+
     pub fn markdown_files(&self) -> impl Iterator<Item = &VaultFile> {
         self.files.iter().filter(|f| f.kind == FileKind::Markdown)
     }
@@ -115,6 +143,7 @@ impl Vault {
     /// dot-prefixed directory; keeps dot-files out of the file list as Obsidian does.
     pub fn rescan(&mut self) -> Result<(), VaultError> {
         let mut files = Vec::new();
+        let mut folders = Vec::new();
         let walker = walkdir::WalkDir::new(&self.root)
             .follow_links(false)
             .into_iter()
@@ -129,15 +158,21 @@ impl Vault {
                     .into_io_error()
                     .unwrap_or_else(|| std::io::Error::other("walk")),
             })?;
-            if !entry.file_type().is_file() {
-                continue;
-            }
             let rel = entry
                 .path()
                 .strip_prefix(&self.root)
                 .expect("entry under root")
                 .to_string_lossy()
                 .replace('\\', "/");
+            if entry.file_type().is_dir() {
+                if entry.depth() > 0 {
+                    folders.push(rel);
+                }
+                continue;
+            }
+            if !entry.file_type().is_file() {
+                continue;
+            }
             let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
             files.push(VaultFile {
                 kind: FileKind::from_path(&rel),
@@ -146,7 +181,9 @@ impl Vault {
             });
         }
         files.sort_by(|a, b| a.path.cmp(&b.path));
+        folders.sort();
         self.files = files;
+        self.folders = folders;
         Ok(())
     }
 
@@ -169,6 +206,7 @@ impl Vault {
         let mut changes = Vec::new();
         match std::fs::metadata(path) {
             Ok(meta) if meta.is_file() => {
+                self.add_ancestors(&rel);
                 let file = VaultFile {
                     kind: FileKind::from_path(&rel),
                     path: rel.clone(),
@@ -186,6 +224,8 @@ impl Vault {
                 }
             }
             Ok(meta) if meta.is_dir() => {
+                self.add_ancestors(&rel);
+                self.add_folder(&rel);
                 let prefix = format!("{rel}/");
                 let before: Vec<String> = self
                     .files
@@ -204,6 +244,13 @@ impl Vault {
                 {
                     if entry.file_type().is_file() {
                         seen.push(entry.path().to_path_buf());
+                    } else if entry.file_type().is_dir() && entry.depth() > 0 {
+                        let sub = entry
+                            .path()
+                            .strip_prefix(&self.root)
+                            .map(|p| p.to_string_lossy().replace('\\', "/"))
+                            .unwrap_or_default();
+                        self.add_folder(&sub);
                     }
                 }
                 for file in seen {
@@ -225,6 +272,8 @@ impl Vault {
                     .collect();
                 self.files
                     .retain(|f| !(f.path == rel || f.path.starts_with(&prefix)));
+                self.folders
+                    .retain(|f| !(*f == rel || f.starts_with(&prefix)));
                 changes.extend(removed.into_iter().map(FileChange::Removed));
             }
         }
@@ -372,6 +421,7 @@ mod tests {
         );
         assert_eq!(vault.markdown_files().count(), 2);
         assert_eq!(vault.files()[3].kind, FileKind::Image);
+        assert_eq!(vault.folders(), ["Projects"], "dot-folders are not listed");
     }
 
     #[test]
@@ -435,6 +485,10 @@ mod tests {
             paths,
             vec!["Board.canvas", "Moved/in/a.md", "Note.md", "pic.PNG"]
         );
+        assert_eq!(vault.folders(), ["Moved", "Moved/in"]);
+        fs::create_dir_all(r.join("Empty")).unwrap();
+        assert!(vault.refresh_path(&r.join("Empty")).is_empty());
+        assert_eq!(vault.folders(), ["Empty", "Moved", "Moved/in"]);
     }
 
     #[test]

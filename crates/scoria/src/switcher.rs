@@ -1,6 +1,7 @@
 //! The quick switcher (Ctrl+O): fuzzy search over file names, aliases and
 //! paths, recent files first while the query is empty, unresolved link
-//! targets shown as "Not created yet".
+//! targets shown as "Not created yet"; Enter on one of those, or on a query
+//! nothing matches, creates the note.
 
 use crate::text_input::{InputEvent, TextInput};
 use crate::theme::Theme;
@@ -43,6 +44,9 @@ struct Item {
 
 pub enum SwitcherEvent {
     Open(String),
+    /// Enter on a target no file resolves to, or on a query nothing
+    /// matches: create the note with that name.
+    Create(String),
     Close,
 }
 
@@ -237,9 +241,16 @@ impl QuickSwitcher {
     }
 
     fn open_selected(&mut self, cx: &mut Context<Self>) {
-        if let Some(item) = self.items.get(self.selected) {
-            if item.candidate.kind != ItemKind::Unresolved {
-                cx.emit(SwitcherEvent::Open(item.candidate.path.clone()));
+        match self.items.get(self.selected) {
+            Some(item) if item.candidate.kind == ItemKind::Unresolved => {
+                cx.emit(SwitcherEvent::Create(item.candidate.path.clone()));
+            }
+            Some(item) => cx.emit(SwitcherEvent::Open(item.candidate.path.clone())),
+            None => {
+                let query = self.input.read(cx).text().trim().to_string();
+                if !query.is_empty() {
+                    cx.emit(SwitcherEvent::Create(query));
+                }
             }
         }
     }
@@ -367,7 +378,7 @@ impl Render for QuickSwitcher {
                         .p_3()
                         .text_size(px(12.))
                         .text_color(theme.text_muted)
-                        .child("No matching files."),
+                        .child("No matching files. Enter to create."),
                 )
             })
     }

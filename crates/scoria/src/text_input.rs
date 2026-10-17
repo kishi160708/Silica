@@ -103,6 +103,10 @@ impl TextInput {
         &self.text
     }
 
+    pub fn set_placeholder(&mut self, placeholder: impl Into<SharedString>) {
+        self.placeholder = placeholder.into();
+    }
+
     pub fn set_text(&mut self, text: impl Into<String>, cx: &mut Context<Self>) {
         self.text = text.into();
         self.cursor = self.text.len();
