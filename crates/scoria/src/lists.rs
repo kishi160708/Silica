@@ -322,6 +322,104 @@ pub fn renumber_following<'a>(
     out
 }
 
+/// After the lines in `changed` were indented or outdented, the numbers
+/// the ordered items from the first changed line to the end of the block
+/// (a blank line) should carry: each follows its previous sibling at the
+/// same depth, and one with no previous sibling (the first of a nested
+/// list, or the first left behind) restarts at 1. Deeper lines are
+/// skipped on the way up; a bullet or a shallower line ends a run. Returns
+/// `(line index, digits range, new number)` for items whose number is wrong.
+pub fn renumber_block(lines: &[String], changed: Range<usize>) -> Vec<(usize, Range<usize>, u64)> {
+    #[derive(Clone)]
+    struct Item {
+        key: (String, String, String),
+        number: Option<u64>,
+        digits: Range<usize>,
+        bullet: bool,
+    }
+    let mut items: Vec<Option<Item>> = lines
+        .iter()
+        .map(|line| {
+            if line.trim().is_empty() {
+                return None;
+            }
+            let p = parse_prefix(line);
+            let key = (
+                line[p.indent.clone()].to_string(),
+                line[p.quotes.clone()].to_string(),
+                line[p.list_indent.clone()].to_string(),
+            );
+            Some(match p.marker {
+                Some(Marker::Ordered { range, number, .. }) => Item {
+                    key,
+                    number: Some(number),
+                    digits: range.start..range.end - 1,
+                    bullet: false,
+                },
+                Some(Marker::Bullet { .. }) => Item {
+                    key,
+                    number: None,
+                    digits: 0..0,
+                    bullet: true,
+                },
+                None => Item {
+                    key,
+                    number: None,
+                    digits: 0..0,
+                    bullet: false,
+                },
+            })
+        })
+        .collect();
+    let mut out = Vec::new();
+    let mut i = changed.start;
+    while i < lines.len() {
+        let Some(item) = items[i].clone() else {
+            break;
+        };
+        if item.number.is_none() {
+            i += 1;
+            continue;
+        }
+        // The previous sibling: up past deeper lines and plain text.
+        let mut prev = None;
+        let mut j = i;
+        while j > 0 {
+            j -= 1;
+            let Some(above) = &items[j] else {
+                break;
+            };
+            if !above.bullet && above.number.is_none() {
+                // Plain text (an item's continuation): not a sibling.
+                continue;
+            }
+            if above.key.0 != item.key.0 || above.key.1 != item.key.1 {
+                break;
+            }
+            if above.key.2.len() > item.key.2.len() {
+                continue;
+            }
+            if above.key.2 != item.key.2 {
+                break;
+            }
+            if above.bullet {
+                break;
+            }
+            prev = above.number;
+            break;
+        }
+        let want = prev.map(|n| n + 1).unwrap_or(1);
+        if item.number != Some(want) {
+            out.push((i, item.digits.clone(), want));
+            if let Some(it) = &mut items[i] {
+                it.number = Some(want);
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -444,5 +542,35 @@ mod tests {
             renumber_following(lines.iter().copied(), "  1. a", 2),
             vec![]
         );
+    }
+
+    fn block(lines: &[&str], changed: Range<usize>) -> Vec<(usize, Range<usize>, u64)> {
+        let lines: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+        renumber_block(&lines, changed)
+    }
+
+    #[test]
+    fn indented_items_restart_and_the_rest_close_the_gap() {
+        // `2. b` was indented under `1. a`.
+        let lines = ["1. a", "\t2. b", "3. c", "4. d", "", "9. e"];
+        assert_eq!(
+            block(&lines, 1..2),
+            vec![(1, 1..2, 1), (2, 0..1, 2), (3, 0..1, 3)]
+        );
+        // The first item was indented: the rest restart at 1.
+        let lines = ["\t1. a", "2. b", "3. c"];
+        assert_eq!(block(&lines, 0..1), vec![(1, 0..1, 1), (2, 0..1, 2)]);
+        // Outdented back: it follows its new sibling and its old siblings
+        // below become a nested list that restarts.
+        let lines = ["1. a", "\t1. x", "1. b", "\t3. y", "\t4. z", "2. c"];
+        assert_eq!(
+            block(&lines, 2..3),
+            vec![(2, 0..1, 2), (3, 1..2, 1), (4, 1..2, 2), (5, 0..1, 3)]
+        );
+        // Bullets and quotes bound a run; plain lines are skipped.
+        let lines = ["- a", "\t5. b", "> 1. q", "> \t7. r"];
+        assert_eq!(block(&lines, 1..2), vec![(1, 1..2, 1), (3, 3..4, 1)]);
+        let lines = ["1. a", "   text", "7. b"];
+        assert_eq!(block(&lines, 2..3), vec![(2, 0..1, 2)]);
     }
 }

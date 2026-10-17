@@ -64,6 +64,8 @@ pub const RUNNABLE: &[&str] = &[
     "editor:toggle-source",
     "editor:open-search",
     "editor:open-search-replace",
+    "editor:add-cursor-above",
+    "editor:add-cursor-below",
     "switcher:open",
     "global-search:open",
     "graph:open",
@@ -602,6 +604,11 @@ impl Workspace {
         .into();
         let state = Arc::new(state);
         self.state = Some(state.clone());
+        let embed_source: Arc<dyn reading::EmbedSource + Send + Sync> = state.clone();
+        let build_options = state.build_options();
+        self.editor.update(cx, |e, cx| {
+            e.set_vault(Some(embed_source), build_options, cx)
+        });
         self.refresh_vault_views(cx);
         self.start_watching(&state, cx);
         if let Some(current) = self.current.clone() {
@@ -852,6 +859,13 @@ impl Workspace {
             "editor:save-file" => self.flush_save(cx),
             "editor:open-search" => self.open_find("", false, window, cx),
             "editor:open-search-replace" => self.open_find("", true, window, cx),
+            "editor:add-cursor-above" | "editor:add-cursor-below" => {
+                if self.mode.is_editing() {
+                    let above = id == "editor:add-cursor-above";
+                    self.editor
+                        .update(cx, |e, cx| e.add_cursor(above, window, cx));
+                }
+            }
             "editor:toggle-source" => {
                 let mode = match self.mode {
                     ViewMode::LivePreview => ViewMode::Source,
@@ -2035,8 +2049,12 @@ impl Render for Workspace {
         let (editor_status, words, chars) = if self.mode.is_editing() {
             let editor = self.editor.read(cx);
             let cursor = editor.cursor();
+            let cursors = match editor.cursor_count() {
+                1 => String::new(),
+                n => format!("{n} cursors  ·  "),
+            };
             let line_status = format!(
-                "Ln {}, Col {}  ·  parse {:.1} ms, {} spans  ·  shape {:.2} ms  ·  ",
+                "Ln {}, Col {}  ·  {cursors}parse {:.1} ms, {} spans  ·  shape {:.2} ms  ·  ",
                 cursor.line + 1,
                 cursor.col + 1,
                 editor.stats.parse_ms,

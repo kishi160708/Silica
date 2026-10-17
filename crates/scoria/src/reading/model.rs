@@ -211,6 +211,62 @@ pub fn build_with(
     Model { blocks, starts }
 }
 
+/// A top-level block Live Preview renders in place of its source lines:
+/// a table, a math block, or a paragraph that is one embed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Widget {
+    /// Byte span of the block in the note (newline after it excluded).
+    pub span: Range<usize>,
+    pub block: RBlock,
+}
+
+/// The blocks of `doc` (the content of `source_path`) that Live Preview
+/// shows as widgets, built with ids unique among them.
+pub fn build_widgets(
+    source_path: &str,
+    doc: &Document<'_>,
+    vault: &dyn EmbedSource,
+    opts: BuildOptions,
+) -> Vec<Widget> {
+    let mut b = Builder {
+        vault,
+        source_path,
+        opts,
+        depth: 0,
+        next_id: 0,
+        footnotes: FootnoteState::default(),
+    };
+    b.footnotes.definitions = collect_definitions(&doc.blocks);
+    let mut out = Vec::new();
+    for block in &doc.blocks {
+        let widget = match &block.kind {
+            BlockKind::Table { .. } | BlockKind::Math { .. } => true,
+            BlockKind::Paragraph { content } => match content.as_slice() {
+                [one] => matches!(
+                    &one.kind,
+                    InlineKind::Wikilink { embed: true, .. }
+                        | InlineKind::Image {
+                            kind: LinkKind::Inline,
+                            ..
+                        }
+                ),
+                _ => false,
+            },
+            _ => false,
+        };
+        if !widget {
+            continue;
+        }
+        if let Some(built) = b.block(block, false) {
+            out.push(Widget {
+                span: block.span.start..block.span.end,
+                block: built,
+            });
+        }
+    }
+    out
+}
+
 /// Builds the model of an embedded note or section with the given nesting.
 fn build_embedded(
     source_path: &str,

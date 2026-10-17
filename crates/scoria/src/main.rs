@@ -136,6 +136,8 @@ struct Args {
     reading: bool,
     /// Open the find panel with this query.
     find: Option<String>,
+    /// Open the find panel with this query and select every match (Find all).
+    find_all: Option<String>,
 }
 
 fn parse_args() -> Args {
@@ -153,6 +155,7 @@ fn parse_args() -> Args {
         source: false,
         reading: false,
         find: None,
+        find_all: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -171,6 +174,7 @@ fn parse_args() -> Args {
             "--source" => args.source = true,
             "--reading" => args.reading = true,
             "--find" => args.find = it.next().or(Some(String::new())),
+            "--find-all" => args.find_all = it.next().or(Some(String::new())),
             _ if args.vault.is_none() => args.vault = Some(PathBuf::from(a)),
             _ => args.note = Some(a),
         }
@@ -240,6 +244,7 @@ fn main() {
         let source = args.source;
         let reading = args.reading;
         let find = args.find.clone();
+        let find_all = args.find_all.clone();
         let synthetic = args.synthetic;
         window
             .update(cx, |ws, window, cx| {
@@ -304,6 +309,11 @@ fn main() {
                         }
                         if let Some(q) = &find {
                             ws.open_find(q, false, window, cx);
+                        }
+                        if let Some(q) = &find_all {
+                            ws.open_find(q, false, window, cx);
+                            ws.editor()
+                                .update(cx, |e, cx| e.find_all_matches(window, cx));
                         }
                         true
                     })

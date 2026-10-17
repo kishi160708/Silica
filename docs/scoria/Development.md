@@ -257,9 +257,8 @@ The frame path is the gate: scrolling and typing stay far under a frame
 budget regardless of note size. Decoration latency scales with note length
 because the whole note is reparsed; a real 50k-line note of ordinary prose is
 about half this size, and incremental reparse of the edited block is the
-planned follow-up. Not yet: multiple cursors (and the find panel's Find
-all), regex and match-case search, auto-pair of brackets and markdown
-markers, renumbering on indent, and Ctrl+click page previews.
+planned follow-up. Not yet: auto-pair of brackets and markdown markers, and
+Ctrl+click page previews.
 
 ### Find and replace, 2026-10-16
 
@@ -314,12 +313,62 @@ comments and block ids hidden, bullets as dots, task markers as checkboxes
 per level, callout type blocks folded into the title, thematic breaks as a
 rule, and code blocks and frontmatter on a band. Clicking a rendered link
 follows it (Ctrl+click in both editing modes). Tables, embeds, images and
-math show their source with decorations.
+math showed their source with decorations until the widgets below.
 
 `crates/-markdown::highlight` gained a `QuoteMarker` span per `>` so
 the transform knows where each level's marker sits. The 300-step stress run
 on a 530-line note in Live Preview shaped in 0.07 ms per frame; the 50k-line
 Source mode gate is unchanged at 0.17 ms.
+
+### Regex search, multiple cursors and block widgets, 2026-10-17
+
+The find panel gained Obsidian's two toggles, `Aa` (match case) and `.*`
+(regex), both off by default; `crates//src/find.rs` now compiles the
+query with the `regex` crate (a literal query is escaped), skips empty
+matches and treats a pattern that does not parse as no results. A regex
+replacement expands `$&`, `$1` to `$9` and `$$`. Find all (the button, or
+Alt+Enter in the query) turns every match into a selection, closes the panel
+and focuses the editor.
+
+The editor keeps extra selections beside the primary one (`extra`, sorted and
+disjoint); `cursors()` and `set_cursors()` move between that and a plain
+list, merging selections that overlap. Typing, Backspace, Delete, word
+deletion, Enter (a plain newline when there are several cursors), Tab, cut,
+copy and paste go through `edit_all`, one replacement per selection in one
+undo step; the history records the selections either side, so undo restores
+all cursors, and a typing step joins the previous group when it starts
+exactly where that one ended. Movement runs the same per-cursor target
+function for every selection; `add_cursor` (the `editor:add-cursor-above`
+and `below` commands) puts one a row above the topmost or below the
+bottommost, Alt+click adds or removes one, Escape and a plain click
+collapse to the primary. The status bar counts cursors. IME composition
+still addresses the primary cursor only; the others are shifted past its
+edit.
+
+Tab and Shift+Tab with smart lists on now renumber: `lists::renumber_block`
+walks the list block around the changed lines and gives every ordered item
+from the first changed line down its previous sibling's number plus one,
+or 1 when it has none (so an indented item starts a nested list at 1 and
+the items it left behind close the gap). The edits are planned in pre-edit
+coordinates (`indent_plan`) so the indentation and the new numbers are one
+undo step.
+
+Live Preview renders tables, math blocks and embed-only paragraphs as
+widgets. The background parse also builds them (`reading::model::build_widgets`,
+with the vault as embed source, so embedded notes and images resolve), and
+the editor folds a widget's lines into one entry whose height is the
+rendered element's; `height_of` returns that height for the first line and
+zero for the rest, so the scroll math is unchanged. The widget element
+comes from the reading view's `Renderer`, which no longer depends on the
+`ReadingView` entity but takes link and fold handlers, and is laid out as a
+child element inside the editor's custom element (the editor entity is
+leased for the frame so the app is at hand). Any selection touching the
+block unfolds it: arrowing into a table or math block shows its source, as
+does clicking one (at the clicked row); an embed widget keeps its clicks so
+links inside work. Inline math drops its dollars like other inline markers.
+Math is shown as its TeX source, centered and in the accent color, as in the
+reading view; there is no formula renderer yet. `--find-all q` opens a note
+with every match selected, for screenshots.
 
 ### Parser, 2026-10-16
 

@@ -181,20 +181,22 @@ pub fn line_block(spans: &[HighlightSpan]) -> (f32, Decor) {
     (scale, decor)
 }
 
-/// Builds the Live Preview text of `line`. `touch` is the part of the
-/// selection on this line (a collapsed cursor included), line-relative;
-/// any construct it touches keeps its source.
-pub fn display_line(
-    line: &str,
-    spans: &[HighlightSpan],
-    touch: Option<Range<usize>>,
-) -> DisplayLine {
+/// Whether a selection or cursor at `touch` (line-relative) reveals the
+/// construct at `range`: it does when the two meet, ends included.
+pub fn touches(touch: &[Range<usize>], range: &Range<usize>) -> bool {
+    touch
+        .iter()
+        .any(|t| t.start <= range.end && t.end >= range.start)
+}
+
+/// Builds the Live Preview text of `line`. `touch` holds the parts of the
+/// selections on this line (collapsed cursors included), line-relative;
+/// any construct one of them touches keeps its source.
+pub fn display_line(line: &str, spans: &[HighlightSpan], touch: &[Range<usize>]) -> DisplayLine {
     let (scale, decor) = line_block(spans);
     let mut hides: Vec<(Range<usize>, &str, HighlightKind)> = Vec::new();
     for (ix, span) in spans.iter().enumerate() {
-        let revealed = touch
-            .as_ref()
-            .is_some_and(|t| t.start <= span.range.end && t.end >= span.range.start);
+        let revealed = touches(touch, &span.range);
         if revealed {
             continue;
         }
@@ -354,9 +356,18 @@ pub fn display_line(
                     hides.push((r.end - 1..r.end, "", k));
                 }
             }
+            HighlightKind::Math => {
+                // `$x$` and `$$x$$` lose their dollars; a block's lines are
+                // a widget when it is not being edited, so only the
+                // delimiters on this line go.
+                let n = t.bytes().take_while(|&b| b == b'$').count().min(2);
+                if n > 0 && t.len() >= 2 * n && t.ends_with(&t[..n]) {
+                    hides.push((r.start..r.start + n, "", k));
+                    hides.push((r.end - n..r.end, "", k));
+                }
+            }
             HighlightKind::CodeBlock
             | HighlightKind::Frontmatter
-            | HighlightKind::Math
             | HighlightKind::Html
             | HighlightKind::Tag => {}
         }
@@ -419,7 +430,8 @@ mod tests {
         let doc = _markdown::parse(src);
         let lines = highlight_lines(&doc);
         let line = src.lines().next().unwrap_or("");
-        display_line(line, &lines[0], touch)
+        let touch: Vec<Range<usize>> = touch.into_iter().collect();
+        display_line(line, &lines[0], &touch)
     }
 
     #[test]
@@ -429,6 +441,8 @@ mod tests {
             "a b c d e f"
         );
         assert_eq!(render("**b** and __c__", None).text, "b and c");
+        assert_eq!(render("so $x^2$ and $$y$$", None).text, "so x^2 and y");
+        assert_eq!(render("so $x^2$ and", Some(4..4)).text, "so $x^2$ and");
         // The cursor right after the bold reveals it; elsewhere not.
         assert_eq!(render("**b** *c*", Some(5..5)).text, "**b** c");
         assert_eq!(render("**b** *c*", Some(0..0)).text, "**b** c");

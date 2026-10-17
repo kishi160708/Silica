@@ -17,7 +17,13 @@ use gpui::{
 };
 use _markdown::Alignment;
 use std::collections::HashSet;
+use std::rc::Rc;
 use std::sync::Arc;
+
+/// What a rendered link does when clicked.
+pub type LinkHandler = Rc<dyn Fn(LinkTarget, &mut Window, &mut App)>;
+/// What a foldable callout's title does when clicked, by title id.
+pub type ToggleHandler = Rc<dyn Fn(usize, &mut App)>;
 
 pub enum ReadingEvent {
     OpenLink(LinkTarget),
@@ -120,13 +126,24 @@ impl ReadingView {
         if self.readable_line_length {
             available = available.min(700.);
         }
-        let r = Renderer {
-            theme: &theme,
-            view: cx.entity(),
-            toggled: &self.toggled,
-            text_system: _window.text_system().clone(),
-            available: available.max(100.),
-        };
+        let view = cx.entity();
+        let on_link: LinkHandler = Rc::new({
+            let view = view.clone();
+            move |target, _, cx| {
+                view.update(cx, |_, cx| cx.emit(ReadingEvent::OpenLink(target)));
+            }
+        });
+        let on_toggle: ToggleHandler = Rc::new(move |id, cx| {
+            view.update(cx, |v, cx| v.toggle_callout(id, cx));
+        });
+        let r = Renderer::new(
+            &theme,
+            _window.text_system().clone(),
+            available,
+            &self.toggled,
+            on_link,
+            on_toggle,
+        );
         let inner = r.block(block, false);
         let last = ix + 1 == model.blocks.len();
         div()
@@ -190,16 +207,37 @@ impl Render for ReadingView {
     }
 }
 
-struct Renderer<'a> {
+/// Builds GPUI elements for model blocks; the reading view and Live
+/// Preview's widgets share it, each with its own click handlers.
+pub(crate) struct Renderer<'a> {
     theme: &'a Theme,
-    view: gpui::Entity<ReadingView>,
     toggled: &'a HashSet<usize>,
+    on_link: LinkHandler,
+    on_toggle: ToggleHandler,
     text_system: Arc<WindowTextSystem>,
     /// Inner width of a top-level block, in pixels.
     available: f32,
 }
 
-impl Renderer<'_> {
+impl<'a> Renderer<'a> {
+    pub(crate) fn new(
+        theme: &'a Theme,
+        text_system: Arc<WindowTextSystem>,
+        available: f32,
+        toggled: &'a HashSet<usize>,
+        on_link: LinkHandler,
+        on_toggle: ToggleHandler,
+    ) -> Renderer<'a> {
+        Renderer {
+            theme,
+            toggled,
+            on_link,
+            on_toggle,
+            text_system,
+            available: available.max(100.),
+        }
+    }
+
     /// Width of `text` set in the note's font, in pixels.
     fn measure(&self, text: &str, font_size: f32, bold: bool, mono: bool) -> f32 {
         let t = self.theme;
@@ -301,7 +339,7 @@ impl Renderer<'_> {
         blocks.iter().map(|b| self.block(b, tight)).collect()
     }
 
-    fn block(&self, block: &RBlock, tight: bool) -> AnyElement {
+    pub(crate) fn block(&self, block: &RBlock, tight: bool) -> AnyElement {
         let t = self.theme;
         let base = t.base_font_size;
         let gap = if tight { px(0.) } else { px(base * 0.9) };
@@ -424,7 +462,7 @@ impl Renderer<'_> {
                 let flipped = self.toggled.contains(&title.id);
                 let collapsed = fold.unwrap_or(false) != flipped;
                 let id = title.id;
-                let view = self.view.clone();
+                let on_toggle = self.on_toggle.clone();
                 let mut bg = color;
                 bg.a = if t.dark { 0.12 } else { 0.08 };
                 div()
@@ -447,9 +485,8 @@ impl Renderer<'_> {
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(color)
                             .when(foldable, |d| {
-                                d.cursor_pointer().on_click(move |_, _, cx| {
-                                    view.update(cx, |v, cx| v.toggle_callout(id, cx));
-                                })
+                                d.cursor_pointer()
+                                    .on_click(move |_, _, cx| on_toggle(id, cx))
                             })
                             .child(div().flex_1().child(self.rich(title)))
                             .when(foldable, |d| {
@@ -667,7 +704,7 @@ impl Renderer<'_> {
                 title,
                 blocks,
             } => {
-                let view = self.view.clone();
+                let on_link = self.on_link.clone();
                 let link = embed.link.clone();
                 div()
                     .my_2()
@@ -687,11 +724,8 @@ impl Renderer<'_> {
                             .text_color(t.text_muted)
                             .cursor_pointer()
                             .hover(|s| s.text_color(t.link))
-                            .on_click(move |_, _, cx| {
-                                let link = link.clone();
-                                view.update(cx, |_, cx| {
-                                    cx.emit(ReadingEvent::OpenLink(LinkTarget::Internal(link)))
-                                });
+                            .on_click(move |_, window, cx| {
+                                on_link(LinkTarget::Internal(link.clone()), window, cx)
                             })
                             .child(SharedString::from(format!("↗ {title}"))),
                     )
@@ -705,18 +739,15 @@ impl Renderer<'_> {
                 .child(SharedString::from(format!("{}: file not found", embed.alt)))
                 .into_any_element(),
             EmbedKind::Unsupported(kind) => {
-                let view = self.view.clone();
+                let on_link = self.on_link.clone();
                 let link = embed.link.clone();
                 div()
                     .id(("embed-file", embed.link.len()))
                     .my_1()
                     .text_color(t.link)
                     .cursor_pointer()
-                    .on_click(move |_, _, cx| {
-                        let link = link.clone();
-                        view.update(cx, |_, cx| {
-                            cx.emit(ReadingEvent::OpenLink(LinkTarget::Internal(link)))
-                        });
+                    .on_click(move |_, window, cx| {
+                        on_link(LinkTarget::Internal(link.clone()), window, cx)
                     })
                     .child(SharedString::from(format!("{} ({kind:?})", embed.alt)))
                     .into_any_element()
@@ -753,10 +784,10 @@ impl Renderer<'_> {
         }
         let ranges: Vec<_> = text.links.iter().map(|(r, _)| r.clone()).collect();
         let targets: Vec<LinkTarget> = text.links.iter().map(|(_, l)| l.clone()).collect();
-        let view = self.view.clone();
-        InteractiveText::new(("rich", text.id), styled).on_click(ranges, move |ix, _, cx| {
+        let on_link = self.on_link.clone();
+        InteractiveText::new(("rich", text.id), styled).on_click(ranges, move |ix, window, cx| {
             if let Some(target) = targets.get(ix).cloned() {
-                view.update(cx, |_, cx| cx.emit(ReadingEvent::OpenLink(target)));
+                on_link(target, window, cx);
             }
         })
     }
