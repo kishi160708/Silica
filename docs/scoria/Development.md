@@ -53,6 +53,34 @@ note that does not exist, or pressing Enter in the switcher on a name nothing
 matches, creates it. In the graph: wheel zooms, drag pans, drag a node to
 move it, click a node to open it, Ctrl+0 refits the view.
 
+## Releases
+
+`.github/workflows/release.yml` and `.forgejo/workflows/release.yml` both fire on a `v*` tag. Cut a
+release by bumping `version` under `[workspace.package]` in the root `Cargo.toml`, committing that,
+then tagging and pushing to both remotes:
+
+```
+git tag -a v0.1.0 -m " 0.1.0"
+git push origin v0.1.0 && git push forgejo v0.1.0
+```
+
+Either workflow refuses to build when the tag and the workspace version disagree, since the archive
+is named from the tag and the binary reports the manifest version. GitHub builds
+`x86_64-unknown-linux-gnu`, `x86_64-pc-windows-msvc` and `aarch64-apple-darwin` — one archive per
+target, plus `SHA256SUMS` over all of them — and publishes with `gh release create`. The homelab
+Forgejo runner has only the Linux container (see [[#Environment]] and `ci.yml`), so it
+builds the x86_64 Linux archive and creates the release through the instance API with the token
+Forgejo Actions injects for the run. Release notes on both are the commit subjects since the
+previous tag. A tag with a hyphen in it, `v0.2.0-rc1`, is published as a prerelease.
+
+Both builds pass `--locked`, so the pinned `gpui` revision and `libc` come from `Cargo.lock`.
+
+> [!warning] The Windows and macOS binaries are untested
+> CI only runs `cargo check -p ` on those platforms and the release job is the first thing
+> that links them; neither has been started on a real GPU. Nothing is code-signed or notarized, so
+> macOS Gatekeeper and Windows SmartScreen will both object. Linux x86_64 is the only build that
+> runs on the reference machine.
+
 ## Reader (phase 2)
 
 Started 2026-10-16, after the three spike gates passed. Gate: a daily user can

@@ -1,0 +1,167 @@
+# Release builds, triggered by pushing a `v*` tag to GitHub.
+#
+#   git tag -a v0.1.0 -m " 0.1.0" && git push origin v0.1.0
+#
+# Each runner builds the `` binary for its own host target and uploads one
+# archive; the final job collects them, writes SHA256SUMS, and publishes the
+# release with notes generated from the commits since the previous tag. A tag
+# with a hyphen in it (v0.2.0-rc1) is published as a prerelease.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Fail before spending three build slots if the tag and the workspace version
+  # disagree: the archives are named from the tag and the binary reports the
+  # manifest version, so they have to match.
+  version:
+    name: Tag matches Cargo.toml
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          manifest=$(sed -n '/^\[workspace\.package\]/,/^\[/p' Cargo.toml \
+            | sed -n 's/^version = "\(.*\)"$/\1/p')
+          echo "tag=$tag manifest=$manifest"
+          if [ "$tag" != "$manifest" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match workspace version $manifest"
+            exit 1
+          fi
+
+  build:
+    name: ${{ matrix.target }}
+    needs: version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar.gz
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+
+      - name: Linux build dependencies for gpui
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential cmake pkg-config \
+            libasound2-dev libfontconfig-dev libfreetype-dev libwayland-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libssl-dev libzstd-dev \
+            libvulkan-dev libgl-dev libx11-xcb-dev libxcb1-dev libxcb-xkb-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+
+      # --locked: Cargo.lock pins libc and the gpui revision on purpose (see Cargo.toml).
+      - name: Build
+        run: cargo build --release --locked -p 
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp target/release/.exe "dist/$name/"
+          else
+            cp target/release/ "dist/$name/"
+            strip "dist/$name/" 2>/dev/null || true
+          fi
+          cp README.md LICENSE "dist/$name/"
+          cd dist
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            7z a "$name.zip" "$name" >/dev/null
+          else
+            tar czf "$name.tar.gz" "$name"
+          fi
+          rm -rf "$name"
+          ls -l
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: -${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # Name the inputs explicitly so SHA256SUMS can never list itself.
+      - name: Checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%P\n' \
+            | sort | xargs sha256sum > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Release notes
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          prev=$(git describe --tags --abbrev=0 "$tag^" 2>/dev/null || true)
+          {
+            if [ -n "$prev" ]; then
+              echo "## Changes since $prev"
+              echo
+              git log --no-merges --reverse --pretty='- %s' "$prev..$tag"
+            else
+              echo "First tagged release."
+            fi
+            echo
+            echo "## Binaries"
+            echo
+            echo "Unsigned builds of the \`\` binary. Verify with \`sha256sum -c SHA256SUMS\`."
+            echo "Run it against a vault folder: \` /path/to/vault\`."
+          } > notes.md
+          cat notes.md
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          case "$tag" in
+            *-*) pre=--prerelease ;;
+            *)   pre= ;;
+          esac
+          gh release create "$tag" \
+            --title " ${tag#v}" \
+            --notes-file notes.md \
+            $pre \
+            dist/*

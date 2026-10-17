@@ -58,6 +58,17 @@ behavior, file formats, and public documentation, lives in the `docs/` vault.
 
 Progress notes, gates and the per-item status live in `docs//Development.md`.
 
+## Releases
+
+Pushing a `v*` tag builds the `` binary on both forges and attaches the archives with a
+`SHA256SUMS` file:
+
+- [GitHub releases](https://github.com/lw-xiong//releases) — Linux x86_64, Windows x86_64, macOS arm64
+- [git. releases](https://git.///releases) — Linux x86_64
+
+There is no installer: unpack the archive and run ` /path/to/vault`. The binaries are
+unsigned, and only the Linux build has been run on a real GPU — see `docs//Development.md`.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
