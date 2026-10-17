@@ -8,6 +8,7 @@
 mod editor;
 mod explorer;
 mod graph;
+mod lists;
 mod mentions;
 mod palette;
 mod reading;

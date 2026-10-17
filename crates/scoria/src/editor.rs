@@ -16,6 +16,7 @@
 //! remembered at load and restored by [`Editor::file_contents`], so a save
 //! changes nothing but the edited bytes.
 
+use crate::lists::{self, Continuation};
 use crate::theme::Theme;
 use gpui::{
     actions, div, fill, point, prelude::*, px, relative, size, App, Bounds, ClipboardItem, Context,
@@ -64,7 +65,9 @@ actions!(
         DeleteWordLeft,
         DeleteWordRight,
         Newline,
+        NewlinePlain,
         Tab,
+        Outdent,
         Undo,
         Redo,
         Copy,
@@ -108,8 +111,9 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-backspace", DeleteWordLeft, ctx),
         KeyBinding::new("ctrl-delete", DeleteWordRight, ctx),
         KeyBinding::new("enter", Newline, ctx),
-        KeyBinding::new("shift-enter", Newline, ctx),
+        KeyBinding::new("shift-enter", NewlinePlain, ctx),
         KeyBinding::new("tab", Tab, ctx),
+        KeyBinding::new("shift-tab", Outdent, ctx),
         KeyBinding::new("ctrl-z", Undo, ctx),
         KeyBinding::new("ctrl-shift-z", Redo, ctx),
         KeyBinding::new("ctrl-y", Redo, ctx),
@@ -306,6 +310,11 @@ pub struct Editor {
     /// The file started with a byte order mark; restored on save.
     bom: bool,
     readable_line_length: bool,
+    /// Enter continues list and quote markers (`smartIndentList`).
+    smart_indent_list: bool,
+    /// Tab inserts a tab (`useTab`) or `tab_size` spaces.
+    use_tab: bool,
+    tab_size: u8,
     /// Shaping time per painted frame since the note was opened.
     pub frame_samples: Sample,
     /// Parse time per completed decoration pass since the note was opened.
@@ -343,6 +352,9 @@ impl Editor {
             crlf: false,
             bom: false,
             readable_line_length: true,
+            smart_indent_list: true,
+            use_tab: true,
+            tab_size: 4,
             frame_samples: Sample::default(),
             parse_samples: Sample::default(),
             parse_latency: Sample::default(),
@@ -410,6 +422,13 @@ impl Editor {
 
     pub fn set_readable_line_length(&mut self, on: bool) {
         self.readable_line_length = on;
+    }
+
+    /// Editor settings from `app.json`: smart lists, and tabs or spaces.
+    pub fn set_indent_options(&mut self, smart_indent_list: bool, use_tab: bool, tab_size: u8) {
+        self.smart_indent_list = smart_indent_list;
+        self.use_tab = use_tab;
+        self.tab_size = tab_size;
     }
 
     /// One step of the self-driving stress run: types, breaks lines, pages
@@ -840,6 +859,50 @@ impl Editor {
         self.edit(range, s, kind, Some(window), cx);
     }
 
+    /// Applies several non-overlapping replacements as one undo step and
+    /// puts the cursor at `cursor` (a selection when `anchor` is given),
+    /// both in post-edit coordinates. Ranges may come in any order.
+    fn edit_many(
+        &mut self,
+        mut edits: Vec<(Range<usize>, String)>,
+        cursor: usize,
+        anchor: Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if edits.is_empty() {
+            return;
+        }
+        let before = (self.anchor, self.head);
+        // Back to front, so earlier offsets stay valid while later text moves.
+        edits.sort_by_key(|e| std::cmp::Reverse(e.0.start));
+        let mut recorded = Vec::with_capacity(edits.len());
+        for (range, new) in edits {
+            let old = self.text[range.clone()].to_string();
+            self.text.replace_range(range.clone(), &new);
+            recorded.push(Edit {
+                at: range.start,
+                old,
+                new,
+            });
+        }
+        self.rebuild_lines();
+        self.head = self.clamp_offset(cursor);
+        self.anchor = self.clamp_offset(anchor.unwrap_or(cursor));
+        self.marked = None;
+        self.goal_x = None;
+        self.dirty = true;
+        self.history.redo.clear();
+        self.history.undo.push(Group {
+            edits: recorded,
+            before,
+            after: (self.anchor, self.head),
+            kind: EditKind::Other,
+            at: Instant::now(),
+        });
+        self.after_edit(Some(window), cx);
+    }
+
     /// Recomputes decorations on the background executor. One parse runs at
     /// a time; edits during a parse queue exactly one more, so fast typing
     /// still sees decorations refresh at the parser's pace instead of
@@ -1246,12 +1309,83 @@ impl Editor {
         }
     }
 
+    /// Enter: a newline that continues list and quote markers and the
+    /// numbering of ordered lists, and clears or outdents an empty item.
     fn newline(&mut self, _: &Newline, window: &mut Window, cx: &mut Context<Self>) {
+        let sel = self.selection();
+        if !self.smart_indent_list || sel.start != sel.end {
+            self.insert("\n", EditKind::Other, window, cx);
+            return;
+        }
+        let (edits, cursor) = newline_plan(&self.text, &self.line_starts, self.head);
+        self.edit_many(edits, cursor, None, window, cx);
+    }
+
+    /// Shift+Enter: a plain newline.
+    fn newline_plain(&mut self, _: &NewlinePlain, window: &mut Window, cx: &mut Context<Self>) {
         self.insert("\n", EditKind::Other, window, cx);
     }
 
+    /// The lines a selection touches (the cursor's line when collapsed).
+    fn selected_lines(&self) -> Range<usize> {
+        let sel = self.selection();
+        let first = self.cursor_at(sel.start).line;
+        let mut last = self.cursor_at(sel.end).line;
+        // A selection ending at a line start does not include that line.
+        if last > first && sel.end == self.line_starts[last] {
+            last -= 1;
+        }
+        first..last + 1
+    }
+
+    /// Tab: indents list items and selected lines by one step, and inserts
+    /// the step anywhere else.
     fn tab(&mut self, _: &Tab, window: &mut Window, cx: &mut Context<Self>) {
-        self.insert("\t", EditKind::Typing, window, cx);
+        let unit = lists::indent_unit(self.use_tab, self.tab_size);
+        let sel = self.selection();
+        let lines = self.selected_lines();
+        let on_item = lists::parse_prefix(self.line_text(lines.start))
+            .marker
+            .is_some();
+        if sel.start == sel.end && !(self.smart_indent_list && on_item) {
+            self.insert(&unit, EditKind::Typing, window, cx);
+            return;
+        }
+        let edits: Vec<(Range<usize>, String)> = lines
+            .clone()
+            .map(|l| {
+                let at = self.line_starts[l] + lists::indent_point(self.line_text(l));
+                (at..at, unit.clone())
+            })
+            .collect();
+        let shift = |at: usize| -> usize {
+            at + edits.iter().filter(|(r, _)| r.start <= at).count() * unit.len()
+        };
+        let (head, anchor) = (shift(self.head), shift(self.anchor));
+        self.edit_many(edits, head, Some(anchor), window, cx);
+    }
+
+    /// Shift+Tab: removes one indentation step from the selected lines.
+    fn outdent(&mut self, _: &Outdent, window: &mut Window, cx: &mut Context<Self>) {
+        let lines = self.selected_lines();
+        let edits: Vec<(Range<usize>, String)> = lines
+            .clone()
+            .filter_map(|l| {
+                let start = self.line_starts[l];
+                let r = lists::outdent_range(self.line_text(l))?;
+                Some((start + r.start..start + r.end, String::new()))
+            })
+            .collect();
+        let shift = |at: usize| -> usize {
+            let removed: usize = edits
+                .iter()
+                .filter(|(r, _)| r.start < at)
+                .map(|(r, _)| r.len().min(at - r.start))
+                .sum();
+            at - removed
+        };
+        let (head, anchor) = (shift(self.head), shift(self.anchor));
+        self.edit_many(edits, head, Some(anchor), window, cx);
     }
 
     fn undo(&mut self, _: &Undo, window: &mut Window, cx: &mut Context<Self>) {
@@ -1443,6 +1577,58 @@ impl Editor {
         let line = self.line_text(c.line);
         line_start + Self::utf16_to_byte(line, range_utf16.start)
             ..line_start + Self::utf16_to_byte(line, range_utf16.end)
+    }
+}
+
+/// The edits Enter makes at `head` with smart lists on: the newline and
+/// continued prefix (or the clearing of an empty item), plus the renumbering
+/// of the ordered items that follow. Returns them with the cursor's new offset.
+fn newline_plan(
+    text: &str,
+    line_starts: &[usize],
+    head: usize,
+) -> (Vec<(Range<usize>, String)>, usize) {
+    let line_ix = match line_starts.binary_search(&head) {
+        Ok(i) => i,
+        Err(i) => i - 1,
+    };
+    let line_start = line_starts[line_ix];
+    let line_end = line_starts
+        .get(line_ix + 1)
+        .map(|n| n - 1)
+        .unwrap_or(text.len());
+    let line = &text[line_start..line_end];
+    let col = head - line_start;
+    match lists::continuation(line, col) {
+        Continuation::Insert(prefix) => {
+            let mut edits = vec![(head..head, format!("\n{prefix}"))];
+            let cursor = head + 1 + prefix.len();
+            let p = lists::parse_prefix(line);
+            if let Some(lists::Marker::Ordered { number, .. }) = p.marker {
+                if col >= p.content {
+                    let following = line_starts[line_ix + 1..]
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &s)| {
+                            let e = line_starts
+                                .get(line_ix + 2 + i)
+                                .map(|n| n - 1)
+                                .unwrap_or(text.len());
+                            &text[s..e]
+                        });
+                    for (ix, range, n) in lists::renumber_following(following, line, number + 2) {
+                        let at = line_starts[line_ix + 1 + ix];
+                        edits.push((at + range.start..at + range.end, n.to_string()));
+                    }
+                }
+            }
+            (edits, cursor)
+        }
+        Continuation::Clear { range, with } => {
+            let abs = line_start + range.start..line_start + range.end;
+            let cursor = abs.start + with.len() + head.saturating_sub(abs.end);
+            (vec![(abs, with)], cursor)
+        }
     }
 }
 
@@ -1676,7 +1862,9 @@ impl Render for Editor {
             .on_action(cx.listener(Self::delete_word_left))
             .on_action(cx.listener(Self::delete_word_right))
             .on_action(cx.listener(Self::newline))
+            .on_action(cx.listener(Self::newline_plain))
             .on_action(cx.listener(Self::tab))
+            .on_action(cx.listener(Self::outdent))
             .on_action(cx.listener(Self::undo))
             .on_action(cx.listener(Self::redo))
             .on_action(cx.listener(Self::copy))
@@ -2100,6 +2288,37 @@ mod tests {
         assert_eq!(char_class('a'), 1);
         assert_eq!(char_class('_'), 1);
         assert_eq!(char_class('['), 2);
+    }
+
+    fn starts(text: &str) -> Vec<usize> {
+        std::iter::once(0)
+            .chain(text.match_indices('\n').map(|(i, _)| i + 1))
+            .collect()
+    }
+
+    fn apply(text: &str, head: usize) -> (String, usize) {
+        let (mut edits, cursor) = newline_plan(text, &starts(text), head);
+        edits.sort_by_key(|e| std::cmp::Reverse(e.0.start));
+        let mut out = text.to_string();
+        for (r, s) in edits {
+            out.replace_range(r, &s);
+        }
+        (out, cursor)
+    }
+
+    #[test]
+    fn enter_continues_items_and_renumbers_the_rest() {
+        assert_eq!(apply("- a", 3), ("- a\n- ".into(), 6));
+        assert_eq!(
+            apply("1. a\n2. b\n3. c", 4),
+            ("1. a\n2. \n3. b\n4. c".into(), 8)
+        );
+        // Splitting an item carries the rest of the text to the new one.
+        assert_eq!(apply("- ab", 3), ("- a\n- b".into(), 6));
+        // An empty item clears; a nested one outdents and keeps the cursor.
+        assert_eq!(apply("- a\n- ", 6), ("- a\n".into(), 4));
+        assert_eq!(apply("- a\n\t- ", 7), ("- a\n- ".into(), 6));
+        assert_eq!(apply("> q", 3), ("> q\n> ".into(), 6));
     }
 
     #[test]

@@ -570,8 +570,15 @@ impl Workspace {
         let readable = state.app.readable_line_length.unwrap_or(true);
         self.reading
             .update(cx, |r, _| r.set_readable_line_length(readable));
-        self.editor
-            .update(cx, |e, _| e.set_readable_line_length(readable));
+        let (smart, use_tab, tab_size) = (
+            state.app.smart_indent_list.unwrap_or(true),
+            state.app.use_tab.unwrap_or(true),
+            state.app.tab_size.unwrap_or(4),
+        );
+        self.editor.update(cx, |e, _| {
+            e.set_readable_line_length(readable);
+            e.set_indent_options(smart, use_tab, tab_size);
+        });
         self.status = format!(
             "{} files, {} notes indexed in {:.0} ms",
             state.vault().files().len(),
