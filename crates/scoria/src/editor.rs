@@ -129,6 +129,10 @@ const GUTTER: f32 = 24.0;
 const READABLE_WIDTH: f32 = 700.0;
 /// Consecutive edits closer than this undo together, like CodeMirror.
 const UNDO_GROUP: Duration = Duration::from_millis(500);
+/// Width of the vertical scrollbar's track at the right edge.
+const SCROLLBAR_WIDTH: f32 = 12.0;
+/// The thumb never shrinks below this, so it can still be grabbed.
+const SCROLLBAR_MIN_THUMB: f32 = 24.0;
 
 pub enum EditorEvent {
     /// The buffer changed; the owner schedules a save.
@@ -272,8 +276,64 @@ struct Layout {
     cursor_line: Option<Arc<WrappedLine>>,
     /// Top of the cursor's line in window coordinates.
     cursor_top: Pixels,
+    /// The scrollbar's track and thumb, when the note overflows the view.
+    scrollbar: Option<Scrollbar>,
     /// Time spent shaping the visible lines in the last frame.
     prepaint_ms: f64,
+}
+
+/// Vertical scrollbar geometry in window coordinates. Positions are
+/// line-based: the thumb sits at the first visible line's share of the
+/// note and is as tall as the visible lines' share, so no full layout pass
+/// is ever needed.
+#[derive(Debug, Clone, Copy)]
+struct Scrollbar {
+    track: Bounds<Pixels>,
+    thumb: Bounds<Pixels>,
+    /// Lines the thumb can be dragged across: the count minus the visible ones.
+    scrollable_lines: usize,
+}
+
+impl Scrollbar {
+    /// Lays the thumb out for `first` as the first visible of `count`
+    /// lines with `visible` of them on screen; `None` when everything fits.
+    fn layout(
+        track: Bounds<Pixels>,
+        count: usize,
+        first: usize,
+        visible: usize,
+        fits: bool,
+    ) -> Option<Scrollbar> {
+        if fits || count <= visible || track.size.height <= px(0.) {
+            return None;
+        }
+        let track_h = track.size.height;
+        let thumb_h = (track_h * (visible as f32 / count as f32))
+            .max(px(SCROLLBAR_MIN_THUMB))
+            .min(track_h);
+        let scrollable_lines = count - visible;
+        let frac = (first as f32 / scrollable_lines as f32).clamp(0., 1.);
+        let top = track.origin.y + (track_h - thumb_h) * frac;
+        let inset = px(3.);
+        Some(Scrollbar {
+            track,
+            thumb: Bounds::new(
+                point(track.origin.x + inset, top),
+                size(track.size.width - inset * 2., thumb_h),
+            ),
+            scrollable_lines,
+        })
+    }
+
+    /// The first visible line for a thumb whose top is at `y`.
+    fn line_for_thumb_top(&self, y: Pixels) -> usize {
+        let room = self.track.size.height - self.thumb.size.height;
+        if room <= px(0.) {
+            return 0;
+        }
+        let frac = ((y - self.track.origin.y) / room).clamp(0., 1.);
+        (frac * self.scrollable_lines as f32).round() as usize
+    }
 }
 
 pub struct Editor {
@@ -295,6 +355,8 @@ pub struct Editor {
     /// Reveal the cursor in the next frame (set when no window was at hand).
     pending_reveal: bool,
     dragging: bool,
+    /// Dragging the scrollbar thumb: the grab point's offset from its top.
+    thumb_drag: Option<Pixels>,
     highlights: Arc<Vec<Vec<HighlightSpan>>>,
     generation: u64,
     pub stats: ParseStats,
@@ -340,6 +402,7 @@ impl Editor {
             scroll_px: px(0.),
             pending_reveal: false,
             dragging: false,
+            thumb_drag: None,
             highlights: Arc::new(vec![Vec::new()]),
             generation: 0,
             stats: ParseStats::default(),
@@ -724,6 +787,55 @@ impl Editor {
             self.clamp_scroll_end(window);
         }
         cx.notify();
+    }
+
+    /// Puts `line` at the top of the view (clamped so the note's end stays
+    /// at the bottom), from the scrollbar.
+    fn scroll_to_line(&mut self, line: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.scroll_line = line.min(self.line_count() - 1);
+        self.scroll_px = px(0.);
+        self.clamp_scroll_end(window);
+        cx.notify();
+    }
+
+    /// Mouse down on the scrollbar: grabs the thumb, or jumps so the thumb
+    /// centers on the click. Returns false when the point is off the track.
+    fn scrollbar_mouse_down(
+        &mut self,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(bar) = self.layout.scrollbar else {
+            return false;
+        };
+        if !bar.track.contains(&position) {
+            return false;
+        }
+        if bar.thumb.contains(&position) {
+            self.thumb_drag = Some(position.y - bar.thumb.origin.y);
+        } else {
+            let half = bar.thumb.size.height / 2.;
+            self.thumb_drag = Some(half);
+            let line = bar.line_for_thumb_top(position.y - half);
+            self.scroll_to_line(line, window, cx);
+        }
+        true
+    }
+
+    fn scrollbar_drag(
+        &mut self,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (Some(grab), Some(bar)) = (self.thumb_drag, self.layout.scrollbar) else {
+            return;
+        };
+        let line = bar.line_for_thumb_top(position.y - grab);
+        if line != self.scroll_line || self.scroll_px != px(0.) {
+            self.scroll_to_line(line, window, cx);
+        }
     }
 
     /// Scrolls the least amount that puts the cursor's row on screen.
@@ -1495,6 +1607,9 @@ impl Editor {
 
     fn mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus_handle, cx);
+        if self.scrollbar_mouse_down(event.position, window, cx) {
+            return;
+        }
         let Some(at) = self.offset_at_point(window, event.position) else {
             return;
         };
@@ -1527,6 +1642,10 @@ impl Editor {
     }
 
     fn mouse_drag(&mut self, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        if self.thumb_drag.is_some() {
+            self.scrollbar_drag(position, window, cx);
+            return;
+        }
         if !self.dragging {
             return;
         }
@@ -2010,6 +2129,8 @@ struct Prepaint {
     cursor_top: Pixels,
     /// `scroll_px` was past the anchor line's rows; the clamped value.
     scroll_px: Pixels,
+    scrollbar: Option<Scrollbar>,
+    thumb_dragging: bool,
     prepaint_ms: f64,
 }
 
@@ -2068,6 +2189,7 @@ impl Element for EditorElement {
         let selection = editor.selection();
         let head = editor.head;
         let focused = editor.focus_handle.is_focused(window);
+        let thumb_dragging = editor.thumb_drag.is_some();
 
         let available = (bounds.size.width - px(GUTTER * 2.)).max(px(50.));
         let content_width = if editor.readable_line_length {
@@ -2174,6 +2296,16 @@ impl Element for EditorElement {
         if !focused {
             cursor_quad = None;
         }
+        let fits =
+            scroll_line == 0 && scroll_px == px(0.) && line >= count && y <= bounds.bottom_left().y;
+        let track = Bounds::new(
+            point(
+                bounds.bottom_right().x - px(SCROLLBAR_WIDTH),
+                bounds.origin.y,
+            ),
+            size(px(SCROLLBAR_WIDTH), bounds.size.height),
+        );
+        let scrollbar = Scrollbar::layout(track, count, scroll_line, lines.len(), fits);
         Prepaint {
             lines,
             line_height: lh,
@@ -2186,6 +2318,8 @@ impl Element for EditorElement {
             cursor_line,
             cursor_top,
             scroll_px,
+            scrollbar,
+            thumb_dragging,
             prepaint_ms: started.elapsed().as_secs_f64() * 1000.0,
         }
     }
@@ -2219,6 +2353,11 @@ impl Element for EditorElement {
             if let Some(cursor) = prepaint.cursor.take() {
                 window.paint_quad(cursor);
             }
+            if let Some(bar) = prepaint.scrollbar {
+                let mut color = self.editor.read(cx).palette.muted;
+                color.a = if prepaint.thumb_dragging { 0.6 } else { 0.35 };
+                window.paint_quad(fill(bar.thumb, color).corner_radii(px(3.)));
+            }
         });
 
         let editor = self.editor.clone();
@@ -2241,7 +2380,12 @@ impl Element for EditorElement {
         let editor = self.editor.clone();
         window.on_mouse_event(move |event: &MouseUpEvent, phase, _window, cx| {
             if phase == DispatchPhase::Bubble && event.button == MouseButton::Left {
-                editor.update(cx, |editor, _| editor.dragging = false);
+                editor.update(cx, |editor, cx| {
+                    editor.dragging = false;
+                    if editor.thumb_drag.take().is_some() {
+                        cx.notify();
+                    }
+                });
             }
         });
         let editor = self.editor.clone();
@@ -2262,6 +2406,7 @@ impl Element for EditorElement {
             visible: prepaint.lines.iter().map(|(v, _)| *v).collect(),
             cursor_line: prepaint.cursor_line.take(),
             cursor_top: prepaint.cursor_top,
+            scrollbar: prepaint.scrollbar,
             prepaint_ms: prepaint.prepaint_ms,
         };
         let scroll_px = prepaint.scroll_px;
