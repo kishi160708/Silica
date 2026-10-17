@@ -29,6 +29,7 @@ cargo run --release -p  -- <vault> --palette "open"         # open with the comm
 cargo run --release -p  -- <vault> --settings hotkeys       # open Settings on a tab (general, appearance, editor, ...)
 cargo run --release -p  -- <vault> --note X --source        # open a note in Source mode (--reading for reading view; the default is the vault's defaultViewMode)
 cargo run --release -p  -- <vault> --note X --stress 40     # self-driven edits on that note, then autosave (use a scratch vault)
+cargo run --release -p  -- <vault> --note X --find word     # open with the find panel up and the query matched
 cargo run --release -p -bench -- generate <dir>
 cargo run --release -p -bench -- index <vault>
 ```
@@ -36,7 +37,8 @@ cargo run --release -p -bench -- index <vault>
 In the app: click a file or a link to open it, Ctrl+P opens the command
 palette, Ctrl+E toggles reading view and editing (Live Preview unless
 `livePreview` is off), `editor:toggle-source` from the palette switches Live
-Preview and Source mode, Ctrl+Alt+Left and Right walk the tab's history,
+Preview and Source mode, Ctrl+F and Ctrl+H find and replace in the note,
+Ctrl+Alt+Left and Right walk the tab's history,
 Ctrl+O opens the quick switcher, Ctrl+Shift+F the Search tab, Ctrl+G the
 graph (again to return), Ctrl+, opens Settings, Ctrl+S saves (edits also save
 on their own two seconds after the last keystroke), Ctrl+Q quits. A note
@@ -255,9 +257,24 @@ The frame path is the gate: scrolling and typing stay far under a frame
 budget regardless of note size. Decoration latency scales with note length
 because the whole note is reparsed; a real 50k-line note of ordinary prose is
 about half this size, and incremental reparse of the edited block is the
-planned follow-up. Not yet: find and replace, multiple cursors, auto-pair
-of brackets and markdown markers, renumbering on indent, and Ctrl+click
-page previews.
+planned follow-up. Not yet: multiple cursors (and the find panel's Find
+all), regex and match-case search, auto-pair of brackets and markdown
+markers, renumbering on indent, and Ctrl+click page previews.
+
+### Find and replace, 2026-10-16
+
+Ctrl+F (`editor:open-search`) opens Obsidian's search panel at the top
+right of the editor, switching to editing first; Ctrl+H
+(`editor:open-search-replace`) adds the replace row, which a toggle on the
+panel also shows. The query starts as the selection when it sits on one
+line. Matching is case-insensitive and literal (`crates//src/find.rs`,
+capped at 20k matches); every match is tinted, the selected one more so,
+and the panel counts them. Typing selects the first match from the cursor
+on, Enter and the arrows step forward and back with wrap-around, Enter in
+the replace field or the Replace button replaces the selected match and
+steps on, Replace all does every match in one undo step, Escape closes.
+Matches refresh after every edit. `--find q` opens a note with the panel
+up, for screenshots.
 
 ### Smart lists and the scrollbar, 2026-10-16
 

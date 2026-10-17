@@ -62,6 +62,8 @@ pub const RUNNABLE: &[&str] = &[
     "command-palette:open",
     "editor:save-file",
     "editor:toggle-source",
+    "editor:open-search",
+    "editor:open-search-replace",
     "switcher:open",
     "global-search:open",
     "graph:open",
@@ -431,7 +433,7 @@ impl Workspace {
         let palette = cx.new(CommandPalette::new);
         let settings = cx.new(SettingsView::new);
         let reading = cx.new(ReadingView::new);
-        let editor = cx.new(Editor::new);
+        let editor = cx.new(|cx| Editor::new(window, cx));
         let graph = cx.new(GraphView::new);
         let subscriptions =
             vec![
@@ -848,6 +850,8 @@ impl Workspace {
         match id {
             "command-palette:open" => self.open_palette("", window, cx),
             "editor:save-file" => self.flush_save(cx),
+            "editor:open-search" => self.open_find("", false, window, cx),
+            "editor:open-search-replace" => self.open_find("", true, window, cx),
             "editor:toggle-source" => {
                 let mode = match self.mode {
                     ViewMode::LivePreview => ViewMode::Source,
@@ -961,6 +965,24 @@ impl Workspace {
             ViewMode::Graph => window.focus(&self.graph.focus_handle(cx), cx),
         }
         cx.notify();
+    }
+
+    /// Opens the editor's find panel (with the replace row when asked),
+    /// switching to editing first since the panel lives in the editor.
+    /// An empty `query` keeps the panel's own (or the selection).
+    pub fn open_find(
+        &mut self,
+        query: &str,
+        replace: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.mode.is_editing() {
+            let mode = self.editing_mode();
+            self.set_mode(mode, window, cx);
+        }
+        self.editor
+            .update(cx, |e, cx| e.open_find(query, replace, window, cx));
     }
 
     /// The editing mode the vault asks for: Live Preview unless

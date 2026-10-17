@@ -7,6 +7,7 @@
 
 mod editor;
 mod explorer;
+mod find;
 mod graph;
 mod lists;
 mod mentions;
@@ -133,6 +134,8 @@ struct Args {
     source: bool,
     /// Open the note in reading view, whatever `defaultViewMode` says.
     reading: bool,
+    /// Open the find panel with this query.
+    find: Option<String>,
 }
 
 fn parse_args() -> Args {
@@ -149,6 +152,7 @@ fn parse_args() -> Args {
         settings: None,
         source: false,
         reading: false,
+        find: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -166,6 +170,7 @@ fn parse_args() -> Args {
             "--settings" => args.settings = it.next().or(Some("general".into())),
             "--source" => args.source = true,
             "--reading" => args.reading = true,
+            "--find" => args.find = it.next().or(Some(String::new())),
             _ if args.vault.is_none() => args.vault = Some(PathBuf::from(a)),
             _ => args.note = Some(a),
         }
@@ -234,6 +239,7 @@ fn main() {
         let settings_tab = args.settings.clone();
         let source = args.source;
         let reading = args.reading;
+        let find = args.find.clone();
         let synthetic = args.synthetic;
         window
             .update(cx, |ws, window, cx| {
@@ -295,6 +301,9 @@ fn main() {
                         }
                         if let Some(t) = &settings_tab {
                             ws.open_settings(settings::Tab::parse(t), window, cx);
+                        }
+                        if let Some(q) = &find {
+                            ws.open_find(q, false, window, cx);
                         }
                         true
                     })
