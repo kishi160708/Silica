@@ -27,6 +27,8 @@ cargo run --release -p  -- <vault> --pane outgoing          # right dock tab: ba
 cargo run --release -p  -- <vault> --graph [local]          # open on the graph view
 cargo run --release -p  -- <vault> --palette "open"         # open with the command palette up
 cargo run --release -p  -- <vault> --settings hotkeys       # open Settings on a tab (general, appearance, editor, ...)
+cargo run --release -p  -- <vault> --note X --source        # open a note in the source editor
+cargo run --release -p  -- <vault> --note X --stress 40     # self-driven edits on that note, then autosave (use a scratch vault)
 cargo run --release -p -bench -- generate <dir>
 cargo run --release -p -bench -- index <vault>
 ```
@@ -34,8 +36,9 @@ cargo run --release -p -bench -- index <vault>
 In the app: click a file or a link to open it, Ctrl+P opens the command
 palette, Ctrl+E toggles reading view and source mode, Ctrl+Alt+Left and Right
 walk the tab's history, Ctrl+O opens the quick switcher, Ctrl+Shift+F the
-Search tab, Ctrl+G the graph (again to return), Ctrl+, opens Settings, Ctrl+Q
-quits. Every shortcut except Ctrl+Q is an Obsidian command bound from its
+Search tab, Ctrl+G the graph (again to return), Ctrl+, opens Settings, Ctrl+S
+saves (edits also save on their own two seconds after the last keystroke),
+Ctrl+Q quits. Every shortcut except Ctrl+Q is an Obsidian command bound from its
 default hotkey, so the vault's `hotkeys.json` rebinds or unbinds it. In the
 graph: wheel zooms, drag pans, drag a node to move it, click a node to open
 it, Ctrl+0 refits the view.
@@ -43,7 +46,8 @@ it, Ctrl+0 refits the view.
 ## Reader (phase 2)
 
 Started 2026-10-16, after the three spike gates passed. Gate: a daily user can
-browse their real vault with no missing content.
+browse their real vault with no missing content. Passed 2026-10-16, see
+[[#Reader gate, 2026-10-16]].
 
 | Reader item | Status |
 | --- | --- |
@@ -60,6 +64,21 @@ browse their real vault with no missing content.
 | Graph | done: global and local graphs, filters, color groups, forces and display settings from `graph.json`; zoom, pan, drag, hover, click opens |
 | Command palette | done: Obsidian's command names and hotkeys, pinned commands from `command-palette.json`, this session's recent commands first; lists only the commands  can run |
 | Settings, read-only | done: General, Appearance, Interface, Editor, Files and links, Hotkeys, Core plugins, Community plugins and the Quick switcher and Command palette plugin tabs, every value from `.obsidian/`; nothing is written |
+
+### Reader gate, 2026-10-16
+
+Checked against a real 10-note vault (project notes with wikilinks and
+aliases, tables in nine of them, fenced ASCII diagrams, inline code, ordered
+and bulleted lists, two `.canvas` files) by opening every note and the lower
+sections of the long ones. Every block rendered with its content; backlinks,
+outgoing links and unlinked mentions matched the text. Two fidelity bugs
+found and fixed on the way: table columns were all equal, which broke long
+identifiers mid-word (columns now follow HTML's automatic table layout, see
+below), and fenced code wider than the note wrapped instead of scrolling.
+
+Still not rendered, none of it present in that vault: MathJax (math shows as
+its source), HTML tags (shown as text), remote images, Canvas and Bases
+files (Parity phase), and the local graph beyond depth one.
 
 ### Command palette and Settings, 2026-10-16
 
@@ -108,9 +127,15 @@ numbers and task checkboxes, block quotes, callouts with fold state and
 Obsidian's type colors, tables with column alignment, code blocks with a
 language label, display math (raw), raw HTML (as text), footnotes.
 
-Not yet: Live Preview, MathJax, HTML rendering, remote images, column widths
-in tables (every column is equal), checkbox toggling, heading folding, copy
-buttons, PDF export.
+Tables lay their columns out the way an HTML table's automatic layout does:
+each column wants its widest cell and needs at least its longest word (both
+measured with the real font), the table is as wide as the sum when that
+fits the note, and otherwise the slack between minimum and wish is shared
+in proportion. The view records its painted width for this and re-lays out
+when it changes. Code blocks never wrap; long lines scroll sideways.
+
+Not yet: Live Preview, MathJax, HTML rendering, remote images, checkbox
+toggling, heading folding, copy buttons, PDF export.
 
 ### Graph view, 2026-10-16
 
@@ -176,7 +201,7 @@ The [[Specification]] sets three gates before any reader or writer work starts.
 | Parser conformance | 1000-note HTML diff corpus at 99 percent | passed: 1007/1009 notes against Obsidian 1.13.7, plus CommonMark 652/652 |
 | Index performance | 20k-file vault indexed cold in under 2 s | measured, see below |
 
-### Editor prototype, 2026-10-16
+### Source editor, 2026-10-16
 
 `crates//src/editor.rs` is a plain-text Markdown editor over one `String`
 with a line index. A custom GPUI element shapes and paints only the visible
@@ -184,29 +209,53 @@ lines; decorations come from `_markdown::highlight`, recomputed on a
 background thread after each edit (one parse in flight, one queued) and
 swapped in when ready, so typing never waits for the parser. Input goes
 through GPUI's input handler scoped to the cursor line, so IME composition
-works; navigation keys are actions.
+works; everything else is an action.
+
+Grown from the spike prototype the same day: soft wrap at the view width
+(capped at the readable line length and centered, like Obsidian), a
+selection (shift with every movement key, drag, double-click word,
+triple-click line, Ctrl+A), word movement and deletion, undo and redo with
+CodeMirror's grouping (consecutive typing or deleting within half a second
+is one step), clipboard copy, cut and paste (the whole line when nothing is
+selected), and the note's text font with the monospace font for code. The
+scroll position is a line plus a pixel offset into it rather than an
+absolute pixel, so wrapped-row heights are only measured near the viewport
+and a 50k-line note never needs a full layout pass; Page Up and Down,
+revealing the cursor and clamping at the end all walk rows from that anchor.
+
+Saving: the buffer holds `\n`; the file's BOM and `\r\n` endings are
+remembered at load and put back on write, so a save changes nothing but the
+edited bytes (verified with `--stress` on a BOM-and-CRLF note in a scratch
+vault). Edits save two seconds after the last keystroke, on Ctrl+S
+(`editor:save-file`), when another note opens, when the view switches to
+reading mode (which then rebuilds from the saved text), and when the window
+closes. The watcher's reload of the open note is skipped when the file is
+what the editor last wrote, keeps the cursor when the note changed
+underneath an unedited buffer, and leaves unsaved edits alone otherwise.
 
 ```
 cargo run --release -p  -- docs/ --synthetic 50000          # open a generated 50k-line note
 cargo run --release -p  -- docs/ --synthetic 50000 --stress  # 600 self-driven edits, then a report
 ```
 
-Stress run on the reference machine, 50,001 lines (4.3 MB, 244k decorated
-spans; the synthetic note is far denser in syntax than a real one):
+Stress run on the reference machine with soft wrap on, 50,001 lines (4.3 MB,
+244k decorated spans; the synthetic note is far denser in syntax than a real
+one):
 
 | Measure | Result |
 | --- | --- |
-| Frames painted during 600 edit and navigation steps in 7 s | 616 |
-| Shaping the visible lines, per frame | 0.48 ms mean, 1.52 ms max |
-| Full reparse plus decoration pass (background) | 226 ms mean |
-| Edit to refreshed decorations | 234 ms |
+| Frames painted during 600 edit, selection, undo and navigation steps in 7 s | 607 |
+| Shaping the visible lines, per frame | 0.17 ms mean, 1.95 ms max |
+| Full reparse plus decoration pass (background) | 222 ms mean |
+| Edit to refreshed decorations | 244 ms |
 
 The frame path is the gate: scrolling and typing stay far under a frame
 budget regardless of note size. Decoration latency scales with note length
 because the whole note is reparsed; a real 50k-line note of ordinary prose is
 about half this size, and incremental reparse of the edited block is the
-planned follow-up. Not in the prototype yet: selections, wrapping, undo,
-saving, and Live Preview rendering of the decorated constructs.
+planned follow-up. Not yet: Live Preview rendering of the decorated
+constructs, list and quote continuation on Enter, find and replace, multiple
+cursors, and a vertical scrollbar.
 
 ### Parser, 2026-10-16
 

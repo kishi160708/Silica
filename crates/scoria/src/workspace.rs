@@ -8,7 +8,7 @@
 //! then kept current by a filesystem watcher: changed paths are re-read and
 //! re-indexed in place, link edges re-resolved, and every pane refreshed.
 
-use crate::editor::Editor;
+use crate::editor::{Editor, EditorEvent};
 use crate::explorer::{display_name, ExplorerEvent, FileExplorer, FileTree};
 use crate::graph::{GraphEvent, GraphView};
 use crate::mentions::{Finder, Name};
@@ -21,7 +21,8 @@ use crate::theme::Theme;
 use crate::watch;
 use gpui::{
     actions, div, prelude::*, px, rgba, uniform_list, Action, App, Context, Entity, FocusHandle,
-    Focusable, Global, KeyBinding, SharedString, Subscription, UniformListScrollHandle, Window,
+    Focusable, Global, KeyBinding, SharedString, Subscription, Task, UniformListScrollHandle,
+    Window,
 };
 use rayon::prelude::*;
 use _cache::{frontmatter_aliases, index_markdown, CachedMetadata, MetadataCache};
@@ -59,6 +60,7 @@ impl Global for Commands {}
 /// the way Obsidian hides commands whose check callback fails.
 pub const RUNNABLE: &[&str] = &[
     "command-palette:open",
+    "editor:save-file",
     "switcher:open",
     "global-search:open",
     "graph:open",
@@ -399,6 +401,8 @@ pub struct Workspace {
     words: usize,
     chars: usize,
     _watcher: Option<watch::Watcher>,
+    /// Pending autosave, two seconds after the last edit.
+    save_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -477,7 +481,18 @@ impl Workspace {
                 cx.subscribe(&reading, |this, _, event: &ReadingEvent, cx| match event {
                     ReadingEvent::OpenLink(target) => this.follow_link(target.clone(), cx),
                 }),
+                cx.subscribe(&editor, |this, _, event: &EditorEvent, cx| match event {
+                    EditorEvent::Edited => this.schedule_save(cx),
+                }),
             ];
+        // Closing the window must not lose edits waiting for the autosave.
+        let this = cx.entity().downgrade();
+        window.on_window_should_close(cx, move |_, cx| {
+            if let Some(ws) = this.upgrade() {
+                ws.update(cx, |ws, cx| ws.flush_save(cx));
+            }
+            true
+        });
         let mut ws = Workspace {
             focus_handle: cx.focus_handle(),
             state: None,
@@ -515,6 +530,7 @@ impl Workspace {
             words: 0,
             chars: 0,
             _watcher: None,
+            save_task: None,
             _subscriptions: subscriptions,
         };
         if let Some(root) = root {
@@ -554,6 +570,8 @@ impl Workspace {
         let readable = state.app.readable_line_length.unwrap_or(true);
         self.reading
             .update(cx, |r, _| r.set_readable_line_length(readable));
+        self.editor
+            .update(cx, |e, _| e.set_readable_line_length(readable));
         self.status = format!(
             "{} files, {} notes indexed in {:.0} ms",
             state.vault().files().len(),
@@ -712,6 +730,11 @@ impl Workspace {
         &self.editor
     }
 
+    /// The vault path shown in the main area.
+    pub fn current(&self) -> Option<&str> {
+        self.current.as_deref()
+    }
+
     /// Shows the Search tab with `query`; focuses the field when a window is at hand.
     pub fn show_search(
         &mut self,
@@ -801,6 +824,7 @@ impl Workspace {
         }
         match id {
             "command-palette:open" => self.open_palette("", window, cx),
+            "editor:save-file" => self.flush_save(cx),
             "switcher:open" => self.open_switcher("", window, cx),
             "global-search:open" => self.open_search_action(&OpenSearch, window, cx),
             "graph:open" => self.open_graph_action(&OpenGraph, window, cx),
@@ -883,6 +907,16 @@ impl Workspace {
         if mode == ViewMode::Graph && self.mode != ViewMode::Graph {
             self.mode_before_graph = self.mode;
         }
+        if mode != ViewMode::Source && self.mode == ViewMode::Source {
+            // The reading view shows what the editor has: save and rebuild now
+            // rather than waiting for the autosave and the watcher.
+            if self.editor.read(cx).is_dirty() {
+                self.flush_save(cx);
+                if let (Some(state), Some(current)) = (self.state.clone(), self.current.clone()) {
+                    self.show_file(&current, &state, cx);
+                }
+            }
+        }
         self.mode = mode;
         match mode {
             ViewMode::Reading => window.focus(&self.reading.focus_handle(cx), cx),
@@ -944,6 +978,7 @@ impl Workspace {
             return;
         };
         if self.current.as_deref() != Some(path.as_str()) {
+            self.flush_save(cx);
             self.history.truncate(self.history_ix);
             self.history.push(path.clone());
             self.history_ix = self.history.len();
@@ -971,8 +1006,26 @@ impl Workspace {
                     self.chars = text.chars().count();
                     self.reading
                         .update(cx, |r, cx| r.set_note(Some(path.to_string()), model, cx));
-                    self.editor
-                        .update(cx, |e, cx| e.set_text(path.to_string(), text, cx));
+                    // The editor keeps its buffer when the file on disk is
+                    // what it last saved (or still holds unsaved edits), and
+                    // keeps its place when the note changed underneath it.
+                    let (same, matches, dirty) = {
+                        let e = self.editor.read(cx);
+                        (e.name.as_ref() == path, e.matches_file(&text), e.is_dirty())
+                    };
+                    if same && matches {
+                        // Own write or an unrelated event.
+                    } else if same && dirty {
+                        self.status = format!("{path} changed on disk; unsaved edits kept").into();
+                        self.refresh_panes(state, cx);
+                        cx.notify();
+                        return;
+                    } else if same {
+                        self.editor.update(cx, |e, cx| e.reload(text, cx));
+                    } else {
+                        self.editor
+                            .update(cx, |e, cx| e.set_text(path.to_string(), text, cx));
+                    }
                     self.status =
                         format!("{path}  ·  reading view built in {build_ms:.1} ms").into();
                 }
@@ -1227,7 +1280,48 @@ impl Workspace {
         ) else {
             return;
         };
+        self.flush_save(cx);
         self.show_file(&path, &state, cx);
+    }
+
+    /// Writes the editor's buffer back after an edit settles (two seconds,
+    /// restarted by every edit, the way Obsidian's autosave works).
+    fn schedule_save(&mut self, cx: &mut Context<Self>) {
+        self.save_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_secs(2)).await;
+            this.update(cx, |ws, cx| ws.flush_save(cx)).ok();
+        }));
+    }
+
+    /// Writes the editor's buffer to its file now, if it has unsaved edits.
+    /// The bytes are the file's own line endings and BOM around the edited
+    /// text, so nothing but the edit changes on disk.
+    pub fn flush_save(&mut self, cx: &mut Context<Self>) {
+        self.save_task = None;
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let (dirty, name) = {
+            let editor = self.editor.read(cx);
+            (editor.is_dirty(), editor.name.to_string())
+        };
+        // Only the open note is written back; a buffer that is not a vault
+        // file (the synthetic stress note) never touches the disk.
+        if !dirty || self.current.as_deref() != Some(name.as_str()) {
+            return;
+        }
+        let contents = self.editor.read(cx).file_contents();
+        let absolute = state.vault().absolute(&name);
+        match std::fs::write(&absolute, contents) {
+            Ok(()) => {
+                self.editor.update(cx, |e, _| e.mark_saved());
+                self.status = format!("{name} saved").into();
+            }
+            Err(err) => {
+                self.status = format!("Could not save {name}: {err}").into();
+            }
+        }
+        cx.notify();
     }
 
     // ----- rendering -------------------------------------------------------------
@@ -1848,19 +1942,20 @@ impl Render for Workspace {
                     ),
             );
 
-        let editor_status = if self.mode == ViewMode::Source {
+        let (editor_status, words, chars) = if self.mode == ViewMode::Source {
             let editor = self.editor.read(cx);
             let cursor = editor.cursor();
-            format!(
+            let line_status = format!(
                 "Ln {}, Col {}  ·  parse {:.1} ms, {} spans  ·  shape {:.2} ms  ·  ",
                 cursor.line + 1,
                 cursor.col + 1,
                 editor.stats.parse_ms,
                 editor.stats.spans,
                 editor.prepaint_ms()
-            )
+            );
+            (line_status, editor.stats.words, editor.stats.chars)
         } else {
-            String::new()
+            (String::new(), self.words, self.chars)
         };
         let status_bar = div()
             .flex()
@@ -1880,8 +1975,7 @@ impl Render for Workspace {
                     .child(self.status.clone()),
             )
             .child(SharedString::from(format!(
-                "{editor_status}{} words, {} characters",
-                self.words, self.chars
+                "{editor_status}{words} words, {chars} characters"
             )));
 
         let overlay: Option<gpui::AnyElement> = match self.modal {

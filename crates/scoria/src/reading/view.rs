@@ -10,9 +10,10 @@ use super::model::{
 };
 use crate::theme::Theme;
 use gpui::{
-    div, img, list, prelude::*, px, AnyElement, App, Context, EventEmitter, FocusHandle, Focusable,
-    FontStyle, FontWeight, HighlightStyle, InteractiveText, ListAlignment, ListOffset, ListState,
-    ObjectFit, SharedString, StrikethroughStyle, StyledText, UnderlineStyle, Window,
+    canvas, div, img, list, prelude::*, px, AnyElement, App, Context, EventEmitter, FocusHandle,
+    Focusable, Font, FontStyle, FontWeight, HighlightStyle, Hsla, InteractiveText, ListAlignment,
+    ListOffset, ListState, ObjectFit, Pixels, SharedString, StrikethroughStyle, StyledText,
+    TextRun, UnderlineStyle, Window, WindowTextSystem,
 };
 use _markdown::Alignment;
 use std::collections::HashSet;
@@ -30,6 +31,8 @@ pub struct ReadingView {
     /// Callouts whose fold state the reader flipped, by title id.
     toggled: HashSet<usize>,
     readable_line_length: bool,
+    /// Width of the view as last painted; tables lay their columns out for it.
+    width: Pixels,
 }
 
 impl EventEmitter<ReadingEvent> for ReadingView {}
@@ -49,6 +52,7 @@ impl ReadingView {
             list: ListState::new(0, ListAlignment::Top, px(1200.)),
             toggled: HashSet::new(),
             readable_line_length: true,
+            width: px(900.),
         }
     }
 
@@ -110,10 +114,18 @@ impl ReadingView {
         let Some(block) = model.blocks.get(ix) else {
             return div().into_any_element();
         };
+        // The block's inner width: the view minus its padding, capped at the
+        // readable line length.
+        let mut available = f32::from(self.width) - 64.;
+        if self.readable_line_length {
+            available = available.min(700.);
+        }
         let r = Renderer {
             theme: &theme,
             view: cx.entity(),
             toggled: &self.toggled,
+            text_system: _window.text_system().clone(),
+            available: available.max(100.),
         };
         let inner = r.block(block, false);
         let last = ix + 1 == model.blocks.len();
@@ -148,12 +160,32 @@ impl Render for ReadingView {
             .text_size(px(base))
             .line_height(px(base * 1.6))
             .text_color(theme.text)
+            .relative()
             .child(
                 list(self.list.clone(), move |ix, window, cx| {
                     view.update(cx, |this, cx| this.render_block(ix, window, cx))
                         .unwrap_or_else(|_| div().into_any_element())
                 })
                 .size_full(),
+            )
+            .child(
+                // Records the painted width; a change lays the blocks out again.
+                canvas(
+                    {
+                        let view = cx.entity();
+                        move |bounds, _, cx| {
+                            view.update(cx, |this, cx| {
+                                if this.width != bounds.size.width {
+                                    this.width = bounds.size.width;
+                                    cx.notify();
+                                }
+                            });
+                        }
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0(),
             )
     }
 }
@@ -162,9 +194,109 @@ struct Renderer<'a> {
     theme: &'a Theme,
     view: gpui::Entity<ReadingView>,
     toggled: &'a HashSet<usize>,
+    text_system: Arc<WindowTextSystem>,
+    /// Inner width of a top-level block, in pixels.
+    available: f32,
 }
 
 impl Renderer<'_> {
+    /// Width of `text` set in the note's font, in pixels.
+    fn measure(&self, text: &str, font_size: f32, bold: bool, mono: bool) -> f32 {
+        let t = self.theme;
+        let font = Font {
+            family: if mono {
+                t.mono_font.clone()
+            } else {
+                t.text_font.clone()
+            },
+            features: Default::default(),
+            fallbacks: None,
+            weight: if bold {
+                FontWeight::SEMIBOLD
+            } else {
+                FontWeight::NORMAL
+            },
+            style: FontStyle::Normal,
+        };
+        let run = TextRun {
+            len: text.len(),
+            font,
+            color: Hsla::default(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let line = self.text_system.shape_line(
+            SharedString::from(text.to_string()),
+            px(font_size),
+            &[run],
+            None,
+        );
+        f32::from(line.width)
+    }
+
+    /// Column widths the way an HTML table's automatic layout sizes them: a
+    /// column wants its longest cell (max-content) and needs at least its
+    /// longest word (min-content); when the note is too narrow for every
+    /// column's wish, the slack is shared in proportion to each column's
+    /// range, and below the minimum the table overflows.
+    fn column_widths(
+        &self,
+        header: &[RichText],
+        rows: &[Vec<RichText>],
+        font_size: f32,
+    ) -> Vec<f32> {
+        const PADDING: f32 = 17.;
+        let count = header
+            .len()
+            .max(rows.iter().map(Vec::len).max().unwrap_or(0));
+        let mut max = vec![0f32; count];
+        let mut min = vec![0f32; count];
+        let mut fold = |ix: usize, cell: &RichText, bold: bool| {
+            let mono = cell.runs.iter().any(|(_, s)| s.code);
+            let longest_line = cell
+                .text
+                .lines()
+                .max_by_key(|l| l.chars().count())
+                .unwrap_or("");
+            let longest_word = cell
+                .text
+                .split_whitespace()
+                .max_by_key(|w| w.chars().count())
+                .unwrap_or("");
+            max[ix] = max[ix].max(self.measure(longest_line, font_size, bold, mono));
+            min[ix] = min[ix].max(self.measure(longest_word, font_size, bold, mono));
+        };
+        for (ix, cell) in header.iter().enumerate() {
+            fold(ix, cell, true);
+        }
+        for row in rows {
+            for (ix, cell) in row.iter().enumerate() {
+                fold(ix, cell, false);
+            }
+        }
+        // Two pixels of slack: the wrapper measures advances a little
+        // differently from the shaper and must not break a line that fits.
+        let max: Vec<f32> = max.iter().map(|m| m.ceil() + 2. + PADDING).collect();
+        let min: Vec<f32> = min
+            .iter()
+            .map(|m| m.max(8.).ceil() + 2. + PADDING)
+            .collect();
+        let sum_max: f32 = max.iter().sum();
+        let sum_min: f32 = min.iter().sum();
+        if sum_max <= self.available {
+            max
+        } else if sum_min >= self.available {
+            min
+        } else {
+            let share = (self.available - sum_min) / (sum_max - sum_min);
+            max.iter()
+                .zip(&min)
+                .map(|(mx, mn)| (mn + (mx - mn) * share).floor())
+                .collect()
+        }
+    }
+
     fn blocks(&self, blocks: &[RBlock], tight: bool) -> Vec<AnyElement> {
         blocks.iter().map(|b| self.block(b, tight)).collect()
     }
@@ -238,17 +370,23 @@ impl Renderer<'_> {
                 .w_full()
                 .bg(t.border)
                 .into_any_element(),
-            RBlock::Code { language, text } => div()
+            RBlock::Code { id, language, text } => div()
                 .mb(gap)
                 .relative()
                 .bg(t.bg_alt)
                 .rounded_md()
-                .px_3()
                 .py_2()
                 .font_family(t.mono_font.clone())
                 .text_size(px(base * 0.875))
                 .line_height(px(base * 0.875 * 1.5))
-                .child(div().child(SharedString::from(text.clone())))
+                .child(
+                    // Code keeps its columns: long lines scroll sideways.
+                    div().id(("code", *id)).overflow_x_scroll().px_3().child(
+                        div()
+                            .whitespace_nowrap()
+                            .child(SharedString::from(text.clone())),
+                    ),
+                )
                 .children(language.as_ref().map(|lang| {
                     div()
                         .absolute()
@@ -344,11 +482,15 @@ impl Renderer<'_> {
                 header,
                 rows,
             } => {
+                let font_size = base * 0.9375;
+                let columns = self.column_widths(header, rows, font_size);
+                let table_width: f32 = columns.iter().sum();
                 let cell = |text: &RichText, ix: usize, head: bool| {
                     let align = alignments.get(ix).copied().unwrap_or(Alignment::None);
+                    let width = columns.get(ix).copied().unwrap_or(80.);
                     div()
-                        .flex_1()
-                        .min_w_0()
+                        .w(px(width))
+                        .flex_shrink_0()
                         .px_2()
                         .py_1()
                         .border_r_1()
@@ -361,32 +503,44 @@ impl Renderer<'_> {
                         })
                         .child(self.rich(text))
                 };
+                // The table is as wide as its columns, like an HTML table.
                 div()
                     .mb(gap)
                     .flex()
-                    .flex_col()
-                    .border_1()
-                    .border_color(t.border)
-                    .rounded_sm()
-                    .text_size(px(base * 0.9375))
+                    .flex_row()
                     .child(
                         div()
+                            .w(px(table_width))
+                            .flex_shrink_0()
                             .flex()
-                            .flex_row()
-                            .bg(t.bg_secondary)
-                            .border_b_1()
+                            .flex_col()
+                            .border_1()
                             .border_color(t.border)
-                            .children(header.iter().enumerate().map(|(i, c)| cell(c, i, true))),
+                            .rounded_sm()
+                            .text_size(px(font_size))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .bg(t.bg_secondary)
+                                    .border_b_1()
+                                    .border_color(t.border)
+                                    .children(
+                                        header.iter().enumerate().map(|(i, c)| cell(c, i, true)),
+                                    ),
+                            )
+                            .children(rows.iter().enumerate().map(|(ri, row)| {
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .when(ri + 1 < rows.len(), |d| {
+                                        d.border_b_1().border_color(t.border)
+                                    })
+                                    .children(
+                                        row.iter().enumerate().map(|(i, c)| cell(c, i, false)),
+                                    )
+                            })),
                     )
-                    .children(rows.iter().enumerate().map(|(ri, row)| {
-                        div()
-                            .flex()
-                            .flex_row()
-                            .when(ri + 1 < rows.len(), |d| {
-                                d.border_b_1().border_color(t.border)
-                            })
-                            .children(row.iter().enumerate().map(|(i, c)| cell(c, i, false)))
-                    }))
                     .into_any_element()
             }
             RBlock::Math(text) => div()

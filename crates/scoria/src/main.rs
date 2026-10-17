@@ -127,6 +127,8 @@ struct Args {
     palette: Option<String>,
     /// Open Settings on this tab (`hotkeys`, `appearance`, ...).
     settings: Option<String>,
+    /// Open the note in source mode.
+    source: bool,
 }
 
 fn parse_args() -> Args {
@@ -141,6 +143,7 @@ fn parse_args() -> Args {
         graph: None,
         palette: None,
         settings: None,
+        source: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -156,6 +159,7 @@ fn parse_args() -> Args {
             "--graph" => args.graph = it.next().or(Some("global".into())),
             "--palette" => args.palette = it.next().or(Some(String::new())),
             "--settings" => args.settings = it.next().or(Some("general".into())),
+            "--source" => args.source = true,
             _ if args.vault.is_none() => args.vault = Some(PathBuf::from(a)),
             _ => args.note = Some(a),
         }
@@ -193,7 +197,6 @@ fn main() {
         graph::bind_keys(cx);
         settings::bind_keys(cx);
         cx.bind_keys([KeyBinding::new("ctrl-q", Quit, None)]);
-        cx.on_action(|_: &Quit, cx| cx.quit());
 
         let bounds = Bounds::centered(None, size(px(1400.0), px(900.0)), cx);
         let vault = args.vault.clone();
@@ -210,6 +213,11 @@ fn main() {
                 |window, cx| cx.new(|cx| Workspace::new(vault, window, cx)),
             )
             .expect("open main window");
+        cx.on_action(move |_: &Quit, cx| {
+            // Save before the window goes away.
+            window.update(cx, |ws, _, cx| ws.flush_save(cx)).ok();
+            cx.quit();
+        });
 
         let note = args.note.clone();
         let search = args.search.clone();
@@ -218,6 +226,7 @@ fn main() {
         let graph = args.graph.clone();
         let palette = args.palette.clone();
         let settings_tab = args.settings.clone();
+        let source = args.source;
         let synthetic = args.synthetic;
         window
             .update(cx, |ws, window, cx| {
@@ -271,6 +280,9 @@ fn main() {
                         if let Some(t) = &settings_tab {
                             ws.open_settings(settings::Tab::parse(t), window, cx);
                         }
+                        if source {
+                            ws.set_mode(ViewMode::Source, window, cx);
+                        }
                         true
                     })
                     .unwrap_or(true);
@@ -283,6 +295,25 @@ fn main() {
 
         if let Some(steps) = args.stress {
             cx.spawn(async move |cx| {
+                // Without `--synthetic` the run edits the opened note (and
+                // saves it): wait for the vault to index and the note to open.
+                while synthetic.is_none() {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(50))
+                        .await;
+                    let ready = window
+                        .update(cx, |ws, window, cx| {
+                            let open = ws.is_loaded() && ws.current().is_some();
+                            if open {
+                                ws.set_mode(ViewMode::Source, window, cx);
+                            }
+                            open
+                        })
+                        .unwrap_or(true);
+                    if ready {
+                        break;
+                    }
+                }
                 let started = std::time::Instant::now();
                 for step in 0..steps {
                     cx.background_executor()
@@ -293,9 +324,14 @@ fn main() {
                             .update(cx, |editor, cx| editor.stress_step(step, window, cx));
                     });
                 }
-                // Let the last parse land before reporting.
+                // Let the last parse land (and, on a real note, the autosave
+                // fire) before reporting.
                 cx.background_executor()
-                    .timer(std::time::Duration::from_millis(1500))
+                    .timer(std::time::Duration::from_millis(if synthetic.is_some() {
+                        1500
+                    } else {
+                        3000
+                    }))
                     .await;
                 let report = window
                     .update(cx, |ws, _, cx| ws.editor().read(cx).report())

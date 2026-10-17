@@ -121,6 +121,8 @@ pub enum RBlock {
     },
     ThematicBreak,
     Code {
+        /// Unique within one model, for GPUI element ids.
+        id: usize,
         language: Option<String>,
         text: String,
     },
@@ -288,6 +290,7 @@ impl<'v> Builder<'v> {
             },
             BlockKind::ThematicBreak => RBlock::ThematicBreak,
             BlockKind::CodeBlock { info, content, .. } => RBlock::Code {
+                id: self.id(),
                 language: info
                     .as_deref()
                     .and_then(|i| i.split_whitespace().next())
