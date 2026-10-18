@@ -220,6 +220,26 @@ chronologically still steps correctly. A format  cannot render is
 refused outright, because here the format is a path and a wrong one is a
 note in the wrong place.
 
+### Adapt to system, and an invented clamp, 2026-10-18
+
+Two bugs found while landing the Settings dropdowns, neither of which
+writes a byte, so neither was a gate problem — but the first made a
+setting a lie.
+
+`Theme::from_appearance` matched `moonstone` and sent everything else to
+the dark theme, so `theme: "system"` — Obsidian's default, and what a vault
+with no theme key means — rendered dark forever, while the Settings row
+promised "on restart". The scheme now follows the desktop: gpui's
+`Window::appearance` answers it, and since the theme global is built before
+a window exists, it is rebuilt once there is one.
+
+The other was `base_font_size.clamp(10, 40)`, a range  invented. The
+probe settled both halves of it: Obsidian's own slider offers 10 to 30, and
+Obsidian neither clamps nor rewrites a file holding something else — 99 sat
+in `appearance.json` through a whole session untouched. So the file's value
+is honoured, with a floor that only keeps a zero out of the layout, and the
+slider's own range is the observed one.
+
 ### The save that would not refuse, 2026-10-18
 
 A gate review of every path by which  writes into the vault turned up
