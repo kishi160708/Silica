@@ -400,30 +400,51 @@ mod tests {
             modifiers: mods.iter().map(|m| m.to_string()).collect(),
             key: key.to_string(),
         };
+        // `Mod` is Obsidian's platform modifier: Cmd on macOS, Ctrl
+        // everywhere else. A literal `Ctrl` stays Ctrl on every platform,
+        // because on macOS the two are different keys.
+        let (md, mk) = if cfg!(target_os = "macos") {
+            ("Cmd", "cmd")
+        } else {
+            ("Ctrl", "ctrl")
+        };
         assert_eq!(
             hotkey_label(&hk(&["Mod", "Shift"], "F")),
-            "Ctrl + Shift + F"
+            format!("{md} + Shift + F")
         );
         assert_eq!(
             hotkey_label(&hk(&["Mod", "Alt"], "ArrowLeft")),
-            "Ctrl + Alt + ←"
+            format!("{md} + Alt + ←")
         );
-        assert_eq!(hotkey_label(&hk(&["Mod"], "l")), "Ctrl + L");
+        assert_eq!(hotkey_label(&hk(&["Mod"], "l")), format!("{md} + L"));
         assert_eq!(hotkey_label(&hk(&[], "F2")), "F2");
         assert_eq!(
             keystroke(&hk(&["Mod", "Shift"], "F")).unwrap(),
-            "ctrl-shift-f"
+            format!("{mk}-shift-f")
         );
         assert_eq!(
             keystroke(&hk(&["Mod", "Alt"], "ArrowLeft")).unwrap(),
-            "ctrl-alt-left"
+            format!("{mk}-alt-left")
         );
-        assert_eq!(keystroke(&hk(&["Mod"], ",")).unwrap(), "ctrl-,");
+        assert_eq!(keystroke(&hk(&["Mod"], ",")).unwrap(), format!("{mk}-,"));
         assert_eq!(
             keystroke(&hk(&["Ctrl"], "PageDown")).unwrap(),
             "ctrl-pagedown"
         );
         assert_eq!(keystroke(&hk(&[], "F1")).unwrap(), "f1");
         assert_eq!(keystroke(&hk(&["Hyper"], "F1")), None);
+
+        // The mapping above mirrors the implementation's `cfg!`, so it would
+        // still pass with the two branches swapped. These hold whichever way
+        // round they are: on macOS `Mod` is the Cmd key and so matches `Meta`
+        // while differing from `Ctrl`; elsewhere it is the Ctrl key.
+        let m = |mods: &[&str]| hotkey_label(&hk(mods, "F"));
+        if cfg!(target_os = "macos") {
+            assert_eq!(m(&["Mod"]), m(&["Meta"]));
+            assert_ne!(m(&["Mod"]), m(&["Ctrl"]));
+        } else {
+            assert_eq!(m(&["Mod"]), m(&["Ctrl"]));
+            assert_ne!(m(&["Mod"]), m(&["Meta"]));
+        }
     }
 }
