@@ -432,6 +432,106 @@ fn accepting_a_suggestion_replaces_only_the_query_and_undoes_cleanly() {
 }
 
 #[test]
+fn writing_a_block_id_touches_only_that_block_and_reindexes_onto_it() {
+    use _suggest::blocks::{new_id, plan_id, Placement};
+    let (mut checked, mut refused) = (0, 0);
+    for note in notes_under_test() {
+        let raw = std::fs::read_to_string(&note).unwrap();
+        let buf = TextBuffer::from_file(&raw);
+        // The planning is over the file's own bytes, endings and all.
+        let text = raw.as_str();
+        let nl = if buf.crlf() { "\r\n" } else { "\n" };
+        let meta = index_markdown(buf.text());
+        // Three blocks per note is enough to cover the shapes without
+        // making the corpus pass take minutes.
+        let blocks: Vec<_> = meta
+            .sections
+            .iter()
+            .filter(|s| s.id.is_none())
+            .filter_map(|s| Placement::of(s.kind).map(|p| (s.position.end.offset, p)))
+            .take(3)
+            .collect();
+        for (end, placement) in blocks {
+            // The cache's offsets are into the buffer's text, which has had
+            // a BOM and CRLF taken off; map back onto the raw bytes.
+            let Some(end) = raw_offset(&raw, buf.text(), end) else {
+                continue;
+            };
+            let id = new_id(end as u64, &meta.blocks);
+            // A block an id cannot be written onto is refused rather than
+            // written to: an unclosed code fence runs to the end of the
+            // file, and an id after it would land inside the fence.
+            let Some(ins) = plan_id(text, end, placement, &id, nl) else {
+                refused += 1;
+                continue;
+            };
+            let after = ins.applied(text);
+            checked += 1;
+            // Only the insertion changed: everything before it and
+            // everything after what it replaced is the note's own bytes.
+            assert_eq!(
+                &after[..ins.range.start],
+                &text[..ins.range.start],
+                "bytes before the id moved in {}",
+                note.display()
+            );
+            assert_eq!(
+                &after[ins.range.start + ins.text.len()..],
+                &text[ins.range.end..],
+                "bytes after the id moved in {}",
+                note.display()
+            );
+            // The id reads back onto a block, which is what makes the link
+            //  just wrote resolve rather than dangle.
+            let reindexed = index_markdown(TextBuffer::from_file(&after).text());
+            assert!(
+                reindexed.blocks.contains_key(&id),
+                "the id did not re-index onto a block in {} ({placement:?})",
+                note.display()
+            );
+            // A note is only ever written with its own endings.
+            if buf.crlf() {
+                assert!(
+                    !ins.text.contains('\n') || ins.text.contains("\r\n"),
+                    "a bare newline reached a CRLF note: {}",
+                    note.display()
+                );
+            }
+        }
+    }
+    assert!(checked > 100, "only {checked} blocks were written to");
+    // The refusals are the rare shape, not the common one.
+    assert!(
+        refused * 20 < checked,
+        "{refused} blocks of {checked} refused an id"
+    );
+}
+
+/// The offset in `raw` of the byte at `at` in `text`, where `text` is `raw`
+/// with a byte order mark and carriage returns taken off.
+fn raw_offset(raw: &str, text: &str, at: usize) -> Option<usize> {
+    if raw.len() == text.len() {
+        return (at <= raw.len()).then_some(at);
+    }
+    // Walk both, skipping what the buffer dropped.
+    let (mut r, mut t) = (0usize, 0usize);
+    let rb = raw.as_bytes();
+    while t < at && r < rb.len() {
+        if rb[r] == b'\r' && rb.get(r + 1) == Some(&b'\n') {
+            r += 1;
+            continue;
+        }
+        if r == 0 && raw.starts_with('\u{feff}') {
+            r += '\u{feff}'.len_utf8();
+            continue;
+        }
+        r += 1;
+        t += 1;
+    }
+    (t == at).then_some(r)
+}
+
+#[test]
 fn a_table_command_stays_inside_its_table_and_undoes_cleanly() {
     use _text::table::{tables, TableCommand};
     const COMMANDS: &[TableCommand] = &[

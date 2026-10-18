@@ -6,6 +6,7 @@
 //! first; a query is fuzzy matched. See
 //! [[Specification#Observed autocompletion behavior, Obsidian 1.14.4]].
 
+use crate::blocks::Placement;
 use crate::trigger::{Kind, Triggered};
 use _cache::{frontmatter_aliases, MetadataCache};
 use _formats::FileKind;
@@ -46,14 +47,26 @@ pub enum Item {
         heading: String,
         level: u8,
     },
-    /// A block of a file, by the id it already carries. `path` is empty for
-    /// a block of the note being edited (`[[#^`).
-    Block { path: String, id: String },
+    /// A block of a file. `path` is empty for a block of the note being
+    /// edited (`[[#^`).
+    Block { path: String, id: BlockId },
     /// A tag, without its `#`.
     Tag { tag: String },
     /// The query as typed: a note that does not exist yet, or display text
     /// after a `|` that is not one of the target's aliases.
     Literal,
+}
+
+/// The id a block row links by: the one it carries, or the one that has to
+/// be written into the target note before the link can be made.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BlockId {
+    Existing(String),
+    /// Where the block ends in the target's text, and how an id goes in.
+    New {
+        end: usize,
+        placement: Placement,
+    },
 }
 
 /// One row of the popup.
@@ -238,36 +251,88 @@ fn block_suggestions(path: &str, query: &str, v: &Vault<'_>) -> Vec<Suggestion> 
         return Vec::new();
     };
     let text = (v.text)(&target).unwrap_or_default();
+    let shown_path = if path.is_empty() {
+        String::new()
+    } else {
+        target.clone()
+    };
+    // Every block of the note in document order: the sections Obsidian
+    // writes an id onto, and a list's items rather than the list itself.
+    let sections = meta.sections.iter().filter_map(|s| {
+        let placement = Placement::of(s.kind)?;
+        Some((s.position, s.id.clone(), placement))
+    });
+    let items = meta
+        .list_items
+        .iter()
+        .map(|i| (i.position, i.id.clone(), Placement::Inline));
     let mut rows: Vec<(usize, Suggestion)> = Vec::new();
-    for block in meta.blocks.values() {
-        let at = block.position.start.offset;
-        let label = block_label(
-            &text,
-            block.position.start.offset..block.position.end.offset,
-        );
-        let item = Item::Block {
-            path: if path.is_empty() {
-                String::new()
-            } else {
-                target.clone()
+    for (position, carried, placement) in sections.chain(items) {
+        let label = block_label(&text, position.start.offset..position.end.offset);
+        if label.is_empty() {
+            continue;
+        }
+        let id = match carried {
+            Some(id) => BlockId::Existing(id),
+            None => BlockId::New {
+                end: position.end.offset,
+                placement,
             },
-            id: block.id.clone(),
         };
-        let mut s = Suggestion::new(item, label.clone(), Some(format!("^{}", block.id)));
+        let detail = match &id {
+            BlockId::Existing(id) => Some(format!("^{id}")),
+            BlockId::New { .. } => None,
+        };
+        let item = Item::Block {
+            path: shown_path.clone(),
+            id: id.clone(),
+        };
+        let mut s = Suggestion::new(item, label.clone(), detail);
         if !query.is_empty() {
-            // The query matches the block's text or its id, either way.
-            let by_label = fuzzy_match(query, &label);
-            let by_id = fuzzy_match(query, &block.id);
-            match by_label.or(by_id) {
-                Some(m) if m.ranges.iter().all(|r| r.end <= label.len()) => s.ranges = m.ranges,
-                Some(_) => {}
+            // A caret query is matched as a substring, not fuzzily the way
+            // a file query is: Obsidian offers `A paragraph.` for `^ara`
+            // and does not offer `Some text with ...`, which a subsequence
+            // match would. It matches the block's text or the id it
+            // carries, either way and whatever the case.
+            let by_id = match &id {
+                BlockId::Existing(id) => contains_fold(id, query).is_some(),
+                BlockId::New { .. } => false,
+            };
+            match contains_fold(&label, query) {
+                Some(range) => s.ranges = vec![range],
+                None if by_id => {}
                 None => continue,
             }
         }
-        rows.push((at, s));
+        rows.push((position.start.offset, s));
     }
+    // A list and its only item can start at the same byte; the item wins,
+    // being the row Obsidian offers.
     rows.sort_by_key(|(at, _)| *at);
+    rows.dedup_by(|a, b| a.0 == b.0);
     rows.into_iter().map(|(_, s)| s).collect()
+}
+
+/// Where `needle` sits in `hay`, ignoring case. ASCII-folded, which is
+/// what a block id and the text around one are in practice.
+fn contains_fold(hay: &str, needle: &str) -> Option<Range<usize>> {
+    let (h, n) = (hay.to_lowercase(), needle.to_lowercase());
+    // Lowercasing can change byte lengths, so the hit is mapped back by
+    // walking the original's char boundaries.
+    let at = h.find(&n)?;
+    let prefix_chars = h[..at].chars().count();
+    let start = hay
+        .char_indices()
+        .nth(prefix_chars)
+        .map(|(i, _)| i)
+        .unwrap_or(hay.len());
+    let len_chars = n.chars().count();
+    let end = hay[start..]
+        .char_indices()
+        .nth(len_chars)
+        .map(|(i, _)| start + i)
+        .unwrap_or(hay.len());
+    Some(start..end)
 }
 
 /// What a block row reads: the block's own text with the `^id` taken off,

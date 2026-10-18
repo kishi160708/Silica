@@ -131,10 +131,15 @@ fn parts(t: &Triggered<'_>, item: &Item, v: &Vault<'_>, opts: &Options) -> Parts
             markdown: true,
         },
         // A block pick follows the heading rule for the path, and writes no
-        // display text at all: `[](Gamma.md#^id)` in markdown style.
+        // display text at all: `[](Gamma.md#^id)` in markdown style. A
+        // block with no id of its own cannot be linked until one is
+        // written, which the caller does before asking for the link.
         Item::Block { id, .. } => Parts {
             path: parse_linktext(t.query).path.to_string(),
-            subpath: format!("#^{id}"),
+            subpath: match id {
+                crate::BlockId::Existing(id) => format!("#^{id}"),
+                crate::BlockId::New { .. } => "#^".to_string(),
+            },
             display: None,
             resolved: true,
             markdown: true,

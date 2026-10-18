@@ -19,10 +19,11 @@
 //! assert_eq!(t.query, "Alpha#first");
 //! ```
 
+pub mod blocks;
 mod candidates;
 mod insert;
 mod trigger;
 
-pub use candidates::{suggestions, Item, Suggestion, Vault, LIMIT};
+pub use candidates::{suggestions, BlockId, Item, Suggestion, Vault, LIMIT};
 pub use insert::{insert, Accept, Insertion, Options};
 pub use trigger::{trigger, Kind, Triggered};

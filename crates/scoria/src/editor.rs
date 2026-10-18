@@ -43,7 +43,8 @@ use gpui::{
 use _formats::config::PropertyTypes;
 use _formats::properties::{self as props, PropertiesInDocument};
 use _markdown::highlight::{flatten, highlight_lines, HighlightKind, HighlightSpan};
-use _suggest::{self as suggest, Accept, Suggestion};
+use _suggest::blocks::{self, IdInsertion, Placement};
+use _suggest::{self as suggest, Accept, BlockId, Suggestion};
 use _text::table::{self, TableCommand};
 use _text::{find, shifted, Cursor, Cursors, EditKind, Sel, TextBuffer};
 use std::collections::{HashMap, HashSet};
@@ -153,6 +154,16 @@ pub fn bind_keys(cx: &mut App) {
     ]);
 }
 
+/// The dominant line ending of `text`, which is what a write into it uses.
+fn newline_of(text: &str) -> &'static str {
+    let crlf = text.matches("\r\n").count();
+    if crlf > 0 && crlf * 2 >= text.matches('\n').count() {
+        "\r\n"
+    } else {
+        "\n"
+    }
+}
+
 /// Horizontal padding either side of the text.
 const GUTTER: f32 = 24.0;
 /// Obsidian's readable line length (`--file-line-width`).
@@ -167,6 +178,8 @@ pub enum EditorEvent {
     Edited,
     /// A rendered link was clicked in Live Preview (or Ctrl+clicked).
     OpenLink(LinkTarget),
+    /// Something the editor could not do, for the status bar.
+    Reported(SharedString),
     /// A property's type was chosen from its menu; the workspace records it
     /// in the vault's `types.json`.
     PropertyTypeAssigned {
@@ -2230,13 +2243,34 @@ impl Editor {
         let Some(state) = self.suggest_vault.clone() else {
             return false;
         };
-        let Some(s) = self.suggest.as_ref() else {
+        let Some((item, at, end)) = self.suggest.as_ref().and_then(|s| {
+            let item = s.items.get(ix).map(|row| row.item.clone())?;
+            Some((item, s.line, s.range.end))
+        }) else {
             return false;
         };
-        let Some(item) = s.items.get(ix).map(|s| s.item.clone()) else {
-            return false;
+        // A block with no id of its own cannot be linked until one is
+        // written. The id goes in first, into this note or into the other
+        // one, and the link is only written if that succeeded.
+        let (item, own_note) = match item {
+            suggest::Item::Block {
+                path,
+                id: BlockId::New { end, placement },
+            } => match self.write_block_id(&state, &path, end, placement, cx) {
+                Some((id, own)) => (
+                    suggest::Item::Block {
+                        path,
+                        id: BlockId::Existing(id),
+                    },
+                    own,
+                ),
+                None => {
+                    self.close_suggest(cx);
+                    return false;
+                }
+            },
+            other => (other, None),
         };
-        let (at, end) = (s.line, s.range.end);
         let line_start = self.buf.line_range(at).start;
         let line = self.buf.line_text(at).to_string();
         let Some(t) = suggest::trigger(&line, end) else {
@@ -2263,13 +2297,91 @@ impl Editor {
             )
         };
         let range = line_start + t.range.start..line_start + t.range.end + ins.consume;
-        let cursor = range.start + ins.cursor;
+        let mut cursor = range.start + ins.cursor;
         self.suggest = None;
+        // An id written into this very note is part of the same edit, so
+        // one undo takes back the whole accept.
+        let mut edits = vec![(range.clone(), ins.text)];
+        if let Some(id_ins) = own_note {
+            if id_ins.range.start <= range.start {
+                let grew = id_ins.text.len() as isize - id_ins.range.len() as isize;
+                cursor = (cursor as isize + grew).max(0) as usize;
+            }
+            edits.push((id_ins.range, id_ins.text));
+        }
         // One undo step, and the cursor where the insertion asks for it:
         // after the link for Enter, inside the brackets for Tab, where
         // `after_edit` opens the popup again on what is left to type.
-        self.edit_many(vec![(range, ins.text)], cursor, None, window, cx);
+        self.edit_many(edits, cursor, None, window, cx);
         true
+    }
+
+    /// Writes an id onto the block a row points at, so the row can be
+    /// linked to.
+    ///
+    /// Returns the id, and the edit to fold into this note's own when the
+    /// block is in the note being edited — that case has to go through the
+    /// buffer, or the next save would write the id straight back out.
+    /// `None` when nothing could be written, and the accept is abandoned.
+    fn write_block_id(
+        &mut self,
+        state: &Arc<VaultState>,
+        path: &str,
+        end: usize,
+        placement: Placement,
+        cx: &mut Context<Self>,
+    ) -> Option<(String, Option<IdInsertion>)> {
+        let target = if path.is_empty() {
+            self.name.to_string()
+        } else {
+            path.to_string()
+        };
+        let own = target == self.name.as_ref();
+        // The note being edited is planned against the buffer, which is
+        // ahead of the disk; another note against its own bytes.
+        let text = if own {
+            self.buf.text().to_string()
+        } else {
+            state.texts().get(&target)?.to_string()
+        };
+        let id = {
+            let cache = state.cache();
+            let taken = cache.file(&target).map(|m| m.blocks.clone())?;
+            blocks::new_id(self.id_seed(), &taken)
+        };
+        let nl = if self.buf.crlf() && own {
+            "\r\n"
+        } else {
+            newline_of(&text)
+        };
+        // A block an id cannot be written onto is refused rather than
+        // written to, so a link  writes always resolves.
+        let Some(insertion) = blocks::plan_id(&text, end, placement, &id, nl) else {
+            cx.emit(EditorEvent::Reported(
+                format!("No id can be written onto that block in {target}").into(),
+            ));
+            return None;
+        };
+        if own {
+            return Some((id, Some(insertion)));
+        }
+        match state.write_block_id(&target, &text, &insertion) {
+            Ok(()) => Some((id, None)),
+            Err(err) => {
+                cx.emit(EditorEvent::Reported(err.into()));
+                None
+            }
+        }
+    }
+
+    /// A seed for a fresh block id. The clock is the only randomness the
+    /// workspace has, and an id only has to be unique within its note.
+    fn id_seed(&self) -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0)
+            ^ (self.buf.head as u64).wrapping_mul(0x9e37_79b9)
     }
 
     /// Where the popup is drawn: under the start of the query, in the

@@ -206,15 +206,29 @@ the kinds it offers and their labels, how the caret query filters, the
 six-lowercase-hex id (180 generated in a row were 180 distinct values), and
 the byte-for-byte placement of a written id for a paragraph and a heading.
 
-**Only blocks that already carry an id are offered.** Obsidian also offers
-blocks without one and writes an id into the *target* note when such a row
-is accepted; that is a write into a second file, and it waits for its own
-change. The probe step that would have settled the placement for a table, a
-code block, a callout, a quote, a math block and a list item typed into the
-very note it was reading and spoiled its own fixture, so those kinds have no
-observed placement yet either. Offering a row  cannot link to would be
-worse than offering nothing, which is the rule the empty block list
-followed before.
+Every block is offered, and accepting one whose block has no id writes the
+id into the *target* note — a write into a file the user never opened,
+which is the shape of change the Writer gate exists to catch. The second
+probe settled the placement for every kind, and there are only two shapes:
+a block whose text ends a line takes ` ^id` inline, and a block that spans
+lines takes `^id` on a line of its own with a blank line either side. The
+id is six lowercase hex characters that the note does not already use.
+
+The write goes through `VaultState::write_block_id`, which re-reads the
+file and refuses unless the bytes are the ones the insertion was planned
+against; the watcher then re-indexes it, the same path a save takes. A
+block in the note being edited is the load-bearing exception: its id is
+folded into the editor's own edit, so one undo takes back the whole accept
+and the next save cannot write the id straight back out.
+
+Two things are 's own. Obsidian writes LF newlines into a CRLF note
+and leaves it mixed, as it does for properties;  writes the note's
+own ending. And a block an id cannot be written onto is refused rather than
+written to — `blocks::plan_id` applies the insertion and re-indexes it
+before offering it, which the real vault proved necessary: a note whose
+code fence is never closed runs to the end of the file, so an id written
+after it lands *inside* the fence, indexes as nothing, and would leave a
+dangling link in a file that had changed for it.
 
 ### Autocompletion, 2026-10-18
 

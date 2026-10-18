@@ -453,14 +453,26 @@ fn headings_come_in_document_order_with_the_h1() {
 }
 
 #[test]
-fn blocks_that_carry_an_id_are_offered_in_document_order() {
+fn every_block_is_offered_in_document_order() {
     let f = Fixture::new();
     let v = f.vault("Scratch.md");
     let t = trigger("[[Alpha#^", 9).expect("triggers");
     let rows = suggestions(&t, &v);
-    // The id is stripped from the label and shown beside it.
+    // The rows Obsidian offered for this note, in this order.
     let labels: Vec<String> = rows.iter().map(|s| s.label.clone()).collect();
-    assert_eq!(labels, ["A paragraph.", "Another paragraph."]);
+    assert_eq!(
+        labels,
+        [
+            "# Alpha",
+            "Some text with #inline-tag and #project/alpha here.",
+            "## First Heading",
+            "A paragraph.",
+            "### Nested Heading",
+            "Another paragraph.",
+        ]
+    );
+    // An id a block already carries is stripped from its label and shown
+    // beside it; a block without one shows nothing there.
     let detail: Vec<String> = rows.iter().filter_map(|s| s.detail.clone()).collect();
     assert_eq!(detail, ["^blockone", "^block-two"]);
 }
@@ -533,5 +545,6 @@ fn blocks_of_the_note_being_edited_come_from_the_empty_path() {
         .iter()
         .map(|s| s.label.clone())
         .collect();
-    assert_eq!(labels, ["A paragraph.", "Another paragraph."]);
+    assert_eq!(labels.first().map(String::as_str), Some("# Alpha"));
+    assert_eq!(labels.len(), 6);
 }

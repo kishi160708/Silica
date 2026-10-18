@@ -468,8 +468,32 @@ Where  deliberately differs, because Obsidian loses bytes:
   `# Crlf\n\n^id\n\r\n\r\npara`, a mixed file.  writes the file's own
   dominant ending throughout, as it already does for properties.
 
-**Unprobed:** the byte-for-byte placement for a table, a fenced or indented
-code block, a callout, a blockquote, a display-math block and a list item —
-the step that would have shown them typed into the very note it was reading
-and spoiled its own fixture.  offers those rows only when the block
-already has an id until a second run settles them.
+Where the id goes depends on the kind, and there are only two shapes. A
+block whose text ends a line takes the id **inline**, and a block that
+spans lines takes it on a **line of its own** with a blank line either side:
+
+| Kind | Written |
+| --- | --- |
+| paragraph | `last line ^id` |
+| list item | `- alpha item ^id`, and on the parent's own line when it has a nested child |
+| heading | `## H\n\n^id\n` |
+| table | `\| 1 \| 2 \|\n\n^id\n` |
+| fenced code | ` ```\n\n^id\n ` |
+| indented code | `    second line\n\n^id\n` |
+| callout | `> body line\n\n^id\n` |
+| blockquote | `> second line\n\n^id\n` |
+| display math | `$$\n\n^id\n` |
+
+A list item inside a blockquote or a callout is not addressed as an item at
+all: the row is the quote, and the id goes on its own line after the whole
+quote. At the end of a file with no trailing newline, an inline id is
+appended and the file still ends without one
+(`last paragraph ^id`), while an own-line id brings a trailing newline with
+it (`\| 1 \| 2 \|\n\n^id\n`).
+
+A block that already carries an id is linked by it and the file is not
+written at all — its bytes and its modification time are both untouched.
+
+**Unprobed:** an ordered list item and a list item at the end of a file,
+whose accept steps did not fire; the inline rule is taken from the two
+unordered samples that did.

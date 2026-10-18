@@ -498,6 +498,29 @@ impl VaultState {
 
     /// Renames or moves a file or folder, rewrites the links to it in every
     /// note (when `update_links`), and brings the index up to date.
+    /// Writes a block id into `path`, which is a note the user is not
+    /// editing. The bytes on disk have to be the bytes the insertion was
+    /// planned against: the vault is the source of truth, and a note that
+    /// moved underneath is left alone rather than overwritten.
+    ///
+    /// The file is written and the watcher re-indexes it, which is the same
+    /// path a save takes.
+    pub fn write_block_id(
+        &self,
+        path: &str,
+        before: &str,
+        insertion: &_suggest::blocks::IdInsertion,
+    ) -> Result<(), String> {
+        let absolute = self.vault().absolute(path);
+        let on_disk = std::fs::read_to_string(&absolute)
+            .map_err(|e| format!("Could not read {path}: {e}"))?;
+        if on_disk != before {
+            return Err(format!("{path} changed on disk; no id was written"));
+        }
+        std::fs::write(&absolute, insertion.applied(&on_disk).as_bytes())
+            .map_err(|e| format!("Could not write {path}: {e}"))
+    }
+
     pub fn rename(
         &self,
         from: &str,
@@ -881,6 +904,7 @@ impl Workspace {
                     EditorEvent::PropertyTypeAssigned { key, ty } => {
                         this.assign_property_type(key.clone(), *ty, cx)
                     }
+                    EditorEvent::Reported(message) => this.report(message.clone(), cx),
                 }),
             ];
         // Closing the window must not lose edits waiting for the autosave.
