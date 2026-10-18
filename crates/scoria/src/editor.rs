@@ -19,8 +19,10 @@
 use crate::find;
 use crate::lists::{self, Continuation};
 use crate::preview::{self, DisplayLine, Piece};
+use crate::properties::{self, Field, Part, Target};
 use crate::reading::model::{build_widgets, BuildOptions, EmbedSource, LinkTarget, RBlock, Widget};
 use crate::reading::view::{LinkHandler, Renderer, ToggleHandler};
+use crate::reading::view::{PropertiesHost, PropertyAction};
 use crate::text_input::{InputEvent, TextInput};
 use crate::theme::Theme;
 use gpui::{
@@ -32,6 +34,8 @@ use gpui::{
     StrikethroughStyle, Style, Subscription, Task, TextAlign, TextRun, TextStyle, UTF16Selection,
     UnderlineStyle, Window, WrappedLine,
 };
+use _formats::config::PropertyTypes;
+use _formats::properties::{self as props, PropertiesInDocument};
 use _markdown::highlight::{flatten, highlight_lines, HighlightKind, HighlightSpan};
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
@@ -156,6 +160,12 @@ pub enum EditorEvent {
     Edited,
     /// A rendered link was clicked in Live Preview (or Ctrl+clicked).
     OpenLink(LinkTarget),
+    /// A property's type was chosen from its menu; the workspace records it
+    /// in the vault's `types.json`.
+    PropertyTypeAssigned {
+        key: String,
+        ty: props::PropertyType,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -519,6 +529,18 @@ pub struct Editor {
     /// Resolves embeds for the widgets; `None` before a vault is open.
     embed_source: Option<Arc<dyn EmbedSource + Send + Sync>>,
     build_options: BuildOptions,
+    /// The vault's `types.json`, for the type each property row shows.
+    property_types: PropertyTypes,
+    /// `propertiesInDocument`: the table, nothing, or the raw YAML.
+    properties_in_document: PropertiesInDocument,
+    /// The properties field being typed into, if any. While it is open the
+    /// editor's keys go to the field instead of the document, and the
+    /// document changes once on commit rather than per keystroke.
+    property_field: Option<Field>,
+    /// Whether the properties block is collapsed.
+    properties_folded: bool,
+    /// The property whose type menu is open.
+    property_menu: Option<String>,
     generation: u64,
     pub stats: ParseStats,
     layout: Layout,
@@ -605,6 +627,11 @@ impl Editor {
             widget_heights: HashMap::new(),
             embed_source: None,
             build_options: BuildOptions::default(),
+            property_types: PropertyTypes::default(),
+            properties_in_document: PropertiesInDocument::default(),
+            property_field: None,
+            properties_folded: false,
+            property_menu: None,
             generation: 0,
             stats: ParseStats::default(),
             layout: Layout::default(),
@@ -721,6 +748,16 @@ impl Editor {
         self.embed_source = source;
         self.build_options = opts;
         self.request_parse(cx);
+    }
+
+    /// The vault's `types.json`, for the properties widget's type glyphs.
+    pub fn set_property_types(&mut self, types: PropertyTypes) {
+        self.property_types = types;
+    }
+
+    /// `propertiesInDocument` from `app.json`.
+    pub fn set_properties_in_document(&mut self, mode: PropertiesInDocument) {
+        self.properties_in_document = mode;
     }
 
     /// Editor settings from `app.json`: smart lists, and tabs or spaces.
@@ -1063,6 +1100,12 @@ impl Editor {
     }
 
     fn widget_is_folded(&self, entry: &(Range<usize>, Widget)) -> bool {
+        // The properties block stays a table wherever the cursor is: it is
+        // edited in its own fields, not by revealing the YAML. `Show as
+        // source` in `propertiesInDocument` is what reveals it instead.
+        if matches!(entry.1.block, RBlock::Properties(_)) {
+            return self.properties_in_document != PropertiesInDocument::Source;
+        }
         let span = self.line_starts[entry.0.start]..self.line_range(entry.0.end - 1).end;
         let primary = Sel {
             anchor: self.anchor,
@@ -1817,10 +1860,20 @@ impl Editor {
     }
 
     fn move_left(&mut self, _: &MoveLeft, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(f) = self.property_field.as_mut() {
+            f.left();
+            cx.notify();
+            return;
+        }
         self.horizontal(true, false, window, cx);
     }
 
     fn move_right(&mut self, _: &MoveRight, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(f) = self.property_field.as_mut() {
+            f.right();
+            cx.notify();
+            return;
+        }
         self.horizontal(false, false, window, cx);
     }
 
@@ -1904,10 +1957,20 @@ impl Editor {
     }
 
     fn line_start(&mut self, _: &LineStart, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(f) = self.property_field.as_mut() {
+            f.home();
+            cx.notify();
+            return;
+        }
         self.row_boundary(false, false, window, cx);
     }
 
     fn line_end(&mut self, _: &LineEnd, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(f) = self.property_field.as_mut() {
+            f.end();
+            cx.notify();
+            return;
+        }
         self.row_boundary(true, false, window, cx);
     }
 
@@ -1965,6 +2028,11 @@ impl Editor {
     // ----- editing actions -------------------------------------------------------
 
     fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(f) = self.property_field.as_mut() {
+            f.backspace();
+            cx.notify();
+            return;
+        }
         let kind = if self.selection().is_empty() {
             EditKind::Backspace
         } else {
@@ -1974,6 +2042,11 @@ impl Editor {
     }
 
     fn delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(f) = self.property_field.as_mut() {
+            f.delete();
+            cx.notify();
+            return;
+        }
         let kind = if self.selection().is_empty() {
             EditKind::Delete
         } else {
@@ -2014,6 +2087,10 @@ impl Editor {
     /// numbering of ordered lists, and clears or outdents an empty item.
     /// With several cursors, or a selection, a plain newline at each.
     fn newline(&mut self, _: &Newline, window: &mut Window, cx: &mut Context<Self>) {
+        // Enter in a properties field commits it, as Obsidian's does.
+        if self.commit_property_field(Some(window), cx) {
+            return;
+        }
         let sel = self.selection();
         if !self.smart_indent_list || sel.start != sel.end || !self.extra.is_empty() {
             self.insert_all("\n", EditKind::Other, window, cx);
@@ -2043,6 +2120,26 @@ impl Editor {
     /// Tab: indents list items and selected lines by one step (renumbering
     /// the ordered lists it touches), and inserts the step anywhere else.
     fn tab(&mut self, _: &Tab, window: &mut Window, cx: &mut Context<Self>) {
+        // Tab commits a key field and moves to that property's value, as
+        // Obsidian's key input does (`enterkeyhint="next"`). From a value
+        // field it just commits, since there is nothing after it.
+        if let Some(field) = self.property_field.clone() {
+            self.commit_property_field(Some(window), cx);
+            // The key the commit left behind: what was typed, for both a
+            // rename and a newly named row.
+            let key = field.text.trim().to_string();
+            if field.part == Part::Key && !key.is_empty() {
+                if let Some(row) = self.property_rows().into_iter().find(|r| r.key == key) {
+                    self.property_field = Some(Field::new(
+                        Target::Existing(key),
+                        Part::Value,
+                        row.edit_text,
+                    ));
+                }
+            }
+            cx.notify();
+            return;
+        }
         let unit = lists::indent_unit(self.use_tab, self.tab_size);
         let sel = self.selection();
         let lines = self.selected_lines();
@@ -2222,9 +2319,11 @@ impl Editor {
         cx.notify();
     }
 
-    /// Escape: drops extra cursors first, then closes the panel.
+    /// Escape: abandons a properties field first, then drops extra cursors,
+    /// then closes the panel.
     fn close_find(&mut self, _: &CloseFind, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.extra.is_empty() && self.focus_handle.is_focused(window) {
+        if self.cancel_property_field(cx) {
+        } else if !self.extra.is_empty() && self.focus_handle.is_focused(window) {
             self.collapse_cursors();
             cx.notify();
         } else if self.find.open {
@@ -2532,6 +2631,204 @@ impl Editor {
             }
         }
         false
+    }
+
+    // ------------------------------------------------------- properties
+
+    /// The properties block of the note as it stands, or `None` when it has
+    /// none.
+    fn properties(&self) -> Option<props::Properties> {
+        _cache::note_properties(&self.text)
+    }
+
+    /// The display rows of the block, with each key's assigned type.
+    fn property_rows(&self) -> Vec<properties::Row> {
+        let Some(block) = self.properties() else {
+            return Vec::new();
+        };
+        let mut next_id = crate::properties::PROPERTY_ID_BASE;
+        properties::rows(
+            &block.entries,
+            |key| props::type_of(key, &block.entries, &self.property_types),
+            &mut next_id,
+        )
+    }
+
+    fn property_type_of(&self, key: &str) -> props::PropertyType {
+        match self.properties() {
+            Some(block) => props::type_of(key, &block.entries, &self.property_types),
+            None => props::PropertyType::Text,
+        }
+    }
+
+    /// Plans `changes` against the block and applies them as one undo step,
+    /// so a field commit is one `Ctrl+Z` away however many lines it moved.
+    fn apply_property_changes(
+        &mut self,
+        changes: &[props::Change],
+        window: Option<&mut Window>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(block) = self.properties() else {
+            // No block yet: a new property creates one above the body.
+            if let Some(props::Change::Set { key, value }) = changes.first() {
+                let nl = if self.crlf { "\r\n" } else { "\n" };
+                let text = props::new_block(key, value, nl);
+                // The buffer holds no BOM (it travels in `self.bom` and is
+                // put back on save), so the block goes at offset zero.
+                self.edit(0..0, &text, EditKind::Other, window, cx);
+            }
+            return;
+        };
+        let Some(edits) = props::plan(&self.text, &block, changes) else {
+            return;
+        };
+        let ranges: Vec<(Range<usize>, String)> = edits
+            .into_iter()
+            .map(|e| (e.start..e.end, e.text))
+            .collect();
+        // Keep the cursor where it was, clamped: the block above it may have
+        // grown or shrunk, and the caret lives in a field, not the document.
+        let head = self.head.min(self.text.len());
+        let after = Cursors {
+            sels: vec![Sel::at(head)],
+            primary: 0,
+        };
+        self.apply_edits(ranges, after, EditKind::Other);
+        self.after_edit(window, cx);
+    }
+
+    /// `markdown:add-metadata-property`: opens an unnamed row at the end of
+    /// the block. Obsidian writes nothing to the file until the row is named
+    /// (confirmed with a probe: running the command left the note untouched).
+    pub fn add_property_row(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.property_action(PropertyAction::AddRow, window, cx);
+    }
+
+    /// `markdown:clear-metadata-properties`: removes every property, and with
+    /// it the fences, as Obsidian does (`---\na: 1\n---\nbody\n` leaves
+    /// `body\n`).
+    pub fn clear_properties(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.property_field = None;
+        let Some(block) = self.properties() else {
+            return;
+        };
+        let changes = properties::clear_all(&block.entries);
+        if !changes.is_empty() {
+            self.apply_property_changes(&changes, Some(window), cx);
+        }
+    }
+
+    /// `editor:toggle-fold-properties`.
+    pub fn toggle_properties_fold(&mut self, cx: &mut Context<Self>) {
+        self.properties_folded = !self.properties_folded;
+        cx.notify();
+    }
+
+    /// What the reader did to a property row.
+    fn property_action(
+        &mut self,
+        action: PropertyAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match action {
+            PropertyAction::Edit { target, part } => {
+                self.property_menu = None;
+                self.commit_property_field(Some(window), cx);
+                let text = match (&target, part) {
+                    (Target::New, _) => String::new(),
+                    (Target::Existing(key), Part::Key) => key.clone(),
+                    (Target::Existing(key), Part::Value) => self
+                        .property_rows()
+                        .into_iter()
+                        .find(|r| &r.key == key)
+                        .map(|r| r.edit_text)
+                        .unwrap_or_default(),
+                };
+                self.property_field = Some(Field::new(target, part, text));
+                cx.notify();
+            }
+            PropertyAction::Toggle { key } => {
+                let on = self
+                    .property_rows()
+                    .into_iter()
+                    .find(|r| r.key == key)
+                    .map(|r| matches!(r.value, properties::Display::Checkbox(true)))
+                    .unwrap_or(false);
+                self.apply_property_changes(
+                    &[props::Change::Set {
+                        key,
+                        value: props::Value::Checkbox(!on),
+                    }],
+                    Some(window),
+                    cx,
+                );
+            }
+            PropertyAction::Remove { key } => {
+                self.property_field = None;
+                self.apply_property_changes(&[props::Change::Remove { key }], Some(window), cx);
+            }
+            PropertyAction::Retype { key, ty } => {
+                self.property_menu = None;
+                if let Some(row) = self.property_rows().into_iter().find(|r| r.key == key) {
+                    let change = properties::retype(&row, ty);
+                    self.apply_property_changes(&[change], Some(window), cx);
+                }
+                // The assignment belongs in the vault's `types.json`, which
+                // the workspace owns; it writes the file and hands the new
+                // table back through `set_property_types`.
+                self.property_types
+                    .types
+                    .insert(key.clone(), ty.as_str().to_string());
+                cx.emit(EditorEvent::PropertyTypeAssigned { key, ty });
+                cx.notify();
+            }
+            PropertyAction::AddRow => {
+                self.commit_property_field(Some(window), cx);
+                self.property_field = Some(Field::new(Target::New, Part::Key, ""));
+                cx.notify();
+            }
+            PropertyAction::OpenTypeMenu { key } => {
+                // A second click on the same icon closes the menu.
+                self.property_menu = if self.property_menu.as_deref() == Some(key.as_str()) {
+                    None
+                } else {
+                    Some(key)
+                };
+                cx.notify();
+            }
+        }
+    }
+
+    /// Writes the open field into the document and closes it. Returns whether
+    /// a field was open.
+    fn commit_property_field(
+        &mut self,
+        window: Option<&mut Window>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(field) = self.property_field.take() else {
+            return false;
+        };
+        let ty = match field.key() {
+            Some(key) => self.property_type_of(key),
+            None => props::PropertyType::Text,
+        };
+        if let Some(change) = properties::commit(&field, ty) {
+            self.apply_property_changes(&[change], window, cx);
+        }
+        cx.notify();
+        true
+    }
+
+    /// Drops the open field without writing it.
+    fn cancel_property_field(&mut self, cx: &mut Context<Self>) -> bool {
+        let had = self.property_field.take().is_some();
+        if had {
+            cx.notify();
+        }
+        had
     }
 
     /// A click on a Live Preview widget: an embed keeps it (its links
@@ -2981,6 +3278,13 @@ impl EntityInputHandler for Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // A properties field takes the keystrokes while it is open; the
+        // document changes once, when the field commits.
+        if let Some(field) = self.property_field.as_mut() {
+            field.insert(new_text);
+            cx.notify();
+            return;
+        }
         let kind = if new_text.contains('\n') {
             EditKind::Other
         } else {
@@ -3522,13 +3826,44 @@ impl Element for EditorElement {
                     entity.update(cx, |_, cx| cx.emit(EditorEvent::OpenLink(target)));
                 }
             });
-            let on_toggle: ToggleHandler = Rc::new(|_, _| {});
-            let no_toggles = HashSet::new();
+            let on_toggle: ToggleHandler = Rc::new({
+                let entity = entity.clone();
+                move |id, cx| {
+                    if id == crate::properties::PROPERTIES_FOLD_ID {
+                        entity.update(cx, |e, cx| {
+                            e.properties_folded = !e.properties_folded;
+                            cx.notify();
+                        });
+                    }
+                }
+            });
+            // The properties block's fold state travels in the toggled set,
+            // the same place the reading view keeps callout folds.
+            let mut no_toggles = HashSet::new();
+            if editor.properties_folded {
+                no_toggles.insert(crate::properties::PROPERTIES_FOLD_ID);
+            }
+            let property_types = editor.property_types.clone();
+            // Live Preview's properties block is editable: the open field is
+            // drawn with its caret, and clicks come back as actions.
+            let properties_host = PropertiesHost {
+                field: editor.property_field.clone(),
+                mode: editor.properties_in_document,
+                menu: editor.property_menu.clone(),
+                on_action: Rc::new({
+                    let entity = entity.clone();
+                    move |action, window, cx| {
+                        entity.update(cx, |e, cx| e.property_action(action, window, cx));
+                    }
+                }),
+            };
             let renderer = Renderer::new(
                 &theme,
                 window.text_system().clone(),
                 f32::from(content_width),
                 &no_toggles,
+                &property_types,
+                Some(&properties_host),
                 on_link,
                 on_toggle,
             );

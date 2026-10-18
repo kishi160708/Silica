@@ -16,6 +16,7 @@ mod mentions;
 mod palette;
 mod preview;
 mod prompt;
+mod properties;
 mod reading;
 mod search;
 mod settings;

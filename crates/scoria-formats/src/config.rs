@@ -3,6 +3,7 @@
 //! Obsidian writes these sparsely (only keys that differ from defaults), so every
 //! typed field is optional and unknown keys are kept in `extra`.
 
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -517,13 +518,24 @@ impl CorePlugins {
 }
 
 /// `types.json`: property name to type.
+///
+/// The map keeps insertion order because Obsidian writes the file that way,
+/// seeded with `aliases`, `cssclasses` and `tags` before any key the user
+/// assigns; a sorted map would rewrite the whole file on the first save.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct PropertyTypes {
     #[serde(default)]
-    pub types: BTreeMap<String, String>,
+    pub types: IndexMap<String, String>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
-/// The property types Obsidian records in `types.json`.
+/// The type names Obsidian 1.14.4 registers (`registeredTypeWidgets`), which
+/// are the values `types.json` carries. `text`, `multitext`, `number`,
+/// `checkbox`, `date`, `datetime`, `tags` and `aliases` are the property
+/// types; `file`, `folder` and `property` serve Bases views and the
+/// properties type menu does not offer them. There is no `cssclasses` type:
+/// that key infers as `multitext`.
 pub const PROPERTY_TYPES: &[&str] = &[
     "text",
     "multitext",
@@ -533,7 +545,9 @@ pub const PROPERTY_TYPES: &[&str] = &[
     "datetime",
     "tags",
     "aliases",
-    "cssclasses",
+    "file",
+    "folder",
+    "property",
 ];
 
 #[cfg(test)]

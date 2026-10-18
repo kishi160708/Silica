@@ -32,6 +32,9 @@ thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 serde_yaml = "0.9"
+# Order-preserving map: Obsidian writes types.json in insertion order, so a
+# sorted map would rewrite the file on every save.
+indexmap = { version = "2", features = ["serde"] }
 walkdir = "2"
 tempfile = "3"
 rayon = "1"

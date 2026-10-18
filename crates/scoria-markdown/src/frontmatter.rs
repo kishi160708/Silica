@@ -25,7 +25,11 @@ pub fn extract_frontmatter(src: &str) -> Option<FrontMatter<'_>> {
             .map(|i| pos + i)
             .unwrap_or(body.len());
         let line = body[pos..line_end].trim_end_matches('\r');
-        if line == "---" || line == "..." {
+        // Only `---` closes the block. YAML's `...` document end does not:
+        // Obsidian 1.14.4 reads `---\na: 1\n...\n` as having no properties at
+        // all and prepends a second block when one is added (observed with a
+        // probe plugin), so `...` must not terminate the block here either.
+        if line == "---" {
             let yaml = &body[first_line_end + 1..pos];
             let end = if line_end < body.len() {
                 line_end + 1
@@ -69,6 +73,15 @@ mod tests {
         let fm = extract_frontmatter(src).unwrap();
         assert_eq!(fm.yaml, "k: v\r\n");
         assert_eq!(&src[fm.end..], "rest");
+    }
+
+    #[test]
+    fn yaml_document_end_does_not_close_the_block() {
+        // Obsidian 1.14.4 does not accept `...` as the closing fence.
+        assert!(extract_frontmatter("---\nk: v\n...\nrest\n").is_none());
+        // It still closes on a later `---`.
+        let fm = extract_frontmatter("---\nk: v\n...\n---\nrest\n").unwrap();
+        assert_eq!(fm.yaml, "k: v\n...\n");
     }
 
     #[test]

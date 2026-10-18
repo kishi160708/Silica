@@ -6,6 +6,7 @@
 pub mod base;
 pub mod canvas;
 pub mod config;
+pub mod properties;
 
 /// How Obsidian treats a file, decided purely by extension (case-insensitive).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

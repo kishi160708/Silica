@@ -22,7 +22,7 @@ with the command inventory and bundle evidence.
 | CommonMark 0.31.2: all 652 spec examples render byte-identical HTML | `-markdown/tests/commonmark.rs` (ratchet) |
 | Obsidian 1.13.7 reading view: 1007 of 1009 corpus notes render the same canonical HTML | `-markdown/tests/corpus.rs` (ratchet; vault and expected HTML under `tests/corpus`) |
 | GFM tables (`\|` does not split a cell, even in code), strikethrough, task items with any single character, footnotes, bare URLs | `-markdown::Options` |
-| Frontmatter only on line 1, BOM and CRLF tolerated | `-markdown::extract_frontmatter` |
+| Frontmatter only on line 1, closed by `---` alone (YAML's `...` does not close it), CRLF tolerated; a BOM before the fence is tolerated, which Obsidian 1.14.4 does not do | `-markdown::extract_frontmatter` |
 | Wikilink body grammar `path#heading#heading\|alias`, `#^block` | `-markdown::parse_linktext` |
 | Wikilinks and embeds are not parsed inside code spans; `[[` needs `]]` on the same line | `-markdown/tests/obsidian.rs` |
 | Tags need a non-numeric character; `# Heading` is not a tag; `#` after an alphanumeric is not a tag | `-markdown/tests/obsidian.rs` |
@@ -48,6 +48,11 @@ with the command inventory and bundle evidence.
 | Filesystem changes: dot-folders ignored, a removed folder removes its files, a moved-in folder is walked; adding or removing a file re-resolves every link | `-vault::Vault::refresh_path`, `-cache::MetadataCache::reresolve` |
 | File operations: new notes are `Untitled`, `Untitled 1`, ... in the `newFileLocation` folder (`root`, `current`, or `newFileFolderPath` when it exists); a `folder/Name` link creates its folders; creating over a path fails ("File already exists."), renaming onto one fails ("Destination file already exists!") but a case-only rename succeeds; `trashOption` `system` (freedesktop trash), `local` (flat in `.trash/`, folders whole, collisions ` 2`, ` 3`) or `none`; defaults `system`, `promptDelete` on, `alwaysUpdateLinks` on | `-vault::ops` |
 | Link rewriting on rename or move: every link resolving to the file is regenerated in `newLinkFormat` (shortest falls back to the full path when ambiguous), keeping its style (wikilink, embed, markdown, angle brackets), `.md` and `%20` in markdown destinations, the subpath, and the alias verbatim unless it equals the old basename and not the written path; markdown link text follows the new basename or link path when it was the old one; code, reference links and `[[#Heading]]` untouched; a moved note's own links change only when they would break; frontmatter links replaced in place | `-cache::links` |
+| Properties: the block parses into ordered entries with byte spans; a type comes from `types.json`, then the reserved keys `tags` and `aliases`, then the value (string `text`, bare `YYYY-MM-DD` `date`, number `number`, boolean `checkbox`, sequence `multitext`; `cssclasses` is a plain list and an ISO date-time is `text`) | `-formats::properties` |
+| Property serialization as Obsidian 1.14.4 writes it: a scalar plain where YAML allows it else double quoted (`"a: b"`, `"  padded  "`, `"42"`, `"[[A]]"`, `""`, `"#a"`), a date bare, a newline as a `\|-` block scalar, a list as a two-space block sequence (the empty list `[]`), null as a bare key, a new property after the last entry, and removing the last property removes the fences | `-formats::properties::render_entry`, `plan` |
+| Property edits are surgical: only the entries whose value actually changes are rewritten, so comments, flow sequences, quoting, blank lines and the file's line endings survive — Obsidian re-serializes the whole block and loses them | `-formats::properties::plan`, `-cache/tests/properties_corpus.rs` (ratchet) |
+| Properties UI: a foldable block above the note with a type glyph, key and value per row, links and tags inside a value clickable, lists and tags as pills, a value that does not fit its type marked and kept as written; `propertiesInDocument` shows the table (`visible`, the default), nothing (`hidden`) or the raw YAML (`source`) | `::properties`, `::reading::view` |
+| Property editing in Live Preview: a click opens a field whose keys the editor routes (Enter commits, Tab commits a key and moves to its value, Escape abandons), a commit is one undo step, a key typed empty removes the property, a rename keeps the entry in place (Obsidian moves it to the end), a new row writes nothing until it is named, and a type chosen from the row menu is recorded in `types.json` | `::properties`, `::editor` |
 | Unlinked mentions: whole-word, case-insensitive, names and aliases, longest name wins, not inside `[[ ]]`, `[ ]( )`, inline or fenced code | `::mentions` |
 | `graph.json`: filters (`search`, `showTags`, `showAttachments`, `hideUnresolved`, `showOrphans`), `colorGroups` with `{query, color: {a, rgb}}`, display and force keys, `scale` and `close`; `collapse-*` keys round-trip | `-formats::config::GraphConfig` |
 | Config files are sparse and optional; unknown keys round-trip | `-formats::config`, `-vault::Vault::read_config` |
@@ -131,3 +136,75 @@ Inlines:
 Not reproduced (two corpus notes): nested runs such as `****a****` and
 `==== four ==x===y==`, and a wikilink inside markdown link text, which splits
 the link in Obsidian.
+
+## Observed properties behavior, Obsidian 1.14.4
+
+Observed with a throwaway plugin in a scratch vault (see
+[[Development#Properties, 2026-10-18]]), driving
+`app.fileManager.processFrontMatter`, `app.metadataTypeManager` and the three
+property commands, then reading the files back byte for byte.
+
+The serializer:
+
+- A `processFrontMatter` call that mutates **nothing** still rewrites the block:
+  `# a comment` is deleted, `tags: [one, two]` becomes a two-space block
+  sequence, and a blank line inside the block is dropped. A block already in
+  that canonical form round-trips byte-identical, so the canonical form is
+  what  writes for a value it changes — and only for that value.
+- Scalars are plain where YAML allows it and double quoted otherwise:
+  `k: "a: b"`, `k: "a #b"`, `k: "  padded  "`, `k: ""`, `k: "42"`,
+  `k: "[[Target]]"`, `k: "#a"`. `say "hi"`, `Ä ö — ✓`, `https://example.com`
+  and a 200-character run all stay plain and unwrapped. A date is written
+  bare (`d: 2026-10-18`).
+- A value containing a newline becomes `k: |-` with the lines indented two
+  spaces. A nested mapping is written with two-space indentation.
+- Lists are block sequences (`k:\n  - a\n  - b`), one `- ` per item, each item
+  quoted by the scalar rules. The empty list is the one flow form, `k: []`.
+- Null is the bare key (`k:`); a JavaScript `undefined` writes no key at all.
+- A new property goes after the last entry. Deleting the last property deletes
+  the fences too: `---\na: 1\n---\nbody\n` becomes `body\n`.
+- Renaming through `processFrontMatter` (delete then set) moves the key to the
+  end of the block.  renames in place instead, changing fewer bytes.
+- Duplicate keys make the whole block fail to parse ("Map keys must be
+  unique"), so such a note has no properties in Obsidian's cache at all.
+
+Types, from `registeredTypeWidgets`:
+
+- The registry is `text`, `multitext` (shown as "List"), `number`,
+  `checkbox`, `date`, `datetime`, `tags`, `aliases`, plus `file`, `folder`
+  and `property` for Bases views. There is **no** `cssclasses` type.
+- `tags` and `aliases` are `reservedKeys` of their widgets, so those keys keep
+  their type whatever the value is.
+- Inference from the value: a string is `text` except a bare `YYYY-MM-DD`,
+  which is `date`; a YAML number is `number`, a boolean `checkbox`, a sequence
+  `multitext`; null, a nested mapping and a block scalar are all `text`.
+  An ISO *date-time* string (`2026-10-18T09:30:00`) infers as `text`, not
+  `datetime` — `datetime` is only ever assigned.
+- `types.json` is written in insertion order, seeded with `aliases: aliases`,
+  `cssclasses: multitext` and `tags: tags` before any assigned key, with
+  two-space indentation and no trailing newline.
+
+Commands and settings:
+
+- `markdown:add-metadata-property` ("Add file property") writes nothing to the
+  file; it opens an empty row in the UI, and the property appears only once it
+  is named.
+- `markdown:clear-metadata-properties` ("Clear file properties") removes the
+  whole block, leaving the body alone.
+- `propertiesInDocument` defaults to `visible` with the key absent from
+  `app.json` (confirmed through `vault.getConfig`).
+- The properties block is the same editable widget in reading view as in Live
+  Preview; the heading reads "Properties" and folds.
+
+Where  deliberately differs, because Obsidian loses bytes:
+
+- **CRLF.** Writing a property into a CRLF block gives mixed endings
+  (`---\r\ntitle: Hi\nadded: v\n---\r\n`).  writes the file's own
+  ending throughout.
+- **Byte order mark.** Obsidian does not recognise frontmatter after a BOM: it
+  prepends a *second* block, leaving
+  `---\nadded: v\n---\n\u{feff}---\ntitle: Hi\n---\n`.  reads the block
+  through the BOM and edits it in place.
+- **`...`** does not close a properties block in Obsidian, and no longer does
+  in  either; adding a property to `---\na: 1\n...\n` prepends a second
+  block there too.

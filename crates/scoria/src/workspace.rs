@@ -31,8 +31,10 @@ use _cache::{
 };
 use _commands::{keystroke, CommandRegistry};
 use _formats::config::{
-    AppConfig, AppearanceConfig, CommandPaletteConfig, CorePlugins, PluginManifest, SwitcherConfig,
+    AppConfig, AppearanceConfig, CommandPaletteConfig, CorePlugins, PluginManifest, PropertyTypes,
+    SwitcherConfig,
 };
+use _formats::properties::PropertiesInDocument;
 use _formats::FileKind;
 use _markdown::Subpath;
 use _vault::{FileChange, TrashOption, Vault};
@@ -74,6 +76,9 @@ pub const RUNNABLE: &[&str] = &[
     "graph:open",
     "graph:open-local",
     "markdown:toggle-preview",
+    "markdown:add-metadata-property",
+    "markdown:clear-metadata-properties",
+    "editor:toggle-fold-properties",
     "app:go-back",
     "app:go-forward",
     "app:open-settings",
@@ -130,6 +135,9 @@ pub struct VaultState {
     pub plugin_manifests: Vec<PluginManifest>,
     pub palette: CommandPaletteConfig,
     pub switcher: SwitcherConfig,
+    /// `types.json`: the type assigned to each property name. Behind a lock
+    /// because the properties UI assigns types while the vault is open.
+    property_types: RwLock<PropertyTypes>,
     pub index_ms: f64,
 }
 
@@ -175,6 +183,7 @@ impl VaultState {
         let plugin_manifests = vault.plugin_manifests();
         let palette = vault.command_palette_config().unwrap_or_default();
         let switcher = vault.switcher_config().unwrap_or_default();
+        let property_types = vault.property_types().unwrap_or_default();
         let notes: Vec<String> = vault.markdown_files().map(|f| f.path.clone()).collect();
         let loaded: Vec<(String, CachedMetadata, Arc<String>)> = notes
             .par_iter()
@@ -205,8 +214,29 @@ impl VaultState {
             plugin_manifests,
             palette,
             switcher,
+            property_types: RwLock::new(property_types),
             index_ms: started.elapsed().as_secs_f64() * 1000.0,
         })
+    }
+
+    /// The vault's property type assignments.
+    pub fn property_types(&self) -> RwLockReadGuard<'_, PropertyTypes> {
+        self.property_types.read().expect("property types lock")
+    }
+
+    /// Records `key`'s type in `types.json`, as Obsidian's type menu does.
+    /// Returns the table as it now stands so the views can redraw from it.
+    pub fn assign_property_type(
+        &self,
+        key: &str,
+        ty: _formats::properties::PropertyType,
+    ) -> Result<PropertyTypes, String> {
+        let mut types = self.property_types.write().expect("property types lock");
+        types.types.insert(key.to_string(), ty.as_str().to_string());
+        self.vault()
+            .write_config("types.json", &*types)
+            .map_err(|e| e.to_string())?;
+        Ok(types.clone())
     }
 
     pub fn vault(&self) -> RwLockReadGuard<'_, Vault> {
@@ -766,6 +796,9 @@ impl Workspace {
                 cx.subscribe(&editor, |this, _, event: &EditorEvent, cx| match event {
                     EditorEvent::Edited => this.schedule_save(cx),
                     EditorEvent::OpenLink(target) => this.follow_link(target.clone(), cx),
+                    EditorEvent::PropertyTypeAssigned { key, ty } => {
+                        this.assign_property_type(key.clone(), *ty, cx)
+                    }
                 }),
             ];
         // Closing the window must not lose edits waiting for the autosave.
@@ -850,11 +883,38 @@ impl Workspace {
         .detach();
     }
 
+    /// Records a property type in the vault's `types.json` and redraws the
+    /// views from the new table.
+    fn assign_property_type(
+        &mut self,
+        key: String,
+        ty: _formats::properties::PropertyType,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        match state.assign_property_type(&key, ty) {
+            Ok(types) => {
+                self.reading
+                    .update(cx, |r, _| r.set_property_types(types.clone()));
+                self.editor.update(cx, |e, _| e.set_property_types(types));
+                cx.notify();
+            }
+            Err(err) => {
+                self.status = format!("types.json could not be written: {err}").into();
+                cx.notify();
+            }
+        }
+    }
+
     fn set_state(&mut self, state: VaultState, cx: &mut Context<Self>) {
         self.loading = None;
         let readable = state.app.readable_line_length.unwrap_or(true);
-        self.reading
-            .update(cx, |r, _| r.set_readable_line_length(readable));
+        self.reading.update(cx, |r, _| {
+            r.set_readable_line_length(readable);
+            r.set_property_types(state.property_types().clone());
+        });
         let (smart, use_tab, tab_size) = (
             state.app.smart_indent_list.unwrap_or(true),
             state.app.use_tab.unwrap_or(true),
@@ -863,6 +923,10 @@ impl Workspace {
         self.editor.update(cx, |e, _| {
             e.set_readable_line_length(readable);
             e.set_indent_options(smart, use_tab, tab_size);
+            e.set_property_types(state.property_types().clone());
+            e.set_properties_in_document(PropertiesInDocument::from_config(
+                state.app.properties_in_document.as_deref(),
+            ));
         });
         self.status = format!(
             "{} files, {} notes indexed in {:.0} ms",
@@ -1150,6 +1214,25 @@ impl Workspace {
             "graph:open" => self.open_graph_action(&OpenGraph, window, cx),
             "graph:open-local" => self.show_graph(true, window, cx),
             "markdown:toggle-preview" => self.toggle_mode(&ToggleMode, window, cx),
+            // Obsidian opens an unnamed property row and writes nothing until
+            // it is named, which is what `add_property_row` does.
+            "markdown:add-metadata-property" => {
+                if self.mode.is_editing() {
+                    self.editor
+                        .update(cx, |e, cx| e.add_property_row(window, cx));
+                }
+            }
+            "markdown:clear-metadata-properties" => {
+                if self.mode.is_editing() {
+                    self.editor
+                        .update(cx, |e, cx| e.clear_properties(window, cx));
+                }
+            }
+            "editor:toggle-fold-properties" => {
+                if self.mode.is_editing() {
+                    self.editor.update(cx, |e, cx| e.toggle_properties_fold(cx));
+                }
+            }
             "app:go-back" => self.go_back(&GoBack, window, cx),
             "app:go-forward" => self.go_forward(&GoForward, window, cx),
             "app:open-settings" => self.open_settings(None, window, cx),

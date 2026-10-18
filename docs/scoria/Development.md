@@ -114,10 +114,85 @@ of mixed use in both apps.
 | Live Preview | done, see [[#Live Preview, 2026-10-16]] |
 | File operations and link rewriting | done, see [[#File operations, 2026-10-17]] |
 | Tables (editing) | not started: widgets render, cells are not editable |
-| Properties | not started |
+| Properties | done, see [[#Properties, 2026-10-18]] |
 | Autocompletion | not started |
 | Templates, daily notes, file recovery | not started |
-| Writing settings back | not started |
+| Writing settings back | started: `types.json` is written when a property type is assigned (`Vault::write_config`); the Settings modal is still read-only |
+
+### Properties, 2026-10-18
+
+The frontmatter block is now a typed, editable properties table in Live
+Preview and a read-only one in the reading view.
+`-formats::properties` is the model: it scans the YAML into ordered
+entries with byte spans, reads each value with `serde_yaml`, infers types,
+serializes values the way Obsidian writes them, and plans edits as byte
+ranges. `-cache::note_properties` is the one place that joins it to
+`extract_frontmatter`. `::properties` turns entries into display rows
+and holds the field-editing rules as pure functions; `::reading::view`
+draws the rows (read-only, or editable when Live Preview passes a
+`PropertiesHost`) and `::editor` owns the open field, routes keys into
+it and applies a commit.
+
+The rules came from Obsidian 1.14.4 directly, with the same throwaway-plugin
+method as the file operations: `-probe` in a scratch vault drove
+`processFrontMatter` through about forty scenarios, dumped
+`registeredTypeWidgets` and the inferred and assigned type of every value
+shape, ran the three property commands, and read every file back byte for
+byte. What it showed is listed in [[Specification#Observed properties
+behavior, Obsidian 1.14.4]] and encoded in the tests. The headline:
+
+- Obsidian rewrites the **whole** block on any property write. A
+  `processFrontMatter` call that mutates nothing still deletes YAML comments,
+  turns `tags: [one, two]` into a block sequence and drops blank lines. A
+  block already in that canonical form round-trips byte-identical.
+- So  writes Obsidian's canonical form, but only for the entries whose
+  value actually changes. `plan` compares *values*, not rendered text, which
+  is what keeps a flow sequence and its quoting when the value is unchanged;
+  everything else in the block keeps its bytes.
+
+`crates/-cache/tests/properties_corpus.rs` is the ratchet over the
+1005 corpus notes that have frontmatter: rewriting every value with itself
+plans no edit, every entry span really covers its key and stays inside the
+block, a real edit leaves the bytes before and after the entry identical,
+clearing leaves exactly the body (plus a BOM where there is one), and adding
+a property appends one line and reorders nothing. Writing the ratchet found
+two bugs on the spot: bare dates were being quoted on rewrite, and an
+unchanged flow list was being reflowed.
+
+The UI: a foldable "Properties" heading, then a row per property with its
+type glyph, key and value. Lists, tags and aliases draw as pills; a
+wikilink value draws as the link (its alias, or the target without a
+subpath) and follows on click; a tag item is clickable whether or not it is
+written with `#`; a checkbox draws a box; an empty value shows a
+placeholder; a value that does not fit its type is marked and kept as
+written. In Live Preview a click on a key or value opens a field — the
+editor routes typing, the arrows, Home, End, Backspace and Delete into it,
+Enter commits, Tab commits a key and moves to its value, Escape abandons —
+and a commit is one undo step through `apply_edits`. The row icon opens the
+type menu, the `×` removes the property, `+ Add property` opens an unnamed
+row that writes nothing until it is named. The three commands
+(`markdown:add-metadata-property`, `markdown:clear-metadata-properties`,
+`editor:toggle-fold-properties`) are runnable, and `propertiesInDocument`
+picks the table, nothing or the raw YAML.
+
+Choosing a type writes `.obsidian/types.json`, the first config file 
+writes: `Vault::write_config` serializes with two-space indentation and no
+trailing newline, as Obsidian does, and `PropertyTypes` keeps insertion order
+(an `IndexMap`) and its unknown keys so the file does not churn.
+
+Two parser corrections fell out of the probe. YAML's `...` does not close a
+properties block in Obsidian, and no longer does in `extract_frontmatter`.
+Obsidian also does not recognise frontmatter after a byte order mark and
+prepends a second block when a property is added;  keeps reading
+through the BOM and edits the block in place, which is a deliberate
+divergence from a case where Obsidian loses the original block. Obsidian
+likewise leaves mixed line endings when it writes into a CRLF block; 
+writes the file's own ending.
+
+Not yet: editing properties in the reading view (Obsidian allows it there
+too), drag-to-reorder, a calendar picker for `date` and `datetime`, value
+autocompletion from other notes, and the Properties core-plugin side panes
+(`properties:open`, `properties:open-local`).
 
 ### File operations, 2026-10-17
 

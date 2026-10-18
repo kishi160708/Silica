@@ -299,6 +299,30 @@ impl Vault {
             .map_err(|source| VaultError::Json { path, source })
     }
 
+    /// Writes one `.obsidian` config file.
+    ///
+    /// Obsidian writes these with two-space indentation and no trailing
+    /// newline (observed in `types.json`), and every config type here keeps
+    /// the keys it does not model in `extra`, so a file Obsidian wrote comes
+    /// back with its unknown keys intact.
+    pub fn write_config<T: serde::Serialize>(
+        &self,
+        name: &str,
+        value: &T,
+    ) -> Result<(), VaultError> {
+        let dir = self.root.join(&self.config_dir);
+        let path = dir.join(name);
+        std::fs::create_dir_all(&dir).map_err(|source| VaultError::Io {
+            path: dir.clone(),
+            source,
+        })?;
+        let text = serde_json::to_string_pretty(value).map_err(|source| VaultError::Json {
+            path: path.clone(),
+            source,
+        })?;
+        std::fs::write(&path, text).map_err(|source| VaultError::Io { path, source })
+    }
+
     pub fn app_config(&self) -> Result<AppConfig, VaultError> {
         Ok(self.read_config("app.json")?.unwrap_or_default())
     }

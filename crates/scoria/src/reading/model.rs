@@ -6,6 +6,7 @@
 //! text with clickable ranges, embeds are resolved and inlined recursively,
 //! and footnote definitions are gathered at the end.
 
+use _formats::properties::Property;
 use _formats::FileKind;
 use _markdown::{
     canonical_callout_type, html::has_scheme, html::percent_decode, parse, plain_text, Alignment,
@@ -111,8 +112,11 @@ pub struct RItem {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RBlock {
-    /// Frontmatter shown as a properties table.
-    Properties(Vec<(String, String)>),
+    /// The properties block. The entries are the parsed frontmatter with
+    /// their byte spans; the renderer resolves each key's type against the
+    /// vault's `types.json` and builds the rows, because the same block is
+    /// drawn read-only in the reading view and editable in Live Preview.
+    Properties(Vec<Property>),
     Paragraph(Vec<Segment>),
     Heading {
         level: u8,
@@ -197,6 +201,7 @@ pub fn build_with(
     let mut b = Builder {
         vault,
         source_path,
+        text: doc.source,
         opts,
         depth: 0,
         next_id: 0,
@@ -231,6 +236,7 @@ pub fn build_widgets(
     let mut b = Builder {
         vault,
         source_path,
+        text: doc.source,
         opts,
         depth: 0,
         next_id: 0,
@@ -240,6 +246,9 @@ pub fn build_widgets(
     let mut out = Vec::new();
     for block in &doc.blocks {
         let widget = match &block.kind {
+            // The properties block is a widget so Live Preview can draw it as
+            // an editable table instead of raw YAML.
+            BlockKind::Yaml { .. } => true,
             BlockKind::Table { .. } | BlockKind::Math { .. } => true,
             BlockKind::Paragraph { content } => match content.as_slice() {
                 [one] => matches!(
@@ -280,6 +289,7 @@ fn build_embedded(
     let mut b = Builder {
         vault,
         source_path,
+        text: doc.source,
         opts,
         depth,
         next_id: *next_id,
@@ -319,6 +329,8 @@ fn collect_definitions(blocks: &[Block<'_>]) -> Vec<String> {
 struct Builder<'v> {
     vault: &'v dyn EmbedSource,
     source_path: &'v str,
+    /// The whole note, so the properties block can carry file byte spans.
+    text: &'v str,
     opts: BuildOptions,
     depth: usize,
     next_id: usize,
@@ -337,7 +349,11 @@ impl<'v> Builder<'v> {
 
     fn block(&mut self, block: &Block<'_>, _tight: bool) -> Option<RBlock> {
         Some(match &block.kind {
-            BlockKind::Yaml { yaml } => RBlock::Properties(properties(yaml)),
+            BlockKind::Yaml { .. } => RBlock::Properties(
+                _cache::note_properties(self.text)
+                    .map(|p| p.entries)
+                    .unwrap_or_default(),
+            ),
             BlockKind::Paragraph { content } => RBlock::Paragraph(self.segments(content)),
             BlockKind::Heading { level, content, .. } => RBlock::Heading {
                 level: *level,
@@ -863,48 +879,10 @@ fn block_by_id<'b, 'a>(blocks: &'b [Block<'a>], id: &str) -> Option<&'b Block<'a
     None
 }
 
-/// Frontmatter as `(key, value)` rows in file order; nested values are
-/// shown as YAML.
-fn properties(yaml: &str) -> Vec<(String, String)> {
-    let Ok(serde_yaml::Value::Mapping(map)) = serde_yaml::from_str::<serde_yaml::Value>(yaml)
-    else {
-        return Vec::new();
-    };
-    map.iter()
-        .map(|(k, v)| {
-            let key = match k {
-                serde_yaml::Value::String(s) => s.clone(),
-                other => serde_yaml::to_string(other)
-                    .unwrap_or_default()
-                    .trim()
-                    .to_string(),
-            };
-            (key, property_value(v))
-        })
-        .collect()
-}
-
-fn property_value(v: &serde_yaml::Value) -> String {
-    match v {
-        serde_yaml::Value::Null => String::new(),
-        serde_yaml::Value::Bool(b) => b.to_string(),
-        serde_yaml::Value::Number(n) => n.to_string(),
-        serde_yaml::Value::String(s) => s.clone(),
-        serde_yaml::Value::Sequence(items) => items
-            .iter()
-            .map(property_value)
-            .collect::<Vec<_>>()
-            .join(", "),
-        other => serde_yaml::to_string(other)
-            .unwrap_or_default()
-            .trim()
-            .to_string(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use _formats::properties::Value as PropertyValue;
     use std::collections::HashMap;
 
     struct Stub {
@@ -1126,12 +1104,17 @@ mod tests {
             "---\ntitle: T\ntags: [a, b]\n---\n> [!TIP]- Fold me\n> body\n\n1. one\n2. [x] two\n\n- [ ] task",
             &stub(),
         );
+        let RBlock::Properties(entries) = &m.blocks[0] else {
+            panic!("{:?}", m.blocks[0])
+        };
         assert_eq!(
-            m.blocks[0],
-            RBlock::Properties(vec![
-                ("title".into(), "T".into()),
-                ("tags".into(), "a, b".into())
-            ])
+            entries.iter().map(|e| e.key.as_str()).collect::<Vec<_>>(),
+            vec!["title", "tags"]
+        );
+        assert_eq!(entries[0].value, PropertyValue::Text("T".into()));
+        assert_eq!(
+            entries[1].value,
+            PropertyValue::List(vec!["a".into(), "b".into()])
         );
         match &m.blocks[1] {
             RBlock::Callout {

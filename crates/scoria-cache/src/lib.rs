@@ -7,10 +7,12 @@
 //! text into a file path with Obsidian's rules.
 
 pub mod links;
+pub mod properties;
 pub mod resolver;
 pub mod vault;
 
 pub use links::{basename, link_path, rewrite_note, LinkFormat, Rewrite};
+pub use properties::note_properties;
 pub use resolver::LinkResolver;
 pub use _markdown::{LineIndex, Loc, Pos, Span};
 pub use vault::{
