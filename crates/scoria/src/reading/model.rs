@@ -147,6 +147,9 @@ pub enum RBlock {
         alignments: Vec<Alignment>,
         header: Vec<RichText>,
         rows: Vec<Vec<RichText>>,
+        /// The bytes each cell stands for, the header row first, so Live
+        /// Preview can edit a cell in place.
+        spans: Vec<Vec<Range<usize>>>,
     },
     Math(String),
     /// `(number, body)` in reference order, rendered after a rule.
@@ -416,6 +419,10 @@ impl<'v> Builder<'v> {
                 rows: rows
                     .iter()
                     .map(|r| r.iter().map(|c| self.rich(&c.content)).collect())
+                    .collect(),
+                spans: std::iter::once(header)
+                    .chain(rows.iter())
+                    .map(|r| r.iter().map(|c| c.span.start..c.span.end).collect())
                     .collect(),
             },
             BlockKind::Math { content } => RBlock::Math(content.trim_matches('\n').to_string()),

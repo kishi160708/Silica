@@ -148,9 +148,12 @@ struct Args {
     /// Type this text at the cursor in the source editor, which is how the
     /// autocompletion popup is opened for a screenshot (`--type "[[al"`).
     type_text: Option<String>,
-    /// Accept the popup's selected row with `enter`, `tab` or `shift-enter`,
-    /// after `--type` and an optional `down` repeated to move the selection.
+    /// Press these keys, comma separated, after `--type`: `enter`, `tab`,
+    /// `shift-tab`, `shift-enter`, `escape`, `up`, `down`.
     accept: Option<String>,
+    /// Open this cell of the note's first table for editing, before
+    /// `--type`, the way clicking one does.
+    cell: Option<usize>,
     /// Run these command ids at startup, comma separated, after everything
     /// else: `--command editor:table-row-after`.
     command: Option<String>,
@@ -176,6 +179,7 @@ fn parse_args() -> Args {
         prompt: None,
         type_text: None,
         accept: None,
+        cell: None,
         command: None,
     };
     let mut it = std::env::args().skip(1);
@@ -199,7 +203,8 @@ fn parse_args() -> Args {
             "--rename" => args.rename = it.next(),
             "--prompt" => args.prompt = it.next().or(Some("rename".into())),
             "--type" => args.type_text = it.next(),
-            "--accept" => args.accept = it.next().or(Some("enter".into())),
+            "--accept" | "--press" => args.accept = it.next().or(Some("enter".into())),
+            "--cell" => args.cell = it.next().and_then(|n| n.parse().ok()),
             "--command" => args.command = it.next(),
             _ if args.vault.is_none() => args.vault = Some(PathBuf::from(a)),
             _ => args.note = Some(a),
@@ -271,6 +276,7 @@ fn main() {
         let source = args.source;
         let type_text = args.type_text.clone();
         let accept = args.accept.clone();
+        let cell = args.cell;
         let command = args.command.clone();
         let reading = args.reading;
         let find = args.find.clone();
@@ -353,12 +359,15 @@ fn main() {
                         if let Some(kind) = &prompt {
                             ws.open_file_prompt(kind, window, cx);
                         }
+                        if let Some(ix) = cell {
+                            ws.editor().update(cx, |e, cx| e.edit_cell(ix, window, cx));
+                        }
                         if let Some(t) = &type_text {
                             ws.editor().update(cx, |e, cx| e.type_text(t, window, cx));
                         }
-                        if let Some(key) = &accept {
+                        if let Some(keys) = &accept {
                             ws.editor()
-                                .update(cx, |e, cx| e.accept_suggestion_key(key, window, cx));
+                                .update(cx, |e, cx| e.press_keys(keys, window, cx));
                         }
                         if let Some(ids) = &command {
                             for id in ids.split(',') {

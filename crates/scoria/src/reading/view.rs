@@ -14,13 +14,14 @@ use crate::theme::Theme;
 use gpui::{
     canvas, div, img, list, prelude::*, px, AnyElement, App, Context, EventEmitter, FocusHandle,
     Focusable, Font, FontStyle, FontWeight, HighlightStyle, Hsla, InteractiveText, ListAlignment,
-    ListOffset, ListState, ObjectFit, Pixels, SharedString, StrikethroughStyle, StyledText,
-    TextRun, UnderlineStyle, Window, WindowTextSystem,
+    ListOffset, ListState, MouseButton, ObjectFit, Pixels, SharedString, StrikethroughStyle,
+    StyledText, TextRun, UnderlineStyle, Window, WindowTextSystem,
 };
 use _formats::config::PropertyTypes;
 use _formats::properties::{PropertiesInDocument, Property, PropertyType};
 use _markdown::Alignment;
 use std::collections::HashSet;
+use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -67,6 +68,27 @@ pub(crate) struct PropertiesHost {
 
 /// What a property row's affordances do when clicked.
 pub type PropertyHandler = Rc<dyn Fn(PropertyAction, &mut Window, &mut App)>;
+
+/// Something the reader did to a table cell. The reading view raises none
+/// of these; Live Preview turns each into a document edit.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TableAction {
+    /// Start typing in the cell standing for these bytes.
+    Edit { span: Range<usize> },
+}
+
+/// What a table cell does when clicked.
+pub type TableHandler = Rc<dyn Fn(TableAction, &mut Window, &mut App)>;
+
+/// Lets a table's cells be edited. The reading view passes `None` and draws
+/// the cells read-only; Live Preview passes the open cell and a sink for
+/// what the reader does.
+pub(crate) struct TableHost {
+    /// The cell being typed into: the bytes it stands for and the text in
+    /// hand, which has not reached the document yet.
+    pub cell: Option<(Range<usize>, Field)>,
+    pub on_action: TableHandler,
+}
 
 /// What a rendered link does when clicked.
 pub type LinkHandler = Rc<dyn Fn(LinkTarget, &mut Window, &mut App)>;
@@ -197,7 +219,9 @@ impl ReadingView {
             available,
             &self.toggled,
             &self.property_types,
-            // Read-only: the reading view does not edit properties yet.
+            // Read-only: the reading view edits neither properties nor
+            // table cells.
+            None,
             None,
             on_link,
             on_toggle,
@@ -275,6 +299,8 @@ pub(crate) struct Renderer<'a> {
     property_types: &'a PropertyTypes,
     /// Set by Live Preview to make the properties block editable.
     properties_host: Option<&'a PropertiesHost>,
+    /// Set by Live Preview to make a table's cells editable.
+    table_host: Option<&'a TableHost>,
     on_link: LinkHandler,
     on_toggle: ToggleHandler,
     text_system: Arc<WindowTextSystem>,
@@ -291,6 +317,7 @@ impl<'a> Renderer<'a> {
         toggled: &'a HashSet<usize>,
         property_types: &'a PropertyTypes,
         properties_host: Option<&'a PropertiesHost>,
+        table_host: Option<&'a TableHost>,
         on_link: LinkHandler,
         on_toggle: ToggleHandler,
     ) -> Renderer<'a> {
@@ -299,6 +326,7 @@ impl<'a> Renderer<'a> {
             toggled,
             property_types,
             properties_host,
+            table_host,
             on_link,
             on_toggle,
             text_system,
@@ -346,11 +374,14 @@ impl<'a> Renderer<'a> {
     /// longest word (min-content); when the note is too narrow for every
     /// column's wish, the slack is shared in proportion to each column's
     /// range, and below the minimum the table overflows.
+    /// `editing` is the column a cell is being typed into and the text in
+    /// hand, so the column grows with what is typed rather than clipping it.
     fn column_widths(
         &self,
         header: &[RichText],
         rows: &[Vec<RichText>],
         font_size: f32,
+        editing: Option<(usize, &str)>,
     ) -> Vec<f32> {
         const PADDING: f32 = 17.;
         let count = header
@@ -380,6 +411,11 @@ impl<'a> Renderer<'a> {
             for (ix, cell) in row.iter().enumerate() {
                 fold(ix, cell, false);
             }
+        }
+        if let Some((ix, text)) = editing.filter(|(ix, _)| *ix < count) {
+            let width = self.measure(text, font_size, false, false);
+            max[ix] = max[ix].max(width);
+            min[ix] = min[ix].max(width);
         }
         // Two pixels of slack: the wrapper measures advances a little
         // differently from the shaper and must not break a line that fits.
@@ -553,14 +589,33 @@ impl<'a> Renderer<'a> {
                 alignments,
                 header,
                 rows,
+                spans,
             } => {
                 let font_size = base * 0.9375;
-                let columns = self.column_widths(header, rows, font_size);
+                let host = self.table_host;
+                // The column holding the open cell measures the text in
+                // hand, so it grows as the cell is typed into.
+                let editing = host.and_then(|h| h.cell.as_ref()).and_then(|(at, f)| {
+                    spans
+                        .iter()
+                        .find_map(|row| row.iter().position(|s| s == at))
+                        .map(|ix| (ix, f.text.as_str()))
+                });
+                let columns = self.column_widths(header, rows, font_size, editing);
                 let table_width: f32 = columns.iter().sum();
-                let cell = |text: &RichText, ix: usize, head: bool| {
+                // `row` is 0 for the header, so the span of every cell is
+                // where the model put it.
+                let cell = |text: &RichText, row: usize, ix: usize, head: bool| -> AnyElement {
                     let align = alignments.get(ix).copied().unwrap_or(Alignment::None);
                     let width = columns.get(ix).copied().unwrap_or(80.);
-                    div()
+                    let span = spans.get(row).and_then(|r| r.get(ix)).cloned();
+                    // The cell being typed into shows the text in hand with
+                    // a caret, the way a property row's field does.
+                    let editing = host
+                        .and_then(|h| h.cell.as_ref())
+                        .filter(|(at, _)| Some(at) == span.as_ref())
+                        .map(|(_, f)| f);
+                    let drawn = div()
                         .w(px(width))
                         .flex_shrink_0()
                         .px_2()
@@ -573,7 +628,24 @@ impl<'a> Renderer<'a> {
                             Alignment::Right => d.text_right(),
                             _ => d,
                         })
-                        .child(self.rich(text))
+                        .map(|d| match editing {
+                            Some(field) => d.child(self.property_field(field, false)),
+                            None => d.child(self.rich(text)),
+                        });
+                    // A cell is clicked into, the way a property row is.
+                    match (host, span) {
+                        (Some(host), Some(span)) => {
+                            let on_action = host.on_action.clone();
+                            drawn
+                                .id(("table-cell", span.start))
+                                .cursor_text()
+                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                    on_action(TableAction::Edit { span: span.clone() }, window, cx);
+                                })
+                                .into_any_element()
+                        }
+                        _ => drawn.into_any_element(),
+                    }
                 };
                 // The table is as wide as its columns, like an HTML table.
                 div()
@@ -598,7 +670,7 @@ impl<'a> Renderer<'a> {
                                     .border_b_1()
                                     .border_color(t.border)
                                     .children(
-                                        header.iter().enumerate().map(|(i, c)| cell(c, i, true)),
+                                        header.iter().enumerate().map(|(i, c)| cell(c, 0, i, true)),
                                     ),
                             )
                             .children(rows.iter().enumerate().map(|(ri, row)| {
@@ -609,7 +681,9 @@ impl<'a> Renderer<'a> {
                                         d.border_b_1().border_color(t.border)
                                     })
                                     .children(
-                                        row.iter().enumerate().map(|(i, c)| cell(c, i, false)),
+                                        row.iter()
+                                            .enumerate()
+                                            .map(|(i, c)| cell(c, ri + 1, i, false)),
                                     )
                             })),
                     )

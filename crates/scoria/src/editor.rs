@@ -26,6 +26,7 @@ use crate::properties::{self, Field, Part, Target};
 use crate::reading::model::{build_widgets, BuildOptions, EmbedSource, LinkTarget, RBlock, Widget};
 use crate::reading::view::{LinkHandler, Renderer, ToggleHandler};
 use crate::reading::view::{PropertiesHost, PropertyAction};
+use crate::reading::view::{TableAction, TableHost};
 use crate::suggest::{Anchor, SuggestState};
 use crate::text_input::{InputEvent, TextInput};
 use crate::theme::Theme;
@@ -43,7 +44,7 @@ use _formats::config::PropertyTypes;
 use _formats::properties::{self as props, PropertiesInDocument};
 use _markdown::highlight::{flatten, highlight_lines, HighlightKind, HighlightSpan};
 use _suggest::{self as suggest, Accept, Suggestion};
-use _text::table::TableCommand;
+use _text::table::{self, TableCommand};
 use _text::{find, shifted, Cursor, Cursors, EditKind, Sel, TextBuffer};
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
@@ -172,6 +173,16 @@ pub enum EditorEvent {
         key: String,
         ty: props::PropertyType,
     },
+}
+
+/// A table cell being typed into.
+struct CellEdit {
+    /// The bytes the cell stands for in the document.
+    span: Range<usize>,
+    /// Those bytes when the field opened; a commit writes nothing if they
+    /// are no longer there.
+    was: String,
+    field: Field,
 }
 
 /// Results of the last decoration pass, shown in the status bar.
@@ -462,6 +473,9 @@ pub struct Editor {
     properties_folded: bool,
     /// The property whose type menu is open.
     property_menu: Option<String>,
+    /// The table cell being typed into. Like a properties field, the keys
+    /// go to it while it is open and the document changes once, on commit.
+    table_field: Option<CellEdit>,
     /// The open autocompletion popup, with the rows it is offering.
     suggest: Option<SuggestState>,
     /// The vault the suggester reads; `None` until one is open.
@@ -547,6 +561,7 @@ impl Editor {
             property_field: None,
             properties_folded: false,
             property_menu: None,
+            table_field: None,
             suggest: None,
             suggest_vault: None,
             link_options: suggest::Options::default(),
@@ -573,6 +588,7 @@ impl Editor {
         self.name = name.into();
         self.buf.load(&raw);
         self.suggest = None;
+        self.table_field = None;
         self.buf.head = 0;
         self.buf.anchor = 0;
         self.widgets = Arc::new(Vec::new());
@@ -596,6 +612,7 @@ impl Editor {
     pub fn reload(&mut self, raw: String, cx: &mut Context<Self>) {
         let (head, anchor) = (self.buf.head, self.buf.anchor);
         self.suggest = None;
+        self.table_field = None;
         self.buf.load(&raw);
         self.buf.head = self.buf.clamp_offset(head);
         self.buf.anchor = self.buf.clamp_offset(anchor);
@@ -726,37 +743,46 @@ impl Editor {
     /// autocompletion popup opens for it. Used by `--type` to put the popup
     /// on screen for a screenshot.
     pub fn type_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(field) = self.active_field() {
+            field.insert(text);
+            cx.notify();
+            return;
+        }
         self.insert_all(text, EditKind::Typing, window, cx);
     }
 
-    /// Presses one of the popup's accept keys by name, for `--accept`.
-    /// `down` moves the selection instead, so a screenshot can show a row
-    /// other than the first being taken.
-    pub fn accept_suggestion_key(
-        &mut self,
-        key: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        for key in key.split(',') {
+    /// Presses keys by name, for `--press`: the popup's accept keys, and
+    /// the keys that move between table cells, so a screenshot can show
+    /// what a keystroke leaves behind.
+    pub fn press_keys(&mut self, keys: &str, window: &mut Window, cx: &mut Context<Self>) {
+        for key in keys.split(',') {
             match key.trim() {
                 "down" => {
-                    self.suggest_step(1, cx);
+                    self.move_down(&MoveDown, window, cx);
                 }
                 "up" => {
-                    self.suggest_step(-1, cx);
+                    self.move_up(&MoveUp, window, cx);
                 }
-                "tab" => {
-                    self.accept_suggestion(Accept::Inside, window, cx);
-                }
-                "shift-enter" => {
-                    self.accept_suggestion(Accept::Typed, window, cx);
-                }
-                _ => {
-                    self.accept_suggestion(Accept::Whole, window, cx);
-                }
+                "tab" => self.tab(&Tab, window, cx),
+                "shift-tab" => self.outdent(&Outdent, window, cx),
+                "shift-enter" => self.newline_plain(&NewlinePlain, window, cx),
+                "escape" => self.close_find(&CloseFind, window, cx),
+                _ => self.newline(&Newline, window, cx),
             }
         }
+    }
+
+    /// Opens cell `ix` of the first table in the note for editing, for
+    /// `--cell`; clicking one is what does it in the app.
+    pub fn edit_cell(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(span) = table::tables(self.buf.text())
+            .first()
+            .and_then(|t| table::table_at(self.buf.text(), t.start))
+            .and_then(|at| at.cells.iter().flatten().nth(ix).cloned())
+        else {
+            return;
+        };
+        self.table_action(TableAction::Edit { span }, window, cx);
     }
 
     /// One step of the self-driving stress run: types, breaks lines, pages
@@ -878,6 +904,11 @@ impl Editor {
         // source` in `propertiesInDocument` is what reveals it instead.
         if matches!(entry.1.block, RBlock::Properties(_)) {
             return self.properties_in_document != PropertiesInDocument::Source;
+        }
+        // A table stays a grid wherever the cursor is, the way Obsidian's
+        // `table-editor` does: its cells are typed into directly.
+        if matches!(entry.1.block, RBlock::Table { .. }) {
+            return true;
         }
         let span = self.buf.line_starts()[entry.0.start]..self.buf.line_range(entry.0.end - 1).end;
         let primary = Sel {
@@ -1516,7 +1547,7 @@ impl Editor {
     }
 
     fn move_left(&mut self, _: &MoveLeft, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(f) = self.property_field.as_mut() {
+        if let Some(f) = self.active_field() {
             f.left();
             cx.notify();
             return;
@@ -1525,7 +1556,7 @@ impl Editor {
     }
 
     fn move_right(&mut self, _: &MoveRight, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(f) = self.property_field.as_mut() {
+        if let Some(f) = self.active_field() {
             f.right();
             cx.notify();
             return;
@@ -1628,7 +1659,7 @@ impl Editor {
         if self.suggest_step(isize::MIN, cx) {
             return;
         }
-        if let Some(f) = self.property_field.as_mut() {
+        if let Some(f) = self.active_field() {
             f.home();
             cx.notify();
             return;
@@ -1640,7 +1671,7 @@ impl Editor {
         if self.suggest_step(isize::MAX, cx) {
             return;
         }
-        if let Some(f) = self.property_field.as_mut() {
+        if let Some(f) = self.active_field() {
             f.end();
             cx.notify();
             return;
@@ -1699,7 +1730,7 @@ impl Editor {
     // ----- editing actions -------------------------------------------------------
 
     fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(f) = self.property_field.as_mut() {
+        if let Some(f) = self.active_field() {
             f.backspace();
             cx.notify();
             return;
@@ -1713,7 +1744,7 @@ impl Editor {
     }
 
     fn delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(f) = self.property_field.as_mut() {
+        if let Some(f) = self.active_field() {
             f.delete();
             cx.notify();
             return;
@@ -1760,6 +1791,14 @@ impl Editor {
         if self.commit_property_field(Some(window), cx) {
             return;
         }
+        // In a table cell it commits and drops into the cell below, or just
+        // commits on the last row.
+        if self.table_field.is_some() {
+            if !self.step_table_cell(0, 1, window, cx) {
+                self.commit_table_field(Some(window), cx, None);
+            }
+            return;
+        }
         if self.buf.newline(self.smart_indent_list) {
             self.after_edit(Some(window), cx);
         }
@@ -1777,6 +1816,10 @@ impl Editor {
     /// the ordered lists it touches), and inserts the step anywhere else.
     fn tab(&mut self, _: &Tab, window: &mut Window, cx: &mut Context<Self>) {
         if self.accept_suggestion(Accept::Inside, window, cx) {
+            return;
+        }
+        // Tab walks the cells of a table, committing each as it leaves it.
+        if self.table_field.is_some() && self.step_table_cell(1, 0, window, cx) {
             return;
         }
         // Tab commits a key field and moves to that property's value, as
@@ -1810,6 +1853,9 @@ impl Editor {
     /// Shift+Tab: removes one indentation step from the selected lines,
     /// renumbering the ordered lists it touches.
     fn outdent(&mut self, _: &Outdent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.table_field.is_some() && self.step_table_cell(-1, 0, window, cx) {
+            return;
+        }
         if self.buf.outdent(self.smart_indent_list) {
             self.after_edit(Some(window), cx);
         }
@@ -1891,12 +1937,12 @@ impl Editor {
         cx.notify();
     }
 
-    /// Escape: abandons a properties field first, then drops extra cursors,
-    /// then closes the panel.
+    /// Escape: closes the autocompletion popup first, then abandons an open
+    /// field, then drops extra cursors, then closes the panel.
     fn close_find(&mut self, _: &CloseFind, window: &mut Window, cx: &mut Context<Self>) {
         if self.suggest.is_some() {
             self.close_suggest(cx);
-        } else if self.cancel_property_field(cx) {
+        } else if self.cancel_table_field(cx) || self.cancel_property_field(cx) {
         } else if !self.buf.extra.is_empty() && self.focus_handle.is_focused(window) {
             self.buf.collapse_cursors();
             cx.notify();
@@ -2535,6 +2581,138 @@ impl Editor {
 
     /// Writes the open field into the document and closes it. Returns whether
     /// a field was open.
+    /// The field the keys go to while one is open: a property row's, or a
+    /// table cell's.
+    fn active_field(&mut self) -> Option<&mut Field> {
+        match self.property_field.as_mut() {
+            Some(f) => Some(f),
+            None => self.table_field.as_mut().map(|c| &mut c.field),
+        }
+    }
+
+    /// A click on a table cell: commit whatever field was open, then take
+    /// this cell's text into a new one.
+    fn table_action(&mut self, action: TableAction, window: &mut Window, cx: &mut Context<Self>) {
+        let TableAction::Edit { span } = action;
+        self.commit_property_field(Some(window), cx);
+        // The click arrives in the coordinates the widget was built from,
+        // which the commit may shift.
+        let span = self
+            .commit_table_field(Some(window), cx, Some(span.clone()))
+            .unwrap_or(span);
+        self.open_cell(span, cx);
+    }
+
+    /// Takes the cell's text into a field for typing.
+    fn open_cell(&mut self, span: Range<usize>, cx: &mut Context<Self>) {
+        let Some(was) = self.buf.text().get(span.clone()).map(str::to_string) else {
+            return;
+        };
+        self.table_field = Some(CellEdit {
+            span,
+            field: Field::new(Target::New, Part::Value, was.clone()),
+            was,
+        });
+        cx.notify();
+    }
+
+    /// Writes the open cell back into the document, if it changed.
+    ///
+    /// Obsidian re-pads a table only when a table command runs, so a cell
+    /// edit replaces that cell's bytes and leaves the rest of the table
+    /// exactly as it was. Returns `keep` shifted past the edit, so the cell
+    /// a click asked for is still the right bytes afterwards.
+    fn commit_table_field(
+        &mut self,
+        window: Option<&mut Window>,
+        cx: &mut Context<Self>,
+        keep: Option<Range<usize>>,
+    ) -> Option<Range<usize>> {
+        let CellEdit { span, was, field } = self.table_field.take()?;
+        let text = table::cell_text(&field.text);
+        // The bytes have to be the ones the field was opened on: anything
+        // else means the document moved underneath, and the vault is the
+        // source of truth.
+        if self.buf.text().get(span.clone()) != Some(was.as_str()) || text == was {
+            cx.notify();
+            return keep;
+        }
+        let grew = text.len() as isize - was.len() as isize;
+        self.edit(span.clone(), &text, EditKind::Other, window, cx);
+        cx.notify();
+        keep.map(|k| {
+            if k.start >= span.end {
+                (k.start as isize + grew) as usize..(k.end as isize + grew) as usize
+            } else {
+                k
+            }
+        })
+    }
+
+    /// Drops the open cell without writing it.
+    fn cancel_table_field(&mut self, cx: &mut Context<Self>) -> bool {
+        let had = self.table_field.take().is_some();
+        if had {
+            cx.notify();
+        }
+        had
+    }
+
+    /// Opens the next cell in reading order (`dx`) or the cell below
+    /// (`dy`), committing the one that is open. `false` when there is no
+    /// such cell, so Tab out of the last one falls through to the editor.
+    fn step_table_cell(
+        &mut self,
+        dx: isize,
+        dy: isize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(span) = self.table_field.as_ref().map(|c| c.span.clone()) else {
+            return false;
+        };
+        self.commit_table_field(Some(window), cx, None);
+        // The table is re-read after the commit: the cell's own bytes may
+        // have changed length.
+        let Some(at) = table::table_at(self.buf.text(), span.start) else {
+            return false;
+        };
+        let Some((row, col)) = at.cells.iter().enumerate().find_map(|(r, cells)| {
+            cells
+                .iter()
+                .position(|s| s.start <= span.start && span.start <= s.end)
+                .map(|c| (r, c))
+        }) else {
+            return false;
+        };
+        let next = if dy != 0 {
+            row.checked_add_signed(dy)
+                .and_then(|row| at.cells.get(row))
+                .and_then(|cells| cells.get(col))
+                .cloned()
+        } else if dx > 0 {
+            // Past the last cell of a row, Tab goes on to the next row.
+            match at.cells.get(row).map(|c| c.len()) {
+                Some(len) if col + 1 < len => at.cells[row].get(col + 1).cloned(),
+                _ => at.cells.get(row + 1).and_then(|c| c.first()).cloned(),
+            }
+        } else {
+            match col.checked_sub(1) {
+                Some(c) => at.cells[row].get(c).cloned(),
+                None => row
+                    .checked_sub(1)
+                    .and_then(|r| at.cells.get(r))
+                    .and_then(|c| c.last())
+                    .cloned(),
+            }
+        };
+        let Some(next) = next else {
+            return false;
+        };
+        self.open_cell(next, cx);
+        self.table_field.is_some()
+    }
+
     fn commit_property_field(
         &mut self,
         window: Option<&mut Window>,
@@ -2563,9 +2741,10 @@ impl Editor {
         had
     }
 
-    /// A click on a Live Preview widget: an embed keeps it (its links
-    /// work), a table or math block opens for editing at the clicked row.
-    /// Returns true when the click was consumed.
+    /// A click on a Live Preview widget: an embed and a table keep it
+    /// (their links and cells take their own clicks), and a math block
+    /// opens for editing at the clicked row. Returns true when the click
+    /// was consumed.
     fn click_widget(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) -> bool {
         let Some(w) = self
             .layout
@@ -2811,7 +2990,7 @@ impl EntityInputHandler for Editor {
     ) {
         // A properties field takes the keystrokes while it is open; the
         // document changes once, when the field commits.
-        if let Some(field) = self.property_field.as_mut() {
+        if let Some(field) = self.active_field() {
             field.insert(new_text);
             cx.notify();
             return;
@@ -3402,6 +3581,18 @@ impl Element for EditorElement {
                     }
                 }),
             };
+            let table_host = TableHost {
+                cell: editor
+                    .table_field
+                    .as_ref()
+                    .map(|c| (c.span.clone(), c.field.clone())),
+                on_action: Rc::new({
+                    let entity = entity.clone();
+                    move |action, window, cx| {
+                        entity.update(cx, |e, cx| e.table_action(action, window, cx));
+                    }
+                }),
+            };
             let renderer = Renderer::new(
                 &theme,
                 window.text_system().clone(),
@@ -3409,6 +3600,7 @@ impl Element for EditorElement {
                 &no_toggles,
                 &property_types,
                 Some(&properties_host),
+                Some(&table_host),
                 on_link,
                 on_toggle,
             );
@@ -3428,7 +3620,10 @@ impl Element for EditorElement {
                         line = wlines.end;
                         continue;
                     }
-                    let embed = matches!(widget.block, RBlock::Paragraph(_));
+                    // An embed keeps its clicks so its links work, and a
+                    // table keeps them because its cells take their own:
+                    // neither ever unfolds to its source.
+                    let embed = matches!(widget.block, RBlock::Paragraph(_) | RBlock::Table { .. });
                     let mut element = div()
                         .w(content_width)
                         .child(renderer.block(&widget.block, false))

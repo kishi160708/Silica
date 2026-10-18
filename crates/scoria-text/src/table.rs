@@ -72,6 +72,9 @@ pub struct TableAt {
     /// The table's bytes in the document, the trailing newline excluded.
     pub span: Range<usize>,
     pub table: Table,
+    /// The bytes each cell stands for, the header row first. A row written
+    /// with too few cells has too few spans: there is nowhere to type.
+    pub cells: Vec<Vec<Range<usize>>>,
     /// The row the cursor is in, the header being 0.
     pub row: usize,
     pub col: usize,
@@ -267,6 +270,7 @@ pub fn table_at(text: &str, offset: usize) -> Option<TableAt> {
     Some(TableAt {
         span,
         table,
+        cells: spans,
         row,
         col,
     })
@@ -378,6 +382,30 @@ fn swap_columns(t: &mut Table, a: usize, b: usize) {
         r.swap(a, b);
     }
     t.alignments.swap(a, b);
+}
+
+/// What text typed into a cell is written as.
+///
+/// A bare `|` would split the cell in two and a newline would end the row,
+/// so both are kept inside the cell they were typed in. Editing a cell
+/// re-pads nothing: Obsidian only re-pads when a table command runs, so the
+/// rest of the table keeps its bytes.
+pub fn cell_text(typed: &str) -> String {
+    let mut out = String::with_capacity(typed.len());
+    let mut chars = typed.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\n' | '\r' => out.push(' '),
+            // One already escaped stays as it is.
+            '\\' if chars.peek() == Some(&'|') => {
+                out.push('\\');
+                out.push(chars.next().expect("peeked"));
+            }
+            '|' => out.push_str("\\|"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 /// The table `editor:insert-table` writes: a blank line, then two by two
@@ -587,6 +615,18 @@ mod tests {
         assert!(table_at(src, 0).is_none());
         assert!(table_at(src, src.find("after").unwrap()).is_none());
         assert!(table_at(src, src.find('1').unwrap()).is_some());
+    }
+
+    #[test]
+    fn typed_cell_text_keeps_the_row_whole() {
+        assert_eq!(cell_text("plain"), "plain");
+        // A bare pipe would split the cell; an escaped one is already safe.
+        assert_eq!(cell_text("x|y"), "x\\|y");
+        assert_eq!(cell_text("x\\|y"), "x\\|y");
+        assert_eq!(cell_text("a|b|c"), "a\\|b\\|c");
+        // A newline would end the row.
+        assert_eq!(cell_text("two\nlines"), "two lines");
+        assert_eq!(cell_text("`a|b`"), "`a\\|b`");
     }
 
     #[test]

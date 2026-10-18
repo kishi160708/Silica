@@ -383,8 +383,20 @@ of empty three-wide cells, leaving the cursor in the first header cell.
 |     |     |
 ```
 
+Editing a cell is the opposite: **ordinary typing inside a table re-pads
+nothing**. A change to one cell's text leaves every other byte of the table
+as it was, and it stays that way when the cursor moves to another cell and
+when it leaves the table altogether — `| 1 | 2 |` edited to `| WIDE | 2 |`
+stays ragged until a table command runs. So the padded form is what the
+commands write, not an invariant Obsidian maintains.
+
+The widget itself is a real `table.table-editor` inside a `.table-wrapper`,
+each cell holding a `.table-cell-wrapper`; the cells are not
+`contenteditable` themselves, so the table stays drawn as a grid while the
+cursor is inside it rather than unfolding to its source the way other
+widgets do.
+
 **Unprobed:** where Obsidian leaves the cursor after each command (the
 columns it reported came from an unfocused editor and disagreed with
-themselves), whether a column's width counts characters or display columns
-for CJK and emoji, and whether typing *inside* a Live Preview table cell
-reformats the table on every keystroke or only when the cell is left.
+themselves), and whether a column's width counts characters or display
+columns for CJK and emoji.

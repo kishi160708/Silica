@@ -32,6 +32,7 @@ cargo run --release -p  -- <vault> --note X --stress 40     # self-driven edits 
 cargo run --release -p  -- <vault> --note X --source --type '[[al'          # type at the cursor: opens the autocompletion popup for a screenshot
 cargo run --release -p  -- <vault> --note X --source --type '[[al' --accept down,enter   # and press the popup's keys (enter, tab, shift-enter, up, down)
 cargo run --release -p  -- <vault> --note X --source --command editor:table-row-after   # run command ids at startup, comma separated (use a scratch vault)
+cargo run --release -p  -- <vault> --note X --cell 2 --type new --press enter   # open a table cell, type in it, press keys (enter, tab, shift-tab, escape, up, down)
 cargo run --release -p  -- <vault> --note X --find word     # open with the find panel up and the query matched
 cargo run --release -p  -- <vault> --note X --prompt rename  # open the rename prompt (move, delete, folder) for screenshots
 cargo run --release -p  -- <vault> --note X --rename "New"   # rename the note at startup, rewriting links (use a scratch vault)
@@ -116,7 +117,7 @@ of mixed use in both apps.
 | Source mode | done, see [[#Source editor, 2026-10-16]] |
 | Live Preview | done, see [[#Live Preview, 2026-10-16]] |
 | File operations and link rewriting | done, see [[#File operations, 2026-10-17]] |
-| Tables (editing) | the sixteen table commands, see [[#Table editing, 2026-10-18]]; typing straight into a Live Preview cell is not wired up yet |
+| Tables (editing) | done: the sixteen commands and editable cells, see [[#Table editing, 2026-10-18]] |
 | Properties | done, see [[#Properties, 2026-10-18]] |
 | Autocompletion | links, headings, aliases, embeds and tags, see [[#Autocompletion, 2026-10-18]]; block references are not offered yet |
 | Templates, daily notes, file recovery | not started |
@@ -164,13 +165,29 @@ The round-trip harness runs eight of the commands over every table in the
 corpus and a real vault: nothing outside the table's own bytes moves, and
 undo restores the note.
 
-**Not done:** typing into a cell in the Live Preview widget. Clicking a
-table still puts the cursor on that source line, which is how every other
-widget behaves; the commands are what make a table editable for now.
+Cells are editable too. Clicking one opens a field in it, the way a
+property row's value opens; Tab and Shift+Tab walk the cells, Enter drops
+into the cell below, Escape abandons the edit, and the column grows with
+what is typed. A table now stays a grid wherever the cursor is, as
+Obsidian's `table-editor` does, instead of unfolding to its pipes — Source
+mode is where the markdown is edited directly.
+
+A second probe settled what a cell edit writes, which the first had left
+open: **ordinary typing re-pads nothing.** A cell changed through the
+editor API kept every other byte of the table as it was, through the cursor
+moving to another cell and out of the table entirely. So the padded form is
+what the commands write, not an invariant, and committing a cell replaces
+that cell's bytes and nothing else. Two rules of 's own: a `|` typed
+into a cell is written `\|` and a newline becomes a space, because either
+would otherwise restructure the table (`table::cell_text`); and a commit
+writes nothing unless the cell still holds the bytes the field was opened
+on, so a document that moved underneath is left alone.
+
 **Unprobed:** where Obsidian leaves the cursor after each command (the
 columns it reported came from an unfocused editor and disagreed with
-themselves), and whether a column counts characters or display columns for
-CJK and emoji —  counts characters.
+themselves), whether a column counts characters or display columns for CJK
+and emoji —  counts characters — and what Obsidian writes for a `|`
+typed into a cell.
 
 ### Autocompletion, 2026-10-18
 
