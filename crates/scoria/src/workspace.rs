@@ -1589,6 +1589,11 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Opens a Settings dropdown's options, for `--menu`.
+    pub fn open_settings_menu(&mut self, key: &str, cx: &mut Context<Self>) {
+        self.settings.update(cx, |s, cx| s.open_menu(key, cx));
+    }
+
     /// Opens the Settings modal, on `tab` when given (`--settings` on the command line).
     pub fn open_settings(
         &mut self,

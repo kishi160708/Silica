@@ -11,7 +11,8 @@
 //! running app can change on the spot. `Vault::write_config` merges into
 //! the file's own JSON, so nothing but the changed key moves.
 //!
-//! Dropdowns, text fields and sliders are still read-only. Every row also
+//! Text fields and sliders are still read-only; a dropdown writes the
+//! option it names, through the same table its label is read from. Every row also
 //! says how far it gets in  ([`Honored`]): nothing on a setting the
 //! app follows as you click it, "on restart" for the theme and fonts, and
 //! "not in  yet" for the ones written only for Obsidian to read. The
@@ -23,7 +24,7 @@ use crate::text_input::{InputEvent, TextInput};
 use crate::theme::Theme;
 use crate::workspace::{Commands, VaultState};
 use gpui::{
-    actions, div, prelude::*, px, rgb, uniform_list, App, Context, Entity, EventEmitter,
+    actions, deferred, div, prelude::*, px, rgb, uniform_list, App, Context, Entity, EventEmitter,
     FocusHandle, Focusable, FontWeight, KeyBinding, SharedString, Subscription,
     UniformListScrollHandle, Window,
 };
@@ -235,6 +236,190 @@ enum Flag {
     CommunityPlugin(String),
 }
 
+/// A dropdown's options: what each row reads and what it writes.
+///
+/// The labels are Obsidian's, as the Settings tab shows them; the values
+/// are what it puts in the file, which the phase 3 probe confirmed for
+/// every one of these keys. See
+/// [[Specification#Observed settings write behavior, Obsidian 1.14.4]].
+type Options = &'static [(&'static str, &'static str)];
+
+/// A setting that is not a toggle: the key it writes and the one pair of
+/// accessors its control reads through and writes through, so what a row
+/// shows and what it writes cannot drift apart.
+#[derive(Clone, Copy)]
+struct Typed {
+    key: &'static str,
+    options: Options,
+    /// The value in the file now, as one of `options`' written values.
+    read: fn(&VaultState) -> String,
+    /// The file with this setting set to `value`.
+    write: fn(&VaultState, &str) -> SettingChange,
+}
+
+impl Typed {
+    /// The option the file's value names, or the first, which is Obsidian's
+    /// default for every one of these keys.
+    fn selected(&self, state: &VaultState) -> usize {
+        let value = (self.read)(state);
+        self.options
+            .iter()
+            .position(|(_, v)| *v == value)
+            .unwrap_or(0)
+    }
+
+    fn label(&self, state: &VaultState) -> &'static str {
+        self.options[self.selected(state)].0
+    }
+}
+
+impl PartialEq for Typed {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+    }
+}
+
+impl Eq for Typed {}
+
+impl std::fmt::Debug for Typed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Typed").field("key", &self.key).finish()
+    }
+}
+
+/// Reads a string key of `app.json`, with the value Obsidian writes when it
+/// is absent.
+macro_rules! app_choice {
+    ($name:ident, $key:literal, $field:ident, $default:literal, $options:expr) => {
+        const $name: Typed = Typed {
+            key: $key,
+            options: $options,
+            read: |state| {
+                state
+                    .app()
+                    .$field
+                    .clone()
+                    .filter(|v| !v.is_empty())
+                    .unwrap_or_else(|| $default.to_string())
+            },
+            write: |state, value| {
+                let mut next = state.app().clone();
+                next.$field = Some(value.to_string());
+                SettingChange::App(next)
+            },
+        };
+    };
+}
+
+macro_rules! appearance_choice {
+    ($name:ident, $key:literal, $field:ident, $default:literal, $options:expr) => {
+        const $name: Typed = Typed {
+            key: $key,
+            options: $options,
+            read: |state| {
+                state
+                    .appearance()
+                    .$field
+                    .clone()
+                    .filter(|v| !v.is_empty())
+                    .unwrap_or_else(|| $default.to_string())
+            },
+            write: |state, value| {
+                let mut next = state.appearance().clone();
+                next.$field = Some(value.to_string());
+                SettingChange::Appearance(next)
+            },
+        };
+    };
+}
+
+app_choice!(
+    DEFAULT_VIEW_MODE,
+    "defaultViewMode",
+    default_view_mode,
+    "source",
+    &[("Editing view", "source"), ("Reading view", "preview")]
+);
+app_choice!(
+    PROPERTIES_IN_DOCUMENT,
+    "propertiesInDocument",
+    properties_in_document,
+    "visible",
+    &[
+        ("Visible", "visible"),
+        ("Hidden", "hidden"),
+        ("Source", "source")
+    ]
+);
+app_choice!(
+    NEW_FILE_LOCATION,
+    "newFileLocation",
+    new_file_location,
+    "root",
+    &[
+        ("Vault folder", "root"),
+        ("Same folder as current file", "current"),
+        ("In the folder specified below", "folder")
+    ]
+);
+app_choice!(
+    NEW_LINK_FORMAT,
+    "newLinkFormat",
+    new_link_format,
+    "shortest",
+    &[
+        ("Shortest path when possible", "shortest"),
+        ("Relative path to file", "relative"),
+        ("Absolute path in vault", "absolute")
+    ]
+);
+app_choice!(
+    TRASH_OPTION,
+    "trashOption",
+    trash_option,
+    "system",
+    &[
+        ("Move to system trash", "system"),
+        ("Move to Obsidian trash (.trash folder)", "local"),
+        ("Permanently delete", "none")
+    ]
+);
+appearance_choice!(
+    BASE_COLOR_SCHEME,
+    "theme",
+    theme,
+    "system",
+    &[
+        ("Adapt to system", "system"),
+        ("Light", "moonstone"),
+        ("Dark", "obsidian")
+    ]
+);
+
+/// `livePreview` is a two-option dropdown over a boolean key, so it reads
+/// and writes `true` and `false` as the strings its options name.
+const LIVE_PREVIEW: Typed = Typed {
+    key: "livePreview",
+    options: &[("Live Preview", "true"), ("Source mode", "false")],
+    read: |state| state.app().live_preview.unwrap_or(true).to_string(),
+    write: |state, value| {
+        let mut next = state.app().clone();
+        next.live_preview = Some(value == "true");
+        SettingChange::App(next)
+    },
+};
+
+/// Every dropdown that writes.
+const TYPED_ALL: &[Typed] = &[
+    DEFAULT_VIEW_MODE,
+    PROPERTIES_IN_DOCUMENT,
+    NEW_FILE_LOCATION,
+    NEW_LINK_FORMAT,
+    TRASH_OPTION,
+    BASE_COLOR_SCHEME,
+    LIVE_PREVIEW,
+];
+
 /// A config file with one setting changed, for the workspace to write.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SettingChange {
@@ -382,6 +567,8 @@ struct Item {
     /// What a click writes; `None` for the controls that are still
     /// read-only.
     flag: Option<Flag>,
+    /// What a dropdown writes, for the controls that are not toggles.
+    typed: Option<Typed>,
     honored: Honored,
 }
 
@@ -410,6 +597,7 @@ fn heading(name: &str) -> Item {
         desc: "".into(),
         control: Control::None,
         flag: None,
+        typed: None,
         honored: Honored::Live,
     }
 }
@@ -421,6 +609,7 @@ fn item(name: &str, desc: &str, control: Control) -> Item {
         desc: desc.to_string().into(),
         control,
         flag: None,
+        typed: None,
         honored: Honored::Live,
     }
 }
@@ -453,6 +642,15 @@ fn switcher_toggle(name: &str, desc: &str, switcher: &SwitcherConfig, flag: Swit
 
 fn dropdown(name: &str, desc: &str, value: impl Into<SharedString>) -> Item {
     item(name, desc, Control::Dropdown(value.into()))
+}
+
+/// A dropdown that writes: what it shows and what a pick writes both come
+/// from `typed`, so a row cannot show one key and write another.
+fn choice(name: &str, desc: &str, state: &VaultState, typed: Typed) -> Item {
+    Item {
+        typed: Some(typed),
+        ..item(name, desc, Control::Dropdown(typed.label(state).into()))
+    }
 }
 
 fn text(name: &str, desc: &str, value: impl Into<SharedString>) -> Item {
@@ -513,6 +711,8 @@ pub struct SettingsView {
     /// Indices into `all_commands` after search and filter.
     hotkey_rows: Vec<usize>,
     hotkey_scroll: UniformListScrollHandle,
+    /// The dropdown whose options are showing, by the key it writes.
+    menu: Option<&'static str>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -544,6 +744,7 @@ impl SettingsView {
             all_commands: Vec::new(),
             hotkey_rows: Vec::new(),
             hotkey_scroll: UniformListScrollHandle::new(),
+            menu: None,
             _subscriptions: subscriptions,
         };
         view.load_commands(cx);
@@ -660,11 +861,6 @@ impl SettingsView {
 
     fn appearance_items(state: &VaultState) -> Vec<Item> {
         let a = &state.appearance();
-        let scheme = match a.theme.as_deref() {
-            Some("obsidian") => "Dark",
-            Some("moonstone") => "Light",
-            _ => "Adapt to system",
-        };
         let font = |family: &Option<String>| -> SharedString {
             match family.as_deref().map(str::trim) {
                 Some(f) if !f.is_empty() => f.to_string().into(),
@@ -673,10 +869,11 @@ impl SettingsView {
         };
         let snippets = a.enabled_css_snippets.as_ref().map_or(0, |s| s.len());
         vec![
-            dropdown(
+            choice(
                 "Base color scheme",
                 "Choose Obsidian's default color scheme.",
-                scheme,
+                state,
+                BASE_COLOR_SCHEME,
             )
             .on_restart(),
             text(
@@ -765,20 +962,6 @@ impl SettingsView {
 
     fn editor_items(state: &VaultState) -> Vec<Item> {
         let app = &state.app();
-        let default_view = match app.default_view_mode.as_deref() {
-            Some("preview") => "Reading view",
-            _ => "Editing view",
-        };
-        let editing_mode = if app.live_preview.unwrap_or(true) {
-            "Live Preview"
-        } else {
-            "Source mode"
-        };
-        let properties = match app.properties_in_document.as_deref() {
-            Some("hidden") => "Hidden",
-            Some("source") => "Source",
-            _ => "Visible",
-        };
         let languages = app
             .spellcheck_languages
             .as_ref()
@@ -790,15 +973,17 @@ impl SettingsView {
             None => true,
         };
         vec![
-            dropdown(
+            choice(
                 "Default view for new tabs",
                 "The default view that a new Markdown tab gets opened in.",
-                default_view,
+                state,
+                DEFAULT_VIEW_MODE,
             ),
-            dropdown(
+            choice(
                 "Default editing mode",
                 "The default editing mode a new tab will start with.",
-                editing_mode,
+                state,
+                LIVE_PREVIEW,
             ),
             toggle(
                 "Show editing mode in status bar",
@@ -825,10 +1010,11 @@ impl SettingsView {
                 app,
                 STRICT_LINE_BREAKS,
             ),
-            dropdown(
+            choice(
                 "Properties in document",
                 "Choose how properties are displayed at the top of notes. Select “source” to show properties as raw YAML.",
-                properties,
+                state,
+                PROPERTIES_IN_DOCUMENT,
             ),
             app_toggle(
                 "Fold heading",
@@ -919,27 +1105,12 @@ impl SettingsView {
 
     fn files_items(state: &VaultState) -> Vec<Item> {
         let app = &state.app();
-        let new_notes = match app.new_file_location.as_deref() {
-            Some("current") => "Same folder as current file",
-            Some("folder") => "In the folder specified below",
-            _ => "Vault folder",
-        };
         let attachments = app.attachment_folder_path.as_deref().unwrap_or("/");
         let (attachment_location, attachment_path, subfolder) = match attachments {
             "/" | "" => ("Vault folder", "", ""),
             "./" => ("Same folder as current file", "", ""),
             p if p.starts_with("./") => ("In subfolder under current folder", "", &p[2..]),
             p => ("In the folder specified below", p, ""),
-        };
-        let link_format = match app.new_link_format.as_deref() {
-            Some("relative") => "Path from current file",
-            Some("absolute") => "Path from vault folder",
-            _ => "Shortest path when possible",
-        };
-        let trash = match app.trash_option.as_deref() {
-            Some("local") => "Move to Obsidian trash (.trash folder)",
-            Some("none") => "Permanently delete",
-            _ => "Move to system trash",
         };
         let excluded = app
             .user_ignore_filters
@@ -956,10 +1127,11 @@ impl SettingsView {
                 FOCUS_NEW_TAB,
             )
             .not_yet(),
-            dropdown(
+            choice(
                 "Default location for new notes",
                 "Where newly created notes are placed.",
-                new_notes,
+                state,
+                NEW_FILE_LOCATION,
             ),
         ];
         if app.new_file_location.as_deref() == Some("folder") {
@@ -993,10 +1165,11 @@ impl SettingsView {
         }
         items.extend([
             heading("Links"),
-            dropdown(
+            choice(
                 "New link format",
                 "What links to insert when auto-generating internal links.",
-                link_format,
+                state,
+                NEW_LINK_FORMAT,
             ),
             app_toggle(
                 "Automatically update internal links",
@@ -1023,10 +1196,11 @@ impl SettingsView {
                 app,
                 PROMPT_DELETE,
             ),
-            dropdown(
+            choice(
                 "Deleted files",
                 "What happens to a file after you delete it.",
-                trash,
+                state,
+                TRASH_OPTION,
             ),
             heading("Advanced"),
             text(
@@ -1264,22 +1438,82 @@ impl SettingsView {
                     .child(toggle)
                     .into_any_element()
             }
-            Control::Dropdown(value) => div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap_2()
-                .px_2()
-                .py(px(3.))
-                .rounded_sm()
-                .bg(theme.bg_alt)
-                .border_1()
-                .border_color(theme.border)
-                .text_size(px(12.))
-                .text_color(theme.text)
-                .child(value.clone())
-                .child(div().text_color(theme.text_muted).child("▾"))
-                .into_any_element(),
+            Control::Dropdown(value) => {
+                let shown = div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .px_2()
+                    .py(px(3.))
+                    .rounded_sm()
+                    .bg(theme.bg_alt)
+                    .border_1()
+                    .border_color(theme.border)
+                    .text_size(px(12.))
+                    .text_color(theme.text)
+                    .child(value.clone())
+                    .child(div().text_color(theme.text_muted).child("▾"));
+                let Some(typed) = item.typed else {
+                    return shown.into_any_element();
+                };
+                let selected = self.state.as_ref().map(|s| typed.selected(s)).unwrap_or(0);
+                let open = self.menu == Some(typed.key);
+                div()
+                    .relative()
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("settings-menu-{}", typed.key)))
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                // A second click closes it, as the property
+                                // type menu does.
+                                this.menu = (this.menu != Some(typed.key)).then_some(typed.key);
+                                cx.notify();
+                            }))
+                            .child(shown),
+                    )
+                    .when(open, |d| {
+                        // Deferred, or the rows after this one paint over
+                        // the options: a later sibling wins otherwise.
+                        d.child(deferred(
+                            div()
+                                .absolute()
+                                .top(px(26.))
+                                .right(px(0.))
+                                .min_w(px(200.))
+                                .flex()
+                                .flex_col()
+                                .bg(theme.bg_secondary)
+                                .border_1()
+                                .border_color(theme.border)
+                                .rounded_md()
+                                .shadow_lg()
+                                .py_1()
+                                .children(typed.options.iter().enumerate().map(
+                                    |(ix, (label, _))| {
+                                        div()
+                                            .id(SharedString::from(format!(
+                                                "settings-option-{}-{ix}",
+                                                typed.key
+                                            )))
+                                            .px_3()
+                                            .py_1()
+                                            .text_size(px(12.))
+                                            .cursor_pointer()
+                                            .when(ix == selected, |d| d.bg(theme.bg_active))
+                                            .hover(|s| s.bg(theme.bg_alt))
+                                            .text_color(theme.text)
+                                            .child(SharedString::from(label.to_string()))
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.pick(typed, ix, cx)
+                                            }))
+                                    },
+                                )),
+                        ))
+                    })
+                    .into_any_element()
+            }
             Control::Text(value) => div()
                 .min_w(px(160.))
                 .max_w(px(320.))
@@ -1335,6 +1569,31 @@ impl SettingsView {
                 .child(label.clone())
                 .into_any_element(),
         }
+    }
+
+    /// Opens the dropdown that writes `key`, for `--menu`: clicking one is
+    /// what does it in the app.
+    pub fn open_menu(&mut self, key: &str, cx: &mut Context<Self>) {
+        self.menu = TYPED_ALL.iter().find(|t| t.key == key).map(|t| t.key);
+        cx.notify();
+    }
+
+    /// Writes the option a dropdown's row names. The value comes from the
+    /// same table the control reads through, so the two cannot drift.
+    fn pick(&mut self, typed: Typed, option: usize, cx: &mut Context<Self>) {
+        self.menu = None;
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let Some((_, value)) = typed.options.get(option) else {
+            return;
+        };
+        if (typed.read)(&state) != *value {
+            cx.emit(SettingsEvent::Changed(Box::new((typed.write)(
+                &state, value,
+            ))));
+        }
+        cx.notify();
     }
 
     fn render_item(&self, item: &Item, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
@@ -1597,7 +1856,7 @@ impl Render for SettingsView {
                             .bg(theme.bg_alt)
                             .text_size(px(11.))
                             .text_color(theme.text_muted)
-                            .child("Toggles write to the vault's .obsidian folder as you click them; dropdowns, text fields and sliders are still read-only. A tagged setting is still written for Obsidian, but  does not read it yet, or reads it only when it starts."),
+                            .child("Toggles and dropdowns write to the vault's .obsidian folder as you use them; text fields and sliders are still read-only. A tagged setting is still written for Obsidian, but  does not read it yet, or reads it only when it starts."),
                     )
                     .child(div().flex_1().min_h_0().child(body)),
             )
@@ -1643,6 +1902,78 @@ mod tests {
         check!(AppFlag, AppConfig);
         check!(AppearanceFlag, AppearanceConfig);
         check!(SwitcherFlag, SwitcherConfig);
+    }
+
+    #[test]
+    fn every_dropdown_writes_its_own_key_and_nothing_else() {
+        let (_dir, state) = vault();
+        for typed in TYPED_ALL {
+            for (label, value) in typed.options {
+                let change = (typed.write)(&state, value);
+                let json = match &change {
+                    SettingChange::App(c) => serde_json::to_value(c).unwrap(),
+                    SettingChange::Appearance(c) => serde_json::to_value(c).unwrap(),
+                    other => panic!("{} wrote {other:?}", typed.key),
+                };
+                let object = json.as_object().expect("an object");
+                assert_eq!(
+                    object.len(),
+                    1,
+                    "{} changed more than its own key for {label}: {json}",
+                    typed.key
+                );
+                let written = object.get(typed.key).expect("its own key");
+                // `livePreview` is a boolean behind a two-option dropdown;
+                // every other one writes the string its option names.
+                let want = match *value {
+                    "true" => serde_json::Value::Bool(true),
+                    "false" => serde_json::Value::Bool(false),
+                    v => serde_json::Value::String(v.to_string()),
+                };
+                assert_eq!(
+                    written, &want,
+                    "{} wrote the wrong value for {label}: {json}",
+                    typed.key
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_dropdown_reads_back_what_it_wrote() {
+        // The control's label and its write go through the same table, so
+        // picking an option must leave that option showing.
+        let (dir, mut state) = vault();
+        for typed in TYPED_ALL {
+            for (ix, (label, value)) in typed.options.iter().enumerate() {
+                state.apply_setting(&(typed.write)(&state, value)).unwrap();
+                state = VaultState::load(&dir.path().to_path_buf()).unwrap();
+                assert_eq!(
+                    typed.selected(&state),
+                    ix,
+                    "{} did not read back {label}",
+                    typed.key
+                );
+                assert_eq!(typed.label(&state), *label);
+            }
+        }
+    }
+
+    #[test]
+    fn a_setting_at_its_default_is_written_rather_than_removed() {
+        // Obsidian keeps the key with its explicit value, which the phase 3
+        // probe settled for every kind of value;  has no way of
+        // removing a config key and does not need one.
+        let (dir, state) = vault();
+        let default = NEW_LINK_FORMAT.options[0].1;
+        state
+            .apply_setting(&(NEW_LINK_FORMAT.write)(&state, default))
+            .unwrap();
+        let written = std::fs::read_to_string(dir.path().join(".obsidian/app.json")).unwrap();
+        assert!(
+            written.contains("\"newLinkFormat\": \"shortest\""),
+            "the default was not written: {written}"
+        );
     }
 
     /// Obsidian words this one the other way round: the control is "Use

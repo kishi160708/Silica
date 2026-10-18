@@ -160,6 +160,8 @@ struct Args {
     command: Option<String>,
     /// Open the template chooser and pick the template this matches.
     template: Option<String>,
+    /// Open the Settings dropdown that writes this key, for screenshots.
+    menu: Option<String>,
 }
 
 fn parse_args() -> Args {
@@ -185,6 +187,7 @@ fn parse_args() -> Args {
         cell: None,
         command: None,
         template: None,
+        menu: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -211,6 +214,7 @@ fn parse_args() -> Args {
             "--cell" => args.cell = it.next().and_then(|n| n.parse().ok()),
             "--command" => args.command = it.next(),
             "--template" => args.template = it.next(),
+            "--menu" => args.menu = it.next(),
             _ if args.vault.is_none() => args.vault = Some(PathBuf::from(a)),
             _ => args.note = Some(a),
         }
@@ -284,6 +288,7 @@ fn main() {
         let cell = args.cell;
         let command = args.command.clone();
         let template = args.template.clone();
+        let menu = args.menu.clone();
         let reading = args.reading;
         let find = args.find.clone();
         let find_all = args.find_all.clone();
@@ -382,6 +387,9 @@ fn main() {
                         }
                         if let Some(q) = &template {
                             ws.pick_template(q, window, cx);
+                        }
+                        if let Some(key) = &menu {
+                            ws.open_settings_menu(key, cx);
                         }
                         true
                     })

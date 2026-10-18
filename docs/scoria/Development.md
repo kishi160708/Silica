@@ -124,7 +124,7 @@ of mixed use in both apps.
 | Templates | done: the three commands and the chooser, see [[#Templates, 2026-10-18]] |
 | Daily notes | done: today's note, the template and stepping between them, see [[#Daily notes, 2026-10-18]] |
 | File recovery | out of phase 3: Obsidian keeps its snapshots in IndexedDB outside the vault, so it cannot affect the gate |
-| Writing settings back | started: every Settings toggle writes, see [[#Settings writing, 2026-10-18]]; dropdowns, text fields and sliders are still read-only |
+| Writing settings back | toggles and dropdowns write, see [[#Settings writing, 2026-10-18]] and [[#Settings dropdowns, 2026-10-18]]; text fields and sliders are still read-only |
 | Round-trip harness | done, see [[#Round-trip harness, 2026-10-18]] |
 
 ### Table editing, 2026-10-18
@@ -350,6 +350,41 @@ own means writing a six-character id into the *target* note — inline on a
 paragraph, on its own line after a heading. That is a write into a second
 file and wants its own change. `Ctrl+P`/`Ctrl+N`, which Obsidian's popup also
 binds to the selection, are left to 's own bindings.
+
+### Settings dropdowns, 2026-10-18
+
+Seven dropdowns write: the base colour scheme, the default view for new
+tabs, the default editing mode, properties in document, where new notes go,
+the new link format and what happens to a deleted file. Clicking one shows
+its options and picking one writes the key.
+
+A dropdown is a `Typed`: the key, the option list, and the one pair of
+accessors the control's label is read through and a pick is written
+through. That is the same guarantee the toggles' `Flag` gives — a row
+cannot show one key and write another — and it let the seven hand-written
+label matches go, since the table now owns both directions. Two tests walk
+every dropdown: one asserts a pick writes its own key and nothing else,
+the other writes each option, reloads the vault and asserts the control
+reads that option back.
+
+The values came from the phase 3 probe, which also settled the question
+this work was waiting on: **a setting at its default is written, not
+removed**, for every kind of value. So `Vault::write_config` needed no way
+of removing a key, which is what the research had flagged as the one answer
+that could have forced a change there.
+
+`livePreview` is the odd one: a two-option dropdown over a boolean key, so
+it reads and writes `true` and `false` as the strings its options name
+rather than getting a mechanism of its own.
+
+The options are drawn with `deferred`, the way the file explorer's context
+menu is. Without it the rows below paint over the open menu, because a
+later sibling wins — this version of gpui has no `z_index`.
+
+**Unprobed:** the option labels are 's existing ones, read off
+Obsidian's settings tab when the read-only modal was built, not re-observed
+in the phase 3 run — that run drove the config keys rather than the
+controls, so it settled what is written and not what the tab reads.
 
 ### Settings writing, 2026-10-18
 
