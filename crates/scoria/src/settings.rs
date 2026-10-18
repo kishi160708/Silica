@@ -11,7 +11,12 @@
 //! running app can change on the spot. `Vault::write_config` merges into
 //! the file's own JSON, so nothing but the changed key moves.
 //!
-//! Dropdowns, text fields and sliders are still read-only.
+//! Dropdowns, text fields and sliders are still read-only. Every row also
+//! says how far it gets in  ([`Honored`]): nothing on a setting the
+//! app follows as you click it, "on restart" for the theme and fonts, and
+//! "not in  yet" for the ones written only for Obsidian to read. The
+//! vault is shared, so writing a setting  ignores is still worth
+//! doing — pretending it changes something here is not.
 
 use crate::palette::hotkey_chip;
 use crate::text_input::{InputEvent, TextInput};
@@ -342,6 +347,32 @@ enum Control {
     Button(SharedString),
 }
 
+/// How far a setting gets in .
+///
+/// Every value here is written for the vault, which Obsidian reads too, so
+/// a setting  ignores is still worth setting. Saying which is which
+/// is the honest part: a row with no tag changes  as you click it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Honored {
+    /// Read while the vault is open; the change shows at once.
+    Live,
+    /// Read when  starts (the theme and the fonts).
+    OnRestart,
+    /// Not read at all yet: the value is written for Obsidian.
+    No,
+}
+
+impl Honored {
+    /// The tag shown beside the setting's name, if any.
+    fn tag(self) -> Option<&'static str> {
+        match self {
+            Honored::Live => None,
+            Honored::OnRestart => Some("on restart"),
+            Honored::No => Some("not in  yet"),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct Item {
     heading: bool,
@@ -351,6 +382,25 @@ struct Item {
     /// What a click writes; `None` for the controls that are still
     /// read-only.
     flag: Option<Flag>,
+    honored: Honored,
+}
+
+impl Item {
+    ///  reads this one when it starts.
+    fn on_restart(self) -> Item {
+        Item {
+            honored: Honored::OnRestart,
+            ..self
+        }
+    }
+
+    ///  does not read this one yet; it is written for Obsidian.
+    fn not_yet(self) -> Item {
+        Item {
+            honored: Honored::No,
+            ..self
+        }
+    }
 }
 
 fn heading(name: &str) -> Item {
@@ -360,6 +410,7 @@ fn heading(name: &str) -> Item {
         desc: "".into(),
         control: Control::None,
         flag: None,
+        honored: Honored::Live,
     }
 }
 
@@ -370,6 +421,7 @@ fn item(name: &str, desc: &str, control: Control) -> Item {
         desc: desc.to_string().into(),
         control,
         flag: None,
+        honored: Honored::Live,
     }
 }
 
@@ -574,19 +626,19 @@ impl SettingsView {
             return vec![item("No vault is open", "", Control::None)];
         };
         match tab {
-            Tab::General => self.general_items(state),
-            Tab::Appearance => self.appearance_items(state),
-            Tab::Interface => self.interface_items(state),
-            Tab::Editor => self.editor_items(state),
-            Tab::Files => self.files_items(state),
+            Tab::General => Self::general_items(state),
+            Tab::Appearance => Self::appearance_items(state),
+            Tab::Interface => Self::interface_items(state),
+            Tab::Editor => Self::editor_items(state),
+            Tab::Files => Self::files_items(state),
             Tab::Hotkeys => Vec::new(),
-            Tab::CorePlugins => self.core_plugin_items(state),
-            Tab::CommunityPlugins => self.community_plugin_items(state),
-            Tab::Plugin(id) => self.plugin_items(state, id),
+            Tab::CorePlugins => Self::core_plugin_items(state),
+            Tab::CommunityPlugins => Self::community_plugin_items(state),
+            Tab::Plugin(id) => Self::plugin_items(state, &self.all_commands, id),
         }
     }
 
-    fn general_items(&self, state: &VaultState) -> Vec<Item> {
+    fn general_items(state: &VaultState) -> Vec<Item> {
         let vault = state.vault();
         vec![
             item(
@@ -594,7 +646,7 @@ impl SettingsView {
                 " reads this vault the way Obsidian 1.14.4 does.",
                 Control::Button("Check for updates".into()),
             ),
-            dropdown("Language", "Change the display language.", "English"),
+            dropdown("Language", "Change the display language.", "English").not_yet(),
             item(
                 "Help",
                 "Learn how to use Obsidian and get help from the community.",
@@ -606,7 +658,7 @@ impl SettingsView {
         ]
     }
 
-    fn appearance_items(&self, state: &VaultState) -> Vec<Item> {
+    fn appearance_items(state: &VaultState) -> Vec<Item> {
         let a = &state.appearance();
         let scheme = match a.theme.as_deref() {
             Some("obsidian") => "Dark",
@@ -625,7 +677,8 @@ impl SettingsView {
                 "Base color scheme",
                 "Choose Obsidian's default color scheme.",
                 scheme,
-            ),
+            )
+            .on_restart(),
             text(
                 "Accent color",
                 "Choose the accent color used throughout the app.",
@@ -633,7 +686,8 @@ impl SettingsView {
                     .clone()
                     .filter(|c| !c.is_empty())
                     .unwrap_or_else(|| "Default".into()),
-            ),
+            )
+            .not_yet(),
             dropdown(
                 "Themes",
                 "Manage installed themes and browse community themes.",
@@ -641,7 +695,8 @@ impl SettingsView {
                     .clone()
                     .filter(|t| !t.is_empty())
                     .unwrap_or_else(|| "Default".into()),
-            ),
+            )
+            .not_yet(),
             item(
                 "CSS snippets",
                 "Manage your collection of CSS files for tweaking the app's appearance.",
@@ -653,32 +708,37 @@ impl SettingsView {
                     }
                     .into(),
                 ),
-            ),
+            )
+            .not_yet(),
             heading("Font"),
             text(
                 "Interface font",
                 "Set base font for all of Obsidian.",
                 font(&a.interface_font_family),
-            ),
+            )
+            .on_restart(),
             text(
                 "Text font",
                 "Set font for editing and reading views.",
                 font(&a.text_font_family),
-            ),
+            )
+            .on_restart(),
             text(
                 "Monospace font",
                 "Set font for places like code blocks and frontmatter.",
                 font(&a.monospace_font_family),
-            ),
+            )
+            .on_restart(),
             item(
                 "Font size",
                 "Font size in pixels that affects editing and reading views.",
                 Control::Slider(a.base_font_size.unwrap_or(16).to_string().into()),
-            ),
+            )
+            .on_restart(),
         ]
     }
 
-    fn interface_items(&self, state: &VaultState) -> Vec<Item> {
+    fn interface_items(state: &VaultState) -> Vec<Item> {
         let a = &state.appearance();
         vec![
             appearance_toggle(
@@ -686,24 +746,24 @@ impl SettingsView {
                 "Display the header at the top of every tab.",
                 a,
                 SHOW_VIEW_HEADER,
-            ),
+            ).not_yet(),
             appearance_toggle(
                 "Show ribbon",
                 "Display vertical toolbar on the side of the window.",
                 a,
                 SHOW_RIBBON,
-            ),
+            ).not_yet(),
             heading("Advanced"),
             appearance_toggle(
                 "Native menus",
                 "Menus throughout the app will match the operating system. They will not be affected by your theme.",
                 a,
                 NATIVE_MENUS,
-            ),
+            ).not_yet(),
         ]
     }
 
-    fn editor_items(&self, state: &VaultState) -> Vec<Item> {
+    fn editor_items(state: &VaultState) -> Vec<Item> {
         let app = &state.app();
         let default_view = match app.default_view_mode.as_deref() {
             Some("preview") => "Reading view",
@@ -745,14 +805,14 @@ impl SettingsView {
                 "Show the editing mode toggle in the status bar.",
                 editor_status,
                 Flag::CorePlugin("editor-status", true),
-            ),
+            ).not_yet(),
             heading("Display"),
             app_toggle(
                 "Inline title",
                 "Display the filename as an editable title inline with the file contents.",
                 app,
                 SHOW_INLINE_TITLE,
-            ),
+            ).not_yet(),
             app_toggle(
                 "Readable line length",
                 "Limit maximum line length. Less content fits onscreen, but long blocks of text are more readable.",
@@ -775,55 +835,55 @@ impl SettingsView {
                 "Lets you fold all content under a heading.",
                 app,
                 FOLD_HEADING,
-            ),
+            ).not_yet(),
             app_toggle(
                 "Fold indent",
                 "Lets you fold part of an indentation, such as lists.",
                 app,
                 FOLD_INDENT,
-            ),
+            ).not_yet(),
             app_toggle(
                 "Line numbers",
                 "Show line numbers in the gutter.",
                 app,
                 SHOW_LINE_NUMBER,
-            ),
+            ).not_yet(),
             app_toggle(
                 "Indentation guides",
                 "Show vertical relationship lines between list items.",
                 app,
                 SHOW_INDENT_GUIDE,
-            ),
+            ).not_yet(),
             app_toggle(
                 "Right-to-left (RTL)",
                 "Sets the default text direction of notes to right-to-left.",
                 app,
                 RIGHT_TO_LEFT,
-            ),
+            ).not_yet(),
             heading("Behavior"),
             app_toggle(
                 "Spellcheck",
                 "Turn on the spellchecker.",
                 app,
                 SPELLCHECK,
-            ),
+            ).not_yet(),
             text(
                 "Spellcheck languages",
                 "Choose the languages for the spellchecker to use.",
                 languages,
-            ),
+            ).not_yet(),
             app_toggle(
                 "Auto-pair brackets",
                 "Pair brackets and quotes automatically.",
                 app,
                 AUTO_PAIR_BRACKETS,
-            ),
+            ).not_yet(),
             app_toggle(
                 "Auto-pair Markdown syntax",
                 "Pair symbols automatically for bold, italic, code, and more.",
                 app,
                 AUTO_PAIR_MARKDOWN,
-            ),
+            ).not_yet(),
             app_toggle(
                 "Smart lists",
                 "Automatically set indentation and place list items correctly.",
@@ -847,17 +907,17 @@ impl SettingsView {
                 "Automatically convert HTML to Markdown when pasting and drag-and-drop from web pages.",
                 app,
                 AUTO_CONVERT_HTML,
-            ),
+            ).not_yet(),
             app_toggle(
                 "Vim key bindings",
                 "Use Vim key bindings when editing.",
                 app,
                 VIM_MODE,
-            ),
+            ).not_yet(),
         ]
     }
 
-    fn files_items(&self, state: &VaultState) -> Vec<Item> {
+    fn files_items(state: &VaultState) -> Vec<Item> {
         let app = &state.app();
         let new_notes = match app.new_file_location.as_deref() {
             Some("current") => "Same folder as current file",
@@ -894,7 +954,8 @@ impl SettingsView {
                 "When you open a link in a new tab, switch to it immediately.",
                 app,
                 FOCUS_NEW_TAB,
-            ),
+            )
+            .not_yet(),
             dropdown(
                 "Default location for new notes",
                 "Where newly created notes are placed.",
@@ -908,24 +969,27 @@ impl SettingsView {
                 app.new_file_folder_path.clone().unwrap_or_default(),
             ));
         }
-        items.push(dropdown(
-            "Default location for new attachments",
-            "Where newly added attachments are placed.",
-            attachment_location,
-        ));
+        items.push(
+            dropdown(
+                "Default location for new attachments",
+                "Where newly added attachments are placed.",
+                attachment_location,
+            )
+            .not_yet(),
+        );
         if !attachment_path.is_empty() {
             items.push(text(
                 "Attachment folder path",
                 "Place newly created attachment files, such as images created via drag-and-drop or audio recordings, in this folder.",
                 attachment_path.to_string(),
-            ));
+            ).not_yet());
         }
         if !subfolder.is_empty() {
             items.push(text(
                 "Subfolder name",
                 "If your file is in “vault/folder”, and you set subfolder name to “attachments”, attachments will be saved to “vault/folder/attachments”.",
                 subfolder.to_string(),
-            ));
+            ).not_yet());
         }
         items.extend([
             heading("Links"),
@@ -945,7 +1009,7 @@ impl SettingsView {
                 "Auto-generate Wikilinks for [[links]] and ![[images]] instead of Markdown links and images.",
                 app,
                 USE_WIKILINKS,
-            ),
+            ).not_yet(),
             app_toggle(
                 "Show all file types",
                 "Show files with any extension even if Obsidian can't open them natively, so you can link to them and see them in the file explorer.",
@@ -969,7 +1033,7 @@ impl SettingsView {
                 "Excluded files",
                 "Excluded files will be hidden in Search, Graph View, and Unlinked Mentions, less noticeable in Quick Switcher and link suggestions.",
                 excluded,
-            ),
+            ).not_yet(),
             text(
                 "Override config folder",
                 "Use a different config folder than the default one. Must start with a dot.",
@@ -978,12 +1042,12 @@ impl SettingsView {
                 } else {
                     config_dir
                 },
-            ),
+            ).not_yet(),
         ]);
         items
     }
 
-    fn core_plugin_items(&self, state: &VaultState) -> Vec<Item> {
+    fn core_plugin_items(state: &VaultState) -> Vec<Item> {
         CORE_PLUGINS
             .iter()
             .map(|p| {
@@ -993,11 +1057,16 @@ impl SettingsView {
                     CorePlugins::is_enabled_or_default(state.core_plugins().as_ref(), p),
                     Flag::CorePlugin(p.id, p.default_on),
                 )
+                // 's own Files, Search, Graph and the rest do not
+                // turn off with the plugin that owns them in Obsidian; the
+                // one thing that follows is which plugin tabs this modal
+                // shows.
+                .not_yet()
             })
             .collect()
     }
 
-    fn community_plugin_items(&self, state: &VaultState) -> Vec<Item> {
+    fn community_plugin_items(state: &VaultState) -> Vec<Item> {
         let n = state.plugin_manifests.len();
         let mut items = vec![
             item(
@@ -1025,18 +1094,22 @@ impl SettingsView {
                 if !m.author.is_empty() {
                     title.push_str(&format!(" By {}", m.author));
                 }
-                items.push(toggle(
-                    &title,
-                    &m.description,
-                    state.community_plugins().contains(&m.id),
-                    Flag::CommunityPlugin(m.id.clone()),
-                ));
+                items.push(
+                    toggle(
+                        &title,
+                        &m.description,
+                        state.community_plugins().contains(&m.id),
+                        Flag::CommunityPlugin(m.id.clone()),
+                    )
+                    //  runs no plugins; the list is Obsidian's.
+                    .not_yet(),
+                );
             }
         }
         items
     }
 
-    fn plugin_items(&self, state: &VaultState, id: &str) -> Vec<Item> {
+    fn plugin_items(state: &VaultState, commands: &[Command], id: &str) -> Vec<Item> {
         match id {
             "switcher" => {
                 let s = &state.switcher();
@@ -1046,23 +1119,23 @@ impl SettingsView {
                         "Only show results from existing files. Links to files that are not yet created will be hidden.",
                         s,
                         SHOW_EXISTING_ONLY,
-                    ),
+                    ).not_yet(),
                     switcher_toggle(
                         "Show attachments",
                         "Show attachment files like images, videos, and PDFs.",
                         s,
                         SHOW_ATTACHMENTS,
-                    ),
+                    ).not_yet(),
                     switcher_toggle(
                         "Show all file types",
                         "Show all files including ones that Obsidian can't open. The file will be opened with the default app for that file type.",
                         s,
                         SHOW_ALL_FILE_TYPES,
-                    ),
+                    ).not_yet(),
                 ]
             }
             "command-palette" => {
-                let registry = &self.all_commands;
+                let registry = commands;
                 let mut items = vec![heading("Pinned commands")];
                 if state.palette.pinned.is_empty() {
                     items.push(item("No commands found.", "", Control::None));
@@ -1292,9 +1365,28 @@ impl SettingsView {
                     .flex_1()
                     .child(
                         div()
-                            .text_size(px(14.))
-                            .text_color(theme.text)
-                            .child(item.name.clone()),
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .text_size(px(14.))
+                                    .text_color(theme.text)
+                                    .child(item.name.clone()),
+                            )
+                            .children(item.honored.tag().map(|tag| {
+                                div()
+                                    .flex_shrink_0()
+                                    .px(px(5.))
+                                    .py(px(1.))
+                                    .rounded_sm()
+                                    .border_1()
+                                    .border_color(theme.border)
+                                    .text_size(px(10.))
+                                    .text_color(theme.text_faint)
+                                    .child(tag)
+                            })),
                     )
                     .when(!item.desc.is_empty(), |d| {
                         d.child(
@@ -1505,7 +1597,7 @@ impl Render for SettingsView {
                             .bg(theme.bg_alt)
                             .text_size(px(11.))
                             .text_color(theme.text_muted)
-                            .child("Toggles write to the vault's .obsidian folder as you click them. Dropdowns, text fields and sliders are still read-only: change those in Obsidian, or edit the files."),
+                            .child("Toggles write to the vault's .obsidian folder as you click them; dropdowns, text fields and sliders are still read-only. A tagged setting is still written for Obsidian, but  does not read it yet, or reads it only when it starts."),
                     )
                     .child(div().flex_1().min_h_0().child(body)),
             )
@@ -1601,6 +1693,77 @@ mod tests {
             Some(&true),
             "the others keep their defaults"
         );
+    }
+
+    /// A vault to build the tabs against; `VaultState::load` wants a real
+    /// folder.
+    fn vault() -> (tempfile::TempDir, VaultState) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join(".obsidian")).unwrap();
+        std::fs::write(root.join("Note.md"), "# Note\n").unwrap();
+        let state = VaultState::load(&root.to_path_buf()).unwrap();
+        (dir, state)
+    }
+
+    /// Every toggle in the modal, with how far  gets with it.
+    fn toggles(state: &VaultState) -> Vec<(String, Honored)> {
+        let tabs = [
+            SettingsView::general_items(state),
+            SettingsView::appearance_items(state),
+            SettingsView::interface_items(state),
+            SettingsView::editor_items(state),
+            SettingsView::files_items(state),
+            SettingsView::core_plugin_items(state),
+            SettingsView::community_plugin_items(state),
+            SettingsView::plugin_items(state, &[], "switcher"),
+        ];
+        tabs.into_iter()
+            .flatten()
+            .filter(|i| i.flag.is_some())
+            .map(|i| (i.name.to_string(), i.honored))
+            .collect()
+    }
+
+    /// The honesty ratchet: a toggle goes untagged only when  really
+    /// reads the key. Implementing one of the tagged settings means
+    /// dropping its `not_yet()` here as well, which is the point.
+    #[test]
+    fn only_the_toggles__reads_are_untagged() {
+        let (_dir, state) = vault();
+        let live: Vec<String> = toggles(&state)
+            .into_iter()
+            .filter(|(_, honored)| *honored == Honored::Live)
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(
+            live,
+            [
+                "Readable line length",
+                "Strict line breaks",
+                "Smart lists",
+                "Indent using tabs",
+                "Automatically update internal links",
+                "Show all file types",
+                "Confirm before deleting files",
+            ],
+            "a toggle claims  reads it"
+        );
+    }
+
+    /// Every tab builds, and the ones that write carry a flag.
+    #[test]
+    fn every_toggle_in_every_tab_writes_something() {
+        let (_dir, state) = vault();
+        let toggles = toggles(&state);
+        assert!(
+            toggles.len() > 40,
+            "only {} toggles were built",
+            toggles.len()
+        );
+        for (name, _) in &toggles {
+            assert!(!name.is_empty(), "a toggle has no name");
+        }
     }
 
     #[test]

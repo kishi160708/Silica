@@ -149,6 +149,18 @@ in Files. The rest (inline title, folding, line numbers, RTL, spellcheck,
 auto-pairing, Vim mode, native menus, the ribbon, tab title bars) is written
 for Obsidian to honor;  does not implement those yet.
 
+Which is which is now on the row. Every item carries an `Honored`: nothing
+on a setting  follows as you click it, "on restart" for the theme and
+the fonts (the `Theme` global is built once from `appearance.json` at
+startup), and "not in  yet" for everything written only for Obsidian
+to read — the whole Core plugins tab included, since 's own Files,
+Search and Graph do not turn off with the plugins that own them in Obsidian.
+The vault is shared, so writing a setting  ignores is worth doing;
+letting a click look like it changed something here is not. A test walks
+every tab and asserts that exactly seven toggles go untagged, so
+implementing one of the tagged settings means dropping its tag in the same
+change.
+
 Two rules came out of the shapes of the files themselves rather than a probe:
 a vault with no `core-plugins.json` gets a whole map of every plugin at its
 default, because a one-key file would read as "everything else off", and the
