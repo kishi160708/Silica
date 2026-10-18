@@ -497,3 +497,43 @@ written at all — its bytes and its modification time are both untouched.
 **Unprobed:** an ordered list item and a list item at the end of a file,
 whose accept steps did not fire; the inline rule is taken from the two
 unordered samples that did.
+
+## Observed settings write behavior, Obsidian 1.14.4
+
+Observed with a throwaway plugin in a scratch vault (see
+[[Development#Phase 3 probe, 2026-10-18]]), setting each key through
+`vault.setConfig` and reading `.obsidian/app.json` and
+`.obsidian/appearance.json` back as raw bytes before and after every
+change.
+
+**A setting returned to its default is written, not removed.** Every one of
+the thirty-eight changes the run made left its key in the file, the
+default-valued ones included: `newLinkFormat` back to `shortest`, `theme`
+back to `system`, `tabSize` back to `4`, `baseFontSize` back to `16`,
+`livePreview` back to `true`, `readableLineLength` back to `true` and
+`accentColor` back to `""` all kept their key with the explicit value. A
+key absent from the file stays absent until something sets it, and from
+then on it is always written. That is what  already does, so no way
+of removing a config key is needed.
+
+The values each enum key takes, as written:
+
+| Key | File | Values |
+| --- | --- | --- |
+| `defaultViewMode` | `app.json` | `preview`, `source` |
+| `propertiesInDocument` | `app.json` | `visible`, `hidden`, `source` |
+| `newFileLocation` | `app.json` | `root`, `current`, `folder` |
+| `newLinkFormat` | `app.json` | `shortest`, `relative`, `absolute` |
+| `trashOption` | `app.json` | `system`, `local`, `none` |
+| `fileSortOrder` | `app.json` | `alphabetical`, `byModifiedTime` |
+| `theme` | `appearance.json` | `moonstone`, `obsidian`, `system` |
+
+`livePreview` is a boolean rather than an enum, and `tabSize` and
+`baseFontSize` are written as plain integers (`2`, `4`, `8`, `14`, `16`,
+`20`) with no decimal point. A text field writes its string verbatim,
+including a font family with a space in it (`"Noto Sans Mono"`), and an
+emptied field writes `""` rather than dropping the key.
+
+**Unprobed:** the option *labels* each dropdown shows, and the min, max and
+step of the two sliders — the run drove the keys rather than the controls,
+so it settled what is written and not what the tab reads.

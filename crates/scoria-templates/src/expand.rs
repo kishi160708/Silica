@@ -76,10 +76,24 @@ fn placeholder(body: &str, cx: &Context<'_>) -> Option<String> {
         return None;
     }
     let name = name.to_ascii_lowercase();
+    // An empty format on the placeholder falls back to the setting, and an
+    // empty setting to Obsidian's own default rather than to moment's: a
+    // vault with `"dateFormat": ""` still writes `2026-10-18`.
+    let fallback = |format: Option<&str>, setting: &str, default: &'static str| {
+        non_empty(format)
+            .or(non_empty(Some(setting)))
+            .unwrap_or(default)
+            .to_string()
+    };
     Some(match name.as_str() {
-        // An empty format falls back to the setting, as `{{date:}}` does.
-        "date" => moment::format(non_empty(format).unwrap_or(cx.date_format), &cx.at),
-        "time" => moment::format(non_empty(format).unwrap_or(cx.time_format), &cx.at),
+        "date" => moment::format(
+            &fallback(format, cx.date_format, DEFAULT_DATE_FORMAT),
+            &cx.at,
+        ),
+        "time" => moment::format(
+            &fallback(format, cx.time_format, DEFAULT_TIME_FORMAT),
+            &cx.at,
+        ),
         "title" => cx.title.to_string(),
         _ => return None,
     })
@@ -177,6 +191,20 @@ mod tests {
         c.time_format = "h:mm a";
         assert_eq!(expand("{{date}} at {{time}}", &c), "18/10/2026 at 4:58 pm");
         // A format on the placeholder wins over the setting.
+        assert_eq!(expand("{{date:YYYY}}", &c), "2026");
+    }
+
+    #[test]
+    fn an_empty_setting_falls_back_to_obsidian_s_own_default() {
+        // A vault whose templates.json holds `"dateFormat": ""` still gets
+        // `2026-10-18` and `16:58`, not the empty string a bare moment
+        // format would give.
+        let mut c = cx();
+        c.date_format = "";
+        c.time_format = "";
+        assert_eq!(expand("{{date}} {{time}}", &c), "2026-10-18 16:58");
+        assert_eq!(expand("{{date:}}", &c), "2026-10-18");
+        // A format on the placeholder still wins.
         assert_eq!(expand("{{date:YYYY}}", &c), "2026");
     }
 

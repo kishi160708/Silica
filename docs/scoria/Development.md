@@ -335,10 +335,14 @@ change.
 Two rules came out of the shapes of the files themselves rather than a probe:
 a vault with no `core-plugins.json` gets a whole map of every plugin at its
 default, because a one-key file would read as "everything else off", and the
-legacy array shape keeps its shape. **Unprobed:** whether Obsidian removes a
-key when a setting goes back to its default.  writes the explicit
-value, so toggling off and on again can leave a key Obsidian would not have
-written (the value is the one Obsidian would read either way).
+legacy array shape keeps its shape.
+
+The question this note used to leave open — whether Obsidian removes a key
+when a setting goes back to its default — was settled by the phase 3 probe:
+it does not. Every default-valued write kept its key with the explicit
+value, so what  already writes is what Obsidian writes, and no way of
+removing a config key is needed. See
+[[Specification#Observed settings write behavior, Obsidian 1.14.4]].
 
 ### Round-trip harness, 2026-10-18
 
