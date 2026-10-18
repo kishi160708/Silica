@@ -6,7 +6,6 @@
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use std::collections::BTreeMap;
 
 /// Default name of the configuration directory; overridable per vault.
 pub const DEFAULT_CONFIG_DIR: &str = ".obsidian";
@@ -274,15 +273,22 @@ pub struct Hotkey {
     pub key: String,
 }
 
-/// `hotkeys.json`: command id to its user overrides; an empty list unbinds the command.
-pub type Hotkeys = BTreeMap<String, Vec<Hotkey>>;
+/// `hotkeys.json`: command id to its user overrides; an empty list unbinds
+/// the command. Insertion order is kept, like [`PropertyTypes`]: Obsidian
+/// writes the file in the order the bindings were made, so a sorted map
+/// would reorder the whole file the first time  saved it.
+pub type Hotkeys = IndexMap<String, Vec<Hotkey>>;
 
 /// `core-plugins.json`. Current builds write a map of id to enabled; older
 /// builds wrote an array of enabled ids. Both are accepted.
+///
+/// The map keeps the file's order: Obsidian writes the plugins in its own
+/// registration order, not alphabetically, so a sorted map would rewrite
+/// every line the first time  saved the file.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum CorePlugins {
-    Map(BTreeMap<String, bool>),
+    Map(IndexMap<String, bool>),
     List(Vec<String>),
 }
 

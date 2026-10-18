@@ -35,7 +35,8 @@ with the command inventory and bundle evidence.
 | Vault-wide cache: `resolvedLinks` and `unresolvedLinks` counts per source (links, embeds, frontmatter links), backlinks per occurrence, tags merged case-insensitively from inline text and the `tags` property (list or comma string, `#` optional), aliases from `aliases` | `-cache::MetadataCache` |
 | Reading view from the same tree: embeds resolve to a whole note, a `#Heading` section (to the next heading of the same or higher level) or a `#^id` block, nested four deep; footnotes numbered by first reference; a single newline is a line break unless `strictLineBreaks` | `::reading::model` |
 | Reading view tables follow HTML automatic layout: a column is as wide as its widest cell, never narrower than its longest word, and the slack is shared when the note is narrower; fenced code never wraps | `::reading::view` |
-| Source editor: the buffer holds `\n`; a save restores the file's BOM and `\r\n` endings; autosave two seconds after the last edit, on Ctrl+S, on navigation, on leaving source mode and on close; only the open note is written | `::editor::FileText`, `::workspace::Workspace::flush_save` |
+| Source editor: the buffer holds `\n`; a save restores the file's BOM and its dominant `\r\n` ending; a file whose endings disagree is written back verbatim until it is edited; autosave two seconds after the last edit, on Ctrl+S, on navigation, on leaving source mode and on close; only the open note is written | `-text::FileText`, `::workspace::Workspace::flush_save` |
+| Writer round trips: opening a note and saving it changes no bytes, every editing command undoes back to the file's bytes, typing changes only the bytes at the cursor, a property write stays inside its block, and a config file read and written back is unchanged | `-text/tests/writer_roundtrip.rs` (ratchet) |
 | Smart lists: Enter continues quote markers, bullets, numbering (following siblings renumber) and task checkboxes, clears an empty item and outdents an empty nested one; Tab and Shift+Tab indent and outdent list items with a tab or `tabSize` spaces per `useTab`, and the ordered items they unsettle renumber: an item follows its previous sibling at its depth, one with none restarts at 1 | `::lists` |
 | Live Preview: markers of a construct are hidden unless the cursor or selection touches it; headings scaled by level; wikilinks show alias or target, markdown links their text; tasks render as checkboxes that toggle on click; quotes as a bar per level; callouts fold the type into the title; comments and block ids hidden; inline math loses its dollars; a click on a rendered link follows it, Ctrl+click in Source mode too | `::preview`, `::editor` |
 | Live Preview widgets: a top-level table, math block, or paragraph that is one embed (note, section, block or image) renders in place of its lines through the reading renderer while no selection touches them; the cursor entering the block (arrows, or a click on a table or math widget, at the clicked row) shows its source; links inside an embed widget work | `::reading::model::build_widgets`, `::editor` |
@@ -56,6 +57,7 @@ with the command inventory and bundle evidence.
 | Unlinked mentions: whole-word, case-insensitive, names and aliases, longest name wins, not inside `[[ ]]`, `[ ]( )`, inline or fenced code | `::mentions` |
 | `graph.json`: filters (`search`, `showTags`, `showAttachments`, `hideUnresolved`, `showOrphans`), `colorGroups` with `{query, color: {a, rgb}}`, display and force keys, `scale` and `close`; `collapse-*` keys round-trip | `-formats::config::GraphConfig` |
 | Config files are sparse and optional; unknown keys round-trip | `-formats::config`, `-vault::Vault::read_config` |
+| Writing a config file changes only what the value changed: the new value is merged into the file's own JSON, so key order, number spelling (`1` not `1.0`, and more digits than an `f32` field holds), and keys the type does not serialize all survive | `-vault::Vault::write_config` |
 | `core-plugins.json` map and legacy array shapes | `-formats::config::CorePlugins` |
 | JSON Canvas 1.0 fields, z-order by array order, tab-indented output | `-formats::canvas` |
 | Bases top-level keys and recursive filters | `-formats::base` |
@@ -132,6 +134,17 @@ Inlines:
   the alt is the first alias part that is not a size hint, else the display
   text (`Note > Heading`).
 - `[[Note#H]]` displays as `Note > H`; an alias adds `aria-label`.
+
+Line endings and the byte order mark, from the corpus and a 1700-note real
+vault rather than from Obsidian's source:
+
+- A file's endings are not always uniform. One note in the wild carried a
+  single `\r\n` among 4430 `\n` lines, so "the file used CRLF" has to mean
+  the dominant ending, not the presence of one.
+-  therefore writes the dominant ending on every line once a file is
+  edited, and writes a mixed file back verbatim while nothing has changed.
+  **Unprobed:** what Obsidian itself writes for such a file. Worth a probe
+  note in the scratch vault before the writer milestone closes.
 
 Not reproduced (two corpus notes): nested runs such as `****a****` and
 `==== four ==x===y==`, and a wikilink inside markdown link text, which splits

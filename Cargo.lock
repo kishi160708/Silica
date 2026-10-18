@@ -4769,6 +4769,7 @@ dependencies = [
  "-formats",
  "-markdown",
  "-search",
+ "-text",
  "-vault",
  "serde_yaml",
  "tempfile",
@@ -4822,6 +4823,18 @@ version = "0.1.0"
 dependencies = [
  "regex",
  "serde_yaml",
+]
+
+[[package]]
+name = "-text"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "-cache",
+ "-formats",
+ "-vault",
+ "serde",
+ "tempfile",
 ]
 
 [[package]]

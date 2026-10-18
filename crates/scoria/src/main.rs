@@ -9,9 +9,7 @@
 
 mod editor;
 mod explorer;
-mod find;
 mod graph;
-mod lists;
 mod mentions;
 mod palette;
 mod preview;

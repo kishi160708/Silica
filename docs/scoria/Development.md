@@ -117,7 +117,65 @@ of mixed use in both apps.
 | Properties | done, see [[#Properties, 2026-10-18]] |
 | Autocompletion | not started |
 | Templates, daily notes, file recovery | not started |
-| Writing settings back | started: `types.json` is written when a property type is assigned (`Vault::write_config`); the Settings modal is still read-only |
+| Writing settings back | started: `types.json` is written when a property type is assigned, and `Vault::write_config` now merges into the file's own JSON so nothing else churns; the Settings modal is still read-only |
+| Round-trip harness | done, see [[#Round-trip harness, 2026-10-18]] |
+
+### Round-trip harness, 2026-10-18
+
+The Writer gate — the vault round-trips byte-identical after a week of mixed
+use — now has a harness:
+`crates/-text/tests/writer_roundtrip.rs`, over the 1000-note corpus and
+both `.obsidian` sets in the repository. Four properties, one per shape of
+writing:
+
+- opening a note and saving it changes no bytes;
+- every editing command undoes back to the file's bytes (a scripted session
+  of typing, Enter, Tab, Shift+Tab, Backspace, Delete, Ctrl+Backspace,
+  paste, typing over a selection and cutting a line, at five places in every
+  note, wound all the way back);
+- an edit is local: typing changes the bytes at the cursor and nothing else,
+  and a property write stays inside its block;
+- a config file read and written back is unchanged.
+
+Invariants are checked after every step, not just at the end: the line index
+is the one the text implies, every cursor sits on a character boundary, and
+what a save would write reads back as the text in hand. Setting
+`SCORIA_ROUNDTRIP_VAULT` to a vault's path runs the same round trips over it
+(nothing is written — the edits happen in a buffer in memory), which is how
+the gate's real vault is checked without a test depending on one.
+
+To make the editor testable the text model moved out of the GPUI view into
+`crates/-text`: `TextBuffer` (the text, its line index, the selections,
+the undo history and one method per editing command), `FileText`, the
+`lists`, `find` and edit-plan modules, all free of gpui.
+`crates//src/editor.rs` keeps the shaping, scrolling, decorations, find
+panel and properties table and holds a `TextBuffer`; its actions are now
+`buf.<command>()` followed by `after_edit`. Nothing changed in behavior —
+the suite and a 400-step stress run on a 20k-line note are the evidence.
+
+Writing the harness found three bugs on the spot:
+
+- **A stray `\r\n` rewrote a whole file.** `FileText` took any `\r\n` as
+  "this file uses CRLF", so a note from a real vault with one such line
+  among 4430 Unix ones would have had every line ending rewritten by the
+  first save. The ending is now the dominant one, and a file whose endings
+  disagree is kept verbatim and written back unchanged until it is edited.
+- **`core-plugins.json` and `hotkeys.json` were sorted maps.** Obsidian
+  writes both in its own order, so the first save would have reordered every
+  line. Both are `IndexMap` now, like `types.json`.
+- **A struct cannot reproduce a config file.** Serializing `GraphConfig`
+  gave Obsidian's `graph.json` back with its keys in declaration order, `1.0`
+  where the file said `1`, `0.51871324` where it said `0.518713248970312`
+  (an `f32` field) and no `colorGroups` at all (skipped when empty).
+  `Vault::write_config` now merges the new value into the file's own JSON:
+  a key whose value did not change keeps its bytes and its place, a changed
+  one is replaced where it stands, a new one is appended, and a key the type
+  does not serialize is left alone.
+
+Not covered here, by design: link rewriting on rename
+(`-cache/tests/rename_corpus.rs`) and the properties planner
+(`-cache/tests/properties_corpus.rs`) have their own corpus ratchets;
+this harness drives the writer's path into them rather than their internals.
 
 ### Properties, 2026-10-18
 

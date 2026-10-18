@@ -1,0 +1,19 @@
+[package]
+name = "-text"
+description = "The editor's text model: buffer, line index, selections, undo and the edit plans of the editing commands"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+regex.workspace = true
+
+[dev-dependencies]
+-cache.workspace = true
+serde.workspace = true
+-formats.workspace = true
+-vault.workspace = true
+tempfile.workspace = true

@@ -299,12 +299,18 @@ impl Vault {
             .map_err(|source| VaultError::Json { path, source })
     }
 
-    /// Writes one `.obsidian` config file.
+    /// Writes one `.obsidian` config file, changing only what `value`
+    /// changed.
     ///
     /// Obsidian writes these with two-space indentation and no trailing
     /// newline (observed in `types.json`), and every config type here keeps
     /// the keys it does not model in `extra`, so a file Obsidian wrote comes
-    /// back with its unknown keys intact.
+    /// back with its unknown keys intact. That is not enough on its own for
+    /// the Writer gate: a struct serializes its fields in declaration
+    /// order, floats as `1.0` where Obsidian wrote `1`, and an `f32` field
+    /// cannot reproduce the digits of `0.518713248970312`. So the new value
+    /// is merged into the file's own JSON ([`merge_config`]) and every key
+    /// it did not change keeps the bytes it had.
     pub fn write_config<T: serde::Serialize>(
         &self,
         name: &str,
@@ -316,7 +322,19 @@ impl Vault {
             path: dir.clone(),
             source,
         })?;
-        let text = serde_json::to_string_pretty(value).map_err(|source| VaultError::Json {
+        let fresh = serde_json::to_value(value).map_err(|source| VaultError::Json {
+            path: path.clone(),
+            source,
+        })?;
+        let merged = match std::fs::read_to_string(&path) {
+            // A file nobody can parse is replaced rather than merged into.
+            Ok(text) => match serde_json::from_str(&text) {
+                Ok(old) => merge_config(old, fresh),
+                Err(_) => fresh,
+            },
+            Err(_) => fresh,
+        };
+        let text = serde_json::to_string_pretty(&merged).map_err(|source| VaultError::Json {
             path: path.clone(),
             source,
         })?;
@@ -389,6 +407,71 @@ impl Vault {
     /// The raw workspace layout; typed modelling comes with the workspace milestone.
     pub fn workspace_json(&self) -> Result<Option<serde_json::Value>, VaultError> {
         self.read_config("workspace.json")
+    }
+}
+
+/// Merges `fresh` (a config value as its type serializes it) into `old` (the
+/// file as it is on disk), so that writing a value nothing changed rewrites
+/// nothing.
+///
+/// `serde_json` is built with `preserve_order`, so `old` carries the file's
+/// key order and every number exactly as it was written. A key `fresh`
+/// agrees with keeps the old node and its position; a key it changed takes
+/// the new value in the old key's place; a key only `fresh` has is appended.
+/// A key only `old` has stays: either the type does not model it, or it
+/// skips serializing it when empty, and neither is a reason to drop what
+/// Obsidian wrote.
+fn merge_config(old: serde_json::Value, fresh: serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    match (old, fresh) {
+        (Value::Object(mut merged), Value::Object(fields)) => {
+            for (key, value) in fields {
+                match merged.get(&key) {
+                    Some(prev) if same_config_value(prev, &value) => {}
+                    Some(prev) if prev.is_object() && value.is_object() => {
+                        // In place: `Map::remove` would move the key to the
+                        // end of the file.
+                        if let Some(slot) = merged.get_mut(&key) {
+                            let prev = std::mem::replace(slot, Value::Null);
+                            *slot = merge_config(prev, value);
+                        }
+                    }
+                    _ => {
+                        merged.insert(key, value);
+                    }
+                }
+            }
+            Value::Object(merged)
+        }
+        // Not both objects (`community-plugins.json` is an array): there
+        // is nothing to merge into, so the typed value is the file.
+        (_, fresh) => fresh,
+    }
+}
+
+/// Whether a config value means what the file already says.
+///
+/// Numbers compare at `f32`, the narrowest a config field uses: it makes
+/// Obsidian's `1` equal to serde's `1.0`, and a `centerStrength` read into an
+/// `f32` and written back equal to the `f64` digits the file carries. The
+/// comparison only decides whether to keep the file's bytes, so a value that
+/// differs beyond `f32` is written out rather than lost.
+fn same_config_value(old: &serde_json::Value, new: &serde_json::Value) -> bool {
+    use serde_json::Value;
+    match (old, new) {
+        (Value::Number(a), Value::Number(b)) => match (a.as_f64(), b.as_f64()) {
+            (Some(a), Some(b)) => a == b || a as f32 == b as f32,
+            _ => a == b,
+        },
+        (Value::Array(a), Value::Array(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(a, b)| same_config_value(a, b))
+        }
+        (Value::Object(a), Value::Object(b)) => {
+            a.len() == b.len()
+                && a.iter()
+                    .all(|(k, v)| b.get(k).is_some_and(|other| same_config_value(v, other)))
+        }
+        _ => old == new,
     }
 }
 
@@ -513,6 +596,118 @@ mod tests {
         fs::create_dir_all(r.join("Empty")).unwrap();
         assert!(vault.refresh_path(&r.join("Empty")).is_empty());
         assert_eq!(vault.folders(), ["Empty", "Moved", "Moved/in"]);
+    }
+
+    /// Obsidian's `graph.json`, as it writes it: `collapse-*` keys among the
+    /// others, integers without a decimal point, and more digits of
+    /// `centerStrength` than an `f32` field can hold.
+    const GRAPH_JSON: &str = r#"{
+  "collapse-filter": true,
+  "search": "",
+  "showTags": false,
+  "colorGroups": [],
+  "showArrow": false,
+  "textFadeMultiplier": 0,
+  "nodeSizeMultiplier": 1,
+  "centerStrength": 0.518713248970312,
+  "linkDistance": 250,
+  "close": true
+}"#;
+
+    #[test]
+    fn writing_a_config_value_nothing_changed_rewrites_nothing() {
+        let dir = sample_vault();
+        fs::write(dir.path().join(".obsidian/graph.json"), GRAPH_JSON).unwrap();
+        let vault = Vault::open(dir.path()).unwrap();
+        let graph = vault.graph_config().unwrap();
+        vault.write_config("graph.json", &graph).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.path().join(".obsidian/graph.json")).unwrap(),
+            GRAPH_JSON,
+            "a value read and written back changed the file"
+        );
+    }
+
+    #[test]
+    fn writing_a_changed_setting_leaves_the_other_keys_alone() {
+        let dir = sample_vault();
+        fs::write(dir.path().join(".obsidian/graph.json"), GRAPH_JSON).unwrap();
+        let vault = Vault::open(dir.path()).unwrap();
+        let mut graph = vault.graph_config().unwrap();
+        graph.show_tags = Some(true);
+        vault.write_config("graph.json", &graph).unwrap();
+        let after = fs::read_to_string(dir.path().join(".obsidian/graph.json")).unwrap();
+        assert_eq!(
+            after,
+            GRAPH_JSON.replace("\"showTags\": false", "\"showTags\": true"),
+            "changing one setting rewrote more than its line"
+        );
+    }
+
+    #[test]
+    fn a_key_the_model_does_not_write_is_kept() {
+        let dir = sample_vault();
+        // `colorGroups` is skipped when empty, and `theme` is a key no
+        // graph config models at all. Both have to survive a write.
+        fs::write(
+            dir.path().join(".obsidian/graph.json"),
+            "{\n  \"colorGroups\": [],\n  \"theme\": \"moonstone\",\n  \"scale\": 1\n}",
+        )
+        .unwrap();
+        let vault = Vault::open(dir.path()).unwrap();
+        let graph = vault.graph_config().unwrap();
+        vault.write_config("graph.json", &graph).unwrap();
+        let after = fs::read_to_string(dir.path().join(".obsidian/graph.json")).unwrap();
+        assert!(after.contains("\"colorGroups\": []"), "{after}");
+        assert!(after.contains("\"theme\": \"moonstone\""), "{after}");
+    }
+
+    #[test]
+    fn a_nested_object_keeps_its_place_and_its_other_keys() {
+        let dir = sample_vault();
+        let path = dir.path().join(".obsidian/types.json");
+        fs::write(
+            &path,
+            "{\n  \"first\": 1,\n  \"types\": {\n    \"due\": \"date\",\n    \"owner\": \"text\"\n  },\n  \"last\": 2\n}",
+        )
+        .unwrap();
+        let vault = Vault::open(dir.path()).unwrap();
+        let mut types = vault.property_types().unwrap();
+        types.types.insert("due".into(), "datetime".into());
+        vault.write_config("types.json", &types).unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "{\n  \"first\": 1,\n  \"types\": {\n    \"due\": \"datetime\",\n    \"owner\": \"text\"\n  },\n  \"last\": 2\n}",
+            "merging into a nested object moved keys"
+        );
+    }
+
+    #[test]
+    fn a_file_that_is_not_an_object_is_replaced() {
+        let dir = sample_vault();
+        let path = dir.path().join(".obsidian/community-plugins.json");
+        fs::write(&path, "[\n  \"old\"\n]").unwrap();
+        let vault = Vault::open(dir.path()).unwrap();
+        let plugins: CommunityPlugins = vec!["new".to_string()];
+        vault
+            .write_config("community-plugins.json", &plugins)
+            .unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "[\n  \"new\"\n]");
+    }
+
+    #[test]
+    fn unparsable_json_is_replaced_rather_than_merged_into() {
+        let dir = sample_vault();
+        let path = dir.path().join(".obsidian/types.json");
+        fs::write(&path, "{ not json").unwrap();
+        let vault = Vault::open(dir.path()).unwrap();
+        let mut types = PropertyTypes::default();
+        types.types.insert("due".into(), "date".into());
+        vault.write_config("types.json", &types).unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "{\n  \"types\": {\n    \"due\": \"date\"\n  }\n}"
+        );
     }
 
     #[test]

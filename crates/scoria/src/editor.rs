@@ -1,6 +1,10 @@
-//! Source-mode editor: one `String` buffer with a line index, soft-wrapped
-//! at the view width, with selections, undo and the decorations of the
-//! shared parser.
+//! Source-mode editor: a [`TextBuffer`] soft-wrapped at the view width,
+//! with the decorations of the shared parser.
+//!
+//! The text itself, its line index, the selections, the undo history and
+//! every edit the keys below make live in `-text`, where they can be
+//! tested without a window; this view adds the shaping, scrolling,
+//! decorations, find panel and properties table around them.
 //!
 //! Only the lines on screen are shaped and painted each frame. The scroll
 //! position is a line plus a pixel offset into it rather than an absolute
@@ -14,10 +18,9 @@
 //!
 //! The buffer holds `\n` line endings; the file's own ending and BOM are
 //! remembered at load and restored by [`Editor::file_contents`], so a save
-//! changes nothing but the edited bytes.
+//! changes nothing but the edited bytes (the round trips in
+//! `-text/tests/writer_roundtrip.rs` hold that over the corpus).
 
-use crate::find;
-use crate::lists::{self, Continuation};
 use crate::preview::{self, DisplayLine, Piece};
 use crate::properties::{self, Field, Part, Target};
 use crate::reading::model::{build_widgets, BuildOptions, EmbedSource, LinkTarget, RBlock, Widget};
@@ -37,11 +40,12 @@ use gpui::{
 use _formats::config::PropertyTypes;
 use _formats::properties::{self as props, PropertiesInDocument};
 use _markdown::highlight::{flatten, highlight_lines, HighlightKind, HighlightSpan};
+use _text::{find, shifted, Cursor, Cursors, EditKind, Sel, TextBuffer};
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 actions!(
     editor,
@@ -148,8 +152,6 @@ pub fn bind_keys(cx: &mut App) {
 const GUTTER: f32 = 24.0;
 /// Obsidian's readable line length (`--file-line-width`).
 const READABLE_WIDTH: f32 = 700.0;
-/// Consecutive edits closer than this undo together, like CodeMirror.
-const UNDO_GROUP: Duration = Duration::from_millis(500);
 /// Width of the vertical scrollbar's track at the right edge.
 const SCROLLBAR_WIDTH: f32 = 12.0;
 /// The thumb never shrinks below this, so it can still be grabbed.
@@ -166,49 +168,6 @@ pub enum EditorEvent {
         key: String,
         ty: props::PropertyType,
     },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct Cursor {
-    pub line: usize,
-    /// Byte offset within the line.
-    pub col: usize,
-}
-
-/// One selection: `head` is the moving end (the cursor), `anchor` the
-/// fixed one; equal when nothing is selected.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Sel {
-    anchor: usize,
-    head: usize,
-    /// Preferred x when moving between rows.
-    goal: Option<Pixels>,
-}
-
-impl Sel {
-    fn at(offset: usize) -> Sel {
-        Sel {
-            anchor: offset,
-            head: offset,
-            goal: None,
-        }
-    }
-
-    fn range(&self) -> Range<usize> {
-        self.head.min(self.anchor)..self.head.max(self.anchor)
-    }
-
-    fn is_empty(&self) -> bool {
-        self.head == self.anchor
-    }
-}
-
-/// Every selection in buffer order, and which one is the primary (the one
-/// the find panel, IME and scrolling follow).
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Cursors {
-    sels: Vec<Sel>,
-    primary: usize,
 }
 
 /// Results of the last decoration pass, shown in the status bar.
@@ -245,38 +204,6 @@ impl Sample {
             self.total_ms / self.count as f64
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EditKind {
-    Typing,
-    Backspace,
-    Delete,
-    Other,
-}
-
-/// One replacement: `old` at `at` became `new`.
-#[derive(Debug)]
-struct Edit {
-    at: usize,
-    old: String,
-    new: String,
-}
-
-/// Edits undone and redone together, with the selections either side.
-#[derive(Debug)]
-struct Group {
-    edits: Vec<Edit>,
-    before: Cursors,
-    after: Cursors,
-    kind: EditKind,
-    at: Instant,
-}
-
-#[derive(Debug, Default)]
-struct History {
-    undo: Vec<Group>,
-    redo: Vec<Group>,
 }
 
 /// The find and replace panel: its two fields, the matches of the query
@@ -496,19 +423,9 @@ impl Scrollbar {
 pub struct Editor {
     focus_handle: FocusHandle,
     pub name: SharedString,
-    text: String,
-    line_starts: Vec<usize>,
-    /// The moving end of the primary selection; the cursor.
-    head: usize,
-    /// The fixed end of the primary selection; equals `head` when nothing is selected.
-    anchor: usize,
-    /// Preferred x when moving between rows.
-    goal_x: Option<Pixels>,
-    /// Further selections (Find all, Alt+click, add cursor above and
-    /// below), in buffer order, disjoint from each other and the primary.
-    extra: Vec<Sel>,
-    /// IME composition range, absolute.
-    marked: Option<Range<usize>>,
+    /// The text, its line index, the selections and the undo history; the
+    /// bytes this view writes back are all decided there.
+    buf: TextBuffer,
     scroll_line: usize,
     /// Pixels of `scroll_line` scrolled above the top of the view.
     scroll_px: Pixels,
@@ -548,12 +465,6 @@ pub struct Editor {
     pending_parse: Option<Task<()>>,
     /// An edit arrived while a parse was running; parse again when it lands.
     parse_queued: bool,
-    history: History,
-    dirty: bool,
-    /// The file used `\r\n`; restored on save.
-    crlf: bool,
-    /// The file started with a byte order mark; restored on save.
-    bom: bool,
     readable_line_length: bool,
     /// Live Preview: markers hidden and constructs rendered in place,
     /// except where the cursor is.
@@ -610,13 +521,7 @@ impl Editor {
             },
             _subscriptions: subscriptions,
             name: "untitled".into(),
-            text: String::new(),
-            line_starts: vec![0],
-            head: 0,
-            anchor: 0,
-            goal_x: None,
-            extra: Vec::new(),
-            marked: None,
+            buf: TextBuffer::new(),
             scroll_line: 0,
             scroll_px: px(0.),
             pending_reveal: false,
@@ -638,10 +543,6 @@ impl Editor {
             palette: Palette::default(),
             pending_parse: None,
             parse_queued: false,
-            history: History::default(),
-            dirty: false,
-            crlf: false,
-            bom: false,
             readable_line_length: true,
             live_preview: false,
             smart_indent_list: true,
@@ -657,9 +558,9 @@ impl Editor {
     /// line endings; the cursor goes to the start.
     pub fn set_text(&mut self, name: impl Into<SharedString>, raw: String, cx: &mut Context<Self>) {
         self.name = name.into();
-        self.load(raw);
-        self.head = 0;
-        self.anchor = 0;
+        self.buf.load(&raw);
+        self.buf.head = 0;
+        self.buf.anchor = 0;
         self.widgets = Arc::new(Vec::new());
         self.widget_heights.clear();
         self.scroll_line = 0;
@@ -679,45 +580,33 @@ impl Editor {
     /// Replaces the buffer after the file changed on disk, keeping the
     /// cursor and scroll position where they were (clamped to the new text).
     pub fn reload(&mut self, raw: String, cx: &mut Context<Self>) {
-        self.load(raw);
-        self.head = self.clamp_offset(self.head);
-        self.anchor = self.clamp_offset(self.anchor);
+        let (head, anchor) = (self.buf.head, self.buf.anchor);
+        self.buf.load(&raw);
+        self.buf.head = self.buf.clamp_offset(head);
+        self.buf.anchor = self.buf.clamp_offset(anchor);
         self.scroll_line = self.scroll_line.min(self.line_count() - 1);
         self.request_parse(cx);
         cx.notify();
     }
 
-    fn load(&mut self, raw: String) {
-        let file = FileText::parse(&raw);
-        self.crlf = file.crlf;
-        self.bom = file.bom;
-        self.text = file.text;
-        self.marked = None;
-        self.goal_x = None;
-        self.extra.clear();
-        self.dirty = false;
-        self.history = History::default();
-        self.rebuild_lines();
-    }
-
     /// The bytes to write back: the buffer with the file's original line
     /// endings and byte order mark.
     pub fn file_contents(&self) -> String {
-        FileText::join(self.bom, self.crlf, &self.text)
+        self.buf.file_contents()
     }
 
     pub fn is_dirty(&self) -> bool {
-        self.dirty
+        self.buf.is_dirty()
     }
 
     /// Whether `raw` (a file's bytes) is this buffer, ignoring the BOM and
     /// line endings the buffer normalizes away.
     pub fn matches_file(&self, raw: &str) -> bool {
-        FileText::parse(raw).text == self.text
+        self.buf.matches_file(raw)
     }
 
     pub fn mark_saved(&mut self) {
-        self.dirty = false;
+        self.buf.mark_saved();
     }
 
     pub fn set_readable_line_length(&mut self, on: bool) {
@@ -778,7 +667,7 @@ impl Editor {
             9 => self.backspace(&Backspace, window, cx),
             10 => {
                 let line = (step * 7919) % self.line_count();
-                let at = self.line_starts[line];
+                let at = self.buf.line_starts()[line];
                 self.move_to(at, false, window, cx);
             }
             11 => self.move_up(&MoveUp, window, cx),
@@ -808,114 +697,22 @@ impl Editor {
     }
 
     pub fn cursor(&self) -> Cursor {
-        self.cursor_at(self.head)
+        self.buf.cursor()
     }
 
     /// The primary selection's byte range, empty at the cursor when
     /// nothing is selected.
     pub fn selection(&self) -> Range<usize> {
-        self.head.min(self.anchor)..self.head.max(self.anchor)
+        self.buf.selection()
     }
 
     /// How many cursors there are (one unless Find all or Alt+click added more).
     pub fn cursor_count(&self) -> usize {
-        self.extra.len() + 1
-    }
-
-    /// Every selection in buffer order, with the primary's index.
-    fn cursors(&self) -> Cursors {
-        let primary = Sel {
-            anchor: self.anchor,
-            head: self.head,
-            goal: self.goal_x,
-        };
-        let mut sels = self.extra.clone();
-        let start = primary.range().start;
-        let ix = sels.partition_point(|s| s.range().start < start);
-        sels.insert(ix, primary);
-        Cursors { sels, primary: ix }
-    }
-
-    /// Installs `cursors`, clamped to the text, with selections that
-    /// overlap (or cursors at the same place) merged into one.
-    fn set_cursors(&mut self, cursors: Cursors) {
-        let mut sels: Vec<(Sel, bool)> = cursors
-            .sels
-            .iter()
-            .enumerate()
-            .map(|(i, s)| {
-                let sel = Sel {
-                    anchor: self.clamp_offset(s.anchor),
-                    head: self.clamp_offset(s.head),
-                    goal: s.goal,
-                };
-                (sel, i == cursors.primary)
-            })
-            .collect();
-        sels.sort_by_key(|(s, _)| (s.range().start, s.range().end));
-        let mut merged: Vec<(Sel, bool)> = Vec::new();
-        for (s, p) in sels {
-            if let Some((last, lp)) = merged.last_mut() {
-                let (lr, r) = (last.range(), s.range());
-                let overlaps =
-                    r.start < lr.end || (lr.is_empty() && r.is_empty() && r.start == lr.start);
-                if overlaps {
-                    let (start, end) = (lr.start.min(r.start), lr.end.max(r.end));
-                    // The primary's direction wins; otherwise the earlier one's.
-                    let reversed = if p && !*lp {
-                        s.head < s.anchor
-                    } else {
-                        last.head < last.anchor
-                    };
-                    *last = Sel {
-                        anchor: if reversed { end } else { start },
-                        head: if reversed { start } else { end },
-                        goal: None,
-                    };
-                    *lp |= p;
-                    continue;
-                }
-            }
-            merged.push((s, p));
-        }
-        let primary = merged.iter().position(|(_, p)| *p).unwrap_or(0);
-        let (main, _) = merged.remove(primary);
-        self.head = main.head;
-        self.anchor = main.anchor;
-        self.goal_x = main.goal;
-        self.extra = merged.into_iter().map(|(s, _)| s).collect();
-    }
-
-    /// Drops every cursor but the primary.
-    fn collapse_cursors(&mut self) {
-        self.extra.clear();
-    }
-
-    /// Keeps the extra cursors in place after the primary's edit replaced
-    /// `range` with `inserted` bytes.
-    fn shift_extras(&mut self, range: &Range<usize>, inserted: usize) {
-        if self.extra.is_empty() {
-            return;
-        }
-        let map = |at: usize| -> usize {
-            if at >= range.end {
-                at - range.len() + inserted
-            } else if at > range.start {
-                range.start + inserted
-            } else {
-                at
-            }
-        };
-        for s in &mut self.extra {
-            s.head = map(s.head);
-            s.anchor = map(s.anchor);
-        }
-        let cursors = self.cursors();
-        self.set_cursors(cursors);
+        self.buf.cursor_count()
     }
 
     pub fn line_count(&self) -> usize {
-        self.line_starts.len()
+        self.buf.line_count()
     }
 
     /// Milliseconds the last frame spent shaping visible lines.
@@ -923,146 +720,19 @@ impl Editor {
         self.layout.prepaint_ms
     }
 
-    // ----- lines ---------------------------------------------------------------
-
-    fn rebuild_lines(&mut self) {
-        self.line_starts.clear();
-        self.line_starts.push(0);
-        self.line_starts
-            .extend(self.text.match_indices('\n').map(|(i, _)| i + 1));
-    }
-
-    /// The line's bytes without its newline.
-    fn line_range(&self, line: usize) -> Range<usize> {
-        let start = self.line_starts[line];
-        let end = match self.line_starts.get(line + 1) {
-            Some(next) => next - 1,
-            None => self.text.len(),
-        };
-        start..end
-    }
-
-    fn line_text(&self, line: usize) -> &str {
-        &self.text[self.line_range(line)]
-    }
-
-    fn cursor_at(&self, offset: usize) -> Cursor {
-        let line = match self.line_starts.binary_search(&offset) {
-            Ok(i) => i,
-            Err(i) => i - 1,
-        };
-        Cursor {
-            line,
-            col: offset - self.line_starts[line],
-        }
-    }
-
-    fn clamp_col(&self, line: usize, col: usize) -> usize {
-        let text = self.line_text(line);
-        let mut col = col.min(text.len());
-        while !text.is_char_boundary(col) {
-            col -= 1;
-        }
-        col
-    }
-
-    fn clamp_offset(&self, offset: usize) -> usize {
-        let mut at = offset.min(self.text.len());
-        while !self.text.is_char_boundary(at) {
-            at -= 1;
-        }
-        at
-    }
-
-    fn prev_char_boundary(&self, offset: usize) -> usize {
-        let mut i = offset.saturating_sub(1);
-        while i > 0 && !self.text.is_char_boundary(i) {
-            i -= 1;
-        }
-        i
-    }
-
-    fn next_char_boundary(&self, offset: usize) -> usize {
-        let mut i = (offset + 1).min(self.text.len());
-        while i < self.text.len() && !self.text.is_char_boundary(i) {
-            i += 1;
-        }
-        i
-    }
-
-    /// Word-boundary scan: whitespace, then a run of one character class.
-    fn word_left(&self, from: usize) -> usize {
-        let mut i = from;
-        let class_at = |i: usize| self.text[..i].chars().next_back().map(char_class);
-        while i > 0 && class_at(i) == Some(0) {
-            i = self.prev_char_boundary(i);
-        }
-        let class = class_at(i);
-        while i > 0 && class_at(i) == class {
-            i = self.prev_char_boundary(i);
-        }
-        i
-    }
-
-    fn word_right(&self, from: usize) -> usize {
-        let mut i = from;
-        let len = self.text.len();
-        let class_at = |i: usize| self.text[i..].chars().next().map(char_class);
-        while i < len && class_at(i) == Some(0) {
-            i = self.next_char_boundary(i);
-        }
-        let class = class_at(i);
-        while i < len && class_at(i) == class {
-            i = self.next_char_boundary(i);
-        }
-        i
-    }
-
-    fn word_at(&self, at: usize) -> Range<usize> {
-        let class_before = self.text[..at].chars().next_back().map(char_class);
-        let class_after = self.text[at..].chars().next().map(char_class);
-        // Prefer the word the cursor is in or just after; whitespace selects itself.
-        let class = match (class_before, class_after) {
-            (_, Some(c)) if c != 0 => c,
-            (Some(c), _) if c != 0 => c,
-            (_, Some(c)) => c,
-            (Some(c), None) => c,
-            (None, None) => return at..at,
-        };
-        let mut start = at;
-        while start > 0
-            && self.text[..start]
-                .chars()
-                .next_back()
-                .is_some_and(|c| char_class(c) == class && c != '\n')
-        {
-            start = self.prev_char_boundary(start);
-        }
-        let mut end = at;
-        while end < self.text.len()
-            && self.text[end..]
-                .chars()
-                .next()
-                .is_some_and(|c| char_class(c) == class && c != '\n')
-        {
-            end = self.next_char_boundary(end);
-        }
-        start..end
-    }
-
     // ----- shaping outside a frame ----------------------------------------------
 
     /// The parts of the selections (and cursors) on `line`, line-relative;
     /// Live Preview reveals the source of the constructs they touch.
     fn touches_on_line(&self, line: usize) -> Vec<Range<usize>> {
-        let range = self.line_range(line);
+        let range = self.buf.line_range(line);
         let mut out = Vec::new();
         let primary = Sel {
-            anchor: self.anchor,
-            head: self.head,
+            anchor: self.buf.anchor,
+            head: self.buf.head,
             goal: None,
         };
-        for s in std::iter::once(&primary).chain(self.extra.iter()) {
+        for s in std::iter::once(&primary).chain(self.buf.extra.iter()) {
             let sel = s.range();
             if sel.end < range.start || sel.start > range.end {
                 continue;
@@ -1076,7 +746,7 @@ impl Editor {
 
     /// What `line` shows: its source, or Live Preview's rendering of it.
     fn display_for(&self, line: usize) -> DisplayLine {
-        let text = self.line_text(line);
+        let text = self.buf.line_text(line);
         if self.live_preview {
             let spans = self.highlights.get(line).map(Vec::as_slice).unwrap_or(&[]);
             preview::display_line(text, spans, &self.touches_on_line(line))
@@ -1106,14 +776,14 @@ impl Editor {
         if matches!(entry.1.block, RBlock::Properties(_)) {
             return self.properties_in_document != PropertiesInDocument::Source;
         }
-        let span = self.line_starts[entry.0.start]..self.line_range(entry.0.end - 1).end;
+        let span = self.buf.line_starts()[entry.0.start]..self.buf.line_range(entry.0.end - 1).end;
         let primary = Sel {
-            anchor: self.anchor,
-            head: self.head,
+            anchor: self.buf.anchor,
+            head: self.buf.head,
             goal: None,
         };
         !std::iter::once(&primary)
-            .chain(self.extra.iter())
+            .chain(self.buf.extra.iter())
             .any(|s| preview::touches(&[s.range()], &span))
     }
 
@@ -1282,7 +952,7 @@ impl Editor {
             self.pending_reveal = true;
             return;
         }
-        let c = self.cursor_at(self.head);
+        let c = self.buf.cursor_at(self.buf.head);
         let Some(shaped) = self.shape(window, c.line) else {
             self.pending_reveal = true;
             return;
@@ -1335,9 +1005,8 @@ impl Editor {
 
     // ----- editing -------------------------------------------------------------
 
-    /// Replaces `range` with `insert` at the primary cursor, records it for
-    /// undo and moves the cursor after the insertion; other cursors keep
-    /// their place in the text.
+    /// Replaces `range` with `insert` at the primary cursor as one undo
+    /// step, then refreshes what the view keeps around the text.
     fn edit(
         &mut self,
         range: Range<usize>,
@@ -1346,97 +1015,43 @@ impl Editor {
         window: Option<&mut Window>,
         cx: &mut Context<Self>,
     ) {
-        let before = self.cursors();
-        let old = self.text[range.clone()].to_string();
-        self.text.replace_range(range.clone(), insert);
-        self.rebuild_lines();
-        self.head = range.start + insert.len();
-        self.anchor = self.head;
-        self.marked = None;
-        self.goal_x = None;
-        self.dirty = true;
-        self.shift_extras(&range, insert.len());
-        self.record(
-            vec![Edit {
-                at: range.start,
-                old,
-                new: insert.to_string(),
-            }],
-            kind,
-            before,
-        );
+        self.buf.edit(range, insert, kind);
         self.after_edit(window, cx);
     }
 
-    /// One replacement per selection, in [`Editor::cursors`] order, as one
-    /// undo step; every cursor collapses after its own insertion. Ranges
-    /// that reach into the previous selection's replacement are cut short.
+    /// One replacement per selection as one undo step; see
+    /// [`TextBuffer::edit_all`].
     fn edit_all(
         &mut self,
-        mut edits: Vec<(Range<usize>, String)>,
+        edits: Vec<(Range<usize>, String)>,
         kind: EditKind,
         window: Option<&mut Window>,
         cx: &mut Context<Self>,
     ) {
-        let cursors = self.cursors();
-        debug_assert_eq!(edits.len(), cursors.sels.len());
-        let mut floor = 0;
-        for (range, _) in &mut edits {
-            range.start = range.start.max(floor).min(range.end);
-            floor = range.end;
+        if self.buf.edit_all(edits, kind) {
+            self.after_edit(window, cx);
         }
-        if edits.iter().all(|(r, new)| r.is_empty() && new.is_empty()) {
-            return;
-        }
-        let mut after = Vec::with_capacity(edits.len());
-        let mut delta: isize = 0;
-        for (range, new) in &edits {
-            let start = (range.start as isize + delta) as usize;
-            after.push(Sel::at(start + new.len()));
-            delta += new.len() as isize - range.len() as isize;
-        }
-        let after = Cursors {
-            sels: after,
-            primary: cursors.primary,
-        };
-        self.apply_edits(edits, after, kind);
-        self.after_edit(window, cx);
     }
 
     /// Inserts `s` at every cursor, replacing what each has selected.
     fn insert_all(&mut self, s: &str, kind: EditKind, window: &mut Window, cx: &mut Context<Self>) {
-        let edits = self
-            .cursors()
-            .sels
-            .iter()
-            .map(|sel| (sel.range(), s.to_string()))
-            .collect();
-        self.edit_all(edits, kind, Some(window), cx);
+        if self.buf.insert_all(s, kind) {
+            self.after_edit(Some(window), cx);
+        }
     }
 
     /// Deletes at every cursor: the selection, or what `range` gives for a
     /// collapsed one.
     fn delete_all(
         &mut self,
-        range: impl Fn(&Self, usize) -> Range<usize>,
+        range: impl Fn(&TextBuffer, usize) -> Range<usize>,
         kind: EditKind,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let edits = self
-            .cursors()
-            .sels
-            .iter()
-            .map(|sel| {
-                let r = if sel.is_empty() {
-                    range(self, sel.head)
-                } else {
-                    sel.range()
-                };
-                (r, String::new())
-            })
-            .collect();
-        self.edit_all(edits, kind, Some(window), cx);
+        if self.buf.delete_all(range, kind) {
+            self.after_edit(Some(window), cx);
+        }
     }
 
     fn after_edit(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
@@ -1448,35 +1063,6 @@ impl Editor {
         }
         cx.emit(EditorEvent::Edited);
         cx.notify();
-    }
-
-    /// Records one step's edits (in the order they were applied). A typing
-    /// or deleting step that starts exactly where the previous one of the
-    /// same kind ended, within [`UNDO_GROUP`], joins its group.
-    fn record(&mut self, edits: Vec<Edit>, kind: EditKind, before: Cursors) {
-        let after = self.cursors();
-        let now = Instant::now();
-        self.history.redo.clear();
-        if kind != EditKind::Other {
-            if let Some(last) = self.history.undo.last_mut() {
-                if last.kind == kind
-                    && last.after.positions() == before.positions()
-                    && now.duration_since(last.at) < UNDO_GROUP
-                {
-                    last.edits.extend(edits);
-                    last.after = after;
-                    last.at = now;
-                    return;
-                }
-            }
-        }
-        self.history.undo.push(Group {
-            edits,
-            before,
-            after,
-            kind,
-            at: now,
-        });
     }
 
     /// Applies several non-overlapping replacements as one undo step and
@@ -1491,49 +1077,9 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if edits.is_empty() {
-            return;
+        if self.buf.edit_many(edits, cursor, anchor) {
+            self.after_edit(Some(window), cx);
         }
-        let after = Cursors {
-            sels: vec![Sel {
-                anchor: anchor.unwrap_or(cursor),
-                head: cursor,
-                goal: None,
-            }],
-            primary: 0,
-        };
-        self.apply_edits(edits, after, EditKind::Other);
-        self.after_edit(Some(window), cx);
-    }
-
-    /// The buffer and history part of [`Editor::edit_many`] and
-    /// [`Editor::edit_all`]: `after` is in post-edit coordinates.
-    fn apply_edits(
-        &mut self,
-        mut edits: Vec<(Range<usize>, String)>,
-        after: Cursors,
-        kind: EditKind,
-    ) {
-        let before = self.cursors();
-        // Back to front, so earlier offsets stay valid while later text
-        // moves; of two edits at one offset the replacement goes before
-        // the insertion.
-        edits.sort_by_key(|e| (std::cmp::Reverse(e.0.start), std::cmp::Reverse(e.0.end)));
-        let mut recorded = Vec::with_capacity(edits.len());
-        for (range, new) in edits {
-            let old = self.text[range.clone()].to_string();
-            self.text.replace_range(range.clone(), &new);
-            recorded.push(Edit {
-                at: range.start,
-                old,
-                new,
-            });
-        }
-        self.rebuild_lines();
-        self.set_cursors(after);
-        self.marked = None;
-        self.dirty = true;
-        self.record(recorded, kind, before);
     }
 
     /// Recomputes decorations on the background executor. One parse runs at
@@ -1548,7 +1094,7 @@ impl Editor {
         }
         self.parse_queued = false;
         let generation = self.generation;
-        let text = self.text.clone();
+        let text = self.buf.text().to_string();
         let requested_at = Instant::now();
         let widget_source = self
             .live_preview
@@ -1630,12 +1176,12 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.collapse_cursors();
-        self.head = self.clamp_offset(offset);
+        self.buf.collapse_cursors();
+        self.buf.head = self.buf.clamp_offset(offset);
         if !select {
-            self.anchor = self.head;
+            self.buf.anchor = self.buf.head;
         }
-        self.marked = None;
+        self.buf.marked = None;
         self.reveal_cursor(window);
         cx.notify();
     }
@@ -1647,24 +1193,24 @@ impl Editor {
         select: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
-        mut target: impl FnMut(&Self, &mut Window, Sel) -> (usize, Option<Pixels>),
+        mut target: impl FnMut(&Self, &mut Window, Sel) -> (usize, Option<f32>),
     ) {
-        let cursors = self.cursors();
+        let cursors = self.buf.cursors();
         let mut sels = Vec::with_capacity(cursors.sels.len());
         for s in &cursors.sels {
             let (head, goal) = target(self, window, *s);
-            let head = self.clamp_offset(head);
+            let head = self.buf.clamp_offset(head);
             sels.push(Sel {
                 anchor: if select { s.anchor } else { head },
                 head,
                 goal,
             });
         }
-        self.set_cursors(Cursors {
+        self.buf.set_cursors(Cursors {
             sels,
             primary: cursors.primary,
         });
-        self.marked = None;
+        self.buf.marked = None;
         self.reveal_cursor(window);
         cx.notify();
     }
@@ -1686,9 +1232,9 @@ impl Editor {
                     sel.end
                 }
             } else if left {
-                this.prev_char_boundary(s.head)
+                this.buf.prev_char_boundary(s.head)
             } else {
-                this.next_char_boundary(s.head)
+                this.buf.next_char_boundary(s.head)
             };
             (target, None)
         });
@@ -1713,19 +1259,19 @@ impl Editor {
         &self,
         window: &mut Window,
         head: usize,
-        goal_x: Option<Pixels>,
+        goal_x: Option<f32>,
         delta: isize,
-    ) -> (usize, Option<Pixels>) {
+    ) -> (usize, Option<f32>) {
         let lh = self.layout.line_height;
-        let c = self.cursor_at(head);
+        let c = self.buf.cursor_at(head);
         let Some(shaped) = self.shape(window, c.line).filter(|_| lh > px(0.)) else {
             // No layout yet: move by buffer lines.
             let line = (c.line as isize + delta).clamp(0, self.line_count() as isize - 1) as usize;
-            let col = self.clamp_col(line, c.col);
-            return (self.line_starts[line] + col, None);
+            let col = self.buf.clamp_col(line, c.col);
+            return (self.buf.line_starts()[line] + col, None);
         };
         let (start_row, x) = shaped.row_and_x(c.col);
-        let goal = goal_x.unwrap_or(x);
+        let goal = goal_x.map(px).unwrap_or(x);
         let mut line = c.line;
         let mut row = start_row;
         let mut rows = shaped.rows();
@@ -1758,9 +1304,9 @@ impl Editor {
         let target = if line == c.line && row == start_row {
             // Nowhere to go: the first row goes to the start, the last to the end.
             if delta < 0 {
-                self.line_starts[line]
+                self.buf.line_starts()[line]
             } else {
-                self.line_range(line).end
+                self.buf.line_range(line).end
             }
         } else {
             let shaped = if line == c.line {
@@ -1771,10 +1317,10 @@ impl Editor {
                     None => return (head, goal_x),
                 }
             };
-            let col = self.clamp_col(line, shaped.index_at(goal, row));
-            self.line_starts[line] + col
+            let col = self.buf.clamp_col(line, shaped.index_at(goal, row));
+            self.buf.line_starts()[line] + col
         };
-        (target, Some(goal))
+        (target, Some(f32::from(goal)))
     }
 
     fn row_boundary(
@@ -1785,19 +1331,19 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         self.move_each(select, window, cx, |this, window, s| {
-            let c = this.cursor_at(s.head);
+            let c = this.buf.cursor_at(s.head);
             let target = match this.shape(window, c.line) {
                 Some(shaped) if this.layout.line_height > px(0.) => {
                     let (row, _) = shaped.row_and_x(c.col);
                     let x = if end { px(f32::MAX / 4.) } else { px(0.) };
-                    let col = this.clamp_col(c.line, shaped.index_at(x, row));
-                    this.line_starts[c.line] + col
+                    let col = this.buf.clamp_col(c.line, shaped.index_at(x, row));
+                    this.buf.line_starts()[c.line] + col
                 }
                 _ => {
                     if end {
-                        this.line_range(c.line).end
+                        this.buf.line_range(c.line).end
                     } else {
-                        this.line_starts[c.line]
+                        this.buf.line_starts()[c.line]
                     }
                 }
             };
@@ -1808,7 +1354,7 @@ impl Editor {
     /// `editor:add-cursor-above` and `below`: a new cursor one row above
     /// the topmost (or below the bottommost), at the same x.
     pub fn add_cursor(&mut self, above: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let cursors = self.cursors();
+        let cursors = self.buf.cursors();
         let from = if above {
             cursors.sels[0]
         } else {
@@ -1816,7 +1362,7 @@ impl Editor {
         };
         let (head, goal) =
             self.vertical_target(window, from.head, from.goal, if above { -1 } else { 1 });
-        if self.cursor_at(head).line == self.cursor_at(from.head).line {
+        if self.buf.cursor_at(head).line == self.buf.cursor_at(from.head).line {
             return;
         }
         let mut sels = cursors.sels;
@@ -1825,7 +1371,7 @@ impl Editor {
             head,
             goal,
         });
-        self.set_cursors(Cursors {
+        self.buf.set_cursors(Cursors {
             sels,
             primary: cursors.primary,
         });
@@ -1903,13 +1449,13 @@ impl Editor {
 
     fn move_word_left(&mut self, _: &MoveWordLeft, window: &mut Window, cx: &mut Context<Self>) {
         self.move_each(false, window, cx, |this, _, s| {
-            (this.word_left(s.head), None)
+            (this.buf.word_left(s.head), None)
         });
     }
 
     fn move_word_right(&mut self, _: &MoveWordRight, window: &mut Window, cx: &mut Context<Self>) {
         self.move_each(false, window, cx, |this, _, s| {
-            (this.word_right(s.head), None)
+            (this.buf.word_right(s.head), None)
         });
     }
 
@@ -1920,7 +1466,7 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         self.move_each(true, window, cx, |this, _, s| {
-            (this.word_left(s.head), None)
+            (this.buf.word_left(s.head), None)
         });
     }
 
@@ -1931,7 +1477,7 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         self.move_each(true, window, cx, |this, _, s| {
-            (this.word_right(s.head), None)
+            (this.buf.word_right(s.head), None)
         });
     }
 
@@ -1988,13 +1534,13 @@ impl Editor {
     }
 
     fn document_start(&mut self, _: &DocumentStart, window: &mut Window, cx: &mut Context<Self>) {
-        self.goal_x = None;
+        self.buf.goal = None;
         self.move_to(0, false, window, cx);
     }
 
     fn document_end(&mut self, _: &DocumentEnd, window: &mut Window, cx: &mut Context<Self>) {
-        self.goal_x = None;
-        self.move_to(self.text.len(), false, window, cx);
+        self.buf.goal = None;
+        self.move_to(self.buf.len(), false, window, cx);
     }
 
     fn select_document_start(
@@ -2003,7 +1549,7 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.goal_x = None;
+        self.buf.goal = None;
         self.move_to(0, true, window, cx);
     }
 
@@ -2013,15 +1559,12 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.goal_x = None;
-        self.move_to(self.text.len(), true, window, cx);
+        self.buf.goal = None;
+        self.move_to(self.buf.len(), true, window, cx);
     }
 
     fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
-        self.collapse_cursors();
-        self.anchor = 0;
-        self.head = self.text.len();
-        self.goal_x = None;
+        self.buf.select_all();
         cx.notify();
     }
 
@@ -2038,7 +1581,7 @@ impl Editor {
         } else {
             EditKind::Other
         };
-        self.delete_all(|this, at| this.prev_char_boundary(at)..at, kind, window, cx);
+        self.delete_all(|buf, at| buf.prev_char_boundary(at)..at, kind, window, cx);
     }
 
     fn delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
@@ -2052,7 +1595,7 @@ impl Editor {
         } else {
             EditKind::Other
         };
-        self.delete_all(|this, at| at..this.next_char_boundary(at), kind, window, cx);
+        self.delete_all(|buf, at| at..buf.next_char_boundary(at), kind, window, cx);
     }
 
     fn delete_word_left(
@@ -2061,12 +1604,7 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.delete_all(
-            |this, at| this.word_left(at)..at,
-            EditKind::Other,
-            window,
-            cx,
-        );
+        self.delete_all(|buf, at| buf.word_left(at)..at, EditKind::Other, window, cx);
     }
 
     fn delete_word_right(
@@ -2076,7 +1614,7 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         self.delete_all(
-            |this, at| at..this.word_right(at),
+            |buf, at| at..buf.word_right(at),
             EditKind::Other,
             window,
             cx,
@@ -2091,30 +1629,14 @@ impl Editor {
         if self.commit_property_field(Some(window), cx) {
             return;
         }
-        let sel = self.selection();
-        if !self.smart_indent_list || sel.start != sel.end || !self.extra.is_empty() {
-            self.insert_all("\n", EditKind::Other, window, cx);
-            return;
+        if self.buf.newline(self.smart_indent_list) {
+            self.after_edit(Some(window), cx);
         }
-        let (edits, cursor) = newline_plan(&self.text, &self.line_starts, self.head);
-        self.edit_many(edits, cursor, None, window, cx);
     }
 
     /// Shift+Enter: a plain newline.
     fn newline_plain(&mut self, _: &NewlinePlain, window: &mut Window, cx: &mut Context<Self>) {
         self.insert_all("\n", EditKind::Other, window, cx);
-    }
-
-    /// The lines a selection touches (the cursor's line when collapsed).
-    fn selected_lines(&self) -> Range<usize> {
-        let sel = self.selection();
-        let first = self.cursor_at(sel.start).line;
-        let mut last = self.cursor_at(sel.end).line;
-        // A selection ending at a line start does not include that line.
-        if last > first && sel.end == self.line_starts[last] {
-            last -= 1;
-        }
-        first..last + 1
     }
 
     /// Tab: indents list items and selected lines by one step (renumbering
@@ -2140,118 +1662,45 @@ impl Editor {
             cx.notify();
             return;
         }
-        let unit = lists::indent_unit(self.use_tab, self.tab_size);
-        let sel = self.selection();
-        let lines = self.selected_lines();
-        let on_item = lists::parse_prefix(self.line_text(lines.start))
-            .marker
-            .is_some();
-        if !self.extra.is_empty() || (sel.start == sel.end && !(self.smart_indent_list && on_item))
+        if self
+            .buf
+            .indent(self.use_tab, self.tab_size, self.smart_indent_list)
         {
-            self.insert_all(&unit, EditKind::Typing, window, cx);
-            return;
+            self.after_edit(Some(window), cx);
         }
-        let edits = indent_plan(
-            &self.text,
-            &self.line_starts,
-            lines,
-            &unit,
-            true,
-            self.smart_indent_list,
-        );
-        let (head, anchor) = (shifted(self.head, &edits), shifted(self.anchor, &edits));
-        self.edit_many(edits, head, Some(anchor), window, cx);
     }
 
     /// Shift+Tab: removes one indentation step from the selected lines,
     /// renumbering the ordered lists it touches.
     fn outdent(&mut self, _: &Outdent, window: &mut Window, cx: &mut Context<Self>) {
-        let lines = self.selected_lines();
-        let edits = indent_plan(
-            &self.text,
-            &self.line_starts,
-            lines,
-            "",
-            false,
-            self.smart_indent_list,
-        );
-        let (head, anchor) = (shifted(self.head, &edits), shifted(self.anchor, &edits));
-        self.edit_many(edits, head, Some(anchor), window, cx);
+        if self.buf.outdent(self.smart_indent_list) {
+            self.after_edit(Some(window), cx);
+        }
     }
 
     fn undo(&mut self, _: &Undo, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(group) = self.history.undo.pop() else {
-            return;
-        };
-        for e in group.edits.iter().rev() {
-            self.text.replace_range(e.at..e.at + e.new.len(), &e.old);
+        if self.buf.undo() {
+            self.after_edit(Some(window), cx);
         }
-        self.rebuild_lines();
-        self.set_cursors(group.before.clone());
-        self.history.redo.push(group);
-        self.finish_history_step(window, cx);
     }
 
     fn redo(&mut self, _: &Redo, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(group) = self.history.redo.pop() else {
-            return;
-        };
-        for e in &group.edits {
-            self.text.replace_range(e.at..e.at + e.old.len(), &e.new);
+        if self.buf.redo() {
+            self.after_edit(Some(window), cx);
         }
-        self.rebuild_lines();
-        self.set_cursors(group.after.clone());
-        self.history.undo.push(group);
-        self.finish_history_step(window, cx);
-    }
-
-    fn finish_history_step(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.marked = None;
-        self.goal_x = None;
-        self.dirty = true;
-        self.after_edit(Some(window), cx);
-    }
-
-    /// What each cursor copies: its selection, or its whole line when
-    /// nothing is selected (what CodeMirror copies).
-    fn copy_ranges(&self) -> Vec<Range<usize>> {
-        self.cursors()
-            .sels
-            .iter()
-            .map(|s| {
-                if !s.is_empty() {
-                    return s.range();
-                }
-                let line = self.cursor_at(s.head).line;
-                let start = self.line_starts[line];
-                let end = self
-                    .line_starts
-                    .get(line + 1)
-                    .copied()
-                    .unwrap_or(self.text.len());
-                start..end
-            })
-            .collect()
-    }
-
-    /// The clipboard text for `ranges`: several cursors' texts joined with
-    /// newlines.
-    fn clipboard_text(&self, ranges: &[Range<usize>]) -> String {
-        let parts: Vec<&str> = ranges.iter().map(|r| &self.text[r.clone()]).collect();
-        parts.join("\n")
     }
 
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
-        let ranges = self.copy_ranges();
+        let ranges = self.buf.copy_ranges();
         if ranges.iter().any(|r| !r.is_empty()) {
-            cx.write_to_clipboard(ClipboardItem::new_string(self.clipboard_text(&ranges)));
+            cx.write_to_clipboard(ClipboardItem::new_string(self.buf.clipboard_text(&ranges)));
         }
     }
 
     fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
-        let ranges = self.copy_ranges();
+        let ranges = self.buf.copy_ranges();
         if ranges.iter().any(|r| !r.is_empty()) {
-            cx.write_to_clipboard(ClipboardItem::new_string(self.clipboard_text(&ranges)));
+            cx.write_to_clipboard(ClipboardItem::new_string(self.buf.clipboard_text(&ranges)));
             let edits = ranges.into_iter().map(|r| (r, String::new())).collect();
             self.edit_all(edits, EditKind::Other, Some(window), cx);
         }
@@ -2263,23 +1712,9 @@ impl Editor {
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return;
         };
-        let text = text.replace("\r\n", "\n");
-        let cursors = self.cursors();
-        let lines: Vec<&str> = text.split('\n').collect();
-        let edits = cursors
-            .sels
-            .iter()
-            .enumerate()
-            .map(|(i, s)| {
-                let piece = if cursors.sels.len() > 1 && lines.len() == cursors.sels.len() {
-                    lines[i].to_string()
-                } else {
-                    text.clone()
-                };
-                (s.range(), piece)
-            })
-            .collect();
-        self.edit_all(edits, EditKind::Other, Some(window), cx);
+        if self.buf.paste(&text) {
+            self.after_edit(Some(window), cx);
+        }
     }
 
     // ----- find and replace ------------------------------------------------------
@@ -2299,8 +1734,8 @@ impl Editor {
             self.find.replace_shown = true;
         }
         let sel = self.selection();
-        let selected = (sel.start != sel.end && !self.text[sel.clone()].contains('\n'))
-            .then(|| self.text[sel].to_string());
+        let selected = (sel.start != sel.end && !self.buf.text()[sel.clone()].contains('\n'))
+            .then(|| self.buf.text()[sel].to_string());
         let text = if !query.is_empty() {
             Some(query.to_string())
         } else {
@@ -2323,8 +1758,8 @@ impl Editor {
     /// then closes the panel.
     fn close_find(&mut self, _: &CloseFind, window: &mut Window, cx: &mut Context<Self>) {
         if self.cancel_property_field(cx) {
-        } else if !self.extra.is_empty() && self.focus_handle.is_focused(window) {
-            self.collapse_cursors();
+        } else if !self.buf.extra.is_empty() && self.focus_handle.is_focused(window) {
+            self.buf.collapse_cursors();
             cx.notify();
         } else if self.find.open {
             self.find.open = false;
@@ -2352,7 +1787,7 @@ impl Editor {
             return;
         }
         let query = self.find.query.read(cx).text().to_string();
-        self.find.matches = find::find_matches(&self.text, &query, self.find.opts);
+        self.find.matches = find::find_matches(self.buf.text(), &query, self.find.opts);
         let sel = self.selection();
         self.find.current = self.find.matches.iter().position(|m| *m == sel);
     }
@@ -2374,11 +1809,11 @@ impl Editor {
 
     fn select_match(&mut self, ix: usize, cx: &mut Context<Self>) {
         let m = self.find.matches[ix].clone();
-        self.collapse_cursors();
-        self.anchor = m.start;
-        self.head = m.end;
+        self.buf.collapse_cursors();
+        self.buf.anchor = m.start;
+        self.buf.head = m.end;
         self.find.current = Some(ix);
-        self.goal_x = None;
+        self.buf.goal = None;
         self.pending_reveal = true;
         cx.notify();
     }
@@ -2439,7 +1874,7 @@ impl Editor {
             })
             .collect();
         let primary = self.find.current.unwrap_or(0).min(sels.len() - 1);
-        self.set_cursors(Cursors { sels, primary });
+        self.buf.set_cursors(Cursors { sels, primary });
         self.find.open = false;
         window.focus(&self.focus_handle, cx);
         self.pending_reveal = true;
@@ -2451,7 +1886,7 @@ impl Editor {
         let with = self.find.replacement.read(cx).text().to_string();
         let query = self.find.query.read(cx).text();
         match find::compile(query, self.find.opts) {
-            Some(re) => find::replacement_for(&self.text, m, &re, self.find.opts, &with),
+            Some(re) => find::replacement_for(self.buf.text(), m, &re, self.find.opts, &with),
             None => with,
         }
     }
@@ -2493,11 +1928,8 @@ impl Editor {
         cursor: usize,
         cx: &mut Context<Self>,
     ) {
-        let after = Cursors {
-            sels: vec![Sel::at(cursor)],
-            primary: 0,
-        };
-        self.apply_edits(edits, after, EditKind::Other);
+        self.buf
+            .apply_edits(edits, Cursors::at(cursor), EditKind::Other);
         self.after_edit(None, cx);
     }
 
@@ -2536,8 +1968,8 @@ impl Editor {
     /// The buffer offset under a window point, using the last frame's layout.
     fn offset_at_point(&self, window: &mut Window, position: Point<Pixels>) -> Option<usize> {
         let (line, shaped, d) = self.display_hit(window, position)?;
-        let col = self.clamp_col(line, shaped.display.to_source(d));
-        Some(self.line_starts[line] + col)
+        let col = self.buf.clamp_col(line, shaped.display.to_source(d));
+        Some(self.buf.line_starts()[line] + col)
     }
 
     /// The link under source byte `col` of `line`. With `rendered_only`,
@@ -2546,7 +1978,7 @@ impl Editor {
     fn link_at(&self, line: usize, col: usize, rendered_only: bool) -> Option<LinkTarget> {
         let spans = self.highlights.get(line)?;
         let touch = self.touches_on_line(line);
-        let text = self.line_text(line);
+        let text = self.buf.line_text(line);
         for s in spans {
             if !(s.range.start <= col && col < s.range.end) {
                 continue;
@@ -2609,10 +2041,10 @@ impl Editor {
         };
         if self.live_preview {
             if let Some((src, HighlightKind::Task)) = shaped.display.sub_at(d) {
-                let start = self.line_starts[line];
-                let checked = self.text.as_bytes().get(start + src.start + 1) != Some(&b' ');
+                let start = self.buf.line_starts()[line];
+                let checked = self.buf.text().as_bytes().get(start + src.start + 1) != Some(&b' ');
                 let with = if checked { "[ ]" } else { "[x]" };
-                let (head, anchor) = (self.head, self.anchor);
+                let (head, anchor) = (self.buf.head, self.buf.anchor);
                 self.edit_many(
                     vec![(start + src.start..start + src.end, with.to_string())],
                     head,
@@ -2638,7 +2070,7 @@ impl Editor {
     /// The properties block of the note as it stands, or `None` when it has
     /// none.
     fn properties(&self) -> Option<props::Properties> {
-        _cache::note_properties(&self.text)
+        _cache::note_properties(self.buf.text())
     }
 
     /// The display rows of the block, with each key's assigned type.
@@ -2672,15 +2104,15 @@ impl Editor {
         let Some(block) = self.properties() else {
             // No block yet: a new property creates one above the body.
             if let Some(props::Change::Set { key, value }) = changes.first() {
-                let nl = if self.crlf { "\r\n" } else { "\n" };
+                let nl = if self.buf.crlf() { "\r\n" } else { "\n" };
                 let text = props::new_block(key, value, nl);
-                // The buffer holds no BOM (it travels in `self.bom` and is
+                // The buffer holds no BOM (it travels in `self.buf.bom()` and is
                 // put back on save), so the block goes at offset zero.
                 self.edit(0..0, &text, EditKind::Other, window, cx);
             }
             return;
         };
-        let Some(edits) = props::plan(&self.text, &block, changes) else {
+        let Some(edits) = props::plan(self.buf.text(), &block, changes) else {
             return;
         };
         let ranges: Vec<(Range<usize>, String)> = edits
@@ -2689,12 +2121,12 @@ impl Editor {
             .collect();
         // Keep the cursor where it was, clamped: the block above it may have
         // grown or shrunk, and the caret lives in a field, not the document.
-        let head = self.head.min(self.text.len());
+        let head = self.buf.head.min(self.buf.len());
         let after = Cursors {
             sels: vec![Sel::at(head)],
             primary: 0,
         };
-        self.apply_edits(ranges, after, EditKind::Other);
+        self.buf.apply_edits(ranges, after, EditKind::Other);
         self.after_edit(window, cx);
     }
 
@@ -2854,11 +2286,11 @@ impl Editor {
         let line = (w.lines.start + row)
             .min(w.lines.end - 1)
             .min(self.line_count() - 1);
-        self.collapse_cursors();
-        self.head = self.line_starts[line];
-        self.anchor = self.head;
-        self.goal_x = None;
-        self.marked = None;
+        self.buf.collapse_cursors();
+        self.buf.head = self.buf.line_starts()[line];
+        self.buf.anchor = self.buf.head;
+        self.buf.goal = None;
+        self.buf.marked = None;
         cx.notify();
         true
     }
@@ -2877,11 +2309,11 @@ impl Editor {
         let Some(at) = self.offset_at_point(window, event.position) else {
             return;
         };
-        self.goal_x = None;
-        self.marked = None;
+        self.buf.goal = None;
+        self.buf.marked = None;
         if event.modifiers.alt && event.click_count == 1 {
             // Alt+click adds a cursor (or removes the one it lands on).
-            let mut cursors = self.cursors();
+            let mut cursors = self.buf.cursors();
             if let Some(ix) = cursors
                 .sels
                 .iter()
@@ -2895,32 +2327,33 @@ impl Editor {
                 cursors.sels.push(Sel::at(at));
                 cursors.primary = cursors.sels.len() - 1;
             }
-            self.set_cursors(cursors);
+            self.buf.set_cursors(cursors);
             cx.notify();
             return;
         }
         if !event.modifiers.shift {
-            self.collapse_cursors();
+            self.buf.collapse_cursors();
         }
         match event.click_count {
             2 => {
-                let word = self.word_at(at);
-                self.anchor = word.start;
-                self.head = word.end;
+                let word = self.buf.word_at(at);
+                self.buf.anchor = word.start;
+                self.buf.head = word.end;
             }
             n if n >= 3 => {
-                let line = self.cursor_at(at).line;
-                self.anchor = self.line_starts[line];
-                self.head = self
-                    .line_starts
+                let line = self.buf.cursor_at(at).line;
+                self.buf.anchor = self.buf.line_starts()[line];
+                self.buf.head = self
+                    .buf
+                    .line_starts()
                     .get(line + 1)
                     .copied()
-                    .unwrap_or(self.text.len());
+                    .unwrap_or(self.buf.len());
             }
             _ => {
-                self.head = at;
+                self.buf.head = at;
                 if !event.modifiers.shift {
-                    self.anchor = at;
+                    self.buf.anchor = at;
                 }
                 self.dragging = true;
             }
@@ -2951,7 +2384,7 @@ impl Editor {
                 .min(bounds.bottom_right().y - px(1.)),
         );
         if let Some(at) = self.offset_at_point(window, clamped) {
-            self.head = at;
+            self.buf.head = at;
             cx.notify();
         }
     }
@@ -2978,156 +2411,12 @@ impl Editor {
 
     /// A line-relative UTF-16 range on the cursor's line, as an absolute byte range.
     fn line_relative(&self, range_utf16: Range<usize>) -> Range<usize> {
-        let c = self.cursor_at(self.head);
-        let line_start = self.line_starts[c.line];
-        let line = self.line_text(c.line);
+        let c = self.buf.cursor_at(self.buf.head);
+        let line_start = self.buf.line_starts()[c.line];
+        let line = self.buf.line_text(c.line);
         line_start + Self::utf16_to_byte(line, range_utf16.start)
             ..line_start + Self::utf16_to_byte(line, range_utf16.end)
     }
-}
-
-/// The edits Enter makes at `head` with smart lists on: the newline and
-/// continued prefix (or the clearing of an empty item), plus the renumbering
-/// of the ordered items that follow. Returns them with the cursor's new offset.
-fn newline_plan(
-    text: &str,
-    line_starts: &[usize],
-    head: usize,
-) -> (Vec<(Range<usize>, String)>, usize) {
-    let line_ix = match line_starts.binary_search(&head) {
-        Ok(i) => i,
-        Err(i) => i - 1,
-    };
-    let line_start = line_starts[line_ix];
-    let line_end = line_starts
-        .get(line_ix + 1)
-        .map(|n| n - 1)
-        .unwrap_or(text.len());
-    let line = &text[line_start..line_end];
-    let col = head - line_start;
-    match lists::continuation(line, col) {
-        Continuation::Insert(prefix) => {
-            let mut edits = vec![(head..head, format!("\n{prefix}"))];
-            let cursor = head + 1 + prefix.len();
-            let p = lists::parse_prefix(line);
-            if let Some(lists::Marker::Ordered { number, .. }) = p.marker {
-                if col >= p.content {
-                    let following = line_starts[line_ix + 1..]
-                        .iter()
-                        .enumerate()
-                        .map(|(i, &s)| {
-                            let e = line_starts
-                                .get(line_ix + 2 + i)
-                                .map(|n| n - 1)
-                                .unwrap_or(text.len());
-                            &text[s..e]
-                        });
-                    for (ix, range, n) in lists::renumber_following(following, line, number + 2) {
-                        let at = line_starts[line_ix + 1 + ix];
-                        edits.push((at + range.start..at + range.end, n.to_string()));
-                    }
-                }
-            }
-            (edits, cursor)
-        }
-        Continuation::Clear { range, with } => {
-            let abs = line_start + range.start..line_start + range.end;
-            let cursor = abs.start + with.len() + head.saturating_sub(abs.end);
-            (vec![(abs, with)], cursor)
-        }
-    }
-}
-
-/// The edits Tab (`indent`) or Shift+Tab make on `lines`: one indentation
-/// step of `unit` added after each line's quote markers, or one removed,
-/// plus (with `renumber`) the new numbers of the ordered items the change
-/// unsettled, all in pre-edit coordinates for one undo step.
-fn indent_plan(
-    text: &str,
-    line_starts: &[usize],
-    lines: Range<usize>,
-    unit: &str,
-    indent: bool,
-    renumber: bool,
-) -> Vec<(Range<usize>, String)> {
-    let line_text = |l: usize| -> &str {
-        let start = line_starts[l];
-        let end = line_starts.get(l + 1).map(|n| n - 1).unwrap_or(text.len());
-        &text[start..end]
-    };
-    let mut edits = Vec::new();
-    // Bytes each changed line gained before its marker, post minus pre.
-    let mut deltas: HashMap<usize, isize> = HashMap::new();
-    for l in lines.clone() {
-        let lt = line_text(l);
-        if indent {
-            let at = line_starts[l] + lists::indent_point(lt);
-            edits.push((at..at, unit.to_string()));
-            deltas.insert(l, unit.len() as isize);
-        } else if let Some(r) = lists::outdent_range(lt) {
-            let start = line_starts[l];
-            edits.push((start + r.start..start + r.end, String::new()));
-            deltas.insert(l, -(r.len() as isize));
-        }
-    }
-    if !renumber || edits.is_empty() {
-        return edits;
-    }
-    // The list block around the change: its lines up to a blank one
-    // either side, as they will read after the edit.
-    let mut first = lines.start;
-    while first > 0 && !line_text(first - 1).trim().is_empty() {
-        first -= 1;
-    }
-    let mut last = lines.end;
-    while last < line_starts.len() && !line_text(last).trim().is_empty() {
-        last += 1;
-    }
-    let block: Vec<String> = (first..last)
-        .map(|l| {
-            let lt = line_text(l);
-            match deltas.get(&l) {
-                Some(d) if *d > 0 => {
-                    let at = lists::indent_point(lt);
-                    format!("{}{}{}", &lt[..at], unit, &lt[at..])
-                }
-                Some(d) => {
-                    let n = (-*d) as usize;
-                    let r = lists::outdent_range(lt).unwrap_or(0..0);
-                    format!("{}{}", &lt[..r.start], &lt[r.start + n..])
-                }
-                None => lt.to_string(),
-            }
-        })
-        .collect();
-    let changed = lines.start - first..lines.end - first;
-    for (ix, digits, n) in lists::renumber_block(&block, changed) {
-        let l = first + ix;
-        let delta = deltas.get(&l).copied().unwrap_or(0);
-        let start = (digits.start as isize - delta) as usize;
-        let at = line_starts[l] + start;
-        edits.push((at..at + digits.len(), n.to_string()));
-    }
-    edits
-}
-
-/// Where byte `at` of the text sits after `edits` (disjoint, in any order)
-/// are applied; a position inside a replaced range lands after its
-/// replacement, and an insertion exactly at `at` goes before it.
-fn shifted(at: usize, edits: &[(Range<usize>, String)]) -> usize {
-    let mut sorted: Vec<&(Range<usize>, String)> = edits.iter().collect();
-    sorted.sort_by_key(|(r, _)| (r.start, r.end));
-    let mut delta: isize = 0;
-    for (r, new) in sorted {
-        if r.end <= at {
-            delta += new.len() as isize - r.len() as isize;
-        } else if r.start < at {
-            return (r.start as isize + delta) as usize + new.len();
-        } else {
-            break;
-        }
-    }
-    (at as isize + delta) as usize
 }
 
 /// Pairs each widget with the lines its span covers in `text`.
@@ -3149,64 +2438,6 @@ fn widget_lines(text: &str, widgets: Vec<Widget>) -> Vec<(Range<usize>, Widget)>
         .collect()
 }
 
-impl Cursors {
-    /// The selections' ends, for comparing where one step ended and the
-    /// next began without regard to goal x.
-    fn positions(&self) -> Vec<(usize, usize)> {
-        self.sels.iter().map(|s| (s.anchor, s.head)).collect()
-    }
-}
-
-/// A file's text split from the bytes the buffer normalizes away.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct FileText {
-    bom: bool,
-    /// The file used `\r\n` (any mixed endings become the dominant one).
-    crlf: bool,
-    /// The body with `\n` line endings.
-    text: String,
-}
-
-impl FileText {
-    fn parse(raw: &str) -> FileText {
-        let (bom, body) = match raw.strip_prefix('\u{feff}') {
-            Some(rest) => (true, rest),
-            None => (false, raw),
-        };
-        let crlf = body.contains("\r\n");
-        let text = if crlf {
-            body.replace("\r\n", "\n")
-        } else {
-            body.to_string()
-        };
-        FileText { bom, crlf, text }
-    }
-
-    fn join(bom: bool, crlf: bool, text: &str) -> String {
-        let mut out = String::with_capacity(text.len() + 3);
-        if bom {
-            out.push('\u{feff}');
-        }
-        if crlf {
-            out.push_str(&text.replace('\n', "\r\n"));
-        } else {
-            out.push_str(text);
-        }
-        out
-    }
-}
-
-/// 0 for whitespace, 1 for word characters, 2 for punctuation.
-fn char_class(c: char) -> u8 {
-    if c.is_whitespace() {
-        0
-    } else if c.is_alphanumeric() || c == '_' {
-        1
-    } else {
-        2
-    }
-}
-
 impl Focusable for Editor {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -3221,7 +2452,7 @@ impl EntityInputHandler for Editor {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<String> {
-        let line = self.line_text(self.cursor().line);
+        let line = self.buf.line_text(self.cursor().line);
         let start = Self::utf16_to_byte(line, range_utf16.start);
         let end = Self::utf16_to_byte(line, range_utf16.end);
         adjusted_range.replace(Self::byte_to_utf16(line, start)..Self::byte_to_utf16(line, end));
@@ -3235,8 +2466,8 @@ impl EntityInputHandler for Editor {
         _cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
         let c = self.cursor();
-        let range = self.line_range(c.line);
-        let line = &self.text[range.clone()];
+        let range = self.buf.line_range(c.line);
+        let line = &self.buf.text()[range.clone()];
         let sel = self.selection();
         let (start, end) = if sel.start >= range.start && sel.end <= range.end {
             (sel.start - range.start, sel.end - range.start)
@@ -3245,7 +2476,7 @@ impl EntityInputHandler for Editor {
         };
         Some(UTF16Selection {
             range: Self::byte_to_utf16(line, start)..Self::byte_to_utf16(line, end),
-            reversed: self.head < self.anchor,
+            reversed: self.buf.head < self.buf.anchor,
         })
     }
 
@@ -3255,12 +2486,12 @@ impl EntityInputHandler for Editor {
         _cx: &mut Context<Self>,
     ) -> Option<Range<usize>> {
         let c = self.cursor();
-        let range = self.line_range(c.line);
-        let marked = self.marked.clone()?;
+        let range = self.buf.line_range(c.line);
+        let marked = self.buf.marked.clone()?;
         if marked.start < range.start || marked.end > range.end {
             return None;
         }
-        let line = &self.text[range.clone()];
+        let line = &self.buf.text()[range.clone()];
         Some(
             Self::byte_to_utf16(line, marked.start - range.start)
                 ..Self::byte_to_utf16(line, marked.end - range.start),
@@ -3268,7 +2499,7 @@ impl EntityInputHandler for Editor {
     }
 
     fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
-        self.marked = None;
+        self.buf.marked = None;
     }
 
     fn replace_text_in_range(
@@ -3292,7 +2523,7 @@ impl EntityInputHandler for Editor {
         };
         let range = range_utf16
             .map(|r| self.line_relative(r))
-            .or_else(|| self.marked.clone());
+            .or_else(|| self.buf.marked.clone());
         match range {
             // A ranged replacement (IME) addresses the primary cursor's line.
             Some(range) => self.edit(range, new_text, kind, Some(window), cx),
@@ -3310,16 +2541,16 @@ impl EntityInputHandler for Editor {
     ) {
         let range = range_utf16
             .map(|r| self.line_relative(r))
-            .or_else(|| self.marked.clone())
+            .or_else(|| self.buf.marked.clone())
             .unwrap_or_else(|| self.selection());
         self.edit(range.clone(), new_text, EditKind::Typing, Some(window), cx);
         let marked = range.start..range.start + new_text.len();
         if let Some(sel) = new_selected_range {
             let at = marked.start + Self::utf16_to_byte(new_text, sel.end);
-            self.head = self.clamp_offset(at);
-            self.anchor = self.head;
+            self.buf.head = self.buf.clamp_offset(at);
+            self.buf.anchor = self.buf.head;
         }
-        self.marked = Some(marked);
+        self.buf.marked = Some(marked);
     }
 
     fn bounds_for_range(
@@ -3330,7 +2561,7 @@ impl EntityInputHandler for Editor {
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
         let shaped = self.layout.cursor_line.clone()?;
-        let line = self.line_text(self.cursor().line);
+        let line = self.buf.line_text(self.cursor().line);
         let start = Self::utf16_to_byte(line, range_utf16.start);
         let end = Self::utf16_to_byte(line, range_utf16.end);
         let rh = shaped.row_height;
@@ -3799,8 +3030,8 @@ impl Element for EditorElement {
             let count = editor.line_count();
             let scroll_line = editor.scroll_line.min(count - 1);
             let mut scroll_px = editor.scroll_px;
-            let cursors = editor.cursors();
-            let head = editor.head;
+            let cursors = editor.buf.cursors();
+            let head = editor.buf.head;
             let focused = editor.focus_handle.is_focused(window);
             let thumb_dragging = editor.thumb_drag.is_some();
 
@@ -3960,7 +3191,7 @@ impl Element for EditorElement {
                         ));
                     }
                 }
-                let range = editor.line_range(line);
+                let range = editor.buf.line_range(line);
                 if !matches.is_empty() {
                     // Matches touching this line, by binary search on their starts.
                     let first = matches.partition_point(|m| m.end < range.start);
@@ -4248,120 +3479,5 @@ impl Element for EditorElement {
                 window.on_next_frame(move |_, cx| cx.notify(id));
             }
         });
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn word_classes_split_identifiers_from_punctuation() {
-        assert_eq!(char_class(' '), 0);
-        assert_eq!(char_class('a'), 1);
-        assert_eq!(char_class('_'), 1);
-        assert_eq!(char_class('['), 2);
-    }
-
-    fn starts(text: &str) -> Vec<usize> {
-        std::iter::once(0)
-            .chain(text.match_indices('\n').map(|(i, _)| i + 1))
-            .collect()
-    }
-
-    fn apply(text: &str, head: usize) -> (String, usize) {
-        let (mut edits, cursor) = newline_plan(text, &starts(text), head);
-        edits.sort_by_key(|e| std::cmp::Reverse(e.0.start));
-        let mut out = text.to_string();
-        for (r, s) in edits {
-            out.replace_range(r, &s);
-        }
-        (out, cursor)
-    }
-
-    #[test]
-    fn enter_continues_items_and_renumbers_the_rest() {
-        assert_eq!(apply("- a", 3), ("- a\n- ".into(), 6));
-        assert_eq!(
-            apply("1. a\n2. b\n3. c", 4),
-            ("1. a\n2. \n3. b\n4. c".into(), 8)
-        );
-        // Splitting an item carries the rest of the text to the new one.
-        assert_eq!(apply("- ab", 3), ("- a\n- b".into(), 6));
-        // An empty item clears; a nested one outdents and keeps the cursor.
-        assert_eq!(apply("- a\n- ", 6), ("- a\n".into(), 4));
-        assert_eq!(apply("- a\n\t- ", 7), ("- a\n- ".into(), 6));
-        assert_eq!(apply("> q", 3), ("> q\n> ".into(), 6));
-    }
-
-    fn apply_many(text: &str, edits: Vec<(Range<usize>, String)>) -> String {
-        let mut edits = edits;
-        edits.sort_by_key(|e| (std::cmp::Reverse(e.0.start), std::cmp::Reverse(e.0.end)));
-        let mut out = text.to_string();
-        for (r, new) in edits {
-            out.replace_range(r, &new);
-        }
-        out
-    }
-
-    fn line_starts(text: &str) -> Vec<usize> {
-        std::iter::once(0)
-            .chain(text.match_indices('\n').map(|(i, _)| i + 1))
-            .collect()
-    }
-
-    #[test]
-    fn tab_and_shift_tab_renumber_ordered_lists() {
-        let text = "1. a\n2. b\n3. c\n";
-        let edits = indent_plan(text, &line_starts(text), 1..2, "\t", true, true);
-        assert_eq!(apply_many(text, edits), "1. a\n\t1. b\n2. c\n");
-        let text = "1. a\n\t1. b\n2. c\n";
-        let edits = indent_plan(text, &line_starts(text), 1..2, "", false, true);
-        assert_eq!(apply_many(text, edits), "1. a\n2. b\n3. c\n");
-        // Without smart lists only the indentation changes.
-        let text = "1. a\n2. b\n3. c\n";
-        let edits = indent_plan(text, &line_starts(text), 1..2, "  ", true, false);
-        assert_eq!(apply_many(text, edits), "1. a\n  2. b\n3. c\n");
-        // A selection over two items indents both; numbers follow.
-        let text = "1. a\n2. b\n3. c\n4. d\n";
-        let edits = indent_plan(text, &line_starts(text), 1..3, "\t", true, true);
-        assert_eq!(apply_many(text, edits), "1. a\n\t1. b\n\t2. c\n2. d\n");
-    }
-
-    #[test]
-    fn shifted_positions_follow_the_edits() {
-        let edits = vec![(2..2, "\t".to_string()), (10..11, "12".to_string())];
-        assert_eq!(shifted(0, &edits), 0);
-        assert_eq!(shifted(2, &edits), 3);
-        assert_eq!(shifted(5, &edits), 6);
-        assert_eq!(shifted(11, &edits), 13);
-        assert_eq!(shifted(20, &edits), 22);
-        // Inside a replaced range: after the replacement.
-        let edits = vec![(3..6, "".to_string())];
-        assert_eq!(shifted(4, &edits), 3);
-    }
-
-    #[test]
-    fn file_text_round_trips_bom_and_line_endings() {
-        for raw in [
-            "plain\nlf\n",
-            "\u{feff}bom\nlf",
-            "crlf\r\nlines\r\n",
-            "\u{feff}# both\r\n\r\ntext\r\n",
-            "",
-            "no trailing newline",
-        ] {
-            let f = FileText::parse(raw);
-            assert!(!f.text.contains('\r'), "{raw:?}");
-            assert_eq!(FileText::join(f.bom, f.crlf, &f.text), raw, "{raw:?}");
-        }
-    }
-
-    #[test]
-    fn file_text_normalizes_mixed_endings_to_the_dominant_one() {
-        let f = FileText::parse("a\r\nb\nc");
-        assert_eq!(f.text, "a\nb\nc");
-        assert!(f.crlf);
-        assert_eq!(FileText::join(f.bom, f.crlf, &f.text), "a\r\nb\r\nc");
     }
 }
