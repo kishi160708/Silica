@@ -16,7 +16,7 @@ use crate::palette::{CommandPalette, PaletteCommand, PaletteEvent};
 use crate::prompt::{Prompt, PromptEvent, PromptSpec};
 use crate::reading::{self, LinkTarget, ReadingEvent, ReadingView};
 use crate::search::{SearchEvent, SearchPane};
-use crate::settings::{self, SettingsEvent, SettingsView};
+use crate::settings::{self, SettingChange, SettingsEvent, SettingsView};
 use crate::switcher::{QuickSwitcher, SwitcherEvent};
 use crate::theme::Theme;
 use crate::watch;
@@ -128,15 +128,16 @@ pub struct VaultState {
     cache: RwLock<MetadataCache>,
     /// Note text as indexed, for search and mentions.
     texts: RwLock<HashMap<String, Arc<String>>>,
-    pub app: AppConfig,
-    pub appearance: AppearanceConfig,
-    pub core_plugins: Option<CorePlugins>,
-    pub community_plugins: Vec<String>,
+    /// The config files Settings writes, behind locks for the same reason
+    /// `property_types` is: a control changes one while the vault is open.
+    app: RwLock<AppConfig>,
+    appearance: RwLock<AppearanceConfig>,
+    core_plugins: RwLock<Option<CorePlugins>>,
+    community_plugins: RwLock<Vec<String>>,
+    switcher: RwLock<SwitcherConfig>,
     pub plugin_manifests: Vec<PluginManifest>,
     pub palette: CommandPaletteConfig,
-    pub switcher: SwitcherConfig,
-    /// `types.json`: the type assigned to each property name. Behind a lock
-    /// because the properties UI assigns types while the vault is open.
+    /// `types.json`: the type assigned to each property name.
     property_types: RwLock<PropertyTypes>,
     pub index_ms: f64,
 }
@@ -207,13 +208,13 @@ impl VaultState {
             vault: RwLock::new(vault),
             cache: RwLock::new(cache),
             texts: RwLock::new(texts),
-            app,
-            appearance,
-            core_plugins,
-            community_plugins,
+            app: RwLock::new(app),
+            appearance: RwLock::new(appearance),
+            core_plugins: RwLock::new(core_plugins),
+            community_plugins: RwLock::new(community_plugins),
+            switcher: RwLock::new(switcher),
             plugin_manifests,
             palette,
-            switcher,
             property_types: RwLock::new(property_types),
             index_ms: started.elapsed().as_secs_f64() * 1000.0,
         })
@@ -222,6 +223,67 @@ impl VaultState {
     /// The vault's property type assignments.
     pub fn property_types(&self) -> RwLockReadGuard<'_, PropertyTypes> {
         self.property_types.read().expect("property types lock")
+    }
+
+    pub fn app(&self) -> RwLockReadGuard<'_, AppConfig> {
+        self.app.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub fn appearance(&self) -> RwLockReadGuard<'_, AppearanceConfig> {
+        self.appearance.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub fn core_plugins(&self) -> RwLockReadGuard<'_, Option<CorePlugins>> {
+        self.core_plugins.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub fn community_plugins(&self) -> RwLockReadGuard<'_, Vec<String>> {
+        self.community_plugins
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub fn switcher(&self) -> RwLockReadGuard<'_, SwitcherConfig> {
+        self.switcher.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Writes a setting the Settings modal changed and keeps the config in
+    /// hand in step. The file is written first: the vault is the source of
+    /// truth, so a change that cannot reach disk does not count.
+    pub fn apply_setting(&self, change: &SettingChange) -> Result<(), String> {
+        match change {
+            SettingChange::App(config) => {
+                self.write_config("app.json", config)?;
+                *self.app.write().unwrap_or_else(|e| e.into_inner()) = config.clone();
+            }
+            SettingChange::Appearance(config) => {
+                self.write_config("appearance.json", config)?;
+                *self.appearance.write().unwrap_or_else(|e| e.into_inner()) = config.clone();
+            }
+            SettingChange::Switcher(config) => {
+                self.write_config("switcher.json", config)?;
+                *self.switcher.write().unwrap_or_else(|e| e.into_inner()) = config.clone();
+            }
+            SettingChange::CorePlugins(config) => {
+                self.write_config("core-plugins.json", config)?;
+                *self.core_plugins.write().unwrap_or_else(|e| e.into_inner()) =
+                    Some(config.clone());
+            }
+            SettingChange::CommunityPlugins(config) => {
+                self.write_config("community-plugins.json", config)?;
+                *self
+                    .community_plugins
+                    .write()
+                    .unwrap_or_else(|e| e.into_inner()) = config.clone();
+            }
+        }
+        Ok(())
+    }
+
+    fn write_config<T: serde::Serialize>(&self, name: &str, value: &T) -> Result<(), String> {
+        self.vault()
+            .write_config(name, value)
+            .map_err(|e| e.to_string())
     }
 
     /// Records `key`'s type in `types.json`, as Obsidian's type menu does.
@@ -253,7 +315,7 @@ impl VaultState {
 
     pub fn build_options(&self) -> reading::BuildOptions {
         reading::BuildOptions {
-            strict_line_breaks: self.app.strict_line_breaks.unwrap_or(false),
+            strict_line_breaks: self.app().strict_line_breaks.unwrap_or(false),
         }
     }
 
@@ -325,21 +387,21 @@ impl VaultState {
     }
 
     pub fn link_format(&self) -> LinkFormat {
-        LinkFormat::from_config(self.app.new_link_format.as_deref())
+        LinkFormat::from_config(self.app().new_link_format.as_deref())
     }
 
     pub fn trash_option(&self) -> TrashOption {
-        TrashOption::from_config(self.app.trash_option.as_deref())
+        TrashOption::from_config(self.app().trash_option.as_deref())
     }
 
     /// `alwaysUpdateLinks`: on by default; off means ask before rewriting.
     pub fn update_links_automatically(&self) -> bool {
-        self.app.always_update_links.unwrap_or(true)
+        self.app().always_update_links.unwrap_or(true)
     }
 
     /// `promptDelete`: on by default.
     pub fn confirm_delete(&self) -> bool {
-        self.app.prompt_delete.unwrap_or(true)
+        self.app().prompt_delete.unwrap_or(true)
     }
 
     /// Where a note created for the link text `name` goes, given the open
@@ -347,8 +409,8 @@ impl VaultState {
     pub fn new_note_path(&self, name: &str, current: Option<&str>) -> String {
         let vault = self.vault();
         let folder = vault.new_note_folder(
-            self.app.new_file_location.as_deref(),
-            self.app.new_file_folder_path.as_deref(),
+            self.app().new_file_location.as_deref(),
+            self.app().new_file_folder_path.as_deref(),
             current,
         );
         vault.new_note_path(name, &folder)
@@ -788,6 +850,9 @@ impl Workspace {
                     window,
                     |this, _, event: &SettingsEvent, window, cx| match event {
                         SettingsEvent::Close => this.close_modal(window, cx),
+                        SettingsEvent::Changed(change) => {
+                            this.change_setting(change.as_ref().clone(), cx)
+                        }
                     },
                 ),
                 cx.subscribe(&reading, |this, _, event: &ReadingEvent, cx| match event {
@@ -908,26 +973,53 @@ impl Workspace {
         }
     }
 
-    fn set_state(&mut self, state: VaultState, cx: &mut Context<Self>) {
-        self.loading = None;
-        let readable = state.app.readable_line_length.unwrap_or(true);
-        self.reading.update(cx, |r, _| {
+    /// Pushes what `app.json` says into the open views: the parts of the
+    /// editor and reading view that a setting changes while the vault is
+    /// open. Called when the vault loads and again whenever Settings
+    /// writes.
+    fn apply_app_config(&mut self, state: &VaultState, cx: &mut Context<Self>) {
+        let readable = state.app().readable_line_length.unwrap_or(true);
+        self.reading.update(cx, |r, cx| {
             r.set_readable_line_length(readable);
             r.set_property_types(state.property_types().clone());
+            cx.notify();
         });
         let (smart, use_tab, tab_size) = (
-            state.app.smart_indent_list.unwrap_or(true),
-            state.app.use_tab.unwrap_or(true),
-            state.app.tab_size.unwrap_or(4),
+            state.app().smart_indent_list.unwrap_or(true),
+            state.app().use_tab.unwrap_or(true),
+            state.app().tab_size.unwrap_or(4),
         );
-        self.editor.update(cx, |e, _| {
+        let properties =
+            PropertiesInDocument::from_config(state.app().properties_in_document.as_deref());
+        let build_options = state.build_options();
+        self.editor.update(cx, |e, cx| {
             e.set_readable_line_length(readable);
             e.set_indent_options(smart, use_tab, tab_size);
             e.set_property_types(state.property_types().clone());
-            e.set_properties_in_document(PropertiesInDocument::from_config(
-                state.app.properties_in_document.as_deref(),
-            ));
+            e.set_properties_in_document(properties);
+            e.set_build_options(build_options, cx);
         });
+    }
+
+    /// Writes a setting the Settings modal changed, then applies it. The
+    /// modal redraws from the vault's config either way, so a write that
+    /// fails leaves the control as it was and says so in the status bar.
+    fn change_setting(&mut self, change: SettingChange, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        if let Err(err) = state.apply_setting(&change) {
+            self.status = format!("{} could not be written: {err}", change.file()).into();
+            cx.notify();
+            return;
+        }
+        self.apply_app_config(&state, cx);
+        self.refresh_vault_views(cx);
+        cx.notify();
+    }
+
+    fn set_state(&mut self, state: VaultState, cx: &mut Context<Self>) {
+        self.loading = None;
         self.status = format!(
             "{} files, {} notes indexed in {:.0} ms",
             state.vault().files().len(),
@@ -942,6 +1034,7 @@ impl Workspace {
         self.editor.update(cx, |e, cx| {
             e.set_vault(Some(embed_source), build_options, cx)
         });
+        self.apply_app_config(&state, cx);
         self.refresh_vault_views(cx);
         self.start_watching(&state, cx);
         if let Some(current) = self.current.clone() {
@@ -955,7 +1048,7 @@ impl Workspace {
         let Some(state) = self.state.clone() else {
             return;
         };
-        let show_unsupported = state.app.show_unsupported_files.unwrap_or(false);
+        let show_unsupported = state.app().show_unsupported_files.unwrap_or(false);
         let tree = {
             let vault = state.vault();
             FileTree::new(vault.files(), vault.folders(), show_unsupported)
@@ -1265,8 +1358,8 @@ impl Workspace {
                     .as_ref()
                     .map(|s| {
                         s.vault().new_note_folder(
-                            s.app.new_file_location.as_deref(),
-                            s.app.new_file_folder_path.as_deref(),
+                            s.app().new_file_location.as_deref(),
+                            s.app().new_file_folder_path.as_deref(),
                             self.current.as_deref(),
                         )
                     })
@@ -1397,7 +1490,7 @@ impl Workspace {
         let live = self
             .state
             .as_ref()
-            .and_then(|s| s.app.live_preview)
+            .and_then(|s| s.app().live_preview)
             .unwrap_or(true);
         if live {
             ViewMode::LivePreview
@@ -1412,8 +1505,8 @@ impl Workspace {
         let preview = self
             .state
             .as_ref()
-            .and_then(|s| s.app.default_view_mode.as_deref())
-            == Some("preview");
+            .map(|s| s.app().default_view_mode.as_deref() == Some("preview"))
+            .unwrap_or(false);
         if preview {
             ViewMode::Reading
         } else {
@@ -3061,6 +3154,40 @@ mod tests {
         fs::write(r.join("Sub/S.md"), "[A](../A.md) [[B]]\n").unwrap();
         let state = VaultState::load(&r.to_path_buf()).unwrap();
         (dir, state)
+    }
+
+    /// The path a toggle takes: the flipped config reaches `app.json` and
+    /// the state in hand, and the key the vault already had is left alone.
+    #[test]
+    fn a_setting_change_writes_its_file_and_updates_the_state() {
+        let (dir, state) = vault();
+        assert_eq!(state.app().trash_option.as_deref(), Some("local"));
+        assert_eq!(state.app().vim_mode, None);
+
+        let mut app = state.app().clone();
+        app.vim_mode = Some(true);
+        state.apply_setting(&SettingChange::App(app)).unwrap();
+
+        assert_eq!(state.app().vim_mode, Some(true), "the state follows");
+        let text = fs::read_to_string(dir.path().join(".obsidian/app.json")).unwrap();
+        assert_eq!(
+            text, "{\n  \"trashOption\": \"local\",\n  \"vimMode\": true\n}",
+            "the file kept what it had and gained one key"
+        );
+    }
+
+    /// A config file the vault does not have yet is created, and only with
+    /// what changed.
+    #[test]
+    fn a_setting_change_creates_a_missing_config_file() {
+        let (dir, state) = vault();
+        let mut switcher = state.switcher().clone();
+        switcher.show_attachments = Some(false);
+        state
+            .apply_setting(&SettingChange::Switcher(switcher))
+            .unwrap();
+        let text = fs::read_to_string(dir.path().join(".obsidian/switcher.json")).unwrap();
+        assert_eq!(text, "{\n  \"showAttachments\": false\n}");
     }
 
     #[test]

@@ -4761,6 +4761,7 @@ dependencies = [
  "anyhow",
  "gpui",
  "gpui_platform",
+ "indexmap",
  "notify",
  "rayon",
  "regex",
@@ -4771,6 +4772,8 @@ dependencies = [
  "-search",
  "-text",
  "-vault",
+ "serde",
+ "serde_json",
  "serde_yaml",
  "tempfile",
 ]

@@ -96,7 +96,7 @@ impl QuickSwitcher {
 
     pub fn set_state(&mut self, state: Arc<VaultState>, cx: &mut Context<Self>) {
         let mut candidates = Vec::new();
-        let show_unsupported = state.app.show_unsupported_files.unwrap_or(false);
+        let show_unsupported = state.app().show_unsupported_files.unwrap_or(false);
         let vault = state.vault();
         let cache = state.cache();
         for file in vault.files() {

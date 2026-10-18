@@ -117,8 +117,45 @@ of mixed use in both apps.
 | Properties | done, see [[#Properties, 2026-10-18]] |
 | Autocompletion | not started |
 | Templates, daily notes, file recovery | not started |
-| Writing settings back | started: `types.json` is written when a property type is assigned, and `Vault::write_config` now merges into the file's own JSON so nothing else churns; the Settings modal is still read-only |
+| Writing settings back | started: every Settings toggle writes, see [[#Settings writing, 2026-10-18]]; dropdowns, text fields and sliders are still read-only |
 | Round-trip harness | done, see [[#Round-trip harness, 2026-10-18]] |
+
+### Settings writing, 2026-10-18
+
+Every toggle in the Settings modal writes. A click clones the config the
+control reads, flips its one field and emits it; `Workspace::change_setting`
+writes the file through `Vault::write_config` — which merges into the file's
+own JSON, so only that key moves — stores it in the `VaultState` and pushes
+what the running app can change into the open views. The banner now says
+which controls write; dropdowns, text fields and sliders are still read-only.
+
+What a toggle writes is a `Flag`: the key Obsidian writes, what the key
+means when it is absent, and the accessors for it. The control's state is
+read through the same flag that a click writes, so the two cannot drift
+apart, and a test walks every flag of every file to check that toggling
+writes that key, flips it, and touches nothing else. The one control
+Obsidian words backwards ("Use [[Wikilinks]]" is `useMarkdownLinks`
+negated) carries an `invert` bit rather than its own code path.
+
+The config a toggle changes has to be mutable while the vault is open, so
+`app`, `appearance`, `core_plugins`, `community_plugins` and `switcher` moved
+behind locks in `VaultState`, as `property_types` already was, and are read
+through accessors.
+
+Applied on the spot, from `Workspace::apply_app_config`: readable line
+length, smart lists, indent with tabs or spaces, properties in document and
+strict line breaks (the editor rebuilds its widgets), plus show-all-file-types
+in Files. The rest (inline title, folding, line numbers, RTL, spellcheck,
+auto-pairing, Vim mode, native menus, the ribbon, tab title bars) is written
+for Obsidian to honor;  does not implement those yet.
+
+Two rules came out of the shapes of the files themselves rather than a probe:
+a vault with no `core-plugins.json` gets a whole map of every plugin at its
+default, because a one-key file would read as "everything else off", and the
+legacy array shape keeps its shape. **Unprobed:** whether Obsidian removes a
+key when a setting goes back to its default.  writes the explicit
+value, so toggling off and on again can leave a key Obsidian would not have
+written (the value is the one Obsidian would read either way).
 
 ### Round-trip harness, 2026-10-18
 

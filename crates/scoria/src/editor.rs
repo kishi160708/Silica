@@ -639,6 +639,15 @@ impl Editor {
         self.request_parse(cx);
     }
 
+    /// New render options (`strictLineBreaks` changed in Settings); the
+    /// widgets are rebuilt with them.
+    pub fn set_build_options(&mut self, opts: BuildOptions, cx: &mut Context<Self>) {
+        if self.build_options != opts {
+            self.build_options = opts;
+            self.request_parse(cx);
+        }
+    }
+
     /// The vault's `types.json`, for the properties widget's type glyphs.
     pub fn set_property_types(&mut self, types: PropertyTypes) {
         self.property_types = types;

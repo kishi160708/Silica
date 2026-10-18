@@ -21,6 +21,8 @@ path = "src/main.rs"
 -search.workspace = true
 -text.workspace = true
 anyhow.workspace = true
+indexmap.workspace = true
+serde.workspace = true
 rayon.workspace = true
 notify.workspace = true
 regex.workspace = true
@@ -29,4 +31,5 @@ gpui.workspace = true
 gpui_platform.workspace = true
 
 [dev-dependencies]
+serde_json.workspace = true
 tempfile.workspace = true

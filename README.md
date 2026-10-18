@@ -12,7 +12,7 @@ GitHub extensions Obsidian uses, and Obsidian's own syntax into one tree with by
 it to reading-view HTML that matches Obsidian 1.13.7 on 1007 of 1009 corpus notes; the metadata
 cache, the editor and the link rewriter are all built from that tree. The application opens a real
 vault with the three-pane shell: Files, reading view, Backlinks, Outgoing links, Outline, Tags,
-Search, the quick switcher, the graph, the command palette and a read-only Settings modal. Notes
+Search, the quick switcher, the graph, the command palette and a Settings modal whose toggles write. Notes
 open in Live Preview or Source mode with find and replace, multiple cursors and autosave; new note,
 rename, move, copy and delete rewrite links the way Obsidian does, and frontmatter is an editable,
 typed properties table that rewrites only the lines it changes. Everything is bound through
@@ -54,7 +54,7 @@ at [.](https://.).
 | --- | --- | --- |
 | 1. Spike | 50k-line editor, parser conformance corpus, 2 s vault index | Done |
 | 2. Reader | A daily user browses their real vault with no missing content | Done: Files, reading view, Backlinks, Outgoing links, Outline, Tags, Search, quick switcher, graph, command palette, read-only Settings, file watching |
-| 3. Writer | The vault round-trips byte-identical after a week of mixed use in both apps | In progress: Source mode, Live Preview, find and replace, file operations with link rewriting and properties are done; table editing, autocompletion, templates, daily notes, file recovery and writing settings back are next |
+| 3. Writer | The vault round-trips byte-identical after a week of mixed use in both apps | In progress: Source mode, Live Preview, find and replace, file operations with link rewriting, properties, the round-trip harness and the Settings toggles are done; table editing, autocompletion, templates, daily notes and file recovery are next |
 | 4. Parity | Core plugin parity | Not started: canvas, bases, PDF, math, themes subset, URI and CLI |
 | 5. Ecosystem | Native plugin SDK | Not started |
 

@@ -1,8 +1,17 @@
-//! The Settings modal (`app:open-settings`, Ctrl+,), read-only: the tabs
-//! Obsidian 1.14.4 shows (General, Appearance, Interface, Editor, Files and
-//! links, Hotkeys, Core plugins, Community plugins, then one per enabled
-//! core plugin with options) with every value read from `.obsidian/`.
-//! Controls are drawn in their current state and do not write anything.
+//! The Settings modal (`app:open-settings`, Ctrl+,): the tabs Obsidian
+//! 1.14.4 shows (General, Appearance, Interface, Editor, Files and links,
+//! Hotkeys, Core plugins, Community plugins, then one per enabled core
+//! plugin with options) with every value read from `.obsidian/`.
+//!
+//! Toggles write. Each one carries a [`Flag`] naming the key Obsidian
+//! writes, what that key means when it is absent, and how to read and set
+//! it, so the state a control shows and the bytes a click writes cannot
+//! drift apart. A click clones the config, flips the one field and emits
+//! [`SettingChange`]; the workspace writes the file and applies what the
+//! running app can change on the spot. `Vault::write_config` merges into
+//! the file's own JSON, so nothing but the changed key moves.
+//!
+//! Dropdowns, text fields and sliders are still read-only.
 
 use crate::palette::hotkey_chip;
 use crate::text_input::{InputEvent, TextInput};
@@ -14,7 +23,9 @@ use gpui::{
     UniformListScrollHandle, Window,
 };
 use _commands::{hotkey_label, Command};
-use _formats::config::{CorePlugins, CORE_PLUGINS};
+use _formats::config::{
+    AppConfig, AppearanceConfig, CorePlugins, SwitcherConfig, CORE_PLUGINS,
+};
 use _search::fuzzy_match;
 use std::ops::Range;
 use std::sync::Arc;
@@ -108,6 +119,219 @@ impl Tab {
     }
 }
 
+/// A boolean setting of one config file: the key Obsidian writes, what the
+/// key means when it is absent, and how to read and set it.
+///
+/// The control's state is read through `get` and written through `set`, so
+/// a toggle cannot show one key and write another. `invert` is for the one
+/// control Obsidian words the other way round: "Use [[Wikilinks]]" is
+/// `useMarkdownLinks` negated.
+macro_rules! flags {
+    ($ty:ident, $config:ty, $($name:ident, $key:literal, $field:ident, $default:literal, $invert:literal;)+) => {
+        #[derive(Clone, Copy, Debug)]
+        struct $ty {
+            key: &'static str,
+            default: bool,
+            invert: bool,
+            get: fn(&$config) -> Option<bool>,
+            set: fn(&mut $config, bool),
+        }
+
+        /// Two flags are the same setting when they write the same key;
+        /// the accessors are function pointers, which do not compare.
+        impl PartialEq for $ty {
+            fn eq(&self, other: &Self) -> bool {
+                self.key == other.key
+            }
+        }
+
+        impl Eq for $ty {}
+
+        impl $ty {
+            /// Every flag of this file, for the test that checks the keys.
+            #[allow(dead_code)]
+            const ALL: &'static [$ty] = &[$($name),+];
+
+            /// What the control shows, from the config in hand.
+            fn is_on(&self, config: &$config) -> bool {
+                (self.get)(config).unwrap_or(self.default) != self.invert
+            }
+
+            /// `config` with the control flipped.
+            fn toggled(&self, config: &$config) -> $config {
+                let mut next = config.clone();
+                (self.set)(&mut next, !self.is_on(config) != self.invert);
+                next
+            }
+        }
+
+        $(const $name: $ty = $ty {
+            key: $key,
+            default: $default,
+            invert: $invert,
+            get: |c| c.$field,
+            set: |c, v| c.$field = Some(v),
+        };)+
+    };
+}
+
+flags!(
+    AppFlag,
+    AppConfig,
+    SHOW_INLINE_TITLE, "showInlineTitle", show_inline_title, true, false;
+    READABLE_LINE_LENGTH, "readableLineLength", readable_line_length, true, false;
+    STRICT_LINE_BREAKS, "strictLineBreaks", strict_line_breaks, false, false;
+    FOLD_HEADING, "foldHeading", fold_heading, true, false;
+    FOLD_INDENT, "foldIndent", fold_indent, true, false;
+    SHOW_LINE_NUMBER, "showLineNumber", show_line_number, false, false;
+    SHOW_INDENT_GUIDE, "showIndentGuide", show_indent_guide, true, false;
+    RIGHT_TO_LEFT, "rightToLeft", right_to_left, false, false;
+    SPELLCHECK, "spellcheck", spellcheck, true, false;
+    AUTO_PAIR_BRACKETS, "autoPairBrackets", auto_pair_brackets, true, false;
+    AUTO_PAIR_MARKDOWN, "autoPairMarkdown", auto_pair_markdown, true, false;
+    SMART_INDENT_LIST, "smartIndentList", smart_indent_list, true, false;
+    USE_TAB, "useTab", use_tab, true, false;
+    AUTO_CONVERT_HTML, "autoConvertHtml", auto_convert_html, true, false;
+    VIM_MODE, "vimMode", vim_mode, false, false;
+    FOCUS_NEW_TAB, "focusNewTab", focus_new_tab, true, false;
+    ALWAYS_UPDATE_LINKS, "alwaysUpdateLinks", always_update_links, true, false;
+    USE_WIKILINKS, "useMarkdownLinks", use_markdown_links, false, true;
+    SHOW_UNSUPPORTED_FILES, "showUnsupportedFiles", show_unsupported_files, false, false;
+    PROMPT_DELETE, "promptDelete", prompt_delete, true, false;
+);
+
+flags!(
+    AppearanceFlag,
+    AppearanceConfig,
+    SHOW_VIEW_HEADER, "showViewHeader", show_view_header, true, false;
+    SHOW_RIBBON, "showRibbon", show_ribbon, true, false;
+    NATIVE_MENUS, "nativeMenus", native_menus, false, false;
+);
+
+flags!(
+    SwitcherFlag,
+    SwitcherConfig,
+    SHOW_EXISTING_ONLY, "showExistingOnly", show_existing_only, false, false;
+    SHOW_ATTACHMENTS, "showAttachments", show_attachments, true, false;
+    SHOW_ALL_FILE_TYPES, "showAllFileTypes", show_all_file_types, false, false;
+);
+
+/// What a toggle writes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Flag {
+    App(AppFlag),
+    Appearance(AppearanceFlag),
+    Switcher(SwitcherFlag),
+    /// A core plugin in `core-plugins.json`, with what a vault without the
+    /// file does.
+    CorePlugin(&'static str, bool),
+    /// A community plugin id in `community-plugins.json`; enabled means
+    /// listed.
+    CommunityPlugin(String),
+}
+
+/// A config file with one setting changed, for the workspace to write.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SettingChange {
+    App(AppConfig),
+    Appearance(AppearanceConfig),
+    Switcher(SwitcherConfig),
+    CorePlugins(CorePlugins),
+    CommunityPlugins(Vec<String>),
+}
+
+impl SettingChange {
+    /// The file this change is written to, for an error message.
+    pub fn file(&self) -> &'static str {
+        match self {
+            SettingChange::App(_) => "app.json",
+            SettingChange::Appearance(_) => "appearance.json",
+            SettingChange::Switcher(_) => "switcher.json",
+            SettingChange::CorePlugins(_) => "core-plugins.json",
+            SettingChange::CommunityPlugins(_) => "community-plugins.json",
+        }
+    }
+}
+
+impl Flag {
+    fn is_on(&self, state: &VaultState) -> bool {
+        match self {
+            Flag::App(flag) => flag.is_on(&state.app()),
+            Flag::Appearance(flag) => flag.is_on(&state.appearance()),
+            Flag::Switcher(flag) => flag.is_on(&state.switcher()),
+            Flag::CorePlugin(id, default_on) => {
+                core_plugin_enabled(state.core_plugins().as_ref(), id, *default_on)
+            }
+            Flag::CommunityPlugin(id) => state.community_plugins().contains(id),
+        }
+    }
+
+    /// The config file with this setting flipped.
+    fn toggled(&self, state: &VaultState) -> SettingChange {
+        match self {
+            Flag::App(flag) => SettingChange::App(flag.toggled(&state.app())),
+            Flag::Appearance(flag) => SettingChange::Appearance(flag.toggled(&state.appearance())),
+            Flag::Switcher(flag) => SettingChange::Switcher(flag.toggled(&state.switcher())),
+            Flag::CorePlugin(id, _) => SettingChange::CorePlugins(toggled_core_plugin(
+                state.core_plugins().as_ref(),
+                id,
+                self.is_on(state),
+            )),
+            Flag::CommunityPlugin(id) => {
+                let mut plugins = state.community_plugins().clone();
+                match plugins.iter().position(|p| p == id) {
+                    Some(ix) => {
+                        plugins.remove(ix);
+                    }
+                    None => plugins.push(id.clone()),
+                }
+                SettingChange::CommunityPlugins(plugins)
+            }
+        }
+    }
+}
+
+/// Whether `id` is on, with `default_on` for a vault that has no
+/// `core-plugins.json` and for an id the file does not list.
+fn core_plugin_enabled(config: Option<&CorePlugins>, id: &str, default_on: bool) -> bool {
+    match config {
+        Some(CorePlugins::Map(map)) => map.get(id).copied().unwrap_or(default_on),
+        Some(CorePlugins::List(list)) => list.iter().any(|p| p == id),
+        None => default_on,
+    }
+}
+
+/// `core-plugins.json` with `id` flipped. A vault without the file gets one
+/// holding every plugin at its default, the shape Obsidian writes, rather
+/// than a single key that would read as "everything else off".
+fn toggled_core_plugin(config: Option<&CorePlugins>, id: &str, was_on: bool) -> CorePlugins {
+    match config {
+        Some(CorePlugins::Map(map)) => {
+            let mut map = map.clone();
+            map.insert(id.to_string(), !was_on);
+            CorePlugins::Map(map)
+        }
+        Some(CorePlugins::List(list)) => {
+            let mut list = list.clone();
+            match list.iter().position(|p| p == id) {
+                Some(ix) => {
+                    list.remove(ix);
+                }
+                None => list.push(id.to_string()),
+            }
+            CorePlugins::List(list)
+        }
+        None => {
+            let mut map = CORE_PLUGINS
+                .iter()
+                .map(|p| (p.id.to_string(), p.default_on))
+                .collect::<indexmap::IndexMap<String, bool>>();
+            map.insert(id.to_string(), !was_on);
+            CorePlugins::Map(map)
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 enum Control {
     None,
@@ -124,6 +348,9 @@ struct Item {
     name: SharedString,
     desc: SharedString,
     control: Control,
+    /// What a click writes; `None` for the controls that are still
+    /// read-only.
+    flag: Option<Flag>,
 }
 
 fn heading(name: &str) -> Item {
@@ -132,6 +359,7 @@ fn heading(name: &str) -> Item {
         name: name.to_string().into(),
         desc: "".into(),
         control: Control::None,
+        flag: None,
     }
 }
 
@@ -141,11 +369,34 @@ fn item(name: &str, desc: &str, control: Control) -> Item {
         name: name.to_string().into(),
         desc: desc.to_string().into(),
         control,
+        flag: None,
     }
 }
 
-fn toggle(name: &str, desc: &str, on: bool) -> Item {
-    item(name, desc, Control::Toggle(on))
+/// A toggle drawn from the flag it writes, so its state and its click are
+/// the same key.
+fn toggle(name: &str, desc: &str, on: bool, flag: Flag) -> Item {
+    Item {
+        flag: Some(flag),
+        ..item(name, desc, Control::Toggle(on))
+    }
+}
+
+fn app_toggle(name: &str, desc: &str, app: &AppConfig, flag: AppFlag) -> Item {
+    toggle(name, desc, flag.is_on(app), Flag::App(flag))
+}
+
+fn appearance_toggle(
+    name: &str,
+    desc: &str,
+    appearance: &AppearanceConfig,
+    flag: AppearanceFlag,
+) -> Item {
+    toggle(name, desc, flag.is_on(appearance), Flag::Appearance(flag))
+}
+
+fn switcher_toggle(name: &str, desc: &str, switcher: &SwitcherConfig, flag: SwitcherFlag) -> Item {
+    toggle(name, desc, flag.is_on(switcher), Flag::Switcher(flag))
 }
 
 fn dropdown(name: &str, desc: &str, value: impl Into<SharedString>) -> Item {
@@ -193,6 +444,10 @@ impl HotkeyFilter {
 
 pub enum SettingsEvent {
     Close,
+    /// A control changed a setting: the config file to write, with the one
+    /// key changed. The workspace writes it and applies what it can. Boxed
+    /// because a whole `AppConfig` dwarfs the other events.
+    Changed(Box<SettingChange>),
 }
 
 pub struct SettingsView {
@@ -288,6 +543,16 @@ impl SettingsView {
         cx.emit(SettingsEvent::Close);
     }
 
+    /// A click on a toggle: ask the workspace to write the flipped value.
+    /// The modal redraws from the vault's config once the write lands, so a
+    /// failed write leaves the control where it was.
+    fn toggle_flag(&mut self, flag: Flag, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        cx.emit(SettingsEvent::Changed(Box::new(flag.toggled(&state))));
+    }
+
     fn refresh_hotkeys(&mut self, cx: &mut Context<Self>) {
         let query = self.hotkey_search.read(cx).text().trim().to_string();
         let filter = self.hotkey_filter;
@@ -342,7 +607,7 @@ impl SettingsView {
     }
 
     fn appearance_items(&self, state: &VaultState) -> Vec<Item> {
-        let a = &state.appearance;
+        let a = &state.appearance();
         let scheme = match a.theme.as_deref() {
             Some("obsidian") => "Dark",
             Some("moonstone") => "Light",
@@ -414,29 +679,32 @@ impl SettingsView {
     }
 
     fn interface_items(&self, state: &VaultState) -> Vec<Item> {
-        let a = &state.appearance;
+        let a = &state.appearance();
         vec![
-            toggle(
+            appearance_toggle(
                 "Show tab title bar",
                 "Display the header at the top of every tab.",
-                a.show_view_header.unwrap_or(true),
+                a,
+                SHOW_VIEW_HEADER,
             ),
-            toggle(
+            appearance_toggle(
                 "Show ribbon",
                 "Display vertical toolbar on the side of the window.",
-                a.show_ribbon.unwrap_or(true),
+                a,
+                SHOW_RIBBON,
             ),
             heading("Advanced"),
-            toggle(
+            appearance_toggle(
                 "Native menus",
                 "Menus throughout the app will match the operating system. They will not be affected by your theme.",
-                a.native_menus.unwrap_or(false),
+                a,
+                NATIVE_MENUS,
             ),
         ]
     }
 
     fn editor_items(&self, state: &VaultState) -> Vec<Item> {
-        let app = &state.app;
+        let app = &state.app();
         let default_view = match app.default_view_mode.as_deref() {
             Some("preview") => "Reading view",
             _ => "Editing view",
@@ -456,7 +724,7 @@ impl SettingsView {
             .as_ref()
             .map(|l| l.join(", "))
             .unwrap_or_default();
-        let editor_status = match state.core_plugins.as_ref() {
+        let editor_status = match state.core_plugins().as_ref() {
             Some(CorePlugins::Map(m)) => m.get("editor-status").copied().unwrap_or(true),
             Some(CorePlugins::List(l)) => l.iter().any(|x| x == "editor-status"),
             None => true,
@@ -476,83 +744,97 @@ impl SettingsView {
                 "Show editing mode in status bar",
                 "Show the editing mode toggle in the status bar.",
                 editor_status,
+                Flag::CorePlugin("editor-status", true),
             ),
             heading("Display"),
-            toggle(
+            app_toggle(
                 "Inline title",
                 "Display the filename as an editable title inline with the file contents.",
-                app.show_inline_title.unwrap_or(true),
+                app,
+                SHOW_INLINE_TITLE,
             ),
-            toggle(
+            app_toggle(
                 "Readable line length",
                 "Limit maximum line length. Less content fits onscreen, but long blocks of text are more readable.",
-                app.readable_line_length.unwrap_or(true),
+                app,
+                READABLE_LINE_LENGTH,
             ),
-            toggle(
+            app_toggle(
                 "Strict line breaks",
                 "Markdown specs ignore single line breaks in reading view. Turn this off to make single line breaks visible.",
-                app.strict_line_breaks.unwrap_or(false),
+                app,
+                STRICT_LINE_BREAKS,
             ),
             dropdown(
                 "Properties in document",
                 "Choose how properties are displayed at the top of notes. Select “source” to show properties as raw YAML.",
                 properties,
             ),
-            toggle(
+            app_toggle(
                 "Fold heading",
                 "Lets you fold all content under a heading.",
-                app.fold_heading.unwrap_or(true),
+                app,
+                FOLD_HEADING,
             ),
-            toggle(
+            app_toggle(
                 "Fold indent",
                 "Lets you fold part of an indentation, such as lists.",
-                app.fold_indent.unwrap_or(true),
+                app,
+                FOLD_INDENT,
             ),
-            toggle(
+            app_toggle(
                 "Line numbers",
                 "Show line numbers in the gutter.",
-                app.show_line_number.unwrap_or(false),
+                app,
+                SHOW_LINE_NUMBER,
             ),
-            toggle(
+            app_toggle(
                 "Indentation guides",
                 "Show vertical relationship lines between list items.",
-                app.show_indent_guide.unwrap_or(true),
+                app,
+                SHOW_INDENT_GUIDE,
             ),
-            toggle(
+            app_toggle(
                 "Right-to-left (RTL)",
                 "Sets the default text direction of notes to right-to-left.",
-                app.right_to_left.unwrap_or(false),
+                app,
+                RIGHT_TO_LEFT,
             ),
             heading("Behavior"),
-            toggle(
+            app_toggle(
                 "Spellcheck",
                 "Turn on the spellchecker.",
-                app.spellcheck.unwrap_or(true),
+                app,
+                SPELLCHECK,
             ),
             text(
                 "Spellcheck languages",
                 "Choose the languages for the spellchecker to use.",
                 languages,
             ),
-            toggle(
+            app_toggle(
                 "Auto-pair brackets",
                 "Pair brackets and quotes automatically.",
-                app.auto_pair_brackets.unwrap_or(true),
+                app,
+                AUTO_PAIR_BRACKETS,
             ),
-            toggle(
+            app_toggle(
                 "Auto-pair Markdown syntax",
                 "Pair symbols automatically for bold, italic, code, and more.",
-                app.auto_pair_markdown.unwrap_or(true),
+                app,
+                AUTO_PAIR_MARKDOWN,
             ),
-            toggle(
+            app_toggle(
                 "Smart lists",
                 "Automatically set indentation and place list items correctly.",
-                app.smart_indent_list.unwrap_or(true),
+                app,
+                SMART_INDENT_LIST,
             ),
-            toggle(
+            app_toggle(
                 "Indent using tabs",
                 "Use tabs to indent by pressing the “Tab” key. Turn this off to indent using 4 spaces.",
-                app.use_tab.unwrap_or(true),
+                app,
+                USE_TAB,
             ),
             item(
                 "Indent visual width",
@@ -560,21 +842,23 @@ impl SettingsView {
                 Control::Slider(app.tab_size.unwrap_or(4).to_string().into()),
             ),
             heading("Advanced"),
-            toggle(
+            app_toggle(
                 "Convert pasted HTML to Markdown",
                 "Automatically convert HTML to Markdown when pasting and drag-and-drop from web pages.",
-                app.auto_convert_html.unwrap_or(true),
+                app,
+                AUTO_CONVERT_HTML,
             ),
-            toggle(
+            app_toggle(
                 "Vim key bindings",
                 "Use Vim key bindings when editing.",
-                app.vim_mode.unwrap_or(false),
+                app,
+                VIM_MODE,
             ),
         ]
     }
 
     fn files_items(&self, state: &VaultState) -> Vec<Item> {
-        let app = &state.app;
+        let app = &state.app();
         let new_notes = match app.new_file_location.as_deref() {
             Some("current") => "Same folder as current file",
             Some("folder") => "In the folder specified below",
@@ -605,10 +889,11 @@ impl SettingsView {
             .unwrap_or_else(|| "None".into());
         let config_dir = state.vault().config_dir().to_string();
         let mut items = vec![
-            toggle(
+            app_toggle(
                 "Always focus new tabs",
                 "When you open a link in a new tab, switch to it immediately.",
-                app.focus_new_tab.unwrap_or(true),
+                app,
+                FOCUS_NEW_TAB,
             ),
             dropdown(
                 "Default location for new notes",
@@ -649,26 +934,30 @@ impl SettingsView {
                 "What links to insert when auto-generating internal links.",
                 link_format,
             ),
-            toggle(
+            app_toggle(
                 "Automatically update internal links",
                 "Turn off to be prompted to update links after renaming a file.",
-                app.always_update_links.unwrap_or(true),
+                app,
+                ALWAYS_UPDATE_LINKS,
             ),
-            toggle(
+            app_toggle(
                 "Use [[Wikilinks]]",
                 "Auto-generate Wikilinks for [[links]] and ![[images]] instead of Markdown links and images.",
-                !app.use_markdown_links.unwrap_or(false),
+                app,
+                USE_WIKILINKS,
             ),
-            toggle(
+            app_toggle(
                 "Show all file types",
                 "Show files with any extension even if Obsidian can't open them natively, so you can link to them and see them in the file explorer.",
-                app.show_unsupported_files.unwrap_or(false),
+                app,
+                SHOW_UNSUPPORTED_FILES,
             ),
             heading("Trash"),
-            toggle(
+            app_toggle(
                 "Confirm before deleting files",
                 "Avoid accidentally deleting files.",
-                app.prompt_delete.unwrap_or(true),
+                app,
+                PROMPT_DELETE,
             ),
             dropdown(
                 "Deleted files",
@@ -701,7 +990,8 @@ impl SettingsView {
                 toggle(
                     p.name,
                     p.description,
-                    CorePlugins::is_enabled_or_default(state.core_plugins.as_ref(), p),
+                    CorePlugins::is_enabled_or_default(state.core_plugins().as_ref(), p),
+                    Flag::CorePlugin(p.id, p.default_on),
                 )
             })
             .collect()
@@ -738,7 +1028,8 @@ impl SettingsView {
                 items.push(toggle(
                     &title,
                     &m.description,
-                    state.community_plugins.contains(&m.id),
+                    state.community_plugins().contains(&m.id),
+                    Flag::CommunityPlugin(m.id.clone()),
                 ));
             }
         }
@@ -748,22 +1039,25 @@ impl SettingsView {
     fn plugin_items(&self, state: &VaultState, id: &str) -> Vec<Item> {
         match id {
             "switcher" => {
-                let s = &state.switcher;
+                let s = &state.switcher();
                 vec![
-                    toggle(
+                    switcher_toggle(
                         "Show existing only",
                         "Only show results from existing files. Links to files that are not yet created will be hidden.",
-                        s.show_existing_only.unwrap_or(false),
+                        s,
+                        SHOW_EXISTING_ONLY,
                     ),
-                    toggle(
+                    switcher_toggle(
                         "Show attachments",
                         "Show attachment files like images, videos, and PDFs.",
-                        s.show_attachments.unwrap_or(true),
+                        s,
+                        SHOW_ATTACHMENTS,
                     ),
-                    toggle(
+                    switcher_toggle(
                         "Show all file types",
                         "Show all files including ones that Obsidian can't open. The file will be opened with the default app for that file type.",
-                        s.show_all_file_types.unwrap_or(false),
+                        s,
+                        SHOW_ALL_FILE_TYPES,
                     ),
                 ]
             }
@@ -822,7 +1116,7 @@ impl SettingsView {
                 .iter()
                 .filter(|(id, _)| {
                     CORE_PLUGINS.iter().find(|p| p.id == *id).is_some_and(|p| {
-                        CorePlugins::is_enabled_or_default(state.core_plugins.as_ref(), p)
+                        CorePlugins::is_enabled_or_default(state.core_plugins().as_ref(), p)
                     })
                 })
                 .map(|(id, _)| *id)
@@ -860,12 +1154,17 @@ impl SettingsView {
             .child(tab.name())
     }
 
-    fn render_control(control: &Control, theme: &Theme) -> gpui::AnyElement {
-        match control {
+    fn render_control(
+        &self,
+        item: &Item,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        match &item.control {
             Control::None => div().into_any_element(),
             Control::Toggle(on) => {
                 let on = *on;
-                div()
+                let toggle = div()
                     .relative()
                     .w(px(36.))
                     .h(px(20.))
@@ -881,7 +1180,15 @@ impl SettingsView {
                             .size(px(14.))
                             .rounded_full()
                             .bg(rgb(0xffffff)),
-                    )
+                    );
+                let Some(flag) = item.flag.clone() else {
+                    return toggle.into_any_element();
+                };
+                div()
+                    .id(SharedString::from(format!("settings-toggle-{}", item.name)))
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _, _, cx| this.toggle_flag(flag.clone(), cx)))
+                    .child(toggle)
                     .into_any_element()
             }
             Control::Dropdown(value) => div()
@@ -957,7 +1264,7 @@ impl SettingsView {
         }
     }
 
-    fn render_item(item: &Item, theme: &Theme) -> gpui::Div {
+    fn render_item(&self, item: &Item, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
         if item.heading {
             return div()
                 .pt_5()
@@ -1001,7 +1308,7 @@ impl SettingsView {
             .child(
                 div()
                     .flex_shrink_0()
-                    .child(Self::render_control(&item.control, theme)),
+                    .child(self.render_control(item, theme, cx)),
             )
     }
 
@@ -1128,12 +1435,11 @@ impl Render for SettingsView {
             self.render_hotkeys(&theme, cx).into_any_element()
         } else {
             let items = self.items(tab);
-            div()
-                .id("settings-items")
-                .overflow_y_scroll()
-                .size_full()
-                .children(items.iter().map(|i| Self::render_item(i, &theme)))
-                .into_any_element()
+            let mut list = div().id("settings-items").overflow_y_scroll().size_full();
+            for item in &items {
+                list = list.child(self.render_item(item, &theme, cx));
+            }
+            list.into_any_element()
         };
         div()
             .id("settings")
@@ -1199,9 +1505,123 @@ impl Render for SettingsView {
                             .bg(theme.bg_alt)
                             .text_size(px(11.))
                             .text_color(theme.text_muted)
-                            .child("Read-only: values come from the vault's .obsidian folder. Change them in Obsidian or edit the files;  picks up the files on the next start."),
+                            .child("Toggles write to the vault's .obsidian folder as you click them. Dropdowns, text fields and sliders are still read-only: change those in Obsidian, or edit the files."),
                     )
                     .child(div().flex_1().min_h_0().child(body)),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every toggle of every file writes the key Obsidian writes, flips
+    /// only that key, and then reads back the other way round.
+    #[test]
+    fn every_toggle_writes_its_own_key_and_nothing_else() {
+        macro_rules! check {
+            ($ty:ident, $config:ty) => {
+                for flag in $ty::ALL {
+                    let before = <$config>::default();
+                    let after = flag.toggled(&before);
+                    let json = serde_json::to_value(&after).unwrap();
+                    let object = json.as_object().expect("an object");
+                    assert_eq!(
+                        object.len(),
+                        1,
+                        "{} changed more than its own key: {json}",
+                        flag.key
+                    );
+                    assert_eq!(
+                        object.get(flag.key),
+                        Some(&serde_json::Value::Bool(!flag.default)),
+                        "{} wrote the wrong key or value: {json}",
+                        flag.key
+                    );
+                    assert_eq!(
+                        flag.is_on(&after),
+                        !flag.is_on(&before),
+                        "{} did not flip",
+                        flag.key
+                    );
+                }
+            };
+        }
+        check!(AppFlag, AppConfig);
+        check!(AppearanceFlag, AppearanceConfig);
+        check!(SwitcherFlag, SwitcherConfig);
+    }
+
+    /// Obsidian words this one the other way round: the control is "Use
+    /// [[Wikilinks]]", the key is `useMarkdownLinks`.
+    #[test]
+    fn the_wikilinks_toggle_is_use_markdown_links_negated() {
+        let mut config = AppConfig::default();
+        assert!(USE_WIKILINKS.is_on(&config), "wikilinks are the default");
+        config = USE_WIKILINKS.toggled(&config);
+        assert_eq!(config.use_markdown_links, Some(true));
+        assert!(!USE_WIKILINKS.is_on(&config));
+        config = USE_WIKILINKS.toggled(&config);
+        assert_eq!(config.use_markdown_links, Some(false));
+        assert!(USE_WIKILINKS.is_on(&config));
+    }
+
+    #[test]
+    fn a_toggle_shows_the_file_first_and_the_default_when_the_key_is_absent() {
+        let mut config = AppConfig::default();
+        assert!(SPELLCHECK.is_on(&config), "spellcheck is on by default");
+        assert!(!SHOW_LINE_NUMBER.is_on(&config), "line numbers are not");
+        config.spellcheck = Some(false);
+        assert!(!SPELLCHECK.is_on(&config));
+    }
+
+    /// The appearance and switcher files have their own flags; the same
+    /// rules hold for them.
+    #[test]
+    fn the_other_files_toggles_flip_too() {
+        let appearance = SHOW_RIBBON.toggled(&AppearanceConfig::default());
+        assert_eq!(appearance.show_ribbon, Some(false));
+        let switcher = SHOW_EXISTING_ONLY.toggled(&SwitcherConfig::default());
+        assert_eq!(switcher.show_existing_only, Some(true));
+    }
+
+    /// A vault with no `core-plugins.json` gets the whole default map, not
+    /// a one-key file that would read as "everything else off".
+    #[test]
+    fn a_missing_core_plugins_file_is_written_whole() {
+        let plugins = toggled_core_plugin(None, "graph", true);
+        let CorePlugins::Map(map) = &plugins else {
+            panic!("expected a map");
+        };
+        assert_eq!(map.len(), CORE_PLUGINS.len());
+        assert_eq!(map.get("graph"), Some(&false), "the toggled one is off");
+        assert_eq!(
+            map.get("backlink"),
+            Some(&true),
+            "the others keep their defaults"
+        );
+    }
+
+    #[test]
+    fn toggling_a_core_plugin_keeps_the_file_as_it_was() {
+        let existing = CorePlugins::Map(
+            [("graph".to_string(), true), ("canvas".to_string(), false)]
+                .into_iter()
+                .collect(),
+        );
+        let next = toggled_core_plugin(Some(&existing), "graph", true);
+        let CorePlugins::Map(map) = &next else {
+            panic!("expected a map");
+        };
+        assert_eq!(map.len(), 2, "no plugin was added");
+        assert_eq!(map.keys().next().map(String::as_str), Some("graph"));
+        assert_eq!(map.get("graph"), Some(&false));
+        // The legacy array shape keeps its shape.
+        let list = CorePlugins::List(vec!["graph".into()]);
+        let next = toggled_core_plugin(Some(&list), "graph", true);
+        assert_eq!(next, CorePlugins::List(Vec::new()));
+        let next = toggled_core_plugin(Some(&next), "graph", false);
+        assert_eq!(next, CorePlugins::List(vec!["graph".into()]));
     }
 }
