@@ -11,8 +11,9 @@
 //! running app can change on the spot. `Vault::write_config` merges into
 //! the file's own JSON, so nothing but the changed key moves.
 //!
-//! Text fields and sliders are still read-only; a dropdown writes the
-//! option it names, through the same table its label is read from. Every row also
+//! A dropdown writes the option it names, a slider the step it is clicked
+//! on and a text field what is typed into it, each through the same table
+//! its own display is read from. Every row also
 //! says how far it gets in  ([`Honored`]): nothing on a setting the
 //! app follows as you click it, "on restart" for the theme and fonts, and
 //! "not in  yet" for the ones written only for Obsidian to read. The
@@ -420,6 +421,106 @@ const TYPED_ALL: &[Typed] = &[
     LIVE_PREVIEW,
 ];
 
+/// A slider: the key, the range Obsidian's own control offers, and the
+/// accessor pair the value is read through and written through.
+///
+/// Obsidian neither clamps nor rewrites a file holding a value outside the
+/// range, so a file that already does keeps it; the range only bounds what
+/// this control can set.
+#[derive(Clone, Copy, Debug)]
+struct Number {
+    key: &'static str,
+    min: i64,
+    max: i64,
+    read: fn(&VaultState) -> i64,
+    write: fn(&VaultState, i64) -> SettingChange,
+}
+
+/// A free text field, written verbatim.
+#[derive(Clone, Copy, Debug)]
+struct TextField {
+    key: &'static str,
+    /// What Obsidian shows in the empty field, which is also what it writes
+    /// for some of them when the field is cleared.
+    placeholder: &'static str,
+    read: fn(&VaultState) -> String,
+    write: fn(&VaultState, &str) -> SettingChange,
+}
+
+impl TextField {
+    fn same(&self, other: &TextField) -> bool {
+        self.key == other.key
+    }
+}
+
+/// `baseFontSize` in `appearance.json`; Obsidian's slider offers 10 to 30.
+const FONT_SIZE: Number = Number {
+    key: "baseFontSize",
+    min: 10,
+    max: 30,
+    read: |state| state.appearance().base_font_size.unwrap_or(16) as i64,
+    write: |state, value| {
+        let mut next = state.appearance().clone();
+        next.base_font_size = Some(value as u32);
+        SettingChange::Appearance(next)
+    },
+};
+
+/// `tabSize` in `app.json`; Obsidian's slider offers 2 to 8, default 4.
+const TAB_SIZE: Number = Number {
+    key: "tabSize",
+    min: 2,
+    max: 8,
+    read: |state| state.app().tab_size.unwrap_or(4) as i64,
+    write: |state, value| {
+        let mut next = state.app().clone();
+        next.tab_size = Some(value as u8);
+        SettingChange::App(next)
+    },
+};
+
+const NEW_FILE_FOLDER: TextField = TextField {
+    key: "newFileFolderPath",
+    placeholder: "Example: folder 1/folder 2",
+    read: |state| state.app().new_file_folder_path.clone().unwrap_or_default(),
+    write: |state, value| {
+        let mut next = state.app().clone();
+        next.new_file_folder_path = Some(value.to_string());
+        SettingChange::App(next)
+    },
+};
+
+/// Obsidian writes the placeholder rather than an empty string when this
+/// one is cleared, which the probe caught: emptying the field wrote
+/// `Attachments`.
+const ATTACHMENT_FOLDER: TextField = TextField {
+    key: "attachmentFolderPath",
+    placeholder: "Attachments",
+    read: |state| {
+        state
+            .app()
+            .attachment_folder_path
+            .clone()
+            .unwrap_or_default()
+    },
+    write: |state, value| {
+        let mut next = state.app().clone();
+        let value = if value.is_empty() {
+            ATTACHMENT_FOLDER.placeholder
+        } else {
+            value
+        };
+        next.attachment_folder_path = Some(value.to_string());
+        SettingChange::App(next)
+    },
+};
+
+/// Every slider and text field that writes, for the tests that walk them.
+#[cfg(test)]
+const NUMBERS: &[Number] = &[FONT_SIZE, TAB_SIZE];
+#[cfg(test)]
+const TEXTS: &[TextField] = &[NEW_FILE_FOLDER, ATTACHMENT_FOLDER];
+
 /// A config file with one setting changed, for the workspace to write.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SettingChange {
@@ -569,6 +670,10 @@ struct Item {
     flag: Option<Flag>,
     /// What a dropdown writes, for the controls that are not toggles.
     typed: Option<Typed>,
+    /// What a slider writes.
+    number: Option<Number>,
+    /// What a text field writes.
+    field: Option<TextField>,
     honored: Honored,
 }
 
@@ -598,6 +703,8 @@ fn heading(name: &str) -> Item {
         control: Control::None,
         flag: None,
         typed: None,
+        number: None,
+        field: None,
         honored: Honored::Live,
     }
 }
@@ -610,6 +717,8 @@ fn item(name: &str, desc: &str, control: Control) -> Item {
         control,
         flag: None,
         typed: None,
+        number: None,
+        field: None,
         honored: Honored::Live,
     }
 }
@@ -642,6 +751,26 @@ fn switcher_toggle(name: &str, desc: &str, switcher: &SwitcherConfig, flag: Swit
 
 fn dropdown(name: &str, desc: &str, value: impl Into<SharedString>) -> Item {
     item(name, desc, Control::Dropdown(value.into()))
+}
+
+/// A slider that writes, reading and writing through the one accessor pair.
+fn slider(name: &str, desc: &str, state: &VaultState, number: Number) -> Item {
+    Item {
+        number: Some(number),
+        ..item(
+            name,
+            desc,
+            Control::Slider((number.read)(state).to_string().into()),
+        )
+    }
+}
+
+/// A text field that writes.
+fn field(name: &str, desc: &str, state: &VaultState, field: TextField) -> Item {
+    Item {
+        field: Some(field),
+        ..item(name, desc, Control::Text((field.read)(state).into()))
+    }
 }
 
 /// A dropdown that writes: what it shows and what a pick writes both come
@@ -713,6 +842,11 @@ pub struct SettingsView {
     hotkey_scroll: UniformListScrollHandle,
     /// The dropdown whose options are showing, by the key it writes.
     menu: Option<&'static str>,
+    /// The text field being typed into, by the key it writes. The rows are
+    /// rebuilt from the vault on every render, so the open field is the
+    /// view's, not the row's.
+    editing: Option<TextField>,
+    field: Entity<TextInput>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -727,14 +861,27 @@ impl Focusable for SettingsView {
 impl SettingsView {
     pub fn new(cx: &mut Context<Self>) -> SettingsView {
         let hotkey_search = cx.new(|cx| TextInput::new("Filter...", cx));
-        let subscriptions = vec![cx.subscribe(
-            &hotkey_search,
-            |this, _, event: &InputEvent, cx| match event {
-                InputEvent::Changed => this.refresh_hotkeys(cx),
-                InputEvent::Cancel => cx.emit(SettingsEvent::Close),
+        let field = cx.new(|cx| TextInput::new("", cx));
+        let subscriptions = vec![
+            cx.subscribe(
+                &hotkey_search,
+                |this, _, event: &InputEvent, cx| match event {
+                    InputEvent::Changed => this.refresh_hotkeys(cx),
+                    InputEvent::Cancel => cx.emit(SettingsEvent::Close),
+                    _ => {}
+                },
+            ),
+            // One field serves whichever text row is open, since the rows
+            // themselves are rebuilt from the vault on every render.
+            cx.subscribe(&field, |this, _, event: &InputEvent, cx| match event {
+                InputEvent::Submit => this.commit_field(cx),
+                InputEvent::Cancel => {
+                    this.editing = None;
+                    cx.notify();
+                }
                 _ => {}
-            },
-        )];
+            }),
+        ];
         let mut view = SettingsView {
             focus_handle: cx.focus_handle(),
             state: None,
@@ -745,6 +892,8 @@ impl SettingsView {
             hotkey_rows: Vec::new(),
             hotkey_scroll: UniformListScrollHandle::new(),
             menu: None,
+            editing: None,
+            field,
             _subscriptions: subscriptions,
         };
         view.load_commands(cx);
@@ -926,10 +1075,11 @@ impl SettingsView {
                 font(&a.monospace_font_family),
             )
             .on_restart(),
-            item(
+            slider(
                 "Font size",
                 "Font size in pixels that affects editing and reading views.",
-                Control::Slider(a.base_font_size.unwrap_or(16).to_string().into()),
+                state,
+                FONT_SIZE,
             )
             .on_restart(),
         ]
@@ -1082,10 +1232,11 @@ impl SettingsView {
                 app,
                 USE_TAB,
             ),
-            item(
+            slider(
                 "Indent visual width",
                 "Number of spaces a tab character will render as.",
-                Control::Slider(app.tab_size.unwrap_or(4).to_string().into()),
+                state,
+                TAB_SIZE,
             ),
             heading("Advanced"),
             app_toggle(
@@ -1135,10 +1286,11 @@ impl SettingsView {
             ),
         ];
         if app.new_file_location.as_deref() == Some("folder") {
-            items.push(text(
+            items.push(field(
                 "Folder to create new notes in",
                 "Newly created notes will appear in this folder.",
-                app.new_file_folder_path.clone().unwrap_or_default(),
+                state,
+                NEW_FILE_FOLDER,
             ));
         }
         items.push(
@@ -1150,11 +1302,15 @@ impl SettingsView {
             .not_yet(),
         );
         if !attachment_path.is_empty() {
-            items.push(text(
-                "Attachment folder path",
-                "Place newly created attachment files, such as images created via drag-and-drop or audio recordings, in this folder.",
-                attachment_path.to_string(),
-            ).not_yet());
+            items.push(
+                field(
+                    "Attachment folder path",
+                    "Place newly created attachment files, such as images created via drag-and-drop or audio recordings, in this folder.",
+                    state,
+                    ATTACHMENT_FOLDER,
+                )
+                .not_yet(),
+            );
         }
         if !subfolder.is_empty() {
             items.push(text(
@@ -1514,6 +1670,50 @@ impl SettingsView {
                     })
                     .into_any_element()
             }
+            Control::Text(_)
+                if item
+                    .field
+                    .zip(self.editing)
+                    .is_some_and(|(a, b)| a.same(&b)) =>
+            {
+                div()
+                    .min_w(px(220.))
+                    .max_w(px(320.))
+                    .child(self.field.clone())
+                    .into_any_element()
+            }
+            Control::Text(value) if item.field.is_some() => {
+                let field = item.field.expect("checked above");
+                div()
+                    .id(SharedString::from(format!("settings-field-{}", field.key)))
+                    .min_w(px(160.))
+                    .max_w(px(320.))
+                    .px_2()
+                    .py(px(3.))
+                    .rounded_sm()
+                    .bg(theme.bg_alt)
+                    .border_1()
+                    .border_color(theme.border)
+                    .text_size(px(12.))
+                    .cursor_text()
+                    .text_color(if value.is_empty() {
+                        theme.text_faint
+                    } else {
+                        theme.text
+                    })
+                    .whitespace_nowrap()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .child(if value.is_empty() {
+                        SharedString::from(field.placeholder)
+                    } else {
+                        value.clone()
+                    })
+                    .on_click(
+                        cx.listener(move |this, _, window, cx| this.edit_field(field, window, cx)),
+                    )
+                    .into_any_element()
+            }
             Control::Text(value) => div()
                 .min_w(px(160.))
                 .max_w(px(320.))
@@ -1538,25 +1738,66 @@ impl SettingsView {
                     value.clone()
                 })
                 .into_any_element(),
-            Control::Slider(value) => div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap_2()
-                .child(
-                    div()
-                        .w(px(120.))
-                        .h(px(4.))
-                        .rounded_full()
-                        .bg(theme.bg_active),
-                )
-                .child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(theme.text_muted)
-                        .child(value.clone()),
-                )
-                .into_any_element(),
+            Control::Slider(value) => {
+                let Some(number) = item.number else {
+                    return div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .w(px(120.))
+                                .h(px(4.))
+                                .rounded_full()
+                                .bg(theme.bg_active),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(theme.text_muted)
+                                .child(value.clone()),
+                        )
+                        .into_any_element();
+                };
+                let now = self.state.as_ref().map(|s| (number.read)(s)).unwrap_or(0);
+                // One cell per step: the ranges are small, so a click lands
+                // on a value without measuring the track.
+                let steps = (number.min..=number.max).collect::<Vec<_>>();
+                let width = (120. / steps.len() as f32).max(3.);
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .child(div().flex().flex_row().items_center().h(px(14.)).children(
+                        steps.into_iter().map(|step| {
+                            div()
+                                .id(SharedString::from(format!(
+                                    "settings-step-{}-{step}",
+                                    number.key
+                                )))
+                                .w(px(width))
+                                .h(px(4.))
+                                .cursor_pointer()
+                                .bg(if step <= now {
+                                    theme.accent
+                                } else {
+                                    theme.bg_active
+                                })
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.set_number(number, step, cx)
+                                }))
+                        }),
+                    ))
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(theme.text_muted)
+                            .child(value.clone()),
+                    )
+                    .into_any_element()
+            }
             Control::Button(label) => div()
                 .px_3()
                 .py(px(3.))
@@ -1575,6 +1816,53 @@ impl SettingsView {
     /// what does it in the app.
     pub fn open_menu(&mut self, key: &str, cx: &mut Context<Self>) {
         self.menu = TYPED_ALL.iter().find(|t| t.key == key).map(|t| t.key);
+        cx.notify();
+    }
+
+    /// Writes a slider's value, which the control also reads through.
+    /// Opens a text field for typing, with what the vault holds in it.
+    fn edit_field(&mut self, field: TextField, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let value = (field.read)(&state);
+        self.editing = Some(field);
+        self.menu = None;
+        self.field.update(cx, |input, cx| {
+            input.set_placeholder(field.placeholder);
+            input.set_text(value, cx);
+        });
+        window.focus(&self.field.focus_handle(cx), cx);
+        cx.notify();
+    }
+
+    /// Writes what was typed, which the row then reads back.
+    fn commit_field(&mut self, cx: &mut Context<Self>) {
+        let Some(field) = self.editing.take() else {
+            return;
+        };
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let typed = self.field.read(cx).text().to_string();
+        if (field.read)(&state) != typed {
+            cx.emit(SettingsEvent::Changed(Box::new((field.write)(
+                &state, &typed,
+            ))));
+        }
+        cx.notify();
+    }
+
+    fn set_number(&mut self, number: Number, value: i64, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let value = value.clamp(number.min, number.max);
+        if (number.read)(&state) != value {
+            cx.emit(SettingsEvent::Changed(Box::new((number.write)(
+                &state, value,
+            ))));
+        }
         cx.notify();
     }
 
@@ -1856,7 +2144,7 @@ impl Render for SettingsView {
                             .bg(theme.bg_alt)
                             .text_size(px(11.))
                             .text_color(theme.text_muted)
-                            .child("Toggles and dropdowns write to the vault's .obsidian folder as you use them; text fields and sliders are still read-only. A tagged setting is still written for Obsidian, but  does not read it yet, or reads it only when it starts."),
+                            .child("Every control that writes does so to the vault's .obsidian folder as you use it. A tagged setting is still written for Obsidian, but  does not read it yet, or reads it only when it starts."),
                     )
                     .child(div().flex_1().min_h_0().child(body)),
             )
@@ -1957,6 +2245,69 @@ mod tests {
                 assert_eq!(typed.label(&state), *label);
             }
         }
+    }
+
+    #[test]
+    fn every_slider_and_field_writes_its_own_key_and_nothing_else() {
+        let (_dir, state) = vault();
+        let one_key = |change: &SettingChange, key: &str, what: &str| {
+            let json = match change {
+                SettingChange::App(c) => serde_json::to_value(c).unwrap(),
+                SettingChange::Appearance(c) => serde_json::to_value(c).unwrap(),
+                other => panic!("{what} wrote {other:?}"),
+            };
+            let object = json.as_object().expect("an object");
+            assert_eq!(object.len(), 1, "{what} changed more than its key: {json}");
+            assert!(object.contains_key(key), "{what} wrote {json}");
+            object.get(key).cloned().expect("its own key")
+        };
+        for number in NUMBERS {
+            for value in [number.min, number.max] {
+                let written = one_key(&(number.write)(&state, value), number.key, number.key);
+                assert_eq!(written, serde_json::json!(value));
+            }
+        }
+        for field in TEXTS {
+            let written = one_key(&(field.write)(&state, "Journal"), field.key, field.key);
+            assert_eq!(written, serde_json::json!("Journal"));
+        }
+    }
+
+    #[test]
+    fn a_slider_and_a_field_read_back_what_they_wrote() {
+        let (dir, mut state) = vault();
+        for number in NUMBERS {
+            for value in [number.min, number.max, number.min + 1] {
+                state.apply_setting(&(number.write)(&state, value)).unwrap();
+                state = VaultState::load(&dir.path().to_path_buf()).unwrap();
+                assert_eq!((number.read)(&state), value, "{}", number.key);
+            }
+        }
+        for field in TEXTS {
+            state
+                .apply_setting(&(field.write)(&state, "Folder With Space"))
+                .unwrap();
+            state = VaultState::load(&dir.path().to_path_buf()).unwrap();
+            assert_eq!((field.read)(&state), "Folder With Space", "{}", field.key);
+        }
+    }
+
+    /// Obsidian writes the placeholder rather than an empty string when the
+    /// attachment folder is cleared, which the phase 3 probe caught.
+    #[test]
+    fn clearing_the_attachment_folder_writes_its_placeholder() {
+        let (_dir, state) = vault();
+        let change = (ATTACHMENT_FOLDER.write)(&state, "");
+        let SettingChange::App(app) = &change else {
+            panic!("wrote the wrong file");
+        };
+        assert_eq!(app.attachment_folder_path.as_deref(), Some("Attachments"));
+        // The other field keeps an empty string, as Obsidian does for it.
+        let change = (NEW_FILE_FOLDER.write)(&state, "");
+        let SettingChange::App(app) = &change else {
+            panic!("wrote the wrong file");
+        };
+        assert_eq!(app.new_file_folder_path.as_deref(), Some(""));
     }
 
     #[test]

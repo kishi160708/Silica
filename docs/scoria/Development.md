@@ -124,7 +124,7 @@ of mixed use in both apps.
 | Templates | done: the three commands and the chooser, see [[#Templates, 2026-10-18]] |
 | Daily notes | done: today's note, the template and stepping between them, see [[#Daily notes, 2026-10-18]] |
 | File recovery | out of phase 3: Obsidian keeps its snapshots in IndexedDB outside the vault, so it cannot affect the gate |
-| Writing settings back | toggles and dropdowns write, see [[#Settings writing, 2026-10-18]] and [[#Settings dropdowns, 2026-10-18]]; text fields and sliders are still read-only |
+| Writing settings back | done for every control Obsidian itself offers as one, see [[#Settings writing, 2026-10-18]], [[#Settings dropdowns, 2026-10-18]] and [[#Settings sliders and text fields, 2026-10-18]] |
 | Round-trip harness | done, see [[#Round-trip harness, 2026-10-18]] |
 
 ### Table editing, 2026-10-18
@@ -397,6 +397,39 @@ own means writing a six-character id into the *target* note — inline on a
 paragraph, on its own line after a heading. That is a write into a second
 file and wants its own change. `Ctrl+P`/`Ctrl+N`, which Obsidian's popup also
 binds to the selection, are left to 's own bindings.
+
+### Settings sliders and text fields, 2026-10-18
+
+The two sliders write — font size (`baseFontSize`, 10 to 30) and indent
+visual width (`tabSize`, 2 to 8) — and so do the two text fields Obsidian
+offers as free text: the folder for new notes and the attachment folder
+path. Each is the same shape as a dropdown's `Typed`: a key and the one
+accessor pair its display is read through and its write goes through, with
+a test that walks every one of them for both properties.
+
+The ranges are the ones Obsidian's own controls offer, read off its
+rendered tabs in the phase 3 probe. Obsidian neither clamps nor rewrites a
+file holding something outside them — 99 sat in `appearance.json` through a
+whole session — so the range bounds only what 's control can set, and
+a file that already holds something else keeps it.
+
+One behavior is worth the test it got: clearing the attachment folder field
+writes the **placeholder**, `Attachments`, not an empty string, while
+clearing the new-note folder writes `""`. Both were observed.
+
+The slider is a cell per step rather than a dragged thumb. The ranges are
+21 and 7 values wide, so a click lands on a value without measuring the
+track, and dragging can come later. The text field is the inline-field
+pattern the properties row and the table cell already use, with one
+`TextInput` owned by the view rather than by a row: the rows are rebuilt
+from the vault on every render, so a row cannot own anything.
+
+**Left read-only, deliberately:** the three font families and spellcheck
+languages (Obsidian offers a font picker and a 58-entry select, not free
+text, so a text field would be inventing a control), excluded files (a
+dialog), accent colour (a colour input), themes (nothing scans
+`.obsidian/themes`), and the vault name, vault folder, config folder and
+language rows, which are not settings of the vault at all.
 
 ### Settings dropdowns, 2026-10-18
 
