@@ -33,6 +33,7 @@ cargo run --release -p  -- <vault> --note X --source --type '[[al'          # ty
 cargo run --release -p  -- <vault> --note X --source --type '[[al' --accept down,enter   # and press the popup's keys (enter, tab, shift-enter, up, down)
 cargo run --release -p  -- <vault> --note X --source --command editor:table-row-after   # run command ids at startup, comma separated (use a scratch vault)
 cargo run --release -p  -- <vault> --note X --cell 2 --type new --press enter   # open a table cell, type in it, press keys (enter, tab, shift-tab, escape, up, down)
+cargo run --release -p  -- <vault> --note X --template Daily   # open the template chooser and pick what the query matches
 cargo run --release -p  -- <vault> --note X --find word     # open with the find panel up and the query matched
 cargo run --release -p  -- <vault> --note X --prompt rename  # open the rename prompt (move, delete, folder) for screenshots
 cargo run --release -p  -- <vault> --note X --rename "New"   # rename the note at startup, rewriting links (use a scratch vault)
@@ -120,7 +121,9 @@ of mixed use in both apps.
 | Tables (editing) | done: the sixteen commands and editable cells, see [[#Table editing, 2026-10-18]] |
 | Properties | done, see [[#Properties, 2026-10-18]] |
 | Autocompletion | links, headings, aliases, embeds, tags and block references, see [[#Autocompletion, 2026-10-18]] and [[#Block references, 2026-10-18]] |
-| Templates, daily notes, file recovery | not started |
+| Templates | done: the three commands and the chooser, see [[#Templates, 2026-10-18]] |
+| Daily notes | not started: the config type is in, the commands are not |
+| File recovery | out of phase 3: Obsidian keeps its snapshots in IndexedDB outside the vault, so it cannot affect the gate |
 | Writing settings back | started: every Settings toggle writes, see [[#Settings writing, 2026-10-18]]; dropdowns, text fields and sliders are still read-only |
 | Round-trip harness | done, see [[#Round-trip harness, 2026-10-18]] |
 
@@ -188,6 +191,35 @@ columns it reported came from an unfocused editor and disagreed with
 themselves), whether a column counts characters or display columns for CJK
 and emoji —  counts characters — and what Obsidian writes for a `|`
 typed into a cell.
+
+### Templates, 2026-10-18
+
+`insert-template` opens a chooser over the template folder's notes — by
+basename, sorted, with Obsidian's own `Type name of a template...` — and
+writes the chosen one at the cursor with its placeholders filled in.
+`insert-current-date` and `insert-current-time` write the same `{{date}}`
+and `{{time}}` without a template around them.
+
+What a placeholder does was observed rather than guessed, and the literal
+half is the surprising one: `{{DATE}}` expands and `{{ date }}` does not,
+`{{date:}}` falls back to the setting, an empty setting falls back to
+Obsidian's own default, and nothing is exempt from expansion — not fenced
+code, inline code, math or wikilinks. `{{title}}` is the target note's
+basename, never its first heading and never a frontmatter `title`. The
+whole template the probe expanded is a test in `-templates`, byte
+for byte, and so is the moment token table behind the date formats.
+
+`templates.json` holds `folder`, `dateFormat` and `timeFormat`, exists only
+once a setting is written, and keeps a cleared field as the empty string
+rather than dropping the key; the bytes Obsidian wrote are a round-trip
+test in `-vault`. A format token  cannot render is refused with
+a message rather than written wrong, which matters more for daily notes,
+where the format is a path.
+
+The one new dependency is `chrono`, for the local civil date — it was
+already in the tree through gpui, so the lockfile gains an edge and no
+crate. `-templates` itself stays clock-free: the instant is passed
+in, which is why every test is a fixed date.
 
 ### Block references, 2026-10-18
 

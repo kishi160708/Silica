@@ -441,6 +441,57 @@ pub struct SwitcherConfig {
     pub extra: Map<String, Value>,
 }
 
+/// `templates.json`: the Templates core plugin's settings.
+///
+/// The file does not exist until a setting is written, and a cleared field
+/// is written as the empty string rather than dropped. An empty format
+/// means Obsidian's own default, not an empty rendering — see
+/// [[Specification#Observed templates behavior, Obsidian 1.14.4]].
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TemplatesConfig {
+    /// Vault-relative folder holding the templates, verbatim as written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+    /// A moment format; `{{date}}` with no format of its own.
+    #[serde(
+        default,
+        rename = "dateFormat",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub date_format: Option<String>,
+    /// A moment format; `{{time}}` with no format of its own.
+    #[serde(
+        default,
+        rename = "timeFormat",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub time_format: Option<String>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+/// `daily-notes.json`: the Daily notes core plugin's settings.
+///
+/// Like `templates.json`, the file appears only once a setting is written.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct DailyNotesConfig {
+    /// A moment format naming the note; empty or absent means
+    /// [`DAILY_NOTE_DEFAULT_FORMAT`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+    /// Vault-relative folder the notes are created in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+    /// A template applied to a note the plugin creates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template: Option<String>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+/// What a daily note is named when the format is empty or absent.
+pub const DAILY_NOTE_DEFAULT_FORMAT: &str = "YYYY-MM-DD";
+
 /// `plugins/<id>/manifest.json` of an installed community plugin.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct PluginManifest {

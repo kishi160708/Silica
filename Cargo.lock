@@ -4759,6 +4759,7 @@ name = ""
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "gpui",
  "gpui_platform",
  "indexmap",
@@ -4771,6 +4772,7 @@ dependencies = [
  "-markdown",
  "-search",
  "-suggest",
+ "-templates",
  "-text",
  "-vault",
  "serde",
@@ -4853,6 +4855,7 @@ dependencies = [
  "-formats",
  "-markdown",
  "-suggest",
+ "-templates",
  "-vault",
  "serde",
  "tempfile",

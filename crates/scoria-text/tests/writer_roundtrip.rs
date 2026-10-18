@@ -532,6 +532,64 @@ fn raw_offset(raw: &str, text: &str, at: usize) -> Option<usize> {
 }
 
 #[test]
+fn inserting_a_template_writes_only_its_own_bytes_and_undoes_cleanly() {
+    use _templates::{expand, Context, Stamp, DEFAULT_DATE_FORMAT, DEFAULT_TIME_FORMAT};
+    let at = Stamp {
+        year: 2026,
+        month: 10,
+        day: 18,
+        hour: 17,
+        minute: 53,
+        second: 9,
+    };
+    // A template with every placeholder, its own CRLF endings and a byte
+    // order mark: only its text may reach the note.
+    let raw_template = "\u{feff}# {{title}}\r\n\r\nWritten {{date}} at {{time}}.\r\n";
+    let template = TextBuffer::from_file(raw_template).text().to_string();
+    for note in notes_under_test() {
+        let raw = std::fs::read_to_string(&note).unwrap();
+        let mut buf = TextBuffer::from_file(&raw);
+        let before = buf.text().to_string();
+        for at_offset in probe_offsets(&buf) {
+            let cx = Context {
+                at,
+                date_format: DEFAULT_DATE_FORMAT,
+                time_format: DEFAULT_TIME_FORMAT,
+                title: "Note",
+            };
+            let text = expand(&template, &cx);
+            assert!(
+                !text.contains('\r') && !text.contains('\u{feff}'),
+                "a template's own endings reached the note"
+            );
+            buf.set_cursor(at_offset, None);
+            assert!(buf.insert_at_cursors(&text));
+            check_invariants(&buf, &note, "template insertion");
+            let want = format!("{}{}{}", &before[..at_offset], text, &before[at_offset..]);
+            assert_eq!(
+                buf.text(),
+                want,
+                "inserting at {at_offset} moved other bytes in {}",
+                note.display()
+            );
+            buf.undo();
+            assert_eq!(
+                buf.text(),
+                before,
+                "undo of a template insertion at {at_offset} in {}",
+                note.display()
+            );
+        }
+        assert_eq!(
+            buf.file_contents(),
+            raw,
+            "{} did not round trip",
+            note.display()
+        );
+    }
+}
+
+#[test]
 fn a_table_command_stays_inside_its_table_and_undoes_cleanly() {
     use _text::table::{tables, TableCommand};
     const COMMANDS: &[TableCommand] = &[

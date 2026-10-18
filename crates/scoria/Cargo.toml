@@ -20,6 +20,7 @@ path = "src/main.rs"
 -formats.workspace = true
 -search.workspace = true
 -suggest.workspace = true
+-templates.workspace = true
 -text.workspace = true
 anyhow.workspace = true
 indexmap.workspace = true
@@ -28,6 +29,7 @@ rayon.workspace = true
 notify.workspace = true
 regex.workspace = true
 serde_yaml.workspace = true
+chrono.workspace = true
 gpui.workspace = true
 gpui_platform.workspace = true
 

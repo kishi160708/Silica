@@ -8,6 +8,7 @@
 //! then kept current by a filesystem watcher: changed paths are re-read and
 //! re-indexed in place, link edges re-resolved, and every pane refreshed.
 
+use crate::chooser::{Chooser, ChooserEvent, Row as ChooserRow};
 use crate::editor::{Editor, EditorEvent};
 use crate::explorer::{display_name, ExplorerEvent, FileExplorer, FileTree};
 use crate::graph::{GraphEvent, GraphView};
@@ -32,11 +33,12 @@ use _cache::{
 use _commands::{keystroke, CommandRegistry};
 use _formats::config::{
     AppConfig, AppearanceConfig, CommandPaletteConfig, CorePlugins, PluginManifest, PropertyTypes,
-    SwitcherConfig,
+    SwitcherConfig, TemplatesConfig,
 };
 use _formats::properties::PropertiesInDocument;
 use _formats::FileKind;
 use _markdown::Subpath;
+use _templates as templates;
 use _text::table::TableCommand;
 use _vault::{FileChange, TrashOption, Vault};
 use std::collections::HashMap;
@@ -62,6 +64,24 @@ pub struct Commands(pub Arc<CommandRegistry>);
 
 impl Global for Commands {}
 
+/// The local civil time, which is what Obsidian's dates are in.
+fn now() -> templates::Stamp {
+    let local = chrono::Local::now();
+    let naive = local.naive_local();
+    templates::Stamp {
+        year: chrono::Datelike::year(&naive) as i64,
+        month: chrono::Datelike::month(&naive),
+        day: chrono::Datelike::day(&naive),
+        hour: chrono::Timelike::hour(&naive),
+        minute: chrono::Timelike::minute(&naive),
+        second: chrono::Timelike::second(&naive),
+    }
+}
+
+fn non_empty(value: Option<&str>) -> Option<&str> {
+    value.filter(|v| !v.is_empty())
+}
+
 /// Command ids the workspace can run today; the palette lists only these,
 /// the way Obsidian hides commands whose check callback fails.
 pub const RUNNABLE: &[&str] = &[
@@ -81,6 +101,9 @@ pub const RUNNABLE: &[&str] = &[
     "markdown:clear-metadata-properties",
     "editor:toggle-fold-properties",
     "editor:insert-table",
+    "insert-template",
+    "insert-current-date",
+    "insert-current-time",
     "editor:table-row-before",
     "editor:table-row-after",
     "editor:table-row-up",
@@ -152,6 +175,9 @@ pub struct VaultState {
     core_plugins: RwLock<Option<CorePlugins>>,
     community_plugins: RwLock<Vec<String>>,
     switcher: RwLock<SwitcherConfig>,
+    /// The Templates plugin's settings, for the two date commands and the
+    /// template chooser.
+    templates: RwLock<TemplatesConfig>,
     pub plugin_manifests: Vec<PluginManifest>,
     pub palette: CommandPaletteConfig,
     /// `types.json`: the type assigned to each property name.
@@ -201,6 +227,7 @@ impl VaultState {
         let plugin_manifests = vault.plugin_manifests();
         let palette = vault.command_palette_config().unwrap_or_default();
         let switcher = vault.switcher_config().unwrap_or_default();
+        let templates = vault.templates_config().unwrap_or_default();
         let property_types = vault.property_types().unwrap_or_default();
         let notes: Vec<String> = vault.markdown_files().map(|f| f.path.clone()).collect();
         let loaded: Vec<(String, CachedMetadata, Arc<String>)> = notes
@@ -230,6 +257,7 @@ impl VaultState {
             core_plugins: RwLock::new(core_plugins),
             community_plugins: RwLock::new(community_plugins),
             switcher: RwLock::new(switcher),
+            templates: RwLock::new(templates),
             plugin_manifests,
             palette,
             property_types: RwLock::new(property_types),
@@ -258,6 +286,10 @@ impl VaultState {
         self.community_plugins
             .read()
             .unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub fn templates(&self) -> RwLockReadGuard<'_, TemplatesConfig> {
+        self.templates.read().unwrap_or_else(|e| e.into_inner())
     }
 
     pub fn switcher(&self) -> RwLockReadGuard<'_, SwitcherConfig> {
@@ -728,6 +760,8 @@ enum Modal {
     Palette,
     Settings,
     Prompt,
+    /// The template chooser.
+    Chooser,
 }
 
 /// The file operation the open prompt will finish.
@@ -754,6 +788,7 @@ pub struct Workspace {
     explorer: Entity<FileExplorer>,
     search: Entity<SearchPane>,
     switcher: Entity<QuickSwitcher>,
+    chooser: Entity<Chooser>,
     palette: Entity<CommandPalette>,
     settings: Entity<SettingsView>,
     prompt: Entity<Prompt>,
@@ -805,108 +840,122 @@ impl Workspace {
         let explorer = cx.new(FileExplorer::new);
         let search = cx.new(SearchPane::new);
         let switcher = cx.new(QuickSwitcher::new);
+        let chooser = cx.new(Chooser::new);
         let palette = cx.new(CommandPalette::new);
         let settings = cx.new(SettingsView::new);
         let prompt = cx.new(Prompt::new);
         let reading = cx.new(ReadingView::new);
         let editor = cx.new(|cx| Editor::new(window, cx));
         let graph = cx.new(GraphView::new);
-        let subscriptions =
-            vec![
-                cx.subscribe_in(&graph, window, |this, _, event: &GraphEvent, window, cx| {
-                    match event {
-                        GraphEvent::Open(path) => {
-                            let back = this.mode_before_graph;
-                            this.set_mode(back, window, cx);
-                            this.open_file(path.clone(), None, cx);
-                        }
-                    }
-                }),
-                cx.subscribe_in(
-                    &explorer,
-                    window,
-                    |this, _, event: &ExplorerEvent, window, cx| match event {
-                        ExplorerEvent::Open(path) => this.open_file(path.clone(), None, cx),
-                        ExplorerEvent::NewNote { folder } => this.new_note(folder, window, cx),
-                        ExplorerEvent::NewFolder { parent } => {
-                            this.start_new_folder(parent, window, cx)
-                        }
-                        ExplorerEvent::Rename(path) => this.start_rename(path, window, cx),
-                        ExplorerEvent::Move(path) => this.start_move(path, window, cx),
-                        ExplorerEvent::Duplicate(path) => this.duplicate(path, cx),
-                        ExplorerEvent::Delete(path) => this.start_delete(path, window, cx),
-                    },
-                ),
-                cx.subscribe_in(
-                    &prompt,
-                    window,
-                    |this, _, event: &PromptEvent, window, cx| match event {
-                        PromptEvent::Submit(value) => this.prompt_submitted(value, window, cx),
-                        PromptEvent::Secondary => this.prompt_secondary(window, cx),
-                        PromptEvent::Cancel => {
-                            this.pending = None;
-                            this.close_modal(window, cx);
-                        }
-                    },
-                ),
-                cx.subscribe(&search, |this, _, event: &SearchEvent, cx| match event {
-                    SearchEvent::Open(path, offset) => {
+        let subscriptions = vec![
+            cx.subscribe_in(
+                &graph,
+                window,
+                |this, _, event: &GraphEvent, window, cx| match event {
+                    GraphEvent::Open(path) => {
+                        let back = this.mode_before_graph;
+                        this.set_mode(back, window, cx);
                         this.open_file(path.clone(), None, cx);
-                        if let Some(offset) = *offset {
-                            this.reading
-                                .update(cx, |r, cx| r.scroll_to_offset(offset, cx));
-                        }
                     }
-                }),
-                cx.subscribe_in(
-                    &switcher,
-                    window,
-                    |this, _, event: &SwitcherEvent, window, cx| match event {
-                        SwitcherEvent::Open(path) => {
-                            this.close_modal(window, cx);
-                            this.open_file(path.clone(), None, cx);
-                        }
-                        SwitcherEvent::Create(name) => {
-                            this.close_modal(window, cx);
-                            this.create_from_link(name, window, cx);
-                        }
-                        SwitcherEvent::Close => this.close_modal(window, cx),
-                    },
-                ),
-                cx.subscribe_in(
-                    &palette,
-                    window,
-                    |this, _, event: &PaletteEvent, window, cx| match event {
-                        PaletteEvent::Run(id) => {
-                            this.close_modal(window, cx);
-                            let id = id.clone();
-                            this.run_command(&id, window, cx);
-                        }
-                        PaletteEvent::Close => this.close_modal(window, cx),
-                    },
-                ),
-                cx.subscribe_in(
-                    &settings,
-                    window,
-                    |this, _, event: &SettingsEvent, window, cx| match event {
-                        SettingsEvent::Close => this.close_modal(window, cx),
-                        SettingsEvent::Changed(change) => {
-                            this.change_setting(change.as_ref().clone(), cx)
-                        }
-                    },
-                ),
-                cx.subscribe(&reading, |this, _, event: &ReadingEvent, cx| match event {
-                    ReadingEvent::OpenLink(target) => this.follow_link(target.clone(), cx),
-                }),
-                cx.subscribe(&editor, |this, _, event: &EditorEvent, cx| match event {
-                    EditorEvent::Edited => this.schedule_save(cx),
-                    EditorEvent::OpenLink(target) => this.follow_link(target.clone(), cx),
-                    EditorEvent::PropertyTypeAssigned { key, ty } => {
-                        this.assign_property_type(key.clone(), *ty, cx)
+                },
+            ),
+            cx.subscribe_in(
+                &explorer,
+                window,
+                |this, _, event: &ExplorerEvent, window, cx| match event {
+                    ExplorerEvent::Open(path) => this.open_file(path.clone(), None, cx),
+                    ExplorerEvent::NewNote { folder } => this.new_note(folder, window, cx),
+                    ExplorerEvent::NewFolder { parent } => {
+                        this.start_new_folder(parent, window, cx)
                     }
-                    EditorEvent::Reported(message) => this.report(message.clone(), cx),
-                }),
-            ];
+                    ExplorerEvent::Rename(path) => this.start_rename(path, window, cx),
+                    ExplorerEvent::Move(path) => this.start_move(path, window, cx),
+                    ExplorerEvent::Duplicate(path) => this.duplicate(path, cx),
+                    ExplorerEvent::Delete(path) => this.start_delete(path, window, cx),
+                },
+            ),
+            cx.subscribe_in(
+                &prompt,
+                window,
+                |this, _, event: &PromptEvent, window, cx| match event {
+                    PromptEvent::Submit(value) => this.prompt_submitted(value, window, cx),
+                    PromptEvent::Secondary => this.prompt_secondary(window, cx),
+                    PromptEvent::Cancel => {
+                        this.pending = None;
+                        this.close_modal(window, cx);
+                    }
+                },
+            ),
+            cx.subscribe(&search, |this, _, event: &SearchEvent, cx| match event {
+                SearchEvent::Open(path, offset) => {
+                    this.open_file(path.clone(), None, cx);
+                    if let Some(offset) = *offset {
+                        this.reading
+                            .update(cx, |r, cx| r.scroll_to_offset(offset, cx));
+                    }
+                }
+            }),
+            cx.subscribe_in(
+                &switcher,
+                window,
+                |this, _, event: &SwitcherEvent, window, cx| match event {
+                    SwitcherEvent::Open(path) => {
+                        this.close_modal(window, cx);
+                        this.open_file(path.clone(), None, cx);
+                    }
+                    SwitcherEvent::Create(name) => {
+                        this.close_modal(window, cx);
+                        this.create_from_link(name, window, cx);
+                    }
+                    SwitcherEvent::Close => this.close_modal(window, cx),
+                },
+            ),
+            cx.subscribe_in(
+                &palette,
+                window,
+                |this, _, event: &PaletteEvent, window, cx| match event {
+                    PaletteEvent::Run(id) => {
+                        this.close_modal(window, cx);
+                        let id = id.clone();
+                        this.run_command(&id, window, cx);
+                    }
+                    PaletteEvent::Close => this.close_modal(window, cx),
+                },
+            ),
+            cx.subscribe_in(
+                &settings,
+                window,
+                |this, _, event: &SettingsEvent, window, cx| match event {
+                    SettingsEvent::Close => this.close_modal(window, cx),
+                    SettingsEvent::Changed(change) => {
+                        this.change_setting(change.as_ref().clone(), cx)
+                    }
+                },
+            ),
+            cx.subscribe(&reading, |this, _, event: &ReadingEvent, cx| match event {
+                ReadingEvent::OpenLink(target) => this.follow_link(target.clone(), cx),
+            }),
+            cx.subscribe_in(
+                &chooser,
+                window,
+                |this, _, event: &ChooserEvent, window, cx| match event {
+                    ChooserEvent::Chosen(path) => this.insert_template(path.clone(), window, cx),
+                    ChooserEvent::Close => {
+                        this.modal = Modal::None;
+                        window.focus(&this.editor.focus_handle(cx), cx);
+                        cx.notify();
+                    }
+                },
+            ),
+            cx.subscribe(&editor, |this, _, event: &EditorEvent, cx| match event {
+                EditorEvent::Edited => this.schedule_save(cx),
+                EditorEvent::OpenLink(target) => this.follow_link(target.clone(), cx),
+                EditorEvent::PropertyTypeAssigned { key, ty } => {
+                    this.assign_property_type(key.clone(), *ty, cx)
+                }
+                EditorEvent::Reported(message) => this.report(message.clone(), cx),
+            }),
+        ];
         // Closing the window must not lose edits waiting for the autosave.
         let this = cx.entity().downgrade();
         window.on_window_should_close(cx, move |_, cx| {
@@ -923,6 +972,7 @@ impl Workspace {
             explorer,
             search,
             switcher,
+            chooser,
             palette,
             settings,
             prompt,
@@ -1088,6 +1138,127 @@ impl Workspace {
             self.open_file(current, None, cx);
         }
         cx.notify();
+    }
+
+    /// Obsidian's template chooser: the template folder's notes by
+    /// basename, sorted, with its own placeholder. An unset or empty
+    /// folder still opens the list, which then says why it is empty.
+    fn open_template_chooser(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.mode.is_editing() {
+            return;
+        }
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let folder = state
+            .templates()
+            .folder
+            .clone()
+            .unwrap_or_default()
+            .trim_matches('/')
+            .to_string();
+        let empty = if folder.is_empty() {
+            "No template folder is set in Settings".to_string()
+        } else {
+            format!("No templates in {folder}")
+        };
+        let mut rows: Vec<ChooserRow> = Vec::new();
+        if !folder.is_empty() {
+            let prefix = format!("{folder}/");
+            let vault = state.vault();
+            for file in vault.files() {
+                if file.kind != FileKind::Markdown || !file.path.starts_with(&prefix) {
+                    continue;
+                }
+                rows.push(ChooserRow {
+                    label: basename(&file.path).to_string(),
+                    value: file.path.clone(),
+                });
+            }
+        }
+        rows.sort_by(|a, b| a.label.cmp(&b.label));
+        self.modal = Modal::Chooser;
+        self.chooser.update(cx, |c, cx| {
+            c.open(rows, "Type name of a template...", empty, window, cx)
+        });
+        cx.notify();
+    }
+
+    /// Opens the chooser and picks `query` out of it, for `--template`.
+    pub fn pick_template(&mut self, query: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_template_chooser(window, cx);
+        self.chooser.update(cx, |c, cx| c.pick(query, cx));
+    }
+
+    /// Reads the chosen template, expands its placeholders and writes it at
+    /// the cursor.
+    fn insert_template(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.modal = Modal::None;
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let raw = match std::fs::read_to_string(state.vault().absolute(&path)) {
+            Ok(text) => text,
+            Err(err) => return self.report(format!("Could not read {path}: {err}"), cx),
+        };
+        // A template's own byte order mark and line endings are its file's,
+        // not the target's: only its text is inserted.
+        let text = _text::FileText::parse(&raw).text;
+        let title = self
+            .current
+            .as_deref()
+            .map(basename)
+            .unwrap_or_default()
+            .to_string();
+        let expanded = {
+            let templates = state.templates();
+            let cx = templates::Context {
+                at: now(),
+                date_format: non_empty(templates.date_format.as_deref())
+                    .unwrap_or(templates::DEFAULT_DATE_FORMAT),
+                time_format: non_empty(templates.time_format.as_deref())
+                    .unwrap_or(templates::DEFAULT_TIME_FORMAT),
+                title: &title,
+            };
+            templates::expand(&text, &cx)
+        };
+        self.editor
+            .update(cx, |e, cx| e.insert_at_cursors(&expanded, window, cx));
+        window.focus(&self.editor.focus_handle(cx), cx);
+        cx.notify();
+    }
+
+    /// Writes the current date or time at the cursor, in the format
+    /// `templates.json` gives — `{{date}}` and `{{time}}` without a
+    /// template around them, which is what Obsidian's two commands are.
+    fn insert_stamp(&mut self, date: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.mode.is_editing() {
+            return;
+        }
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let templates = state.templates();
+        let format = if date {
+            non_empty(templates.date_format.as_deref()).unwrap_or(templates::DEFAULT_DATE_FORMAT)
+        } else {
+            non_empty(templates.time_format.as_deref()).unwrap_or(templates::DEFAULT_TIME_FORMAT)
+        };
+        let missing = templates::unsupported_tokens(format);
+        if !missing.is_empty() {
+            self.report(
+                format!(
+                    " cannot render {} in a date format",
+                    missing.join(", ")
+                ),
+                cx,
+            );
+            return;
+        }
+        let text = templates::format(format, &now());
+        drop(templates);
+        self.editor
+            .update(cx, |e, cx| e.insert_at_cursors(&text, window, cx));
     }
 
     /// Rebuilds everything that depends on the file list or the whole cache.
@@ -1382,6 +1553,11 @@ impl Workspace {
                     self.editor.update(cx, |e, cx| e.insert_table(window, cx));
                 }
             }
+            "insert-current-date" | "insert-current-time" => {
+                let date = id == "insert-current-date";
+                self.insert_stamp(date, window, cx);
+            }
+            "insert-template" => self.open_template_chooser(window, cx),
             _ if TableCommand::from_id(id).is_some() => {
                 let cmd = TableCommand::from_id(id).expect("checked above");
                 let ran = self.mode.is_editing()
@@ -3122,10 +3298,11 @@ impl Render for Workspace {
 
         let overlay: Option<gpui::AnyElement> = match self.modal {
             Modal::None => None,
-            Modal::Switcher | Modal::Palette | Modal::Prompt => {
+            Modal::Switcher | Modal::Palette | Modal::Prompt | Modal::Chooser => {
                 let child: gpui::AnyElement = match self.modal {
                     Modal::Switcher => self.switcher.clone().into_any_element(),
                     Modal::Palette => self.palette.clone().into_any_element(),
+                    Modal::Chooser => self.chooser.clone().into_any_element(),
                     _ => self.prompt.clone().into_any_element(),
                 };
                 Some(

@@ -764,6 +764,14 @@ impl Editor {
         self.insert_all(text, EditKind::Typing, window, cx);
     }
 
+    /// Writes `text` at every cursor as one undo step, which is how a
+    /// template and the two date commands reach the document.
+    pub fn insert_at_cursors(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.buf.insert_at_cursors(text) {
+            self.after_edit(Some(window), cx);
+        }
+    }
+
     /// Presses keys by name, for `--press`: the popup's accept keys, and
     /// the keys that move between table cells, so a screenshot can show
     /// what a keystroke leaves behind.

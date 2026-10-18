@@ -58,7 +58,7 @@ at [.](https://.).
 | --- | --- | --- |
 | 1. Spike | 50k-line editor, parser conformance corpus, 2 s vault index | Done |
 | 2. Reader | A daily user browses their real vault with no missing content | Done: Files, reading view, Backlinks, Outgoing links, Outline, Tags, Search, quick switcher, graph, command palette, read-only Settings, file watching |
-| 3. Writer | The vault round-trips byte-identical after a week of mixed use in both apps | In progress: Source mode, Live Preview, find and replace, file operations with link rewriting, properties, autocompletion, table editing, the round-trip harness and the Settings toggles are done; block references, templates, daily notes and file recovery are next |
+| 3. Writer | The vault round-trips byte-identical after a week of mixed use in both apps | In progress: Source mode, Live Preview, find and replace, file operations with link rewriting, properties, autocompletion, table editing, block references, templates, the round-trip harness and the Settings toggles are done; daily notes and the rest of the Settings controls are next; file recovery is out of phase 3 |
 | 4. Parity | Core plugin parity | Not started: canvas, bases, PDF, math, themes subset, URI and CLI |
 | 5. Ecosystem | Native plugin SDK | Not started |
 

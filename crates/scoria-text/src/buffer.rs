@@ -859,6 +859,17 @@ impl TextBuffer {
         self.edit_many(vec![(at.span, edit.text)], cursor, None)
     }
 
+    /// Inserts `text` at every cursor, replacing what each has selected,
+    /// as one undo step: what `insert-template` and the two date commands
+    /// write. Obsidian gives every cursor its own copy, which is what
+    /// [`TextBuffer::insert_all`] already does.
+    pub fn insert_at_cursors(&mut self, text: &str) -> bool {
+        if text.is_empty() {
+            return false;
+        }
+        self.insert_all(text, EditKind::Other)
+    }
+
     /// `editor:insert-table`: a blank line and an empty two-by-two table,
     /// with the cursor in the first header cell.
     pub fn insert_table(&mut self) -> bool {

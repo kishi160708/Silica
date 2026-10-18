@@ -6,8 +6,9 @@ pub mod ops;
 pub use ops::{OpError, TrashOption};
 use _cache::LinkResolver;
 use _formats::config::{
-    AppConfig, AppearanceConfig, CommandPaletteConfig, CommunityPlugins, CorePlugins, GraphConfig,
-    Hotkeys, PluginManifest, PropertyTypes, SwitcherConfig, DEFAULT_CONFIG_DIR,
+    AppConfig, AppearanceConfig, CommandPaletteConfig, CommunityPlugins, CorePlugins,
+    DailyNotesConfig, GraphConfig, Hotkeys, PluginManifest, PropertyTypes, SwitcherConfig,
+    TemplatesConfig, DEFAULT_CONFIG_DIR,
 };
 use _formats::FileKind;
 use serde::de::DeserializeOwned;
@@ -399,6 +400,17 @@ impl Vault {
         Ok(self.read_config("switcher.json")?.unwrap_or_default())
     }
 
+    /// The Templates plugin's settings. Neither this file nor
+    /// `daily-notes.json` exists until a setting is written, so a missing
+    /// one is the default rather than an error.
+    pub fn templates_config(&self) -> Result<TemplatesConfig, VaultError> {
+        Ok(self.read_config("templates.json")?.unwrap_or_default())
+    }
+
+    pub fn daily_notes_config(&self) -> Result<DailyNotesConfig, VaultError> {
+        Ok(self.read_config("daily-notes.json")?.unwrap_or_default())
+    }
+
     /// Manifests of the community plugins installed under `plugins/`, sorted
     /// by folder name; folders without a readable manifest are skipped.
     pub fn plugin_manifests(&self) -> Vec<PluginManifest> {
@@ -631,6 +643,89 @@ mod tests {
   "linkDistance": 250,
   "close": true
 }"#;
+
+    /// `templates.json` as Obsidian wrote it in the phase 3 probe: keys in
+    /// the order they were first set, two-space indented, no trailing
+    /// newline.
+    const TEMPLATES_JSON: &str = r#"{
+  "folder": "TProbeB",
+  "dateFormat": "YYYY-MM-DD",
+  "timeFormat": "HH:mm"
+}"#;
+
+    /// `daily-notes.json`, the same way.
+    const DAILY_NOTES_JSON: &str = r#"{
+  "format": "YYYY-MM-DD",
+  "folder": "Journal"
+}"#;
+
+    #[test]
+    fn the_plugin_configs_read_and_write_back_byte_identical() {
+        let dir = sample_vault();
+        fs::write(dir.path().join(".obsidian/templates.json"), TEMPLATES_JSON).unwrap();
+        fs::write(
+            dir.path().join(".obsidian/daily-notes.json"),
+            DAILY_NOTES_JSON,
+        )
+        .unwrap();
+        let vault = Vault::open(dir.path()).unwrap();
+
+        let templates = vault.templates_config().unwrap();
+        assert_eq!(templates.folder.as_deref(), Some("TProbeB"));
+        assert_eq!(templates.date_format.as_deref(), Some("YYYY-MM-DD"));
+        assert_eq!(templates.time_format.as_deref(), Some("HH:mm"));
+        vault.write_config("templates.json", &templates).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.path().join(".obsidian/templates.json")).unwrap(),
+            TEMPLATES_JSON
+        );
+
+        let daily = vault.daily_notes_config().unwrap();
+        assert_eq!(daily.format.as_deref(), Some("YYYY-MM-DD"));
+        assert_eq!(daily.folder.as_deref(), Some("Journal"));
+        assert_eq!(daily.template, None);
+        vault.write_config("daily-notes.json", &daily).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.path().join(".obsidian/daily-notes.json")).unwrap(),
+            DAILY_NOTES_JSON
+        );
+    }
+
+    #[test]
+    fn a_plugin_config_that_was_never_written_is_the_default() {
+        // Neither file exists until a setting is changed, and a vault
+        // without one is not an error.
+        let dir = sample_vault();
+        let vault = Vault::open(dir.path()).unwrap();
+        assert_eq!(
+            vault.templates_config().unwrap(),
+            TemplatesConfig::default()
+        );
+        assert_eq!(
+            vault.daily_notes_config().unwrap(),
+            DailyNotesConfig::default()
+        );
+    }
+
+    #[test]
+    fn a_cleared_templates_field_keeps_its_key() {
+        // Obsidian writes the empty string rather than dropping the key.
+        let dir = sample_vault();
+        let cleared = r#"{
+  "folder": "TProbeB",
+  "dateFormat": "",
+  "timeFormat": ""
+}"#;
+        fs::write(dir.path().join(".obsidian/templates.json"), cleared).unwrap();
+        let vault = Vault::open(dir.path()).unwrap();
+        let templates = vault.templates_config().unwrap();
+        assert_eq!(templates.date_format.as_deref(), Some(""));
+        vault.write_config("templates.json", &templates).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.path().join(".obsidian/templates.json")).unwrap(),
+            cleared
+        );
+    }
 
     #[test]
     fn writing_a_config_value_nothing_changed_rewrites_nothing() {

@@ -7,6 +7,7 @@
 //! other flags open the app in a given state for screenshots and smoke
 //! tests (see `docs//Development.md`).
 
+mod chooser;
 mod editor;
 mod explorer;
 mod graph;
@@ -157,6 +158,8 @@ struct Args {
     /// Run these command ids at startup, comma separated, after everything
     /// else: `--command editor:table-row-after`.
     command: Option<String>,
+    /// Open the template chooser and pick the template this matches.
+    template: Option<String>,
 }
 
 fn parse_args() -> Args {
@@ -181,6 +184,7 @@ fn parse_args() -> Args {
         accept: None,
         cell: None,
         command: None,
+        template: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -206,6 +210,7 @@ fn parse_args() -> Args {
             "--accept" | "--press" => args.accept = it.next().or(Some("enter".into())),
             "--cell" => args.cell = it.next().and_then(|n| n.parse().ok()),
             "--command" => args.command = it.next(),
+            "--template" => args.template = it.next(),
             _ if args.vault.is_none() => args.vault = Some(PathBuf::from(a)),
             _ => args.note = Some(a),
         }
@@ -278,6 +283,7 @@ fn main() {
         let accept = args.accept.clone();
         let cell = args.cell;
         let command = args.command.clone();
+        let template = args.template.clone();
         let reading = args.reading;
         let find = args.find.clone();
         let find_all = args.find_all.clone();
@@ -373,6 +379,9 @@ fn main() {
                             for id in ids.split(',') {
                                 ws.run_command(id.trim(), window, cx);
                             }
+                        }
+                        if let Some(q) = &template {
+                            ws.pick_template(q, window, cx);
                         }
                         true
                     })
