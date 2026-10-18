@@ -10,6 +10,7 @@ members = [
     "crates/-search",
     "crates/-text",
     "crates/-suggest",
+    "crates/-templates",
     "crates/-bench",
 ]
 
@@ -30,6 +31,7 @@ publish = false
 -search = { path = "crates/-search" }
 -text = { path = "crates/-text" }
 -suggest = { path = "crates/-suggest" }
+-templates = { path = "crates/-templates" }
 
 anyhow = "1"
 thiserror = "2"

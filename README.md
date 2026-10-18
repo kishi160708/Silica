@@ -48,6 +48,7 @@ at [.](https://.).
 | `-markdown` | Obsidian Flavored Markdown: CommonMark + GFM + Obsidian syntax parsed into one spanned tree, HTML renderer |
 | `-cache` | Metadata cache (`CachedMetadata`) and link resolution with Obsidian's rules |
 | `-suggest` | Autocompletion: what a line triggers, what the vault offers, and the link accepting one writes |
+| `-templates` | Template placeholders and the moment.js date formats they take |
 | `-formats` | On-disk formats: file kinds, `app.json` and friends, JSON Canvas 1.0, Bases YAML |
 | `-commands` | The 196 command ids and default hotkeys so vault `hotkeys.json` applies unchanged |
 
