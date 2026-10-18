@@ -122,7 +122,7 @@ of mixed use in both apps.
 | Properties | done, see [[#Properties, 2026-10-18]] |
 | Autocompletion | links, headings, aliases, embeds, tags and block references, see [[#Autocompletion, 2026-10-18]] and [[#Block references, 2026-10-18]] |
 | Templates | done: the three commands and the chooser, see [[#Templates, 2026-10-18]] |
-| Daily notes | not started: the config type is in, the commands are not |
+| Daily notes | done: today's note, the template and stepping between them, see [[#Daily notes, 2026-10-18]] |
 | File recovery | out of phase 3: Obsidian keeps its snapshots in IndexedDB outside the vault, so it cannot affect the gate |
 | Writing settings back | started: every Settings toggle writes, see [[#Settings writing, 2026-10-18]]; dropdowns, text fields and sliders are still read-only |
 | Round-trip harness | done, see [[#Round-trip harness, 2026-10-18]] |
@@ -191,6 +191,34 @@ columns it reported came from an unfocused editor and disagreed with
 themselves), whether a column counts characters or display columns for CJK
 and emoji —  counts characters — and what Obsidian writes for a `|`
 typed into a cell.
+
+### Daily notes, 2026-10-18
+
+`daily-notes` opens today's note, creating it from the configured template
+when it is not there; `daily-notes:goto-prev` and `daily-notes:goto-next`
+step between the notes that exist. All three are the legacy unprefixed
+command ids Obsidian still registers.
+
+The probe settled the three rules that matter:
+
+- **The configured folder has to exist.** Obsidian refuses with
+  "Failed to create daily note. Folder “X” not found." and writes nothing,
+  rather than creating it — while folders the *format* names
+  (`YYYY/MM/YYYY-MM-DD`) are created on the way.
+- **An existing note is opened, not rewritten.** The probe's note had a
+  byte order mark, CRLF endings and the body "hand written, do not touch";
+  its bytes, size and modification time were all the same afterwards.
+- **Stepping skips the empty days.** From a note on the 10th with the 9th
+  missing, previous is the 2nd and next is the 20th.
+
+Stepping needs the open note's own date, and a moment format cannot be read
+backwards — `DD-MM-YYYY` and `YYYY/MM/DD` would each need their own parser.
+So `daily_note_day` renders instead: it walks a window of days around today
+and takes the one whose rendered path is the path in hand. The same walk
+finds the neighbour, which is why a format that does not sort
+chronologically still steps correctly. A format  cannot render is
+refused outright, because here the format is a path and a wrong one is a
+note in the wrong place.
 
 ### Templates, 2026-10-18
 

@@ -4867,6 +4867,7 @@ version = "0.1.0"
 dependencies = [
  "-cache",
  "-formats",
+ "-templates",
  "serde",
  "serde_json",
  "tempfile",

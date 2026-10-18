@@ -32,8 +32,8 @@ use _cache::{
 };
 use _commands::{keystroke, CommandRegistry};
 use _formats::config::{
-    AppConfig, AppearanceConfig, CommandPaletteConfig, CorePlugins, PluginManifest, PropertyTypes,
-    SwitcherConfig, TemplatesConfig,
+    self as config, AppConfig, AppearanceConfig, CommandPaletteConfig, CorePlugins,
+    DailyNotesConfig, PluginManifest, PropertyTypes, SwitcherConfig, TemplatesConfig,
 };
 use _formats::properties::PropertiesInDocument;
 use _formats::FileKind;
@@ -104,6 +104,9 @@ pub const RUNNABLE: &[&str] = &[
     "insert-template",
     "insert-current-date",
     "insert-current-time",
+    "daily-notes",
+    "daily-notes:goto-prev",
+    "daily-notes:goto-next",
     "editor:table-row-before",
     "editor:table-row-after",
     "editor:table-row-up",
@@ -178,6 +181,8 @@ pub struct VaultState {
     /// The Templates plugin's settings, for the two date commands and the
     /// template chooser.
     templates: RwLock<TemplatesConfig>,
+    /// The Daily notes plugin's settings.
+    daily_notes: RwLock<DailyNotesConfig>,
     pub plugin_manifests: Vec<PluginManifest>,
     pub palette: CommandPaletteConfig,
     /// `types.json`: the type assigned to each property name.
@@ -228,6 +233,7 @@ impl VaultState {
         let palette = vault.command_palette_config().unwrap_or_default();
         let switcher = vault.switcher_config().unwrap_or_default();
         let templates = vault.templates_config().unwrap_or_default();
+        let daily_notes = vault.daily_notes_config().unwrap_or_default();
         let property_types = vault.property_types().unwrap_or_default();
         let notes: Vec<String> = vault.markdown_files().map(|f| f.path.clone()).collect();
         let loaded: Vec<(String, CachedMetadata, Arc<String>)> = notes
@@ -258,6 +264,7 @@ impl VaultState {
             community_plugins: RwLock::new(community_plugins),
             switcher: RwLock::new(switcher),
             templates: RwLock::new(templates),
+            daily_notes: RwLock::new(daily_notes),
             plugin_manifests,
             palette,
             property_types: RwLock::new(property_types),
@@ -290,6 +297,10 @@ impl VaultState {
 
     pub fn templates(&self) -> RwLockReadGuard<'_, TemplatesConfig> {
         self.templates.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub fn daily_notes(&self) -> RwLockReadGuard<'_, DailyNotesConfig> {
+        self.daily_notes.read().unwrap_or_else(|e| e.into_inner())
     }
 
     pub fn switcher(&self) -> RwLockReadGuard<'_, SwitcherConfig> {
@@ -1140,6 +1151,117 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Opens today's daily note, creating it if it is not there, or steps
+    /// to the previous or next one that exists.
+    ///
+    /// The configured folder has to exist already — Obsidian refuses rather
+    /// than creating it — while folders the format itself names are made on
+    /// the way. See
+    /// [[Specification#Observed daily notes behavior, Obsidian 1.14.4]].
+    fn open_daily(&mut self, step: Option<bool>, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let (format, folder, template) = {
+            let daily = state.daily_notes();
+            (
+                non_empty(daily.format.as_deref())
+                    .unwrap_or(config::DAILY_NOTE_DEFAULT_FORMAT)
+                    .to_string(),
+                daily.folder.clone().unwrap_or_default(),
+                daily.template.clone().unwrap_or_default(),
+            )
+        };
+        let today = now();
+        if let Some(forward) = step {
+            // From the note in hand when it is a daily note, else from today.
+            let from = self
+                .current
+                .as_deref()
+                .and_then(|path| state.vault().daily_note_day(&format, &folder, path, &today))
+                .unwrap_or(today);
+            let next = state
+                .vault()
+                .step_daily_note(&format, &folder, &from, forward);
+            match next {
+                Some(path) => {
+                    self.open_file(path, None, cx);
+                    let mode = self.editing_mode();
+                    self.set_mode(mode, window, cx);
+                }
+                None => self.report(
+                    if forward {
+                        "No next daily note"
+                    } else {
+                        "No previous daily note"
+                    },
+                    cx,
+                ),
+            }
+            return;
+        }
+        let (path, exists) = match state.vault().daily_note(&format, &folder, &today) {
+            Ok(found) => found,
+            Err(err) => return self.report(err.to_string(), cx),
+        };
+        if exists {
+            // An existing note is opened and not touched, bytes or times.
+            self.open_file(path, None, cx);
+            let mode = self.editing_mode();
+            self.set_mode(mode, window, cx);
+            return;
+        }
+        let text = self.daily_template_text(&state, &template, &path, cx);
+        match state.create_note(&path, &text) {
+            Ok(changes) => {
+                self.after_changes(changes, cx);
+                self.open_file(path.clone(), None, cx);
+                let mode = self.editing_mode();
+                self.set_mode(mode, window, cx);
+                self.report(format!("Created {path}"), cx);
+            }
+            Err(err) => self.report(err, cx),
+        }
+    }
+
+    /// The bytes a new daily note starts with: its template expanded, or
+    /// nothing when none is set or it cannot be read.
+    fn daily_template_text(
+        &mut self,
+        state: &Arc<VaultState>,
+        template: &str,
+        path: &str,
+        cx: &mut Context<Self>,
+    ) -> String {
+        if template.is_empty() {
+            return String::new();
+        }
+        let template_path = if template.ends_with(".md") {
+            template.to_string()
+        } else {
+            format!("{template}.md")
+        };
+        let raw = match std::fs::read_to_string(state.vault().absolute(&template_path)) {
+            Ok(text) => text,
+            Err(err) => {
+                self.report(format!("Could not read {template_path}: {err}"), cx);
+                return String::new();
+            }
+        };
+        let text = _text::FileText::parse(&raw).text;
+        let title = basename(path).to_string();
+        let templates = state.templates();
+        let context = templates::Context {
+            at: now(),
+            date_format: non_empty(templates.date_format.as_deref())
+                .unwrap_or(templates::DEFAULT_DATE_FORMAT),
+            time_format: non_empty(templates.time_format.as_deref())
+                .unwrap_or(templates::DEFAULT_TIME_FORMAT),
+            title: &title,
+        };
+        templates::expand(&text, &context)
+    }
+
     /// Obsidian's template chooser: the template folder's notes by
     /// basename, sorted, with its own placeholder. An unset or empty
     /// folder still opens the list, which then says why it is empty.
@@ -1558,6 +1680,9 @@ impl Workspace {
                 self.insert_stamp(date, window, cx);
             }
             "insert-template" => self.open_template_chooser(window, cx),
+            "daily-notes" => self.open_daily(None, window, cx),
+            "daily-notes:goto-prev" => self.open_daily(Some(false), window, cx),
+            "daily-notes:goto-next" => self.open_daily(Some(true), window, cx),
             _ if TableCommand::from_id(id).is_some() => {
                 let cmd = TableCommand::from_id(id).expect("checked above");
                 let ran = self.mode.is_editing()

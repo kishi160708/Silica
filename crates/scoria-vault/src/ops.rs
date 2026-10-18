@@ -599,3 +599,284 @@ mod tests {
         assert!(stamp.starts_with("20"));
     }
 }
+
+/// Where a daily note goes, and which one is next to it.
+///
+/// The format is a moment format and the folder is a setting; both were
+/// observed from the running app, and so was the rule that matters most:
+/// the configured folder has to exist already, while folders the *format*
+/// implies (`YYYY/MM/YYYY-MM-DD`) are created. See
+/// [[Specification#Observed daily notes behavior, Obsidian 1.14.4]].
+pub mod daily {
+    use super::{join, Vault};
+    use _formats::validate_file_name;
+    use _templates::{moment, Stamp};
+
+    /// How far either way `step` looks for a neighbouring note, and how far
+    /// back it recognises the open note's own date.
+    const WINDOW: i64 = 400;
+
+    /// Why a daily note could not be named or created.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum DailyError {
+        /// The format holds tokens  does not render, so the path it
+        /// would write is not the path Obsidian would.
+        Unsupported(Vec<String>),
+        /// The rendered name is not a legal file name.
+        BadName(String),
+        /// The configured folder is not in the vault. Obsidian reports
+        /// "Failed to create daily note. Folder “X” not found." and writes
+        /// nothing.
+        NoFolder(String),
+    }
+
+    impl std::fmt::Display for DailyError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                DailyError::Unsupported(tokens) => write!(
+                    f,
+                    " cannot render {} in a daily note format",
+                    tokens.join(", ")
+                ),
+                DailyError::BadName(name) => {
+                    write!(f, "A daily note cannot be named {name}")
+                }
+                DailyError::NoFolder(folder) => {
+                    write!(
+                        f,
+                        "Failed to create daily note. Folder \u{201c}{folder}\u{201d} not found."
+                    )
+                }
+            }
+        }
+    }
+
+    /// The vault path of the daily note for `at`, without checking whether
+    /// anything is there.
+    pub fn path(format: &str, folder: &str, at: &Stamp) -> Result<String, DailyError> {
+        let unsupported = moment::unsupported_tokens(format);
+        if !unsupported.is_empty() {
+            return Err(DailyError::Unsupported(unsupported));
+        }
+        let rendered = moment::format(format, at);
+        // A format may name folders of its own, which are created; each
+        // segment still has to be a legal name.
+        for segment in rendered.split('/') {
+            if validate_file_name(segment).is_err() {
+                return Err(DailyError::BadName(rendered.clone()));
+            }
+        }
+        Ok(join(folder.trim_matches('/'), &format!("{rendered}.md")))
+    }
+
+    impl Vault {
+        /// The daily note for `at`, and whether it is already there.
+        ///
+        /// The configured folder must exist: Obsidian refuses rather than
+        /// creating it, which is the one way this can fail that a user can
+        /// do anything about.
+        pub fn daily_note(
+            &self,
+            format: &str,
+            folder: &str,
+            at: &Stamp,
+        ) -> Result<(String, bool), DailyError> {
+            let folder = folder.trim_matches('/');
+            if !folder.is_empty() && !self.exists(folder) {
+                return Err(DailyError::NoFolder(folder.to_string()));
+            }
+            let path = path(format, folder, at)?;
+            let exists = self.exists(&path);
+            Ok((path, exists))
+        }
+
+        /// The day of the daily note at `path`, if it is one: the date in a
+        /// window around `around` whose name renders to it.
+        ///
+        /// Rendering forward beats parsing backwards, which a moment format
+        /// does not support — `DD-MM-YYYY` and `YYYY/MM/DD` would each need
+        /// their own reader.
+        pub fn daily_note_day(
+            &self,
+            format: &str,
+            folder: &str,
+            path: &str,
+            around: &Stamp,
+        ) -> Option<Stamp> {
+            let base = around.days_from_epoch();
+            (-WINDOW..=WINDOW).find_map(|delta| {
+                let at = Stamp::from_unix((base + delta) * 86_400, 0);
+                let rendered = self::path(format, folder.trim_matches('/'), &at).ok()?;
+                (rendered == path).then_some(at)
+            })
+        }
+
+        /// The nearest existing daily note before or after `from`.
+        ///
+        /// Obsidian steps over the days that have no note: from a note on
+        /// the 10th with the 9th missing, "previous" is the 2nd.
+        pub fn step_daily_note(
+            &self,
+            format: &str,
+            folder: &str,
+            from: &Stamp,
+            forward: bool,
+        ) -> Option<String> {
+            let folder = folder.trim_matches('/');
+            let base = from.days_from_epoch();
+            (1..=WINDOW).find_map(|delta| {
+                let day = if forward { base + delta } else { base - delta };
+                let at = Stamp::from_unix(day * 86_400, 0);
+                let candidate = path(format, folder, &at).ok()?;
+                self.exists(&candidate).then_some(candidate)
+            })
+        }
+    }
+}
+
+#[cfg(test)]
+mod daily_tests {
+    use super::daily::{self, DailyError};
+    use crate::Vault;
+    use _templates::Stamp;
+    use std::fs;
+
+    fn at() -> Stamp {
+        Stamp {
+            year: 2026,
+            month: 10,
+            day: 18,
+            hour: 9,
+            minute: 7,
+            second: 3,
+        }
+    }
+
+    fn vault(folders: &[&str], notes: &[&str]) -> (tempfile::TempDir, Vault) {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".obsidian")).unwrap();
+        for folder in folders {
+            fs::create_dir_all(dir.path().join(folder)).unwrap();
+        }
+        for note in notes {
+            let path = dir.path().join(note);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, "# note\n").unwrap();
+        }
+        let vault = Vault::open(dir.path()).unwrap();
+        (dir, vault)
+    }
+
+    #[test]
+    fn the_path_is_the_folder_and_the_rendered_format() {
+        assert_eq!(
+            daily::path("YYYY-MM-DD", "Journal", &at()).unwrap(),
+            "Journal/2026-10-18.md"
+        );
+        assert_eq!(
+            daily::path("YYYY-MM-DD", "", &at()).unwrap(),
+            "2026-10-18.md"
+        );
+        // A format may name folders of its own.
+        assert_eq!(
+            daily::path("YYYY/MM/YYYY-MM-DD", "Journal", &at()).unwrap(),
+            "Journal/2026/10/2026-10-18.md"
+        );
+        // A slash around the folder is not part of it.
+        assert_eq!(
+            daily::path("YYYY-MM-DD", "/Journal/", &at()).unwrap(),
+            "Journal/2026-10-18.md"
+        );
+    }
+
+    #[test]
+    fn a_format__cannot_render_is_refused() {
+        // Writing the wrong path would be a note in the wrong place, so a
+        // token the formatter does not know stops the whole thing.
+        let err = daily::path("GGGG-[W]ww", "Journal", &at()).unwrap_err();
+        assert!(matches!(err, DailyError::Unsupported(_)), "{err:?}");
+        assert!(err.to_string().contains("GGGG"));
+        // A format rendering a forbidden character is refused too.
+        let err = daily::path("YYYY:MM", "Journal", &at()).unwrap_err();
+        assert!(matches!(err, DailyError::BadName(_)), "{err:?}");
+    }
+
+    #[test]
+    fn the_configured_folder_has_to_exist_already() {
+        let (_dir, vault) = vault(&["Journal"], &[]);
+        assert_eq!(
+            vault.daily_note("YYYY-MM-DD", "Journal", &at()).unwrap(),
+            ("Journal/2026-10-18.md".to_string(), false)
+        );
+        // Obsidian writes nothing and says so; it does not create it.
+        let err = vault
+            .daily_note("YYYY-MM-DD", "MadeByProbe", &at())
+            .unwrap_err();
+        assert_eq!(err, DailyError::NoFolder("MadeByProbe".to_string()));
+        assert_eq!(
+            err.to_string(),
+            "Failed to create daily note. Folder \u{201c}MadeByProbe\u{201d} not found."
+        );
+        // The root is always there.
+        assert!(vault.daily_note("YYYY-MM-DD", "", &at()).is_ok());
+    }
+
+    #[test]
+    fn an_existing_note_is_reported_rather_than_replaced() {
+        let (_dir, vault) = vault(&["Journal"], &["Journal/2026-10-18.md"]);
+        let (path, exists) = vault.daily_note("YYYY-MM-DD", "Journal", &at()).unwrap();
+        assert_eq!((path.as_str(), exists), ("Journal/2026-10-18.md", true));
+    }
+
+    #[test]
+    fn stepping_skips_the_days_that_have_no_note() {
+        // The gappy set the probe used: from the 10th, previous is the 2nd
+        // and next is the 20th.
+        let (_dir, vault) = vault(
+            &["Journal"],
+            &[
+                "Journal/2026-03-01.md",
+                "Journal/2026-03-02.md",
+                "Journal/2026-03-10.md",
+                "Journal/2026-03-20.md",
+            ],
+        );
+        let tenth = Stamp {
+            year: 2026,
+            month: 3,
+            day: 10,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        };
+        assert_eq!(
+            vault.step_daily_note("YYYY-MM-DD", "Journal", &tenth, false),
+            Some("Journal/2026-03-02.md".to_string())
+        );
+        assert_eq!(
+            vault.step_daily_note("YYYY-MM-DD", "Journal", &tenth, true),
+            Some("Journal/2026-03-20.md".to_string())
+        );
+        // Nothing beyond the last one.
+        let twentieth = Stamp { day: 20, ..tenth };
+        assert_eq!(
+            vault.step_daily_note("YYYY-MM-DD", "Journal", &twentieth, true),
+            None
+        );
+    }
+
+    #[test]
+    fn a_note_s_own_day_is_found_by_rendering_rather_than_parsing() {
+        let (_dir, vault) = vault(&["Journal"], &["Journal/18-10-2026.md"]);
+        // A format that does not sort chronologically still resolves.
+        let day = vault
+            .daily_note_day("DD-MM-YYYY", "Journal", "Journal/18-10-2026.md", &at())
+            .expect("the note's own day");
+        assert_eq!((day.year, day.month, day.day), (2026, 10, 18));
+        // A note that is not a daily note at all has no day.
+        assert_eq!(
+            vault.daily_note_day("DD-MM-YYYY", "Journal", "Journal/Meeting.md", &at()),
+            None
+        );
+    }
+}
