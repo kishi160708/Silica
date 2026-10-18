@@ -219,6 +219,9 @@ pub struct RenameOutcome {
     pub renamed: Vec<(String, String)>,
     pub rewritten_files: usize,
     pub rewritten_links: usize,
+    /// Notes whose links were left alone because the file on disk was not
+    /// the text the rewrite was planned from.
+    pub stale: Vec<String>,
 }
 
 impl VaultState {
@@ -585,10 +588,27 @@ impl VaultState {
         } else {
             Vec::new()
         };
+        // Each rewrite was planned from the text the index holds, so the
+        // file has to still be that text: another app may have saved it
+        // since, and writing the plan would throw that away. A note that
+        // moved underneath keeps its own bytes and its links are left for
+        // the user, which loses nothing either way.
+        let mut stale: Vec<String> = Vec::new();
+        let texts = self.texts();
         for rw in &plan {
-            std::fs::write(self.root.join(&rw.new_path), rw.text.as_bytes())
+            let absolute = self.root.join(&rw.new_path);
+            let planned_from = texts.get(&rw.old_path).map(|t| t.to_string());
+            match (std::fs::read_to_string(&absolute), planned_from) {
+                (Ok(on_disk), Some(was)) if on_disk != was => {
+                    stale.push(rw.new_path.clone());
+                    continue;
+                }
+                _ => {}
+            }
+            std::fs::write(&absolute, rw.text.as_bytes())
                 .map_err(|e| format!("Could not update links in {}: {e}", rw.new_path))?;
         }
+        drop(texts);
         let moved_from: HashMap<&str, &str> = moved
             .iter()
             .map(|(a, b)| (a.as_str(), b.as_str()))
@@ -636,8 +656,13 @@ impl VaultState {
         Ok(RenameOutcome {
             changes,
             renamed: moved,
-            rewritten_files: plan.len(),
-            rewritten_links: plan.iter().map(|r| r.links).sum(),
+            rewritten_files: plan.len() - stale.len(),
+            rewritten_links: plan
+                .iter()
+                .filter(|r| !stale.contains(&r.new_path))
+                .map(|r| r.links)
+                .sum(),
+            stale,
         })
     }
 
@@ -2743,11 +2768,20 @@ impl Workspace {
         } else {
             String::new()
         };
+        // A note that changed underneath keeps its own bytes; say which.
+        let skipped = match outcome.stale.len() {
+            0 => String::new(),
+            n => format!(
+                "; {n} file{} changed on disk and {} left alone",
+                if n == 1 { "" } else { "s" },
+                if n == 1 { "was" } else { "were" }
+            ),
+        };
         self.after_changes(outcome.changes, cx);
         if let Some(current) = self.current.clone() {
             self.explorer.update(cx, |e, cx| e.reveal(&current, cx));
         }
-        self.report(format!("{summary}{links}"), cx);
+        self.report(format!("{summary}{links}{skipped}"), cx);
     }
 
     /// Renames the open note to `new_name` (same folder, same extension)
@@ -3576,6 +3610,30 @@ mod tests {
             .unwrap();
         let text = fs::read_to_string(dir.path().join(".obsidian/switcher.json")).unwrap();
         assert_eq!(text, "{\n  \"showAttachments\": false\n}");
+    }
+
+    #[test]
+    fn rename_leaves_a_note_that_changed_underneath_alone() {
+        // The rewrites are planned from the text the index holds. If the
+        // other app saved one of those notes since, writing the plan would
+        // throw that save away, so the note keeps its own bytes.
+        let (dir, state) = vault();
+        let theirs = "# B\n\nRewritten by the other app, with [[A]] still in it.\n";
+        fs::write(dir.path().join("B.md"), theirs).unwrap();
+        let outcome = state.rename("A.md", "Renamed A.md", true).unwrap();
+        assert_eq!(outcome.stale, vec!["B.md".to_string()]);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("B.md")).unwrap(),
+            theirs,
+            "the other app's save was overwritten"
+        );
+        // The notes that did not change are still rewritten.
+        assert!(outcome.rewritten_files >= 1);
+        let sub = fs::read_to_string(dir.path().join("Sub/S.md")).unwrap();
+        assert!(
+            sub.contains("Renamed A"),
+            "an untouched note was not rewritten: {sub}"
+        );
     }
 
     #[test]

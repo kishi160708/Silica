@@ -74,14 +74,26 @@ impl Theme {
         }
     }
 
-    /// The theme `appearance.json` asks for; missing keys keep the dark defaults.
-    pub fn from_appearance(config: &AppearanceConfig) -> Theme {
+    /// The theme `appearance.json` asks for.
+    ///
+    /// `system` is Obsidian's default and means the desktop's own scheme,
+    /// which only a window can answer; `system_dark` is that answer, and
+    /// the caller passes what it knows. A vault with no `theme` key gets
+    /// the same treatment, since that is what Obsidian reads it as.
+    pub fn from_appearance(config: &AppearanceConfig, system_dark: bool) -> Theme {
         let mut theme = match config.theme.as_deref() {
             Some("moonstone") => Theme::light(),
-            _ => Theme::dark(),
+            Some("obsidian") => Theme::dark(),
+            // `system` and anything else Obsidian does not know.
+            _ if system_dark => Theme::dark(),
+            _ => Theme::light(),
         };
         if let Some(size) = config.base_font_size {
-            theme.base_font_size = size.clamp(10, 40) as f32;
+            // Obsidian's own slider offers 10 to 30, but it neither clamps
+            // nor rewrites a file that holds something else — 99 was left
+            // alone across a whole session — so the file's value is
+            // honoured. The floor only keeps a zero out of the layout.
+            theme.base_font_size = size.max(1) as f32;
         }
         if let Some(f) = first_font(config.text_font_family.as_deref()) {
             theme.text_font = f;

@@ -28,7 +28,7 @@ mod workspace;
 
 use gpui::{
     actions, prelude::*, px, size, App, Bounds, Focusable, KeyBinding, TitlebarOptions,
-    WindowBounds, WindowOptions,
+    WindowAppearance, WindowBounds, WindowOptions,
 };
 use _commands::CommandRegistry;
 use std::fmt::Write as _;
@@ -231,10 +231,13 @@ fn main() {
         .vault
         .as_ref()
         .and_then(|root| _vault::Vault::open(root).ok());
-    let theme = vault
+    // The window is what knows the desktop's colour scheme, and it does not
+    // exist yet; dark is assumed here and the theme is rebuilt below once
+    // the window can answer, which only matters for `theme: "system"`.
+    let appearance = vault.as_ref().and_then(|v| v.appearance_config().ok());
+    let theme = appearance
         .as_ref()
-        .and_then(|v| v.appearance_config().ok())
-        .map(|a| Theme::from_appearance(&a))
+        .map(|a| Theme::from_appearance(a, true))
         .unwrap_or_else(Theme::dark);
     let mut registry = CommandRegistry::with_known_ids();
     if let Some(hotkeys) = vault.as_ref().and_then(|v| v.hotkeys().ok()) {
@@ -269,6 +272,25 @@ fn main() {
                 |window, cx| cx.new(|cx| Workspace::new(vault, window, cx)),
             )
             .expect("open main window");
+        // Now there is a window to ask: `theme: "system"` follows the
+        // desktop, which is Obsidian's default and what a vault with no
+        // theme key means.
+        if let Some(a) = appearance {
+            let follows_system =
+                !matches!(a.theme.as_deref(), Some("moonstone") | Some("obsidian"));
+            if follows_system {
+                let dark = window
+                    .update(cx, |_, window, _| {
+                        matches!(
+                            window.appearance(),
+                            WindowAppearance::Dark | WindowAppearance::VibrantDark
+                        )
+                    })
+                    .unwrap_or(true);
+                cx.set_global(Theme::from_appearance(&a, dark));
+                window.update(cx, |_, _, cx| cx.notify()).ok();
+            }
+        }
         cx.on_action(move |_: &Quit, cx| {
             // Save before the window goes away.
             window.update(cx, |ws, _, cx| ws.flush_save(cx)).ok();
