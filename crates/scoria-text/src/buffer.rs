@@ -190,6 +190,9 @@ pub struct TextBuffer {
     pub marked: Option<Range<usize>>,
     history: History,
     dirty: bool,
+    /// A fingerprint of the bytes last known to be on disk: what was
+    /// loaded, or what was last written.
+    disk: u64,
     /// The file used `\r\n`; restored on save.
     crlf: bool,
     /// The file started with a byte order mark; restored on save.
@@ -206,6 +209,16 @@ pub struct TextBuffer {
 struct MixedFile {
     raw: String,
     text: String,
+}
+
+/// A cheap fingerprint of a file's bytes, so a buffer can notice the file
+/// changed underneath without keeping a second copy of it.
+fn fingerprint(raw: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    raw.len().hash(&mut hasher);
+    raw.hash(&mut hasher);
+    hasher.finish()
 }
 
 impl TextBuffer {
@@ -241,6 +254,7 @@ impl TextBuffer {
         self.goal = None;
         self.extra.clear();
         self.dirty = false;
+        self.disk = fingerprint(raw);
         self.history = History::default();
         self.rebuild_lines();
     }
@@ -265,8 +279,30 @@ impl TextBuffer {
         self.dirty
     }
 
+    /// The fingerprint of the bytes last known to be on disk.
+    pub fn disk(&self) -> u64 {
+        self.disk
+    }
+
     pub fn mark_saved(&mut self) {
         self.dirty = false;
+    }
+
+    /// Records that `raw` is what the file holds now: the bytes loaded, or
+    /// the bytes just written.
+    pub fn mark_on_disk(&mut self, raw: &str) {
+        self.disk = fingerprint(raw);
+    }
+
+    /// Whether `raw` is the bytes this buffer was loaded from or last saved
+    /// as.
+    ///
+    /// A save that finds anything else is about to write over a change it
+    /// never saw — the other app's, in the mixed use the Writer gate is
+    /// about — so it must not. The fingerprint is kept rather than a second
+    /// copy of the file.
+    pub fn disk_unchanged(&self, raw: &str) -> bool {
+        self.disk == fingerprint(raw)
     }
 
     /// Marks the text changed; the history steps do their own bookkeeping

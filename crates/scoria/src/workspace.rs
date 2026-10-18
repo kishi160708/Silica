@@ -2274,9 +2274,23 @@ impl Workspace {
         }
         let contents = self.editor.read(cx).file_contents();
         let absolute = state.vault().absolute(&name);
-        match std::fs::write(&absolute, contents) {
+        // The vault is the source of truth. If the file is not the bytes
+        // this note was loaded from or last saved as, something else wrote
+        // it — Obsidian, in the mixed use the phase 3 gate is about — and
+        // overwriting it would throw that away. The buffer keeps its edits
+        // and says so instead.
+        if let Ok(on_disk) = std::fs::read_to_string(&absolute) {
+            if !self.editor.read(cx).disk_unchanged(&on_disk) {
+                self.status =
+                    format!("{name} changed on disk; not overwritten, your edits are still here")
+                        .into();
+                cx.notify();
+                return;
+            }
+        }
+        match std::fs::write(&absolute, &contents) {
             Ok(()) => {
-                self.editor.update(cx, |e, _| e.mark_saved());
+                self.editor.update(cx, |e, _| e.mark_saved(&contents));
                 self.status = format!("{name} saved").into();
             }
             Err(err) => {

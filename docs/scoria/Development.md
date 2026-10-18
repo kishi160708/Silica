@@ -220,6 +220,33 @@ chronologically still steps correctly. A format  cannot render is
 refused outright, because here the format is a path and a wrong one is a
 note in the wrong place.
 
+### The save that would not refuse, 2026-10-18
+
+A gate review of every path by which  writes into the vault turned up
+the one that loses data, and it is the shape the phase 3 gate is actually
+about: a note open and edited in  while Obsidian saves the same note.
+
+`Workspace::flush_save` wrote the whole buffer over the file with no
+comparison against what was there, and the watcher deliberately does not
+reload a note whose buffer is dirty — it reports "changed on disk; unsaved
+edits kept" and returns. So Obsidian's save survived for about two seconds
+and was then overwritten by 's autosave, silently.
+
+`TextBuffer` now keeps a fingerprint of the bytes it last knew on disk, set
+when a file is loaded and when a save writes one. `flush_save` re-reads the
+file first and refuses when it is anything else, keeping the buffer's edits
+and saying so. That is the guard `VaultState::write_block_id` already had
+for the other note it writes; the save path simply never got one.
+
+Verified in the running app: with `--stress` editing and autosaving a note,
+writing the file from a shell and waiting through ten seconds of further
+autosaves leaves the shell's bytes on disk. The harness holds the property
+over every note of the corpus and a real vault.
+
+**Unprobed:** what Obsidian itself does when it finds a note changed
+underneath.  refuses and says so, which loses nothing either way;
+merging or writing a conflict copy would be inventing behavior.
+
 ### Templates, 2026-10-18
 
 `insert-template` opens a chooser over the template folder's notes — by

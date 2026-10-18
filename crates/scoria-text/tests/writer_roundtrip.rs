@@ -644,6 +644,46 @@ fn a_table_command_stays_inside_its_table_and_undoes_cleanly() {
 }
 
 #[test]
+fn a_save_refuses_a_file_that_changed_underneath() {
+    // The gate is a week of mixed use in both apps, and this is the shape
+    // that loses data: a note is open and edited here, the other app saves
+    // it, and the autosave writes the whole buffer over that save. The
+    // buffer keeps a fingerprint of the bytes it last knew on disk so the
+    // save can refuse.
+    for note in notes_under_test() {
+        let raw = std::fs::read_to_string(&note).unwrap();
+        let mut buf = TextBuffer::from_file(&raw);
+        // Nothing has happened: the file on disk is the file we loaded.
+        assert!(
+            buf.disk_unchanged(&raw),
+            "a freshly loaded note did not match its own bytes: {}",
+            note.display()
+        );
+        // Our own edits do not change what is on disk.
+        buf.set_cursor(0, None);
+        buf.insert_all("typed", EditKind::Typing);
+        assert!(
+            buf.disk_unchanged(&raw),
+            "editing changed what the buffer thinks is on disk: {}",
+            note.display()
+        );
+        // The other app saves: one byte is enough to notice.
+        let theirs = format!("{raw}\nwritten by the other app\n");
+        assert!(
+            !buf.disk_unchanged(&theirs),
+            "a change underneath went unnoticed in {}",
+            note.display()
+        );
+        // Once we save, what we wrote is what is on disk.
+        let ours = buf.file_contents();
+        buf.mark_saved();
+        buf.mark_on_disk(&ours);
+        assert!(buf.disk_unchanged(&ours));
+        assert!(!buf.disk_unchanged(&raw), "the pre-save bytes still match");
+    }
+}
+
+#[test]
 fn an_edited_file_keeps_its_line_ending_and_byte_order_mark() {
     // The one corpus note written the Windows way, with both.
     let note = corpus_root().join("edge/CRLF.md");

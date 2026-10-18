@@ -650,8 +650,17 @@ impl Editor {
         self.buf.matches_file(raw)
     }
 
-    pub fn mark_saved(&mut self) {
+    /// Records that `contents` is what the file now holds.
+    pub fn mark_saved(&mut self, contents: &str) {
         self.buf.mark_saved();
+        self.buf.mark_on_disk(contents);
+    }
+
+    /// Whether `raw` is the bytes this note was loaded from or last saved
+    /// as. A save that finds anything else has a change it has not seen,
+    /// and the vault is the source of truth.
+    pub fn disk_unchanged(&self, raw: &str) -> bool {
+        self.buf.disk_unchanged(raw)
     }
 
     pub fn set_readable_line_length(&mut self, on: bool) {
