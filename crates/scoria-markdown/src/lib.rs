@@ -28,6 +28,7 @@ pub mod span;
 pub use ast::*;
 pub use frontmatter::{extract_frontmatter, FrontMatter};
 pub use html::{render_html, render_html_with, HtmlOptions};
+pub use inline::is_tag_char;
 pub use linktext::{link_target, parse_linktext, LinkText, Subpath};
 pub use span::{LineIndex, Loc, Pos, Span};
 

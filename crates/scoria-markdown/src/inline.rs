@@ -1098,7 +1098,7 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
 
 /// Tag characters: letters, digits, `_`, `-`, `/`, and any non-ASCII
 /// character that is not whitespace (Obsidian allows emoji in tags).
-fn is_tag_char(c: char) -> bool {
+pub fn is_tag_char(c: char) -> bool {
     c.is_alphanumeric()
         || matches!(c, '_' | '-' | '/')
         || (!c.is_ascii() && !is_unicode_whitespace(c))

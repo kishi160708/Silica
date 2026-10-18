@@ -4770,6 +4770,7 @@ dependencies = [
  "-formats",
  "-markdown",
  "-search",
+ "-suggest",
  "-text",
  "-vault",
  "serde",
@@ -4829,12 +4830,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "-suggest"
+version = "0.1.0"
+dependencies = [
+ "-cache",
+ "-formats",
+ "-markdown",
+ "-search",
+ "-vault",
+]
+
+[[package]]
 name = "-text"
 version = "0.1.0"
 dependencies = [
  "regex",
  "-cache",
  "-formats",
+ "-suggest",
  "-vault",
  "serde",
  "tempfile",

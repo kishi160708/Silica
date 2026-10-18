@@ -815,7 +815,12 @@ mod tests {
         generate_vault(b.path(), 40, 3).unwrap();
         let va = Vault::open(a.path()).unwrap();
         let vb = Vault::open(b.path()).unwrap();
-        assert_eq!(va.files(), vb.files());
+        // What the generator decides: the kind follows from the path, and
+        // the modification times are the clock's, not its.
+        let listing = |v: &Vault| -> Vec<(String, u64)> {
+            v.files().iter().map(|f| (f.path.clone(), f.size)).collect()
+        };
+        assert_eq!(listing(&va), listing(&vb));
         for f in va.markdown_files() {
             assert_eq!(
                 fs::read_to_string(va.absolute(&f.path)).unwrap(),

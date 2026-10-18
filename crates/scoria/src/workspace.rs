@@ -992,7 +992,12 @@ impl Workspace {
         let properties =
             PropertiesInDocument::from_config(state.app().properties_in_document.as_deref());
         let build_options = state.build_options();
+        let link_options = _suggest::Options {
+            format: state.link_format(),
+            markdown_links: state.app().use_markdown_links.unwrap_or(false),
+        };
         self.editor.update(cx, |e, cx| {
+            e.set_link_options(link_options);
             e.set_readable_line_length(readable);
             e.set_indent_options(smart, use_tab, tab_size);
             e.set_property_types(state.property_types().clone());
@@ -1032,7 +1037,8 @@ impl Workspace {
         let embed_source: Arc<dyn reading::EmbedSource + Send + Sync> = state.clone();
         let build_options = state.build_options();
         self.editor.update(cx, |e, cx| {
-            e.set_vault(Some(embed_source), build_options, cx)
+            e.set_vault(Some(embed_source), build_options, cx);
+            e.set_suggest_vault(state.clone());
         });
         self.apply_app_config(&state, cx);
         self.refresh_vault_views(cx);

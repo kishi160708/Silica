@@ -18,6 +18,7 @@ mod properties;
 mod reading;
 mod search;
 mod settings;
+mod suggest;
 mod switcher;
 mod text_input;
 mod theme;
@@ -144,6 +145,12 @@ struct Args {
     rename: Option<String>,
     /// Open a file prompt for the opened note: rename, move, delete, folder.
     prompt: Option<String>,
+    /// Type this text at the cursor in the source editor, which is how the
+    /// autocompletion popup is opened for a screenshot (`--type "[[al"`).
+    type_text: Option<String>,
+    /// Accept the popup's selected row with `enter`, `tab` or `shift-enter`,
+    /// after `--type` and an optional `down` repeated to move the selection.
+    accept: Option<String>,
 }
 
 fn parse_args() -> Args {
@@ -164,6 +171,8 @@ fn parse_args() -> Args {
         find_all: None,
         rename: None,
         prompt: None,
+        type_text: None,
+        accept: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -185,6 +194,8 @@ fn parse_args() -> Args {
             "--find-all" => args.find_all = it.next().or(Some(String::new())),
             "--rename" => args.rename = it.next(),
             "--prompt" => args.prompt = it.next().or(Some("rename".into())),
+            "--type" => args.type_text = it.next(),
+            "--accept" => args.accept = it.next().or(Some("enter".into())),
             _ if args.vault.is_none() => args.vault = Some(PathBuf::from(a)),
             _ => args.note = Some(a),
         }
@@ -253,6 +264,8 @@ fn main() {
         let palette = args.palette.clone();
         let settings_tab = args.settings.clone();
         let source = args.source;
+        let type_text = args.type_text.clone();
+        let accept = args.accept.clone();
         let reading = args.reading;
         let find = args.find.clone();
         let find_all = args.find_all.clone();
@@ -333,6 +346,13 @@ fn main() {
                         }
                         if let Some(kind) = &prompt {
                             ws.open_file_prompt(kind, window, cx);
+                        }
+                        if let Some(t) = &type_text {
+                            ws.editor().update(cx, |e, cx| e.type_text(t, window, cx));
+                        }
+                        if let Some(key) = &accept {
+                            ws.editor()
+                                .update(cx, |e, cx| e.accept_suggestion_key(key, window, cx));
                         }
                         true
                     })

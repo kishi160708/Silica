@@ -500,6 +500,7 @@ mod tests {
                 path: p.to_string(),
                 kind: FileKind::from_path(p),
                 size: 0,
+                mtime: 0,
             })
             .collect()
     }

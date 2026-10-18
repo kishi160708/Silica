@@ -37,6 +37,19 @@ pub struct VaultFile {
     pub path: String,
     pub kind: FileKind,
     pub size: u64,
+    /// Milliseconds since the Unix epoch, like Obsidian's `TFile.stat.mtime`:
+    /// the link suggester orders an empty query by it, newest first. Zero
+    /// when the filesystem does not say.
+    pub mtime: u64,
+}
+
+/// A file's modification time in milliseconds since the Unix epoch.
+fn mtime_ms(meta: &std::fs::Metadata) -> u64 {
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// What [`Vault::refresh_path`] found; paths are vault-relative.
@@ -173,11 +186,15 @@ impl Vault {
             if !entry.file_type().is_file() {
                 continue;
             }
-            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            let (size, mtime) = entry
+                .metadata()
+                .map(|m| (m.len(), mtime_ms(&m)))
+                .unwrap_or((0, 0));
             files.push(VaultFile {
                 kind: FileKind::from_path(&rel),
                 path: rel,
                 size,
+                mtime,
             });
         }
         files.sort_by(|a, b| a.path.cmp(&b.path));
@@ -211,6 +228,7 @@ impl Vault {
                     kind: FileKind::from_path(&rel),
                     path: rel.clone(),
                     size: meta.len(),
+                    mtime: mtime_ms(&meta),
                 };
                 match self.files.binary_search_by(|f| f.path.cmp(&rel)) {
                     Ok(ix) => {

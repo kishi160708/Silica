@@ -26,8 +26,10 @@ use crate::properties::{self, Field, Part, Target};
 use crate::reading::model::{build_widgets, BuildOptions, EmbedSource, LinkTarget, RBlock, Widget};
 use crate::reading::view::{LinkHandler, Renderer, ToggleHandler};
 use crate::reading::view::{PropertiesHost, PropertyAction};
+use crate::suggest::{Anchor, SuggestState};
 use crate::text_input::{InputEvent, TextInput};
 use crate::theme::Theme;
+use crate::workspace::VaultState;
 use gpui::{
     actions, div, fill, point, prelude::*, px, relative, size, AnyElement, App, AvailableSpace,
     Bounds, ClipboardItem, Context, DispatchPhase, Element, ElementId, ElementInputHandler, Entity,
@@ -40,6 +42,7 @@ use gpui::{
 use _formats::config::PropertyTypes;
 use _formats::properties::{self as props, PropertiesInDocument};
 use _markdown::highlight::{flatten, highlight_lines, HighlightKind, HighlightSpan};
+use _suggest::{self as suggest, Accept, Suggestion};
 use _text::{find, shifted, Cursor, Cursors, EditKind, Sel, TextBuffer};
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
@@ -458,6 +461,12 @@ pub struct Editor {
     properties_folded: bool,
     /// The property whose type menu is open.
     property_menu: Option<String>,
+    /// The open autocompletion popup, with the rows it is offering.
+    suggest: Option<SuggestState>,
+    /// The vault the suggester reads; `None` until one is open.
+    suggest_vault: Option<Arc<VaultState>>,
+    /// `newLinkFormat` and `useMarkdownLinks`, for the links it writes.
+    link_options: suggest::Options,
     generation: u64,
     pub stats: ParseStats,
     layout: Layout,
@@ -537,6 +546,9 @@ impl Editor {
             property_field: None,
             properties_folded: false,
             property_menu: None,
+            suggest: None,
+            suggest_vault: None,
+            link_options: suggest::Options::default(),
             generation: 0,
             stats: ParseStats::default(),
             layout: Layout::default(),
@@ -559,6 +571,7 @@ impl Editor {
     pub fn set_text(&mut self, name: impl Into<SharedString>, raw: String, cx: &mut Context<Self>) {
         self.name = name.into();
         self.buf.load(&raw);
+        self.suggest = None;
         self.buf.head = 0;
         self.buf.anchor = 0;
         self.widgets = Arc::new(Vec::new());
@@ -581,6 +594,7 @@ impl Editor {
     /// cursor and scroll position where they were (clamped to the new text).
     pub fn reload(&mut self, raw: String, cx: &mut Context<Self>) {
         let (head, anchor) = (self.buf.head, self.buf.anchor);
+        self.suggest = None;
         self.buf.load(&raw);
         self.buf.head = self.buf.clamp_offset(head);
         self.buf.anchor = self.buf.clamp_offset(anchor);
@@ -658,11 +672,61 @@ impl Editor {
         self.properties_in_document = mode;
     }
 
+    /// The vault the autocompletion popup offers rows from. The state is
+    /// read through its locks on every keystroke, so a file added or
+    /// renamed while the note is open is offered without setting it again.
+    pub fn set_suggest_vault(&mut self, state: Arc<VaultState>) {
+        self.suggest_vault = Some(state);
+    }
+
+    /// `newLinkFormat` and `useMarkdownLinks`: the shape of the links an
+    /// accepted suggestion writes.
+    pub fn set_link_options(&mut self, opts: suggest::Options) {
+        self.link_options = opts;
+    }
+
     /// Editor settings from `app.json`: smart lists, and tabs or spaces.
     pub fn set_indent_options(&mut self, smart_indent_list: bool, use_tab: bool, tab_size: u8) {
         self.smart_indent_list = smart_indent_list;
         self.use_tab = use_tab;
         self.tab_size = tab_size;
+    }
+
+    /// Types `text` at the cursor the way a keystroke does, so the
+    /// autocompletion popup opens for it. Used by `--type` to put the popup
+    /// on screen for a screenshot.
+    pub fn type_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.insert_all(text, EditKind::Typing, window, cx);
+    }
+
+    /// Presses one of the popup's accept keys by name, for `--accept`.
+    /// `down` moves the selection instead, so a screenshot can show a row
+    /// other than the first being taken.
+    pub fn accept_suggestion_key(
+        &mut self,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        for key in key.split(',') {
+            match key.trim() {
+                "down" => {
+                    self.suggest_step(1, cx);
+                }
+                "up" => {
+                    self.suggest_step(-1, cx);
+                }
+                "tab" => {
+                    self.accept_suggestion(Accept::Inside, window, cx);
+                }
+                "shift-enter" => {
+                    self.accept_suggestion(Accept::Typed, window, cx);
+                }
+                _ => {
+                    self.accept_suggestion(Accept::Whole, window, cx);
+                }
+            }
+        }
     }
 
     /// One step of the self-driving stress run: types, breaks lines, pages
@@ -1066,6 +1130,7 @@ impl Editor {
     fn after_edit(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
         self.request_parse(cx);
         self.refresh_matches(cx);
+        self.update_suggest(true, cx);
         match window {
             Some(window) => self.reveal_cursor(window),
             None => self.pending_reveal = true,
@@ -1191,6 +1256,9 @@ impl Editor {
             self.buf.anchor = self.buf.head;
         }
         self.buf.marked = None;
+        // A cursor move refreshes a popup that is open, and closes it once
+        // the cursor has left the query.
+        self.update_suggest(false, cx);
         self.reveal_cursor(window);
         cx.notify();
     }
@@ -1220,6 +1288,9 @@ impl Editor {
             primary: cursors.primary,
         });
         self.buf.marked = None;
+        // A cursor move refreshes a popup that is open, and closes it once
+        // the cursor has left the query.
+        self.update_suggest(false, cx);
         self.reveal_cursor(window);
         cx.notify();
     }
@@ -1441,10 +1512,16 @@ impl Editor {
     }
 
     fn move_up(&mut self, _: &MoveUp, window: &mut Window, cx: &mut Context<Self>) {
+        if self.suggest_step(-1, cx) {
+            return;
+        }
         self.vertical(-1, false, window, cx);
     }
 
     fn move_down(&mut self, _: &MoveDown, window: &mut Window, cx: &mut Context<Self>) {
+        if self.suggest_step(1, cx) {
+            return;
+        }
         self.vertical(1, false, window, cx);
     }
 
@@ -1491,10 +1568,16 @@ impl Editor {
     }
 
     fn page_up(&mut self, _: &PageUp, window: &mut Window, cx: &mut Context<Self>) {
+        if self.suggest_step(-(crate::suggest::VISIBLE as isize), cx) {
+            return;
+        }
         self.page(false, false, window, cx);
     }
 
     fn page_down(&mut self, _: &PageDown, window: &mut Window, cx: &mut Context<Self>) {
+        if self.suggest_step(crate::suggest::VISIBLE as isize, cx) {
+            return;
+        }
         self.page(true, false, window, cx);
     }
 
@@ -1512,6 +1595,9 @@ impl Editor {
     }
 
     fn line_start(&mut self, _: &LineStart, window: &mut Window, cx: &mut Context<Self>) {
+        if self.suggest_step(isize::MIN, cx) {
+            return;
+        }
         if let Some(f) = self.property_field.as_mut() {
             f.home();
             cx.notify();
@@ -1521,6 +1607,9 @@ impl Editor {
     }
 
     fn line_end(&mut self, _: &LineEnd, window: &mut Window, cx: &mut Context<Self>) {
+        if self.suggest_step(isize::MAX, cx) {
+            return;
+        }
         if let Some(f) = self.property_field.as_mut() {
             f.end();
             cx.notify();
@@ -1634,6 +1723,9 @@ impl Editor {
     /// numbering of ordered lists, and clears or outdents an empty item.
     /// With several cursors, or a selection, a plain newline at each.
     fn newline(&mut self, _: &Newline, window: &mut Window, cx: &mut Context<Self>) {
+        if self.accept_suggestion(Accept::Whole, window, cx) {
+            return;
+        }
         // Enter in a properties field commits it, as Obsidian's does.
         if self.commit_property_field(Some(window), cx) {
             return;
@@ -1645,12 +1737,18 @@ impl Editor {
 
     /// Shift+Enter: a plain newline.
     fn newline_plain(&mut self, _: &NewlinePlain, window: &mut Window, cx: &mut Context<Self>) {
+        if self.accept_suggestion(Accept::Typed, window, cx) {
+            return;
+        }
         self.insert_all("\n", EditKind::Other, window, cx);
     }
 
     /// Tab: indents list items and selected lines by one step (renumbering
     /// the ordered lists it touches), and inserts the step anywhere else.
     fn tab(&mut self, _: &Tab, window: &mut Window, cx: &mut Context<Self>) {
+        if self.accept_suggestion(Accept::Inside, window, cx) {
+            return;
+        }
         // Tab commits a key field and moves to that property's value, as
         // Obsidian's key input does (`enterkeyhint="next"`). From a value
         // field it just commits, since there is nothing after it.
@@ -1766,7 +1864,9 @@ impl Editor {
     /// Escape: abandons a properties field first, then drops extra cursors,
     /// then closes the panel.
     fn close_find(&mut self, _: &CloseFind, window: &mut Window, cx: &mut Context<Self>) {
-        if self.cancel_property_field(cx) {
+        if self.suggest.is_some() {
+            self.close_suggest(cx);
+        } else if self.cancel_property_field(cx) {
         } else if !self.buf.extra.is_empty() && self.focus_handle.is_focused(window) {
             self.buf.collapse_cursors();
             cx.notify();
@@ -1946,6 +2046,167 @@ impl Editor {
 
     /// The visible line under a window point, shaped as painted, and the
     /// display byte nearest the point.
+    /// Reopens, refreshes or closes the autocompletion popup for the text
+    /// before the cursor.
+    ///
+    /// `opening` is set after an edit. A bare cursor move only refreshes a
+    /// popup that is already open, so clicking into the middle of a link
+    /// that is already written does not pop one up.
+    fn update_suggest(&mut self, opening: bool, cx: &mut Context<Self>) {
+        if !opening && self.suggest.is_none() {
+            return;
+        }
+        // One query, one cursor: a suggestion inserted at several at once
+        // would be several different links.
+        if self.cursor_count() > 1 || self.property_field.is_some() {
+            self.close_suggest(cx);
+            return;
+        }
+        let Some(state) = self.suggest_vault.clone() else {
+            self.close_suggest(cx);
+            return;
+        };
+        let cursor = self.cursor();
+        let line = self.buf.line_text(cursor.line).to_string();
+        let Some(t) = suggest::trigger(&line, cursor.col) else {
+            self.close_suggest(cx);
+            return;
+        };
+        let items = self.offer(&state, &t);
+        if items.is_empty() {
+            self.close_suggest(cx);
+            return;
+        }
+        self.suggest = Some(SuggestState {
+            line: cursor.line,
+            range: t.range.clone(),
+            items,
+            selected: 0,
+        });
+        cx.notify();
+    }
+
+    /// The rows the vault offers for `t`, read under its locks.
+    fn offer(&self, state: &Arc<VaultState>, t: &suggest::Triggered<'_>) -> Vec<Suggestion> {
+        let vault = state.vault();
+        let cache = state.cache();
+        let show_unsupported = state.app().show_unsupported_files.unwrap_or(false);
+        suggest::suggestions(
+            t,
+            &suggest::Vault {
+                files: vault.files(),
+                cache: &cache,
+                source: self.name.as_ref(),
+                show_unsupported,
+            },
+        )
+    }
+
+    fn close_suggest(&mut self, cx: &mut Context<Self>) {
+        if self.suggest.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    /// Moves the popup's selection, if it is open. Up, down, the page keys
+    /// and Home and End all belong to the popup while it is, which is what
+    /// Obsidian's popup binds.
+    fn suggest_step(&mut self, delta: isize, cx: &mut Context<Self>) -> bool {
+        let Some(s) = self.suggest.as_mut() else {
+            return false;
+        };
+        match delta {
+            isize::MIN => s.select_first(),
+            isize::MAX => s.select_last(),
+            delta => s.step(delta),
+        }
+        cx.notify();
+        true
+    }
+
+    /// Accepts the selected row, if the popup is open.
+    fn accept_suggestion(
+        &mut self,
+        accept: Accept,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(ix) = self.suggest.as_ref().map(|s| s.selected) else {
+            return false;
+        };
+        self.accept_suggestion_at(ix, accept, window, cx)
+    }
+
+    /// Writes the row at `ix` into the document and puts the cursor where
+    /// the accept key leaves it. The trigger is read from the line again so
+    /// the text that is replaced is the text that is there now.
+    pub(crate) fn accept_suggestion_at(
+        &mut self,
+        ix: usize,
+        accept: Accept,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(state) = self.suggest_vault.clone() else {
+            return false;
+        };
+        let Some(s) = self.suggest.as_ref() else {
+            return false;
+        };
+        let Some(item) = s.items.get(ix).map(|s| s.item.clone()) else {
+            return false;
+        };
+        let (at, end) = (s.line, s.range.end);
+        let line_start = self.buf.line_range(at).start;
+        let line = self.buf.line_text(at).to_string();
+        let Some(t) = suggest::trigger(&line, end) else {
+            self.close_suggest(cx);
+            return false;
+        };
+        let ins = {
+            let vault = state.vault();
+            let cache = state.cache();
+            let show_unsupported = state.app().show_unsupported_files.unwrap_or(false);
+            suggest::insert(
+                &t,
+                &item,
+                accept,
+                &suggest::Vault {
+                    files: vault.files(),
+                    cache: &cache,
+                    source: self.name.as_ref(),
+                    show_unsupported,
+                },
+                &self.link_options,
+            )
+        };
+        let range = line_start + t.range.start..line_start + t.range.end + ins.consume;
+        let cursor = range.start + ins.cursor;
+        self.suggest = None;
+        // One undo step, and the cursor where the insertion asks for it:
+        // after the link for Enter, inside the brackets for Tab, where
+        // `after_edit` opens the popup again on what is left to type.
+        self.edit_many(vec![(range, ins.text)], cursor, None, window, cx);
+        true
+    }
+
+    /// Where the popup is drawn: under the start of the query, in the
+    /// editor's own coordinates.
+    fn suggest_anchor(&self, state: &SuggestState) -> Option<Anchor> {
+        let shaped = self.layout.cursor_line.clone()?;
+        let (row, x) = shaped.row_and_x(state.range.start.min(state.range.end));
+        let rh = shaped.row_height;
+        let origin = self.layout.bounds.origin;
+        let top = self.layout.cursor_top - origin.y + rh * row as f32;
+        Some(Anchor {
+            x: self.layout.content_x - origin.x + x,
+            top,
+            bottom: top + rh,
+            width: self.layout.bounds.size.width,
+            height: self.layout.bounds.size.height,
+        })
+    }
+
     fn display_hit(
         &self,
         window: &mut Window,
@@ -2600,6 +2861,15 @@ impl Render for Editor {
         self.palette = Palette::from_theme(&theme);
         let base = theme.base_font_size;
         let panel = self.find.open.then(|| self.render_find_panel(&theme, cx));
+        // The popup is drawn over the text, anchored under the query it is
+        // offering rows for.
+        let popup = self.suggest.take().map(|state| {
+            let element = self
+                .suggest_anchor(&state)
+                .map(|anchor| crate::suggest::render(&state, &anchor, &theme, cx));
+            self.suggest = Some(state);
+            element
+        });
         let editor = div()
             .key_context("Editor")
             .track_focus(&self.focus_handle)
@@ -2652,7 +2922,12 @@ impl Render for Editor {
             .child(EditorElement {
                 editor: cx.entity(),
             });
-        div().relative().size_full().child(editor).children(panel)
+        div()
+            .relative()
+            .size_full()
+            .child(editor)
+            .children(panel)
+            .children(popup.flatten())
     }
 }
 

@@ -29,6 +29,8 @@ cargo run --release -p  -- <vault> --palette "open"         # open with the comm
 cargo run --release -p  -- <vault> --settings hotkeys       # open Settings on a tab (general, appearance, editor, ...)
 cargo run --release -p  -- <vault> --note X --source        # open a note in Source mode (--reading for reading view; the default is the vault's defaultViewMode)
 cargo run --release -p  -- <vault> --note X --stress 40     # self-driven edits on that note, then autosave (use a scratch vault)
+cargo run --release -p  -- <vault> --note X --source --type '[[al'          # type at the cursor: opens the autocompletion popup for a screenshot
+cargo run --release -p  -- <vault> --note X --source --type '[[al' --accept down,enter   # and press the popup's keys (enter, tab, shift-enter, up, down)
 cargo run --release -p  -- <vault> --note X --find word     # open with the find panel up and the query matched
 cargo run --release -p  -- <vault> --note X --prompt rename  # open the rename prompt (move, delete, folder) for screenshots
 cargo run --release -p  -- <vault> --note X --rename "New"   # rename the note at startup, rewriting links (use a scratch vault)
@@ -115,10 +117,71 @@ of mixed use in both apps.
 | File operations and link rewriting | done, see [[#File operations, 2026-10-17]] |
 | Tables (editing) | not started: widgets render, cells are not editable |
 | Properties | done, see [[#Properties, 2026-10-18]] |
-| Autocompletion | not started |
+| Autocompletion | links, headings, aliases, embeds and tags, see [[#Autocompletion, 2026-10-18]]; block references are not offered yet |
 | Templates, daily notes, file recovery | not started |
 | Writing settings back | started: every Settings toggle writes, see [[#Settings writing, 2026-10-18]]; dropdowns, text fields and sliders are still read-only |
 | Round-trip harness | done, see [[#Round-trip harness, 2026-10-18]] |
+
+### Autocompletion, 2026-10-18
+
+Typing `[[`, `![[` or `#` opens a popup over the editor. The rows are the
+vault's files, their aliases, a note's headings and the vault's tags;
+Enter, Tab and Shift+Enter accept one three different ways.
+
+What Obsidian does here was observed rather than guessed. Its four
+`app.workspace.editorSuggest.suggests` instances are drivable from a
+throwaway plugin (see [[obsidian-behavior-probes]] in the session notes and
+[[#File operations, 2026-10-17]] for the method): `onTrigger` was called for
+37 shapes of line, `getSuggestions` for what each offers, and the popup's
+own `scope` key handlers for what every accept key writes, across both link
+styles, all three `newLinkFormat` values and a source note in a subfolder.
+Three runs; the results are written up in
+[[Specification#Observed autocompletion behavior, Obsidian 1.14.4]] and
+encoded row for row in `-suggest/tests/obsidian_rows.rs`.
+
+What the probes settled that guessing would have got wrong:
+
+- **Tab is not Enter.** Enter finishes the link and leaves the cursor after
+  the `]]`; Tab leaves it *inside*, so a `#heading` or `|alias` can follow
+  what was just accepted. Shift+Enter ignores the selected row and links the
+  text as typed. On a tag, Enter writes a trailing space and Tab does not.
+- **A heading pick keeps the path as typed** and never takes display text:
+  `[[Sub/Gamma#` stays `Sub/Gamma` where `shortest` would have written
+  `Gamma`. Every other pick is reformatted to the vault's `newLinkFormat`.
+- **Display text follows the path, not the name.** `|Alpha` is added exactly
+  when the path part carries a `/`, and only for notes, so `[[Sub/Alpha|Alpha]]`
+  but `[[../pic.png]]`.
+- **An empty `[[` is ordered by modification time**, newest first — not by
+  recency of opening, which is what the quick switcher uses. The list is also
+  files and aliases only: the switcher offers unresolved link targets, this
+  does not.
+- Nothing suppresses the trigger: it fires inside a code span, a fenced
+  block, a `%%comment%%` and frontmatter alike. That is why the trigger is a
+  scan back along one line rather than a parse.
+
+The code is a new crate, `-suggest`, free of gpui like `-text`:
+`trigger` (what the line asks for), `suggestions` (what the vault offers)
+and `insert` (the bytes accepting one writes, reusing
+`_cache::links::link_path` so there is one link formatter). The GPUI
+side is `/src/suggest.rs`, a list anchored under the query, and about
+sixty lines in the editor that hand the popup the keys it owns while it is
+open. `VaultFile` grew an `mtime` for the ordering above; the metadata was
+already being read for `size`.
+
+The Writer gate's harness covers the new write path: accepting a suggestion
+at five places in every corpus note replaces the query and nothing else, and
+undoes back to the file's bytes — over the real vault too.
+
+Ranking is 's own fuzzy matcher (the one behind the quick switcher), so
+the order within a query can differ from Obsidian's; what each row *writes*
+is what matches.
+
+**Not done:** block references. `[[Note#^` offers nothing rather than
+offering a row it cannot write, because accepting a block with no id of its
+own means writing a six-character id into the *target* note — inline on a
+paragraph, on its own line after a heading. That is a write into a second
+file and wants its own change. `Ctrl+P`/`Ctrl+N`, which Obsidian's popup also
+binds to the selection, are left to 's own bindings.
 
 ### Settings writing, 2026-10-18
 

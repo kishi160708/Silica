@@ -15,5 +15,6 @@ regex.workspace = true
 -cache.workspace = true
 serde.workspace = true
 -formats.workspace = true
+-suggest.workspace = true
 -vault.workspace = true
 tempfile.workspace = true

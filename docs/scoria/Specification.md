@@ -223,3 +223,110 @@ Where  deliberately differs, because Obsidian loses bytes:
 - **`...`** does not close a properties block in Obsidian, and no longer does
   in  either; adding a property to `---\na: 1\n...\n` prepends a second
   block there too.
+
+## Observed autocompletion behavior, Obsidian 1.14.4
+
+Observed with a throwaway plugin in a scratch vault (see
+[[Development#Autocompletion, 2026-10-18]]), driving the four
+`app.workspace.editorSuggest.suggests` instances directly: `onTrigger` for
+every shape of line, `getSuggestions` for what each offers, and the popup's
+own `scope` key handlers for what accepting one writes.
+
+The popup binds `ArrowUp`, `ArrowDown`, `PageUp`, `PageDown`, `Home`, `End`,
+`Ctrl+P`, `Ctrl+N`, `Enter` and `Escape`; the link suggester also binds
+`Tab`, `Shift+Enter`, `#` and `^`. All four have a limit of 100 items.
+
+What triggers, scanning back from the cursor on the cursor's line only:
+
+- **Links.** The last `[[` before the cursor with no `]` after it. The query is
+  everything from there to the cursor and keeps its spaces, `#`, `^`, `|` and
+  `/`: `[[Alpha#first` is one query, `Alpha#first`, which the suggester
+  splits itself. `[[[al` takes the last `[[`. A cursor inside `[[al]]` still
+  triggers; one after the `]]` does not. `![[` is the same suggester, the
+  query starting after the third bracket.
+- **Tags.** A `#` at the start of the line or after whitespace, through the
+  cursor; `word#inl` does not trigger. The query excludes the `#` but the
+  range to replace includes it.
+- Nothing suppresses either one: both fire inside a code span, inside a fenced
+  code block, inside `%%comments%%` and inside frontmatter. The link
+  suggester wins when both would fire, being first in the list.
+- `[text](` offers nothing. There is no markdown-link path completion.
+
+What each offers:
+
+- An **empty** `[[` query lists every file in the vault plus every alias,
+  ordered by the file's modification time, newest first — not by recency of
+  opening, which is what the quick switcher uses. A non-empty query is fuzzy
+  matched and an alias scores just below its file.
+- The list is `metadataCache.getLinkSuggestions()`: files and aliases, and
+  **no unresolved link targets**, which is the other way the link suggester
+  differs from the quick switcher. A query nothing matches offers one item
+  with no file, which links the text as typed.
+- `[[Note#` lists that note's headings in document order, the H1 included,
+  unfiltered while the query after the `#` is empty. `[[#` lists the
+  *current* note's headings.
+- `[[Note#^` lists every block of the note — headings as `## First Heading`
+  with their markers, paragraphs as their text with any `^id` stripped.
+- `[[Note|` lists that note's aliases; with text after the `|` it offers that
+  text as the display text.
+- `#` lists every tag in the vault alphabetically, parent segments
+  (`project` for `project/alpha`) as their own items, without the `#`.
+
+What accepting one writes, with `newLinkFormat: shortest` and wikilinks:
+
+| Typed | Accepted | Written |
+| --- | --- | --- |
+| `[[beta no` | the file | `[[Beta Note]]` |
+| `[[al` | `Sub/Alpha` | `[[Sub/Alpha\|Alpha]]` |
+| `[[alpha ali` | the alias | `[[Alpha\|Alpha Alias]]` |
+| `[[Alpha\|disp` | the typed text | `[[Alpha\|disp]]` |
+| `[[Alpha#first` | the heading | `[[Alpha#First Heading]]` |
+| `[[Alpha#^` | a block with no id | `[[Alpha#^07fe38]]` |
+| `[[pi` | `pic.png` | `[[pic.png]]` |
+| `![[pi` | `pic.png` | `![[pic.png]]` |
+| `[[No Such Note` | the typed text | `[[No Such Note]]`, and no file is created |
+| `#inl` | the tag | `#inline-tag ` |
+
+- The display text after `|` is added exactly when the path part contains a
+  `/`, and only for markdown targets: `[[Sub/Alpha|Alpha]]` and
+  `[[../Beta Note|Beta Note]]`, but `[[../pic.png]]` with none.
+- The path part is `fileToLinktext` in the vault's `newLinkFormat`, so the
+  same note is `[[Gamma]]` from inside `Sub`, `[[Sub/Gamma|Gamma]]` from the
+  root under `absolute`, and `[[../Beta Note|Beta Note]]` under `relative`.
+- A **heading** pick is the exception twice over: the path is left exactly as
+  it was typed rather than reformatted, and no display text is ever added.
+  `[[Sub/Gamma#` becomes `[[Sub/Gamma#Gamma Heading]]` even though
+  `shortest` would have written the path as `Gamma`.
+- A closing `]]` already after the cursor is consumed rather than doubled, so
+  accepting inside `[[be|]]` leaves `[[Beta Note]]` and not four brackets.
+- Accepting a **block** with no id of its own writes the id into the target
+  note. The id is six lowercase hex characters (twelve of twelve samples),
+  appended to a paragraph inline (`para one ^3a3815`) and written on a line
+  of its own after a heading (`## First Heading\n\n^07fe38\n`). An id
+  already there is reused and the target is not touched.
+
+With `useMarkdownLinks` the same picks write markdown links: the display text
+is the basename, the alias, or the heading text, the destination is the link
+path with `.md` kept for notes, and only spaces are percent-encoded —
+`[Beta Note](Beta%20Note.md)`, `[Alpha Alias](Alpha.md)`,
+`[First Heading](Alpha.md#First%20Heading)`, `[pic](pic.png)`,
+`![Beta Note](Beta%20Note.md)`. A pick with no file behind it writes an
+**empty** display text: `[](No%20Such%20Note%20At%20All)`, and a block
+reference writes `[](Alpha.md#^07fe38)`; the cursor then lands between the
+`[` and the `]`, whichever key accepted it, since that is the part left to
+fill in.
+
+The three accept keys differ, and the difference is the point:
+
+- **Enter** writes the whole link and leaves the cursor after the `]]`; on a
+  tag it writes a trailing space (`#inline-tag `) and sits after it.
+- **Tab** writes the same link but leaves the cursor *inside*, before the
+  `]]`, so a `#heading` or `|alias` can follow; on a tag it writes no
+  trailing space. With `useMarkdownLinks` there is nowhere to stand, and Tab
+  lands where Enter does.
+- **Shift+Enter** ignores the selected item and links the text as typed:
+  `[[beta no` becomes `[[beta no]]`. The tag suggester does not bind it.
+
+**Unprobed:** whether the `#` and `^` keys the link popup binds do anything
+beyond typing the character, and whether typing `[[` auto-pairs the closing
+brackets (`autoPairBrackets`, which  does not implement either way).
