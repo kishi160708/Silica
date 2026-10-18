@@ -2167,6 +2167,9 @@ impl Editor {
         let vault = state.vault();
         let cache = state.cache();
         let show_unsupported = state.app().show_unsupported_files.unwrap_or(false);
+        // Only a `#^` query asks for a note's text, so this costs nothing
+        // on the common `[[` keystroke.
+        let texts = |path: &str| state.texts().get(path).map(|t| t.to_string());
         suggest::suggestions(
             t,
             &suggest::Vault {
@@ -2174,6 +2177,7 @@ impl Editor {
                 cache: &cache,
                 source: self.name.as_ref(),
                 show_unsupported,
+                text: &texts,
             },
         )
     }
@@ -2243,6 +2247,7 @@ impl Editor {
             let vault = state.vault();
             let cache = state.cache();
             let show_unsupported = state.app().show_unsupported_files.unwrap_or(false);
+            let texts = |path: &str| state.texts().get(path).map(|t| t.to_string());
             suggest::insert(
                 &t,
                 &item,
@@ -2252,6 +2257,7 @@ impl Editor {
                     cache: &cache,
                     source: self.name.as_ref(),
                     show_unsupported,
+                    text: &texts,
                 },
                 &self.link_options,
             )

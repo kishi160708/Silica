@@ -130,6 +130,15 @@ fn parts(t: &Triggered<'_>, item: &Item, v: &Vault<'_>, opts: &Options) -> Parts
             resolved: true,
             markdown: true,
         },
+        // A block pick follows the heading rule for the path, and writes no
+        // display text at all: `[](Gamma.md#^id)` in markdown style.
+        Item::Block { id, .. } => Parts {
+            path: parse_linktext(t.query).path.to_string(),
+            subpath: format!("#^{id}"),
+            display: None,
+            resolved: true,
+            markdown: true,
+        },
         // Nothing resolved: the query is linked as it was typed. A `|` in it
         // still splits, so `[[Alpha|disp` keeps `disp` as the display text
         // and links `Alpha` even though no file was picked.
@@ -173,6 +182,9 @@ fn link(
         let shown = match (&p.display, &p.resolved, item) {
             (Some(d), _, _) => d.clone(),
             (None, true, Item::Heading { heading, .. }) => heading.clone(),
+            // A block reference has no text to show; the cursor lands
+            // between the brackets, which is the part left to fill in.
+            (None, _, Item::Block { .. }) if !typed => String::new(),
             (None, true, _) => basename(&p.path).to_string(),
             (None, false, _) => String::new(),
         };

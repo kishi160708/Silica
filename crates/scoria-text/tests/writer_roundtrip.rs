@@ -341,7 +341,10 @@ fn typing_changes_only_the_bytes_at_the_cursor() {
 /// `[[al` has something to resolve to whatever note is under test.
 fn suggest_fixture() -> (Vec<VaultFile>, MetadataCache) {
     let notes = [
-        ("Alpha.md", "# Alpha\n\n## First Heading\n"),
+        (
+            "Alpha.md",
+            "# Alpha\n\n## First Heading\n\nA paragraph. ^blockone\n",
+        ),
         ("Beta Note.md", "# Beta Note\n"),
     ];
     let mut resolver = LinkResolver::default();
@@ -389,6 +392,7 @@ fn accepting_a_suggestion_replaces_only_the_query_and_undoes_cleanly() {
                 cache: &cache,
                 source: "Note.md",
                 show_unsupported: false,
+                text: &|_| None,
             };
             let items = _suggest::suggestions(&t, &vault);
             let item = &items.first().expect("`al` offers Alpha").item;

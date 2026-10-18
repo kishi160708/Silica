@@ -26,6 +26,10 @@ pub struct Vault<'a> {
     pub source: &'a str,
     /// `showUnsupportedFiles`: whether files  has no view for are offered.
     pub show_unsupported: bool,
+    /// A note's text, for the labels a block row reads. Only a `#^` query
+    /// asks for it, so the common `[[` keystroke costs nothing. The same
+    /// shape as the `texts` the rename planner takes.
+    pub text: &'a dyn Fn(&str) -> Option<String>,
 }
 
 /// What accepting a row links to.
@@ -42,6 +46,9 @@ pub enum Item {
         heading: String,
         level: u8,
     },
+    /// A block of a file, by the id it already carries. `path` is empty for
+    /// a block of the note being edited (`[[#^`).
+    Block { path: String, id: String },
     /// A tag, without its `#`.
     Tag { tag: String },
     /// The query as typed: a note that does not exist yet, or display text
@@ -106,10 +113,7 @@ fn link_suggestions(query: &str, v: &Vault<'_>) -> Vec<Suggestion> {
         return alias_suggestions(parsed.path, alias, v);
     }
     match parsed.subpath {
-        // A block reference writes an id into the target note, which 
-        // does not do yet; offering a block it cannot link to would be worse
-        // than offering nothing.
-        Some(Subpath::Block(_)) => Vec::new(),
+        Some(Subpath::Block(query)) => block_suggestions(parsed.path, query, v),
         Some(Subpath::Headings(headings)) => {
             heading_suggestions(parsed.path, headings.last().copied().unwrap_or(""), v)
         }
@@ -188,13 +192,8 @@ fn file_suggestions(query: &str, v: &Vault<'_>) -> Vec<Suggestion> {
 /// The headings of the note the query points at, in document order. An
 /// empty path means the note being edited (`[[#`).
 fn heading_suggestions(path: &str, query: &str, v: &Vault<'_>) -> Vec<Suggestion> {
-    let target = if path.is_empty() {
-        v.source.to_string()
-    } else {
-        match v.cache.resolve(path, v.source) {
-            Some(p) => p.to_string(),
-            None => return Vec::new(),
-        }
+    let Some(target) = target_note(path, v) else {
+        return Vec::new();
     };
     let Some(meta) = v.cache.file(&target) else {
         return Vec::new();
@@ -220,6 +219,80 @@ fn heading_suggestions(path: &str, query: &str, v: &Vault<'_>) -> Vec<Suggestion
         out.push(s);
     }
     out
+}
+
+/// The blocks of the note the query points at that already carry an id, in
+/// document order.
+///
+/// Obsidian also offers blocks with no id and writes one into the target
+/// note when such a row is accepted.  offers only the rows it can
+/// link to without touching another file; the rest wait for the commit that
+/// writes ids. See
+/// [[Specification#Observed block reference behavior, Obsidian 1.14.4]].
+fn block_suggestions(path: &str, query: &str, v: &Vault<'_>) -> Vec<Suggestion> {
+    let target = match target_note(path, v) {
+        Some(t) => t,
+        None => return Vec::new(),
+    };
+    let Some(meta) = v.cache.file(&target) else {
+        return Vec::new();
+    };
+    let text = (v.text)(&target).unwrap_or_default();
+    let mut rows: Vec<(usize, Suggestion)> = Vec::new();
+    for block in meta.blocks.values() {
+        let at = block.position.start.offset;
+        let label = block_label(
+            &text,
+            block.position.start.offset..block.position.end.offset,
+        );
+        let item = Item::Block {
+            path: if path.is_empty() {
+                String::new()
+            } else {
+                target.clone()
+            },
+            id: block.id.clone(),
+        };
+        let mut s = Suggestion::new(item, label.clone(), Some(format!("^{}", block.id)));
+        if !query.is_empty() {
+            // The query matches the block's text or its id, either way.
+            let by_label = fuzzy_match(query, &label);
+            let by_id = fuzzy_match(query, &block.id);
+            match by_label.or(by_id) {
+                Some(m) if m.ranges.iter().all(|r| r.end <= label.len()) => s.ranges = m.ranges,
+                Some(_) => {}
+                None => continue,
+            }
+        }
+        rows.push((at, s));
+    }
+    rows.sort_by_key(|(at, _)| *at);
+    rows.into_iter().map(|(_, s)| s).collect()
+}
+
+/// What a block row reads: the block's own text with the `^id` taken off,
+/// since the id is shown beside it rather than in it.
+fn block_label(text: &str, span: Range<usize>) -> String {
+    let raw = text.get(span).unwrap_or_default().trim();
+    let stripped = match raw.rsplit_once('^') {
+        Some((before, id))
+            if !id.is_empty() && id.chars().all(|c| c.is_alphanumeric() || c == '-') =>
+        {
+            before.trim_end()
+        }
+        _ => raw,
+    };
+    stripped.trim().to_string()
+}
+
+/// The note a `#` or `#^` query points at: the one named, or the one being
+/// edited when the path is empty.
+fn target_note(path: &str, v: &Vault<'_>) -> Option<String> {
+    if path.is_empty() {
+        Some(v.source.to_string())
+    } else {
+        v.cache.resolve(path, v.source).map(str::to_string)
+    }
 }
 
 /// The target's aliases, or the text typed after the `|` as display text.

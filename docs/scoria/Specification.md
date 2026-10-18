@@ -400,3 +400,76 @@ widgets do.
 columns it reported came from an unfocused editor and disagreed with
 themselves), and whether a column's width counts characters or display
 columns for CJK and emoji.
+
+## Observed block reference behavior, Obsidian 1.14.4
+
+Observed with a throwaway plugin in a scratch vault (see
+[[Development#Phase 3 probe, 2026-10-18]]), driving the link suggester's
+`onTrigger`/`getSuggestions` and the popup's own Enter handler over a note
+holding one of every block kind, then reading the target note's bytes back
+as an escaped string and a hex dump.
+
+`[[Note#^` offers one row per block, in document order. The kinds, with the
+label each row reads for the probe note:
+
+| Node | Row reads |
+| --- | --- |
+| heading | `# Probe Heading` — the markers are kept |
+| paragraph | `A plain paragraph with no id.` |
+| table | `A B \n1 2` — cells joined by spaces, rows by a newline |
+| code (fenced) | `let fenced = 1;` — the fence and its language are dropped |
+| code (indented) | `indented code line` |
+| callout | `A callout titlecallout body line` — title and body run together |
+| blockquote | `a blockquote\nsecond quote line` |
+| math | `x = y + 1` — the `$$` fences are dropped |
+| listItem | one row per item, nested items getting their own row as well |
+
+A thematic break is **not** offered, and neither is the frontmatter block.
+A list item inside a blockquote is offered as the *blockquote*, and one
+inside a callout as the *callout*: the quote is the block, not the item.
+`[[#^` lists the blocks of the note being edited. A path that resolves to
+nothing (`[[NoSuchNote#^`) and one that resolves to an attachment
+(`[[pic.png#^`) each offer a single row of type `none` rather than an empty
+list.
+
+Accepting a row whose block has no id of its own writes one into the target
+note. The id is six lowercase hex characters — 180 generated in a row were
+180 distinct values — and where it goes depends on the kind:
+
+- **A paragraph** takes ` ^id` appended to its last line, *verbatim*, after
+  whatever is already there. A line ending in a hard break keeps it and the
+  id goes after: `Ends in two spaces.  ` becomes
+  `Ends in two spaces.   ^id`, and `Ends in a backslash\` becomes
+  `Ends in a backslash\ ^id`.
+- **A heading** takes the id on a line of its own, with a blank line either
+  side, and the bytes after it are normalized: the heading keeps its text,
+  then `\n\n^id\n`, then what followed with its leading run of newlines
+  collapsed to one. Every shape agrees:
+
+| Before | After |
+| --- | --- |
+| `## H` (no trailing newline) | `## H\n\n^id\n` |
+| `## H\n` | `## H\n\n^id\n\n` |
+| `## H\n\nbody\n` | `## H\n\n^id\n\nbody\n` |
+| `## H\nbody\n` | `## H\n\n^id\n\nbody\n` |
+| `## H\n### H2\nbody\n` | `## H\n\n^id\n\n### H2\nbody\n` |
+
+  The last two are the ones worth noticing: Obsidian inserts a blank line
+  that was not there, so the id is a paragraph of its own rather than a
+  second line of the following block.
+
+A block that already carries an id is linked to by that id and the target
+note is not touched at all.
+
+Where  deliberately differs, because Obsidian loses bytes:
+
+- **CRLF.** Writing an id into a CRLF note gives the inserted lines LF
+  endings and leaves the rest CRLF: `# Crlf\r\n\r\npara` becomes
+  `# Crlf\n\n^id\n\r\n\r\npara`, a mixed file.  writes the file's own
+  dominant ending throughout, as it already does for properties.
+
+**Unprobed:** the byte-for-byte placement for a table, a fenced or indented
+code block, a callout, a blockquote, a display-math block and a list item —
+the step that would have shown them typed into the very note it was reading
+and spoiled its own fixture.  offers those rows only when the block
+already has an id until a second run settles them.

@@ -14,7 +14,7 @@ cache, the editor and the link rewriter are all built from that tree. The applic
 vault with the three-pane shell: Files, reading view, Backlinks, Outgoing links, Outline, Tags,
 Search, the quick switcher, the graph, the command palette and a Settings modal whose toggles write. Notes
 open in Live Preview or Source mode with find and replace, multiple cursors and autosave; `[[`,
-`![[` and `#` autocomplete against the vault's files, aliases, headings and tags; Obsidian's
+`![[` and `#` autocomplete against the vault's files, aliases, headings, tags and block references; Obsidian's
 sixteen table commands add, move and align rows and columns and tables are edited cell by cell; new note,
 rename, move, copy and delete rewrite links the way Obsidian does, and frontmatter is an editable,
 typed properties table that rewrites only the lines it changes. Everything is bound through

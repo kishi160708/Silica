@@ -119,7 +119,7 @@ of mixed use in both apps.
 | File operations and link rewriting | done, see [[#File operations, 2026-10-17]] |
 | Tables (editing) | done: the sixteen commands and editable cells, see [[#Table editing, 2026-10-18]] |
 | Properties | done, see [[#Properties, 2026-10-18]] |
-| Autocompletion | links, headings, aliases, embeds and tags, see [[#Autocompletion, 2026-10-18]]; block references are not offered yet |
+| Autocompletion | links, headings, aliases, embeds, tags and block references, see [[#Autocompletion, 2026-10-18]] and [[#Block references, 2026-10-18]] |
 | Templates, daily notes, file recovery | not started |
 | Writing settings back | started: every Settings toggle writes, see [[#Settings writing, 2026-10-18]]; dropdowns, text fields and sliders are still read-only |
 | Round-trip harness | done, see [[#Round-trip harness, 2026-10-18]] |
@@ -188,6 +188,33 @@ columns it reported came from an unfocused editor and disagreed with
 themselves), whether a column counts characters or display columns for CJK
 and emoji —  counts characters — and what Obsidian writes for a `|`
 typed into a cell.
+
+### Block references, 2026-10-18
+
+`[[Note#^` lists the target note's blocks, and `[[#^` the blocks of the note
+being edited. The query after the `^` matches a block's text or its id,
+either way and whatever the case, so `^ara` finds "A paragraph." and
+`^BLOCKONE` finds the block with that id. A row shows the block's text with
+the `^id` taken off and the id beside it, and accepting one writes the path
+exactly as it was typed with no display text — the heading rule — or
+`[](Alpha.md#^id)` under `useMarkdownLinks`, with the cursor between the
+brackets.
+
+What Obsidian does was observed in the phase 3 probe (see
+[[Specification#Observed block reference behavior, Obsidian 1.14.4]]):
+the kinds it offers and their labels, how the caret query filters, the
+six-lowercase-hex id (180 generated in a row were 180 distinct values), and
+the byte-for-byte placement of a written id for a paragraph and a heading.
+
+**Only blocks that already carry an id are offered.** Obsidian also offers
+blocks without one and writes an id into the *target* note when such a row
+is accepted; that is a write into a second file, and it waits for its own
+change. The probe step that would have settled the placement for a table, a
+code block, a callout, a quote, a math block and a list item typed into the
+very note it was reading and spoiled its own fixture, so those kinds have no
+observed placement yet either. Offering a row  cannot link to would be
+worse than offering nothing, which is the rule the empty block list
+followed before.
 
 ### Autocompletion, 2026-10-18
 

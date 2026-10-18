@@ -34,6 +34,14 @@ const NOTES: &[(&str, &str)] = &[
 
 const ATTACHMENTS: &[&str] = &["pic.png"];
 
+/// A note's text, which is what a block row's label reads.
+fn note_text(path: &str) -> Option<String> {
+    NOTES
+        .iter()
+        .find(|(p, _)| *p == path)
+        .map(|(_, src)| (*src).to_string())
+}
+
 /// Modification times in the order the probe's files were written, so the
 /// empty-query order is the one Obsidian showed.
 fn files() -> Vec<VaultFile> {
@@ -90,6 +98,7 @@ impl Fixture {
             cache: &self.cache,
             source,
             show_unsupported: false,
+            text: &note_text,
         }
     }
 
@@ -444,11 +453,85 @@ fn headings_come_in_document_order_with_the_h1() {
 }
 
 #[test]
-fn a_block_query_offers_nothing_yet() {
+fn blocks_that_carry_an_id_are_offered_in_document_order() {
     let f = Fixture::new();
     let v = f.vault("Scratch.md");
-    // Accepting a block writes an id into the target note, which 
-    // does not do yet; offering a row it cannot link to would be worse.
     let t = trigger("[[Alpha#^", 9).expect("triggers");
-    assert!(suggestions(&t, &v).is_empty());
+    let rows = suggestions(&t, &v);
+    // The id is stripped from the label and shown beside it.
+    let labels: Vec<String> = rows.iter().map(|s| s.label.clone()).collect();
+    assert_eq!(labels, ["A paragraph.", "Another paragraph."]);
+    let detail: Vec<String> = rows.iter().filter_map(|s| s.detail.clone()).collect();
+    assert_eq!(detail, ["^blockone", "^block-two"]);
+}
+
+#[test]
+fn a_block_query_matches_the_text_or_the_id() {
+    let f = Fixture::new();
+    let v = f.vault("Scratch.md");
+    let rows = |line: &str| {
+        let t = trigger(line, line.len()).expect("triggers");
+        suggestions(&t, &v)
+            .iter()
+            .map(|s| s.label.clone())
+            .collect::<Vec<_>>()
+    };
+    // Substring of the text, anywhere in it.
+    assert_eq!(rows("[[Alpha#^ara"), ["A paragraph.", "Another paragraph."]);
+    // The id itself, whatever its case.
+    assert_eq!(rows("[[Alpha#^blockone"), ["A paragraph."]);
+    assert_eq!(rows("[[Alpha#^BLOCKONE"), ["A paragraph."]);
+    assert!(rows("[[Alpha#^zzz").is_empty());
+}
+
+#[test]
+fn a_block_keeps_the_path_as_typed_and_shows_no_text() {
+    let f = Fixture::new();
+    let o = wiki(LinkFormat::Shortest);
+    // `Gamma` is ambiguous in the fixture, and a block pick still writes
+    // back exactly what was typed, like a heading pick.
+    assert_eq!(
+        f.accept(
+            "Scratch.md",
+            "[[Alpha#^block",
+            "A paragraph.",
+            Accept::Whole,
+            &o
+        ),
+        "[[Alpha#^blockone]]"
+    );
+    assert_eq!(
+        f.accept(
+            "Scratch.md",
+            "[[Alpha#^block-two",
+            "Another",
+            Accept::Whole,
+            &o
+        ),
+        "[[Alpha#^block-two]]"
+    );
+    // Markdown style: `.md` kept, no display text, cursor in the brackets.
+    let md = md(LinkFormat::Shortest);
+    assert_eq!(
+        f.accept(
+            "Scratch.md",
+            "[[Alpha#^block",
+            "A paragraph.",
+            Accept::Whole,
+            &md
+        ),
+        "[](Alpha.md#^blockone)"
+    );
+}
+
+#[test]
+fn blocks_of_the_note_being_edited_come_from_the_empty_path() {
+    let f = Fixture::new();
+    let v = f.vault("Alpha.md");
+    let t = trigger("[[#^", 4).expect("triggers");
+    let labels: Vec<String> = suggestions(&t, &v)
+        .iter()
+        .map(|s| s.label.clone())
+        .collect();
+    assert_eq!(labels, ["A paragraph.", "Another paragraph."]);
 }
