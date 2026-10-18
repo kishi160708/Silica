@@ -43,6 +43,7 @@ use _formats::config::PropertyTypes;
 use _formats::properties::{self as props, PropertiesInDocument};
 use _markdown::highlight::{flatten, highlight_lines, HighlightKind, HighlightSpan};
 use _suggest::{self as suggest, Accept, Suggestion};
+use _text::table::TableCommand;
 use _text::{find, shifted, Cursor, Cursors, EditKind, Sel, TextBuffer};
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
@@ -690,6 +691,35 @@ impl Editor {
         self.smart_indent_list = smart_indent_list;
         self.use_tab = use_tab;
         self.tab_size = tab_size;
+    }
+
+    /// Whether the cursor is in a table: the table commands are offered
+    /// only then, the way Obsidian's check callback hides them.
+    pub fn in_table(&self) -> bool {
+        self.buf.in_table()
+    }
+
+    /// Runs one of Obsidian's table commands at the cursor, rewriting the
+    /// whole table as Obsidian does. `false` when it does not apply.
+    pub fn table_command(
+        &mut self,
+        cmd: TableCommand,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.buf.table_command(cmd) {
+            return false;
+        }
+        self.after_edit(Some(window), cx);
+        true
+    }
+
+    /// `editor:insert-table`: an empty two-by-two table after the cursor's
+    /// line, with the cursor in its first header cell.
+    pub fn insert_table(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.buf.insert_table() {
+            self.after_edit(Some(window), cx);
+        }
     }
 
     /// Types `text` at the cursor the way a keystroke does, so the

@@ -17,6 +17,7 @@ mod buffer;
 pub mod find;
 pub mod lists;
 mod plan;
+pub mod table;
 
 pub use buffer::{char_class, Cursor, Cursors, EditKind, FileText, Sel, TextBuffer};
 pub use plan::{indent_plan, newline_plan, shifted};

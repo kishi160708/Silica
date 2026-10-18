@@ -37,6 +37,7 @@ use _formats::config::{
 use _formats::properties::PropertiesInDocument;
 use _formats::FileKind;
 use _markdown::Subpath;
+use _text::table::TableCommand;
 use _vault::{FileChange, TrashOption, Vault};
 use std::collections::HashMap;
 use std::ops::Range;
@@ -79,6 +80,22 @@ pub const RUNNABLE: &[&str] = &[
     "markdown:add-metadata-property",
     "markdown:clear-metadata-properties",
     "editor:toggle-fold-properties",
+    "editor:insert-table",
+    "editor:table-row-before",
+    "editor:table-row-after",
+    "editor:table-row-up",
+    "editor:table-row-down",
+    "editor:table-row-copy",
+    "editor:table-row-delete",
+    "editor:table-col-before",
+    "editor:table-col-after",
+    "editor:table-col-left",
+    "editor:table-col-right",
+    "editor:table-col-copy",
+    "editor:table-col-delete",
+    "editor:table-col-align-left",
+    "editor:table-col-align-center",
+    "editor:table-col-align-right",
     "app:go-back",
     "app:go-forward",
     "app:open-settings",
@@ -1239,9 +1256,13 @@ impl Workspace {
             .as_ref()
             .map(|s| s.palette.pinned.clone())
             .unwrap_or_default();
+        let in_table = self.mode.is_editing() && self.editor.read(cx).in_table();
         let commands: Vec<PaletteCommand> = registry
             .iter()
             .filter(|c| RUNNABLE.contains(&c.id.as_str()))
+            // Obsidian's table commands hide unless the cursor is in a
+            // table; their check callback is what does it there.
+            .filter(|c| in_table || TableCommand::from_id(&c.id).is_none())
             .map(|c| PaletteCommand::from_command(c, pinned.contains(&c.id)))
             .collect();
         let recent = self.recent_commands.clone();
@@ -1330,6 +1351,22 @@ impl Workspace {
             "editor:toggle-fold-properties" => {
                 if self.mode.is_editing() {
                     self.editor.update(cx, |e, cx| e.toggle_properties_fold(cx));
+                }
+            }
+            "editor:insert-table" => {
+                if self.mode.is_editing() {
+                    self.editor.update(cx, |e, cx| e.insert_table(window, cx));
+                }
+            }
+            _ if TableCommand::from_id(id).is_some() => {
+                let cmd = TableCommand::from_id(id).expect("checked above");
+                let ran = self.mode.is_editing()
+                    && self
+                        .editor
+                        .update(cx, |e, cx| e.table_command(cmd, window, cx));
+                if !ran {
+                    self.status = "The cursor is not in a table".into();
+                    cx.notify();
                 }
             }
             "app:go-back" => self.go_back(&GoBack, window, cx),

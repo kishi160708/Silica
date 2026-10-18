@@ -428,6 +428,60 @@ fn accepting_a_suggestion_replaces_only_the_query_and_undoes_cleanly() {
 }
 
 #[test]
+fn a_table_command_stays_inside_its_table_and_undoes_cleanly() {
+    use _text::table::{tables, TableCommand};
+    const COMMANDS: &[TableCommand] = &[
+        TableCommand::RowBefore,
+        TableCommand::RowAfter,
+        TableCommand::RowCopy,
+        TableCommand::RowDelete,
+        TableCommand::ColBefore,
+        TableCommand::ColAfter,
+        TableCommand::ColCopy,
+        TableCommand::AlignCenter,
+    ];
+    let mut count = 0;
+    for note in notes_under_test() {
+        let raw = std::fs::read_to_string(&note).unwrap();
+        let text = TextBuffer::from_file(&raw).text().to_string();
+        // Every table in the note, through the cursor in its first cell.
+        for found in tables(&text) {
+            count += 1;
+            for cmd in COMMANDS {
+                let mut buf = TextBuffer::from_file(&raw);
+                buf.set_cursor(found.start + 2, None);
+                if !buf.table_command(*cmd) {
+                    continue;
+                }
+                check_invariants(&buf, &note, "table command");
+                // A table command rewrites its whole table, and Obsidian's
+                // does too — but nothing outside it may move.
+                let after = buf.text().to_string();
+                assert_eq!(
+                    &after[..found.start],
+                    &text[..found.start],
+                    "{cmd:?} moved bytes before the table in {}",
+                    note.display()
+                );
+                assert_eq!(
+                    &after[after.len() - (text.len() - found.end)..],
+                    &text[found.end..],
+                    "{cmd:?} moved bytes after the table in {}",
+                    note.display()
+                );
+                assert_eq!(
+                    undo_all(&mut buf, &note),
+                    raw,
+                    "undo did not restore {} after {cmd:?}",
+                    note.display()
+                );
+            }
+        }
+    }
+    assert!(count > 0, "no note under test has a table");
+}
+
+#[test]
 fn an_edited_file_keeps_its_line_ending_and_byte_order_mark() {
     // The one corpus note written the Windows way, with both.
     let note = corpus_root().join("edge/CRLF.md");

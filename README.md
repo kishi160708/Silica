@@ -14,7 +14,8 @@ cache, the editor and the link rewriter are all built from that tree. The applic
 vault with the three-pane shell: Files, reading view, Backlinks, Outgoing links, Outline, Tags,
 Search, the quick switcher, the graph, the command palette and a Settings modal whose toggles write. Notes
 open in Live Preview or Source mode with find and replace, multiple cursors and autosave; `[[`,
-`![[` and `#` autocomplete against the vault's files, aliases, headings and tags; new note,
+`![[` and `#` autocomplete against the vault's files, aliases, headings and tags; Obsidian's
+sixteen table commands add, move and align rows and columns; new note,
 rename, move, copy and delete rewrite links the way Obsidian does, and frontmatter is an editable,
 typed properties table that rewrites only the lines it changes. Everything is bound through
 Obsidian's command ids, so a vault's `hotkeys.json` applies unchanged.
@@ -56,7 +57,7 @@ at [.](https://.).
 | --- | --- | --- |
 | 1. Spike | 50k-line editor, parser conformance corpus, 2 s vault index | Done |
 | 2. Reader | A daily user browses their real vault with no missing content | Done: Files, reading view, Backlinks, Outgoing links, Outline, Tags, Search, quick switcher, graph, command palette, read-only Settings, file watching |
-| 3. Writer | The vault round-trips byte-identical after a week of mixed use in both apps | In progress: Source mode, Live Preview, find and replace, file operations with link rewriting, properties, autocompletion, the round-trip harness and the Settings toggles are done; table editing, block references, templates, daily notes and file recovery are next |
+| 3. Writer | The vault round-trips byte-identical after a week of mixed use in both apps | In progress: Source mode, Live Preview, find and replace, file operations with link rewriting, properties, autocompletion, the table commands, the round-trip harness and the Settings toggles are done; editing table cells in place, block references, templates, daily notes and file recovery are next |
 | 4. Parity | Core plugin parity | Not started: canvas, bases, PDF, math, themes subset, URI and CLI |
 | 5. Ecosystem | Native plugin SDK | Not started |
 

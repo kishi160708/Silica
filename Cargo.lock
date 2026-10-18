@@ -4847,6 +4847,7 @@ dependencies = [
  "regex",
  "-cache",
  "-formats",
+ "-markdown",
  "-suggest",
  "-vault",
  "serde",

@@ -8,6 +8,7 @@
 
 use crate::lists;
 use crate::plan::{indent_plan, newline_plan, shifted};
+use crate::table;
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
@@ -835,6 +836,36 @@ impl TextBuffer {
         }
         let (edits, cursor) = newline_plan(&self.text, &self.line_starts, self.head);
         self.edit_many(edits, cursor, None)
+    }
+
+    /// Whether the cursor is in a table, which is what the table commands
+    /// are offered for.
+    pub fn in_table(&self) -> bool {
+        table::table_at(&self.text, self.head).is_some()
+    }
+
+    /// Runs a table command at the cursor. The whole table is rewritten, as
+    /// Obsidian rewrites it, and the cursor stays in the cell it was in.
+    /// `false` when the cursor is not in a table or the command cannot
+    /// apply, so nothing is written and no undo step is made.
+    pub fn table_command(&mut self, cmd: table::TableCommand) -> bool {
+        let Some(at) = table::table_at(&self.text, self.head) else {
+            return false;
+        };
+        let Some(edit) = table::apply(&at, cmd) else {
+            return false;
+        };
+        let cursor = at.span.start + edit.cursor;
+        self.edit_many(vec![(at.span, edit.text)], cursor, None)
+    }
+
+    /// `editor:insert-table`: a blank line and an empty two-by-two table,
+    /// with the cursor in the first header cell.
+    pub fn insert_table(&mut self) -> bool {
+        let edit = table::insert_table();
+        let at = self.line_range(self.cursor().line).end;
+        let cursor = at + edit.cursor;
+        self.edit_many(vec![(at..at, edit.text)], cursor, None)
     }
 
     /// Tab: indents list items and the selected lines by one step

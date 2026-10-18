@@ -31,6 +31,7 @@ cargo run --release -p  -- <vault> --note X --source        # open a note in Sou
 cargo run --release -p  -- <vault> --note X --stress 40     # self-driven edits on that note, then autosave (use a scratch vault)
 cargo run --release -p  -- <vault> --note X --source --type '[[al'          # type at the cursor: opens the autocompletion popup for a screenshot
 cargo run --release -p  -- <vault> --note X --source --type '[[al' --accept down,enter   # and press the popup's keys (enter, tab, shift-enter, up, down)
+cargo run --release -p  -- <vault> --note X --source --command editor:table-row-after   # run command ids at startup, comma separated (use a scratch vault)
 cargo run --release -p  -- <vault> --note X --find word     # open with the find panel up and the query matched
 cargo run --release -p  -- <vault> --note X --prompt rename  # open the rename prompt (move, delete, folder) for screenshots
 cargo run --release -p  -- <vault> --note X --rename "New"   # rename the note at startup, rewriting links (use a scratch vault)
@@ -115,12 +116,61 @@ of mixed use in both apps.
 | Source mode | done, see [[#Source editor, 2026-10-16]] |
 | Live Preview | done, see [[#Live Preview, 2026-10-16]] |
 | File operations and link rewriting | done, see [[#File operations, 2026-10-17]] |
-| Tables (editing) | not started: widgets render, cells are not editable |
+| Tables (editing) | the sixteen table commands, see [[#Table editing, 2026-10-18]]; typing straight into a Live Preview cell is not wired up yet |
 | Properties | done, see [[#Properties, 2026-10-18]] |
 | Autocompletion | links, headings, aliases, embeds and tags, see [[#Autocompletion, 2026-10-18]]; block references are not offered yet |
 | Templates, daily notes, file recovery | not started |
 | Writing settings back | started: every Settings toggle writes, see [[#Settings writing, 2026-10-18]]; dropdowns, text fields and sliders are still read-only |
 | Round-trip harness | done, see [[#Round-trip harness, 2026-10-18]] |
+
+### Table editing, 2026-10-18
+
+Obsidian's sixteen table commands work: add, move, duplicate and delete
+rows and columns, set a column's alignment, and insert a table. They are in
+the palette, bound through their own command ids, and hidden unless the
+cursor is in a table — which is what Obsidian's own check callback does.
+
+The commands were probed the way the suggester was, by calling each
+command's `editorCheckCallback` over eight shapes of table with the cursor
+in two cells, then reading the note back; 186 of the 480 runs had the check
+pass, and only those were used. Two traps: the check needs `editor.focus()`
+first (without it `executeCommandById` returns true and does nothing), and
+it only ever passes in **Live Preview** — in raw source mode Obsidian will
+not run a table command at all.  runs them in Source mode too, since
+its Source mode is a real editing mode rather than a fallback.
+
+The finding that shapes everything: **a table command rewrites the whole
+table.** Obsidian pads every cell to its column's width (minimum three, what
+the delimiter needs), adds outer pipes to a table written without them,
+fills short rows out with empty cells, and grows the delimiter to match
+(`:-----`, `:----:`, `-----:`). So "edit one cell" is never a small diff,
+in either app — which is fine for the gate as long as  pads
+identically, and `-text/src/table.rs` holds the observed rows as
+tests.
+
+The table under the cursor comes from the one Markdown parser, not from
+looking for pipes: `BlockKind::Table` already carries the alignments and a
+span per cell, so a `|` inside a code span splits a cell here exactly where
+it splits one in the reading view. That turned up a real difference:
+`` | `a|b` | **bold** | `` has three header cells against a two-cell
+delimiter, so GFM — and 's parser — call it a paragraph, while
+Obsidian's table editor rewrites it into a three-column table.  does
+nothing there rather than turn prose into a table.
+
+The planner is `-text::table`: `tables` and `table_at` (which table,
+which cell), `apply` (the text a command writes and where the cursor lands)
+and `insert_table`. `TextBuffer::table_command` applies it as one undo step.
+The round-trip harness runs eight of the commands over every table in the
+corpus and a real vault: nothing outside the table's own bytes moves, and
+undo restores the note.
+
+**Not done:** typing into a cell in the Live Preview widget. Clicking a
+table still puts the cursor on that source line, which is how every other
+widget behaves; the commands are what make a table editable for now.
+**Unprobed:** where Obsidian leaves the cursor after each command (the
+columns it reported came from an unfocused editor and disagreed with
+themselves), and whether a column counts characters or display columns for
+CJK and emoji —  counts characters.
 
 ### Autocompletion, 2026-10-18
 

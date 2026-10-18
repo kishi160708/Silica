@@ -330,3 +330,61 @@ The three accept keys differ, and the difference is the point:
 **Unprobed:** whether the `#` and `^` keys the link popup binds do anything
 beyond typing the character, and whether typing `[[` auto-pairs the closing
 brackets (`autoPairBrackets`, which  does not implement either way).
+
+## Observed table editing behavior, Obsidian 1.14.4
+
+Observed with a throwaway plugin in a scratch vault (see
+[[Development#Table editing, 2026-10-18]]), running each of the sixteen
+table commands against eight shapes of table with the cursor in two
+different cells, then reading the note back. The commands' own
+`editorCheckCallback` only passes in Live Preview with the editor focused —
+in raw source mode it never does, so **Obsidian's table commands are a Live
+Preview feature**; the 186 runs where the check passed are what is recorded
+here.
+
+Any table command **rewrites the whole table**, not the row or column it
+was asked about. The written form is the same every time:
+
+- Every row gets outer pipes, even when the table was written without them,
+  and one space either side of each cell's text.
+- A column is as wide as its widest cell, and never narrower than three,
+  which is what the delimiter needs. Cells are padded to that width.
+- The delimiter fills the column width: `---`, and with an alignment
+  `:--`, `:-:` and `--:`, growing to `:-----`, `:----:` and `-----:`.
+- Padding follows the column's alignment: left and none pad on the right,
+  right pads on the left, and centre splits the difference with the odd
+  space on the right (`B` in a six-wide centred column is `  B   `).
+- A row with too few cells is filled out with empty ones.
+- Cell text is kept as written, escapes included: `x \| y` stays one cell.
+  A `|` inside a code span is **not** protected — `` `a|b` `` is two cells,
+  `` `a `` and `` b` `` — which is what the parser already does.
+
+What each command does, with the cursor in some cell:
+
+| Command | Effect |
+| --- | --- |
+| `table-row-before`, `table-row-after` | an empty row above or below |
+| `table-row-up`, `table-row-down` | swap with the row the other side; the first body row swaps with the **header**, delimiter staying put |
+| `table-row-copy` | the row again, directly below |
+| `table-row-delete` | the row; deleting the header promotes the next row into it |
+| `table-col-before`, `table-col-after` | an empty column either side, alignment `None` |
+| `table-col-left`, `table-col-right` | swap with the column the other side, alignment travelling with it |
+| `table-col-copy` | the column again, directly to the right, alignment included |
+| `table-col-delete` | the column and its alignment |
+| `table-col-align-left/center/right` | the column's alignment, and every cell in it re-padded |
+
+`editor:insert-table` is the one command that is not about an existing
+table: on an empty line it writes a blank line and then a two-by-two table
+of empty three-wide cells, leaving the cursor in the first header cell.
+
+```
+|     |     |
+| --- | --- |
+|     |     |
+```
+
+**Unprobed:** where Obsidian leaves the cursor after each command (the
+columns it reported came from an unfocused editor and disagreed with
+themselves), whether a column's width counts characters or display columns
+for CJK and emoji, and whether typing *inside* a Live Preview table cell
+reformats the table on every keystroke or only when the cell is left.

@@ -151,6 +151,9 @@ struct Args {
     /// Accept the popup's selected row with `enter`, `tab` or `shift-enter`,
     /// after `--type` and an optional `down` repeated to move the selection.
     accept: Option<String>,
+    /// Run these command ids at startup, comma separated, after everything
+    /// else: `--command editor:table-row-after`.
+    command: Option<String>,
 }
 
 fn parse_args() -> Args {
@@ -173,6 +176,7 @@ fn parse_args() -> Args {
         prompt: None,
         type_text: None,
         accept: None,
+        command: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -196,6 +200,7 @@ fn parse_args() -> Args {
             "--prompt" => args.prompt = it.next().or(Some("rename".into())),
             "--type" => args.type_text = it.next(),
             "--accept" => args.accept = it.next().or(Some("enter".into())),
+            "--command" => args.command = it.next(),
             _ if args.vault.is_none() => args.vault = Some(PathBuf::from(a)),
             _ => args.note = Some(a),
         }
@@ -266,6 +271,7 @@ fn main() {
         let source = args.source;
         let type_text = args.type_text.clone();
         let accept = args.accept.clone();
+        let command = args.command.clone();
         let reading = args.reading;
         let find = args.find.clone();
         let find_all = args.find_all.clone();
@@ -353,6 +359,11 @@ fn main() {
                         if let Some(key) = &accept {
                             ws.editor()
                                 .update(cx, |e, cx| e.accept_suggestion_key(key, window, cx));
+                        }
+                        if let Some(ids) = &command {
+                            for id in ids.split(',') {
+                                ws.run_command(id.trim(), window, cx);
+                            }
                         }
                         true
                     })

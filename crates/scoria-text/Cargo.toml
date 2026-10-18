@@ -10,6 +10,9 @@ publish.workspace = true
 
 [dependencies]
 regex.workspace = true
+# The table commands find the table under the cursor with the one Markdown
+# parser rather than by looking for pipes.
+-markdown.workspace = true
 
 [dev-dependencies]
 -cache.workspace = true
