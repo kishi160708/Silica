@@ -313,7 +313,9 @@ impl Vault {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(source) => return Err(VaultError::Io { path, source }),
         };
-        serde_json::from_str(&text)
+        // A byte order mark is not JSON. Windows editors leave one, and a
+        // file carrying one is otherwise perfectly readable.
+        serde_json::from_str(text.strip_prefix('\u{feff}').unwrap_or(&text))
             .map(Some)
             .map_err(|source| VaultError::Json { path, source })
     }
@@ -345,18 +347,27 @@ impl Vault {
             path: path.clone(),
             source,
         })?;
-        let merged = match std::fs::read_to_string(&path) {
-            // A file nobody can parse is replaced rather than merged into.
-            Ok(text) => match serde_json::from_str(&text) {
-                Ok(old) => merge_config(old, fresh),
-                Err(_) => fresh,
-            },
-            Err(_) => fresh,
+        // A byte order mark is not JSON, so the file has to be parsed
+        // without it — and put back with it, since it is the user's byte
+        // and not ours to drop.
+        let (bom, merged) = match std::fs::read_to_string(&path) {
+            Ok(text) => {
+                let bom = text.starts_with('\u{feff}');
+                let body = text.strip_prefix('\u{feff}').unwrap_or(&text);
+                match serde_json::from_str(body) {
+                    Ok(old) => (bom, merge_config(old, fresh)),
+                    // A file nobody can parse is replaced rather than
+                    // merged into.
+                    Err(_) => (bom, fresh),
+                }
+            }
+            Err(_) => (false, fresh),
         };
         let text = serde_json::to_string_pretty(&merged).map_err(|source| VaultError::Json {
             path: path.clone(),
             source,
         })?;
+        let text = if bom { format!("\u{feff}{text}") } else { text };
         std::fs::write(&path, text).map_err(|source| VaultError::Io { path, source })
     }
 
@@ -806,6 +817,39 @@ mod tests {
             .write_config("community-plugins.json", &plugins)
             .unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "[\n  \"new\"\n]");
+    }
+
+    /// A config file with a byte order mark is still JSON once the mark is
+    /// off. Parsing it with the mark fails, which used to mean the file was
+    /// replaced wholesale and every key  does not model was lost.
+    #[test]
+    fn a_config_file_with_a_byte_order_mark_keeps_its_keys_and_its_mark() {
+        let dir = sample_vault();
+        let path = dir.path().join(".obsidian/app.json");
+        let original =
+            "\u{feff}{\n  \"trashOption\": \"local\",\n  \"somethingDoesNotModel\": 7\n}";
+        fs::write(&path, original).unwrap();
+        let vault = Vault::open(dir.path()).unwrap();
+        let mut app = vault.app_config().unwrap();
+        assert_eq!(
+            app.trash_option.as_deref(),
+            Some("local"),
+            "the mark stopped the file being read"
+        );
+        app.vim_mode = Some(true);
+        vault.write_config("app.json", &app).unwrap();
+
+        let written = fs::read_to_string(&path).unwrap();
+        assert!(
+            written.starts_with('\u{feff}'),
+            "the user's byte order mark was dropped: {written:?}"
+        );
+        assert!(
+            written.contains("\"somethingDoesNotModel\": 7"),
+            "a key  does not model was lost: {written}"
+        );
+        assert!(written.contains("\"vimMode\": true"), "{written}");
+        assert!(written.contains("\"trashOption\": \"local\""), "{written}");
     }
 
     #[test]

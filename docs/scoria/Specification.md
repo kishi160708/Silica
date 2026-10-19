@@ -145,8 +145,35 @@ vault rather than from Obsidian's source:
   the dominant ending, not the presence of one.
 -  therefore writes the dominant ending on every line once a file is
   edited, and writes a mixed file back verbatim while nothing has changed.
-  **Unprobed:** what Obsidian itself writes for such a file. Worth a probe
-  note in the scratch vault before the writer milestone closes.
+
+What Obsidian itself does was the open question here, and it is now
+observed (see [[Development#Line endings and the byte order mark, 2026-10-18]]).
+**Its editor normalizes on save**: every ending becomes `\n` and a UTF-8
+byte order mark is dropped.
+
+| Before | After one character is typed |
+| --- | --- |
+| `# Mixed\nline one\nline two\r\nline three\n` | every line `\n` |
+| `# Mixed\r\nline one\r\nline two\nline three\r\n` | every line `\n` |
+| `a\r\nb\nc\r\nd\n` | `aX\nb\nc\nd\n` |
+| `# All\r\nline one\r\nline two\r\n` — uniform CRLF | every line `\n` |
+| `\u{feff}# Bom\nline one\n` | `# Bom\nlineX one\n` — the mark is gone |
+
+A note that is only **opened** is not rewritten: the same mixed file read
+back after being opened and left alone is byte-identical. The normalization
+belongs to the save, not the load.
+
+This is the one place  deliberately keeps *more* of the file than
+Obsidian does.  writes the file's own dominant ending and puts a byte
+order mark back, so it never introduces a difference; Obsidian's editor
+converts the file the first time it is edited there. A vault used in both
+therefore drifts towards LF with no mark, driven by Obsidian, and 
+never drives it the other way.
+
+Note that this is the *editor's* save. The frontmatter API is not the same
+path and does not normalize: writing a property into a CRLF note leaves
+`---\r\ntitle: Hi\nadded: v\n---\r\n`, recorded under the properties
+section above.
 
 Not reproduced (two corpus notes): nested runs such as `****a****` and
 `==== four ==x===y==`, and a wikilink inside markdown link text, which splits

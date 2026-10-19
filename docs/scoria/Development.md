@@ -220,6 +220,45 @@ chronologically still steps correctly. A format  cannot render is
 refused outright, because here the format is a path and a wrong one is a
 note in the wrong place.
 
+### Line endings and the byte order mark, 2026-10-18
+
+The specification has carried an **Unprobed** note since the reader
+milestone: what Obsidian itself writes for a file whose line endings
+disagree. It is answered now, and the answer is stronger than the question.
+
+**Obsidian's editor normalizes on save.** Every ending becomes `\n` and a
+UTF-8 byte order mark is dropped — not just for a mixed file but for a
+uniform CRLF one, which comes back all LF after a single character is
+typed. A note that is only *opened* is not touched; the normalization
+belongs to the save.
+
+ keeps doing the opposite, deliberately: it writes the file's own
+dominant ending and puts the mark back. That means  never introduces
+a difference, while a vault used in both apps drifts towards LF with no
+mark, driven by Obsidian. Keeping more of the user's file than Obsidian
+does is the safe side of this to be on, and it is now a recorded decision
+rather than an open question.
+
+The first run of this probe reported that an untouched file *had* been
+rewritten. It had not: the probe opened each case in the same leaf, so
+opening the next file saved the previous one. Re-running that case alone,
+with nothing opened after it, showed the file byte-identical. Worth the
+second run.
+
+### A config file with a byte order mark, 2026-10-18
+
+Found while closing the gate gaps, and the same class of loss. A byte order
+mark is not JSON, so `serde_json` refused a config file carrying one: every
+setting in it read as its default, and the first write replaced the file
+wholesale — taking every key  does not model with it. Windows editors
+leave such a mark, so this was reachable with no misuse at all.
+
+The mark is now stripped for parsing on both sides and written back on
+save, since it is the user's byte and not 's to drop. A file that is
+genuinely unparseable is still replaced rather than merged into, which is
+the existing documented decision and has its own test; this was never about
+that case.
+
 ### Adapt to system, and an invented clamp, 2026-10-18
 
 Two bugs found while landing the Settings dropdowns, neither of which

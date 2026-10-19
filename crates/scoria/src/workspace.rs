@@ -3612,6 +3612,128 @@ mod tests {
         assert_eq!(text, "{\n  \"showAttachments\": false\n}");
     }
 
+    /// The block id write: it reaches the target's bytes, keeps that
+    /// note's own line endings, and refuses a file it did not plan from.
+    #[test]
+    fn writing_a_block_id_reaches_the_disk_and_refuses_a_stale_file() {
+        use _suggest::blocks::{plan_id, Placement};
+        let (dir, state) = vault();
+        let path = "A.md";
+        let before = fs::read_to_string(dir.path().join(path)).unwrap();
+        let end = before.find("See [[B]]").unwrap() + "See [[B]] and [S](Sub/S.md).".len();
+        let insertion = plan_id(&before, end, Placement::Inline, "abc123", "\n").expect("a plan");
+        state.write_block_id(path, &before, &insertion).unwrap();
+        let after = fs::read_to_string(dir.path().join(path)).unwrap();
+        assert_eq!(after, insertion.applied(&before));
+        assert!(
+            after.contains("^abc123"),
+            "the id is not in the file: {after}"
+        );
+
+        // The same insertion against bytes the file no longer holds is
+        // refused rather than written.
+        let err = state
+            .write_block_id(path, &before, &insertion)
+            .expect_err("the file changed since");
+        assert!(err.contains("changed on disk"), "{err}");
+        assert_eq!(
+            fs::read_to_string(dir.path().join(path)).unwrap(),
+            after,
+            "a refused write still changed the file"
+        );
+    }
+
+    /// A CRLF note keeps its own endings when an id is written into it,
+    /// which is where  deliberately differs from Obsidian.
+    #[test]
+    fn a_block_id_written_into_a_crlf_note_keeps_its_endings() {
+        use _suggest::blocks::{plan_id, Placement};
+        let (dir, state) = vault();
+        let path = "Crlf.md";
+        let before = "# Crlf\r\n\r\npara in a CRLF file.\r\n";
+        fs::write(dir.path().join(path), before).unwrap();
+        let end = before.find("para in a CRLF file.").unwrap() + "para in a CRLF file.".len();
+        let insertion = plan_id(before, end, Placement::Inline, "abc123", "\r\n").expect("a plan");
+        state.write_block_id(path, before, &insertion).unwrap();
+        let after = fs::read_to_string(dir.path().join(path)).unwrap();
+        assert_eq!(after, "# Crlf\r\n\r\npara in a CRLF file. ^abc123\r\n");
+        assert!(
+            !after.contains("\n\n"),
+            "a bare newline reached a CRLF note"
+        );
+    }
+
+    /// Creating a daily note: the bytes on disk are the template expanded,
+    /// the template itself is untouched, and a second run changes nothing.
+    #[test]
+    fn creating_a_daily_note_writes_the_template_and_nothing_else() {
+        use _templates::{expand, Context, Stamp, DEFAULT_DATE_FORMAT, DEFAULT_TIME_FORMAT};
+        let (dir, state) = vault();
+        fs::create_dir_all(dir.path().join("Journal")).unwrap();
+        let template = "# {{title}}\n\nWritten {{date}}.\n";
+        fs::write(dir.path().join("Sub/Daily.md"), template).unwrap();
+        let at = Stamp {
+            year: 2026,
+            month: 10,
+            day: 18,
+            hour: 9,
+            minute: 7,
+            second: 3,
+        };
+        let (path, exists) = state
+            .vault()
+            .daily_note("YYYY-MM-DD", "Journal", &at)
+            .unwrap();
+        assert_eq!((path.as_str(), exists), ("Journal/2026-10-18.md", false));
+        let text = expand(
+            template,
+            &Context {
+                at,
+                date_format: DEFAULT_DATE_FORMAT,
+                time_format: DEFAULT_TIME_FORMAT,
+                title: "2026-10-18",
+            },
+        );
+        state.create_note(&path, &text).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.path().join(&path)).unwrap(),
+            "# 2026-10-18\n\nWritten 2026-10-18.\n"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join("Sub/Daily.md")).unwrap(),
+            template,
+            "the template itself was written to"
+        );
+        // Running again finds it rather than creating a second one.
+        let (again, exists) = state
+            .vault()
+            .daily_note("YYYY-MM-DD", "Journal", &at)
+            .unwrap();
+        assert_eq!((again.as_str(), exists), ("Journal/2026-10-18.md", true));
+    }
+
+    /// A daily note whose folder is missing is refused, and nothing is
+    /// created — Obsidian reports the same and writes nothing.
+    #[test]
+    fn a_daily_note_with_no_folder_writes_nothing() {
+        use _templates::Stamp;
+        let (dir, state) = vault();
+        let at = Stamp {
+            year: 2026,
+            month: 10,
+            day: 18,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        };
+        let err = state
+            .vault()
+            .daily_note("YYYY-MM-DD", "NoSuchFolder", &at)
+            .unwrap_err();
+        assert!(err.to_string().contains("not found"), "{err}");
+        assert!(!dir.path().join("NoSuchFolder").exists());
+    }
+
     #[test]
     fn rename_leaves_a_note_that_changed_underneath_alone() {
         // The rewrites are planned from the text the index holds. If the
