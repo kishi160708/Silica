@@ -431,7 +431,7 @@ columns for CJK and emoji.
 ## Observed block reference behavior, Obsidian 1.14.4
 
 Observed with a throwaway plugin in a scratch vault (see
-[[Development#Phase 3 probe, 2026-10-18]]), driving the link suggester's
+[[Development#The probe batch, 2026-10-18]]), driving the link suggester's
 `onTrigger`/`getSuggestions` and the popup's own Enter handler over a note
 holding one of every block kind, then reading the target note's bytes back
 as an escaped string and a hex dump.
@@ -528,7 +528,7 @@ unordered samples that did.
 ## Observed settings write behavior, Obsidian 1.14.4
 
 Observed with a throwaway plugin in a scratch vault (see
-[[Development#Phase 3 probe, 2026-10-18]]), setting each key through
+[[Development#The probe batch, 2026-10-18]]), setting each key through
 `vault.setConfig` and reading `.obsidian/app.json` and
 `.obsidian/appearance.json` back as raw bytes before and after every
 change.
@@ -601,3 +601,2008 @@ order above and a formatter that keeps a node on one line.
 the key order for `file`, `link` and `group` nodes, since every node in this
 canvas is a `text` one; and where the optional edge keys `toEnd`, `fromEnd`,
 `color` and `label` sit, since no edge in it has any of them.
+
+## Observed task checkbox behavior, Obsidian 1.14.4 (installer build 1.13.7)
+
+Observed on 2026-10-18 with a throwaway plugin in a scratch vault (see
+[[Development#The probe batch, 2026-10-18]]), clicking each
+`input.task-list-item-checkbox` in the **reading view** with `el.click()` and
+reading the note back as raw bytes after every click.
+
+**Any status but a space becomes a space.** The note started as
+`- [ ] t0`, `- [x] t1`, `- [X] t2`, `- [?] t3`, `- [-] t4`, `- [>] t5`, and
+six clicks, one per line, each changed exactly that line and left the other
+five byte-identical:
+
+| Clicked | Line before | Line after |
+| --- | --- | --- |
+| 0 | `- [ ] t0` | `- [x] t0` |
+| 1 | `- [x] t1` | `- [ ] t1` |
+| 2 | `- [X] t2` | `- [ ] t2` |
+| 3 | `- [?] t3` | `- [ ] t3` |
+| 4 | `- [-] t4` | `- [ ] t4` |
+| 5 | `- [>] t5` | `- [ ] t5` |
+
+So the click is a two-state toggle writing the literal three bytes `[x]` or
+`[ ]`, not a cycle through the statuses, and a custom status is **not**
+preserved: `[X]` does not come back capitalised, and `[?]`, `[-]` and `[>]`
+are all lost.  does exactly this already (`Editor::click_rendered`),
+so the apparent data loss is parity, not a defect.
+
+The rendered markup carries the status character even though the click
+discards it:
+
+| Source | `li` class | `li` `data-task` | input |
+| --- | --- | --- | --- |
+| `- [ ] t0` | `task-list-item` | `""` | `<input type="checkbox" class="task-list-item-checkbox">` |
+| `- [x] t1` | `task-list-item is-checked` | `x` | same, with `checked` |
+| `- [X] t2` | `task-list-item is-checked` | `X` | same, with `checked` |
+| `- [?] t3` | `task-list-item is-checked` | `?` | same, with `checked` |
+| `- [-] t4` | `task-list-item is-checked` | `-` | same, with `checked` |
+| `- [>] t5` | `task-list-item is-checked` | `>` | same, with `checked` |
+
+Every non-space status is `is-checked` and carries the `checked` attribute,
+and the `ul` is `contains-task-list`. The two shapes the block parser rejects
+rendered as plain text with no input at all, confirming the parser's rule
+from the rendered side: `- [ ]Not a task` (no space after the bracket) and
+`- [ ]` alone at end of line.
+
+No configuration key governs any of this. `taskStatus`, `taskStatuses`,
+`customTaskStatus`, `checkbox`, `checkboxes`, `cycleTaskStatus`,
+`alternateCheckbox`, `completedTaskCharacter` and `taskCompletionText` all
+read undefined.
+
+Two commands exist for statuses beyond the click, both already in
+`-commands/data/commands.txt` with their observed labels:
+`editor:toggle-checklist-status` ("Toggle checkbox status") and
+`editor:cycle-list-checklist` ("Cycle bullet/checkbox"). Neither was run.
+
+**Unprobed:** what either command does — in particular whether
+`editor:cycle-list-checklist` is the path that reaches `[?]`, `[-]` and `[>]`,
+which the click cannot. Live Preview: the matrix step returned `null` for all
+six rows and read no bytes, so clicking a checkbox in Live Preview is
+unmeasured here ('s own Live Preview toggle is covered by
+[[Development#The checkbox the padding hid, 2026-10-18]]). Repeated toggling
+of one checkbox: the step that tried it reported the DOM reacting with the
+file never changing, contradicting the matrix above, so round-tripping a
+checkbox is unsettled. Also unprobed: whether a theme or CSS can make a
+custom status survive, whether a checkbox inside an embedded note writes to
+the embedded file, and what a click does when the note is open and dirty in
+another pane.
+
+## Observed heading fold behavior, Obsidian 1.14.4
+
+Observed on 2026-10-18 with a throwaway plugin in a scratch vault, Obsidian
+1.14.4 (installer build 1.13.7), folding one 33-line note (`Fold Probe.md`,
+450 bytes, frontmatter plus an `#`/`##`/`###` tree, a list and a footnote
+definition) and reading the fold record, the DOM and the vault back after
+every step. All fourteen steps of the run completed; nothing below rests on a
+failed step. Every editor observation was made in **Live Preview** — the view
+reported `{"mode":"source","source":false}` and the container class read
+`is-live-preview is-folding`. Raw Source mode was never exercised.
+
+A fold is recorded as line ranges, zero-based and inclusive at both ends:
+`{"folds":[{"from":11,"to":18}],"lines":33}`. `lines` is the document's line
+count including the empty line after the final newline (the 450-byte note
+splits into 33 lines).
+
+What `editor:toggle-fold` folded, against the source line numbering:
+
+| Line folded | Range recorded |
+| --- | --- |
+| `## Section A` (11), next heading of the same level `## Section B` on 19 | `11`-`18` — the trailing blank line 18 included |
+| `### Sub A1` (15), the last thing in Section A | `15`-`18` |
+| `## Section B` (19), a list in its body | `19`-`26` |
+| `## Section C` (27), the last heading | `27`-`32` — to the final line, the `[^1]:` definition on 31 and the empty line 32 included |
+| `# H1 Top` (7) | `7`-`32` — the nested `##`/`###` headings inside it included |
+| `- list parent` (23) with two indented children | `23`-`25` — the blank line 26 is *not* part of a list fold, unlike a heading fold's trailing blank |
+| `PREAMBLEBODY ...` (5), a paragraph before any heading | command returns `true`, nothing folds |
+| `---` (0), the frontmatter's opening fence | command returns `true`, nothing folds |
+
+So the extent is the heading line through the line before the next heading of
+the same or a higher level, trailing blanks included, and the last heading
+folds to the end of the file.
+
+In the editor the folded heading line is still rendered with `…` appended
+(element class `cm-foldPlaceholder`); the folded lines are gone from the
+rendered line list. The placeholder line still follows Live Preview's
+cursor-reveal rule: with the cursor on it the line reads `## Section A…`, and
+after a switch away and back it reads `Section A…`. Each foldable line also
+carries a zero-width `div.cm-fold-indicator` (inline-block, `position:
+relative`) paired with a sibling `div.collapse-indicator.collapse-icon` at
+`opacity: 0`, `position: absolute`, `left: -15px` on the heading lines
+captured and `-10px` on the list line; the folded line's indicator gains
+`is-collapsed`. The capture returned five such pairs for a note with six
+foldable lines, plus one unpaired `collapse-indicator` at `left: -22px` above
+the first heading, so it is not established to be a complete listing.
+
+**Nothing is written to the note.** The 450 bytes are byte-identical after
+the fold and after the whole run, and no file in the vault's listing was
+added, changed or removed. The record lives in `localStorage`, under the key
+`5c0r1ac0rpu50001-note-fold-Fold Probe.md` — the app id, `-note-fold-`, then
+the vault-relative path. Only this one root-level note was observed, so how a
+path in a subfolder is spelled in the key is not known. The vault diff the
+run took does not cover `.obsidian/` (its file listing holds no dotfiles),
+and the probe's own `setConfig` call did rewrite `.obsidian/app.json` during
+the run, so "a fold touches no vault byte" is established for the note and
+the vault's non-dot files only.
+
+The fold survives leaving the note and coming back in the same session: the
+record is written on leaving and the section is still folded on return.
+
+In reading view:
+
+| Trait | Observed |
+| --- | --- |
+| Sharing | the editor's fold collapses the same section in reading view, and returning to the editor shows it still folded |
+| Record shape | merely entering reading view rewrote `{11,18}` to `{11,12}`, before any click; all four reading-view folds took the `{h, h+1}` form — `{7,8}`, `{11,12}`, `{19,20}`, `{27,28}` |
+| Back in the editor | the same fold reads at its full extent again (`{11,18}`), so a stored `to` is not authoritative for the editor |
+| Collapsed content | absent from the preview DOM, not hidden: the wrapper list runs `el-p` (TOPBODY) → `el-h2 is-collapsed` (Section A) → `el-h2` (Section B), with no wrapper for the section's paragraph, its `### Sub A1` heading or that heading's body |
+| Extent | collapsing `# H1 Top` hid everything below it and left the paragraph *above* it visible; `## Section B` hid its body and the list; `## Section C` hid its body and the footnote definition |
+| Indicator | `span.heading-collapse-indicator.collapse-indicator.collapse-icon`, the heading element's first child, `position: absolute`, `left: 31.9935px`, `opacity: 0` expanded and `opacity: 1` plus `is-collapsed` collapsed; the glyph is an inline `svg.svg-icon.right-triangle` with path `M3 8L12 17L21 8` |
+| Classes | the `<h1>`/`<h2>` itself keeps an empty class; `is-collapsed` lands on the indicator span and on the wrapper div (`el-h2 is-collapsed`) |
+| Clicking the indicator | toggles, both ways — clicking an already-collapsed one expanded it |
+
+One click on heading *text* (an `H2`; which heading is not recorded) changed
+nothing. That is one observation, not a rule.
+
+The six fold command ids, with the names the registry reported, all queried
+by id rather than enumerated:
+
+| Id | Name |
+| --- | --- |
+| `editor:toggle-fold` | Toggle fold on the current line |
+| `editor:fold-all` | Fold all headings and lists |
+| `editor:unfold-all` | Unfold all headings and lists |
+| `editor:fold-more` | Fold more |
+| `editor:fold-less` | Fold less |
+| `editor:toggle-fold-properties` | Toggle fold properties in current file |
+
+Each reports `hotkeys: []` for itself. The five editor ones all pass their
+check callback with a markdown view focused in Live Preview.
+
+`editor:fold-all` folded everything in one pass, leaving three rendered lines
+and the set `{0,0}`, `{2,3}`, `{7,32}`, `{11,18}`, `{15,18}`, `{19,26}`,
+`{23,25}`, `{27,32}` — one range per heading and per list parent, plus
+`{2,3}`, which covers the indented YAML list under `tags:` on source lines 2
+and 3, and `{0,0}`. No range covers the frontmatter block (lines 0-4), so the
+frontmatter is not shown to fold. `editor:unfold-all` cleared every heading
+and list fold; in three invocations the set ended at exactly `[{0,0}]` each
+time. The `{0,0}` entry is unexplained — it is never correlated with hidden
+content, and it reaches storage: the run's final record read
+`{"folds":[{"from":0,"to":0},{"from":19,"to":20}],"lines":33}`.
+
+With `.obsidian/app.json` holding literally `{}`, `foldHeading` and
+`foldIndent` both read `true` and folding worked, so both default to on.
+With `foldHeading` set to `false` through the API: the editor DOM query for
+fold indicators came back empty (it returned nothing for the list indicator
+either, which `foldIndent: true` should still produce), and
+`editor:toggle-fold` returned `true` and folded nothing — the step records no
+target line, so the toggle is not shown to have been aimed at a heading. In
+reading view the three headings captured still carried the indicator span,
+computed `display: none` with a zero rect, and a scripted click on that
+hidden indicator still collapsed the section: the machinery stays live, the
+affordance is hidden.
+
+One incidental: writing `foldHeading` through the API did not reach
+`.obsidian/app.json` at once. When the app read `false`, the file still read
+`{}`; after restoring the in-app value to `true`, the file read
+`{"foldHeading": false}` — the file trailing the in-memory value by one
+change. One observation, in a run whose cleanup did not restore the config.
+
+**Unprobed:** what the editor does on a cold load with a record the reading
+view wrote (`{h, h+1}`) — the app was never restarted, and merely rendering
+the note in preview rewrites the stored record, so a cold editor load after a
+reading-view session is the likely case and is unobserved; whether fold state
+survives a restart at all, and whether anything outside `localStorage` holds
+it — `foldManager` exposes `loadPath`, `savePath`, `load` and `save`, none of
+which was traced to a file, and the step's `.obsidian` listing came back
+empty from a directory we know holds `app.json`, so it is not evidence of
+absence; whether `.obsidian/` is untouched by a fold; what `{0,0}` is;
+`editor:fold-more` and `editor:fold-less`, invoked four times between them,
+each returning `true` with the fold set and the rendered lines unchanged and
+the cursor position unrecorded — a no-op observation, not their semantics;
+`editor:toggle-fold-properties`, never invoked; keyboard folding, since
+`hotkeys: []` is each command's own report and no key was pressed; folding
+with raw Source mode on; `foldIndent: false`; the `localStorage` key for a
+note in a subfolder; whether a click on heading text ever toggles a fold in
+reading view, and whether any user-visible affordance remains there when
+`foldHeading` is `false` (only a synthetic click on the `display: none`
+indicator was tried); what navigation the jump step performed — it recorded
+only that the cursor ended at line 19 column 0 with the section unfolded in
+the live fold set while the saved record still carried `{19,26}`, so "opening
+a link into a folded section unfolds it" is not established; whether folding
+a heading while another fold is already open removes only its own record (the
+one expand observed had no other entry left to leave alone); and folding for
+headings inside callouts or blockquotes, setext headings, a heading on the
+first line of a file, a file with no trailing newline, and an empty last
+section.
+
+## Observed code-block copy behavior, Obsidian 1.14.4 (installer build 1.13.7)
+
+Observed on 2026-10-18 with a throwaway plugin in a scratch vault: notes
+written byte-exactly through the vault API, then every `copy-code-button` in
+the rendered container clicked while `navigator.clipboard`, Electron's
+`clipboard` and the `copy` event were tapped, and the clipboard read back.
+The version numbers are `apiVersion` and `installedVersion`; `appVersion` was
+null in this build, so the app version was never captured.
+
+Two counting caveats that the rest of this section already accounts for. The
+scanned container held **both** views — it opens with
+`div.markdown-source-view … is-live-preview style="display: none"` — so of the
+ten `<pre>` elements found in the probe note, nine are reading view and the
+tenth is the editor's own live-preview callout widget (a byte-identical
+duplicate of the reading-view callout block, with an all-zero rect). Ten
+clicks therefore produced nine distinct payloads, not ten. And every click was
+dispatched programmatically on a button whose computed `display` was `none`;
+the hover → reveal → click path a person takes was never exercised.
+
+The markup:
+
+- Every `<pre>` the Markdown renderer produces carries exactly one
+  `<button class="copy-code-button">`, appended as the pre's last child,
+  after the `<code>`. Ten of ten pres in the probe note had one.
+- `class` is the button's only attribute: no `aria-label`, no `title`, no
+  text, no `tabindex` (`tabIndex` reads 0, which is the browser default for
+  `<button>`, not an Obsidian choice). Its sole child is an
+  `svg.svg-icon.lucide-copy`.
+- The renderer adds it, not the reading-view leaf: a detached
+  `MarkdownRenderer.render` that was never attached to a view already had a
+  button on all three of its pres, the callout block and a bare
+  `<pre><code>indented block\n</code>` included.
+- Reading view shows no language name anywhere on the block: `::before` and
+  `::after` on both `pre` and `code` compute to `content: none`, and the
+  flair-element scan came back empty on every pre in both scanned notes.
+
+The four `app.css` rules that matched, plus the two mobile overrides:
+
+| Selector | Declarations |
+| --- | --- |
+| `.markdown-rendered pre:not(:hover) > button.copy-code-button` | `display: none` |
+| `.markdown-rendered button.copy-code-button` | `margin: 6px; padding: 6px 8px; height: auto; background-color: transparent; box-shadow: none; color: var(--text-muted); font-size: var(--font-ui-smaller); font-family: var(--font-interface); position: absolute; top: 0; inset-inline-end: 0` |
+| `.markdown-rendered button.copy-code-button:hover` | `background-color: var(--background-modifier-hover)` |
+| `.is-mobile .markdown-rendered pre:not(:hover) > button.copy-code-button` | `display: block` |
+| `.is-mobile .markdown-rendered button.copy-code-button` | `width: auto` |
+
+So the button is hover-only on desktop and always visible on mobile. The
+computed style of an unhovered button is `display: none`, `border-radius:
+5px`, `color: rgb(179, 179, 179)`; the containing pre is `position: relative`.
+
+What a click copies. The one intercepted call is
+`navigator.clipboard.writeText`, once per click; the Electron tap and the
+`copy` listener were installed and their intercept arrays stayed empty (an
+absence, not a recorded negative). The payload is the `code` element's plain
+text — Prism's `<span class="token …">` markup does not survive — with
+**exactly one** trailing newline removed, not a trim:
+
+| Case | DOM text | Copied |
+| --- | --- | --- |
+| Fence body ending in three newlines | `…tab indented\n\n\n` (79 chars) | `…tab indented\n\n` (78) |
+| Ordinary one-line fence | `const CASE_LANG = 1;\n` | `const CASE_LANG = 1;` |
+| 4-space indented block | `…four spaces\n…second line\n` (52) | same without the final `\n` (51) |
+| Frontmatter `pre` (no trailing newline) | `title: Code Copy Probe\ntags:\n  - probe` (38) | identical (38) |
+| Empty fence | `""` | `""` |
+
+Trailing spaces and a leading tab inside the body survive untouched. The
+byte claims rest on a deliberate input/output diff: the probe wrote the note
+and read it back byte-identical before rendering it.
+
+A CRLF file's code block is LF-only in both the DOM and the clipboard —
+`CRLF line one\r\nCRLF line two\r\n` on disk (6 CRs, round-tripped) renders as
+`CRLF line one\nCRLF line two\n` and copies as `CRLF line one\nCRLF line two`.
+Obsidian normalizes the endings while leaving the file's CRs alone.
+
+One sample of each block shape got a button and copied its own body, all from
+a single hand-built note: fence with a language, fence with none, 4-space
+indented block, `~~~` fence, an unregistered info string, inside a callout,
+inside a blockquote, an empty fence, and the frontmatter block. The
+frontmatter case is the odd one: `pre.frontmatter.language-yaml` computes to
+`display: none` (the properties widget is shown instead) and still carries a
+button, and a synthetic click on it copies the raw YAML. The one inline
+`<code>` in the note had no sibling button.
+
+Prism classes on the rendered block:
+
+| Fence | `pre` class | `code` class |
+| --- | --- | --- |
+| ```` ```js ```` | `language-js` | `language-js is-loaded` |
+| `~~~python` | `language-python` | `language-python is-loaded` |
+| ```` ```-made-up ```` (unregistered) | `language--made-up` | `language--made-up is-loaded` |
+| ```` ``` ```` with no info string | *(none)* | *(none)* |
+| 4-space indented block | *(none)* | *(none)* |
+| Frontmatter | `frontmatter language-yaml` | — |
+
+Click feedback is icon-only. The SVG is `lucide-check` at 0, 150 and 400 ms
+after the click and back to `lucide-copy` at 900, 1500 and 2200 ms. Across
+all six samples `className` stays `copy-code-button` and `textContent` stays
+empty, and no Notice appeared on any of the twelve clicks the run made.
+
+In the editor there are **two** affordances, not one:
+
+- A plain fence line gets `span.code-block-flair`, `aria-label="Copy"`,
+  `contenteditable="false"`, on the `HyperMD-codeblock-begin-bg` line, with
+  the text `JavaScript` for a ```` ```js ```` fence. Its rule is
+  `.markdown-source-view.mod-cm6 .code-block-flair { position: absolute;
+  right: 6px; top: 6px; z-index: 1; display: inline-block; padding:
+  var(--size-4-1) var(--size-4-2); border-radius: var(--code-radius);
+  font-family: var(--font-interface); font-size: var(--font-ui-smaller);
+  color: var(--text-muted); cursor: var(--cursor); }`, plus a `:hover`
+  background.
+- A code block rendered as an embed widget — the callout — gets a real
+  `button.copy-code-button` inside the CodeMirror DOM: one `pre` inside the
+  editor, one `cm-embed-block`, and the focusable-element walk lists
+  `BUTTON.copy-code-button tabindex=0` immediately after
+  `DIV.cm-embed-block cm-callout`.
+
+No command in the registry copies a code block. Filtering the registry, the
+ids containing "copy" are `workspace:copy-path`, `workspace:copy-full-path`,
+`workspace:copy-url`, `editor:table-row-copy`, `editor:table-col-copy` and
+`bases:copy-table`; the ones containing "code" are `editor:toggle-code` and
+`editor:insert-codeblock`.
+
+Every reading-view `pre` sampled computed to `white-space: pre-wrap` with
+`overflow-x: auto`. This contradicts the "fenced code never wraps" row above
+and is a computed value only — the matched-rule dump covered the copy-button
+selectors, and the page carried seven stylesheets besides `app.css`.
+
+**Unprobed:** what clicking the editor's `span.code-block-flair` does (it was
+never clicked, only its `aria-label` read), and whether the flair's text is a
+language display-name table or a one-off — one fence, one language was seen.
+Whether Live Preview and source mode differ: both steps read back
+`mode: "source"`, and their button counts (10 and 9) were taken over a
+container that still held the reading-view DOM. Keyboard activation: the
+button is natively focusable, not disabled, and the ten buttons appear in
+document order in the focusable walk, but a `focus()` call on a
+`display: none` button did not move focus and the synthetic Enter is
+self-labelled non-evidence, so whether a real Tab reaches it and Enter copies
+is unanswered. The painted geometry and size, since every button rect was
+zero under `display: none`. Whether a real pointer interaction behaves like
+the synthetic click. Why copying the empty fence left the Electron clipboard
+holding the pre-probe text rather than `""` or the previous value — and
+relatedly, for nine of the ten clicks only the Electron tap witnessed the
+clipboard (`navigatorSkipped: "skipped for time budget"`). Whether the write
+reaches the system clipboard independently of the probe: `navigator.clipboard
+.writeText` was replaced before every click, so the read-back cannot separate
+Obsidian's write from the tap's own forwarding. Whether a code block inside a
+transcluded note embed gets a button — no embed rendered in the probe note.
+Whether any setting turns the button off: the config scan filtered a
+probe-chosen list of eight keys, not an enumeration of Obsidian's settings.
+The exact revert delay of the check icon, bounded only between 400 ms and
+900 ms. Mobile behavior beyond the two `.is-mobile` rules, nothing having run
+with `isMobile` true. Whether the copy text can diverge from the file's bytes
+in ways other than line endings — HTML entities, unicode normalization,
+zero-width characters. Whether the frontmatter pre's button is reachable by a
+person at all, its pre being `display: none`. And which rule sets the
+reading-view `pre` to `pre-wrap`.
+
+## Observed raw HTML behavior, Obsidian 1.14.4 (installer build 1.13.7)
+
+Observed on 2026-10-18 with a throwaway plugin in a scratch vault: a note of raw-HTML constructs opened in reading view and read back, a second note in a subfolder for source-relative `src` values, and 26 single-construct cases from a second probe file. Three limits bound everything below. The run executed its step set twice and the stored values are the second pass, which created nothing — `setup.made` is empty, every probe file already existed. The reading view it measured stopped short: `sectionChildTags` holds 18 entries and ends on the `DIV.el-h2` for "Sup and sub" with no body element after it, so the note's tail never rendered. And the 26 cases come from a different session — its `app://` host hash and its `pic.png` query both differ from the main run's — in a file that records no step name, so the surface those cases rendered into is not stated.
+
+### Images
+
+A raw `<img>` whose `src` resolves to a vault file has the attribute itself rewritten to `app://<36 hex>/<absolute filesystem path>?<13 digits>`. Resolution is Obsidian's link resolution, not path arithmetic:
+
+| Authored in | `src` | Resolves to |
+| --- | --- | --- |
+| root note | `pic.png`, `./pic.png`, `/pic.png` | `pic.png` |
+| root note | `assets/deep.png`, `deep.png` | `assets/deep.png` |
+| root note | `pic two.png`, `pic%20two.png` | `pic two.png`, written `pic%20two.png` |
+| `html/Nested HTML.md` | `sibling.png`, `./sibling.png`, `html/sibling.png` | `html/sibling.png` |
+| `html/Nested HTML.md` | `../pic.png`, `pic.png` | root `pic.png` |
+| `html/Nested HTML.md` | `assets/deep.png`, `deep.png` | `assets/deep.png` |
+
+A bare name is resolved like a wikilink target rather than joined to the note's folder: from `html/`, `sibling.png` finds the sibling and `deep.png` finds `assets/deep.png`. Each of those basenames was unique in the vault, so the preference order between a root file and the source's own folder was not exercised.
+
+- The host is 36 hex characters and differs between the two probe sessions (`e53bdfa6…cfc9f`, `4440591f…6345b`) — per session and opaque.
+- The `?<13 digits>` query is constant per file within one run (`pic.png` `?1792374870859`, `assets/deep.png` `?1792374954193`, `html/sibling.png` `?1792374954195`), the same value in both notes and both DOMs. `pic.png` carries `?1792375399934` in the other session's file, so as observed it is not a stable property of the file.
+- A `src` that resolves to nothing is left verbatim (`missing.png`); the browser then resolves it against `app://obsidian.md/` and the image is broken (`naturalWidth` 0).
+- An `http://` `src` is left alone and really fetched (`naturalWidth` 1). The request carries no `Referer` header, which is what the `referrerpolicy` below asks for.
+- The reading view adds `referrerpolicy="no-referrer"` to every raw `<img>`, the unresolved and the remote one included. It belongs to raw-HTML imgs specifically: the `<img>` inside a reading-view markdown embed (`span.internal-embed media-embed image-embed is-loaded`) carries only `alt` and `src`.
+- Nine consecutive raw `<img>` lines with no blank line between them are one HTML block and render as a single `div.el-img` with the images as direct children — no `<p>`. Raw imgs written inside a paragraph stay in that paragraph's `<p>`.
+- Markdown embeds have a different shape, for contrast: reading view wraps the img in `<span alt="md-sub" src="assets/deep.png" class="internal-embed media-embed image-embed is-loaded">` — the unresolved vault path stays on the wrapper and the resolved `app://` URL goes on the inner img — while the editor-side form is `div.internal-embed … tabindex="-1" contenteditable="false"` with `div.image-wrapper`, `div.image-resize-corner` and `div.embed-actions` children.
+
+The editor DOM retained inside the same leaf renders raw HTML through a `span.cm-html-embed` widget whose imgs carry the same resolved `app://` srcs but no `referrerpolicy`. Those rows were read while the leaf was displaying the reading view and are not laid out (zero rects), so they are widget output rather than a measured Live Preview session.
+
+### Anchors
+
+- A raw `<a>` keeps its href exactly as authored — no resolution, no extension handling, no `app://` — and gains `target="_blank" rel="noopener nofollow"`. It gets neither `class="internal-link"` nor `data-href`, even when the href names a note that exists.
+- A wikilink in the same paragraph renders `<a data-href="Target Note" href="Target Note" class="internal-link" target="_blank" rel="noopener nofollow">`, so `target` and `rel` are on internal links too in 1.14.4, and `data-href` plus the class are what separate them from a raw anchor.
+- Clicking each of five raw anchors (`Target Note`, `Target Note.md`, `assets/deep.png`, `Missing Target`, `#Images block`): no leaf opened (one before and after), the active file stayed `Raw HTML.md`, `window.open` and electron `shell.openExternal` were never called, `location.href` was unchanged, and no vault file was created or removed — not even for the missing target. `defaultPreventedByObsidian` was false on all five, but the probe's own navigation guard also fired and cancelled the default on all five, and nothing records the handler order, so this says what did not happen, not that Obsidian declined the click.
+
+### `<pre>`
+
+- A raw `<pre>` renders as a real `<pre>` inside `div.el-pre`, with an empty `className` and no attributes of Obsidian's own. Its content is literal — `**not bold**` and `[[Target Note]]` stay text, `&` serializes as `&amp;`, two leading spaces survive — but a tag inside it is live markup: `<b>tag inside pre</b>` is an element, and the only `<b>` in the note.
+- The copy button belongs to `pre > code`: a raw `<pre><code>` gets `button.copy-code-button` (a lucide-copy svg), a raw `<pre>` with no `<code>` child does not, a fenced block does. Two copy buttons in the note, and two buttons of any kind.
+- A fenced block is `pre.language-text > code.language-text.is-loaded[data-line="0"]`; a raw one has neither the class nor `data-line`.
+- Wrapping, measured once in a 304 px pane: the three reading-view `<pre>` elements all computed `white-space: pre-wrap; overflow-wrap: break-word; overflow-x: auto; tab-size: 4`, and a 295-character line whose longest unbroken token is 240 characters did not scroll sideways (`scrollWidth == clientWidth == 304`; the block grew to 408 px tall). The same note's two editor-side `<pre>` elements, read from the same DOM, computed `white-space: pre; overflow-x: visible` with zero rects. This disagrees with the "fenced code never wraps" invariant recorded above, but one pane width, an uncaptured theme and an unlaid-out counter-example are not enough to change it.
+
+### Sanitizer, 26 single-construct cases
+
+| Authored | Rendered |
+| --- | --- |
+| `<span onclick="…">x</span>` | `<span>x</span>` — the handler attribute is dropped, the element stays; `onclickFired` false |
+| `<script>window.__probeScript=1</script>after` | `after` — element and script text gone, following text survives; `scriptExecuted` false |
+| `<a href="javascript:…">x</a>` | `<a target="_blank" rel="noopener nofollow">x</a>` — no `href` at all; `javascriptHrefFired` false |
+| `<a href="https://example.invalid/page">`, `<a href="obsidian://open?vault=x&file=y">` | href kept verbatim (`&` re-escaped as `&amp;` in serialization), `target` and `rel` added |
+| `<span class id data-foo title>` | all four attributes kept |
+| `<img src="pic.png" width="100" height="50" alt="A">` | `<img alt="A" height="50" width="100" src="app://…" referrerpolicy="no-referrer">` |
+| `<iframe src="http://…" sandbox="">` | both kept as written — an author's empty `sandbox` is not replaced |
+| `<table><tr><td>c</td></tr></table>` | `<table><tbody><tr><td dir="ltr">c</td></tr></tbody></table>` |
+| `start <b>bold never closed` | `<p dir="auto">start <b>bold never closed</b></p>` — closed at the end of its paragraph, no leak into later blocks |
+| ins, del, kbd, samp, var, small, big, center, font[color], strike, tt, details, summary, sup, sub | all kept with their content |
+
+- The `style` attribute survives verbatim in all nine style cases, and the computed style shows it taking effect for `color`, `background-color`, `font-size`, `font-weight`, `display:none`, `position:absolute` and `display:inline-block`. Two cases show survival only: `background-image:url(http://…)` left no `backgroundImage` in the computed set and no request reached the probe's server, and `<div style="text-align:center">` was recorded with its `attrs` and `computed` both null.
+- Attribute order is rebuilt, not passed through: `class id data-foo title` comes back `title data-foo id class`, and `src width height alt` comes back `alt height width src referrerpolicy`.
+- Obsidian stamps direction attributes a matching renderer has to emit too: `<p dir="auto">` on paragraphs, `dir="auto"` on headings (`<h2 data-heading="Anchors" dir="auto">`), `dir="ltr"` on a `<td>` in a raw table.
+- Inline HTML is wrapped in `<p dir="auto">`; HTML that opens a CommonMark HTML block — `div`, `center`, `details`, `table`, `iframe`, a lone `<img>` on its own line — gets no paragraph wrapper.
+- `<sup>` and `<kbd>` are themed rather than merely structural: sup computes `vertical-align: super` at 12.5 px against a 15 px body, kbd gets `background rgb(35, 35, 35)` at 13.125 px.
+
+The recorded pass left the vault's 74 paths identical before and after, and cleanup detached one markdown leaf. It also attempted no write, so that is not evidence that rendering and clicking are read-only — only that nothing was written.
+
+**Unprobed:** where a raw anchor click ends up, and whether `href="#Images block"` scrolls, since the probe's guard cancelled every navigation; `<details>` in a real note and in-note `<sup>`/`<sub>` — `details.count` is 0 and the sup/sub paragraph was "not found", both consistent with the preview stopping at the last heading rather than with Obsidian omitting them, and the second file's own `supsub` value is null, so sup/sub rests on the one detached case; whether an iframe or a CSS `background-image` in a note actually fetches (no `/san.png` request appears, but that HTTP log is shared across scenarios and those cases ran in the other session); whether the `?<digits>` query is the file mtime, as no file timestamps were captured; whether the pre-wrap measurement is the stock default, since only six config keys were recorded (`attachmentFolderPath`, `newLinkFormat` `shortest`, `useMarkdownLinks` false, `showInlineTitle`, the probe's HTTP base, the version) and none covers theme, snippets, appearance or readable line length — and every link-resolution observation above was made under `useMarkdownLinks: false`, `newLinkFormat: shortest`; an ambiguous bare basename, root file against source folder, since each probe basename was unique; which elements get unwrapped, since all 26 cases used tags that survived and none covered object, embed, form, svg, style, link or meta; raw HTML inside a callout, blockquote, table cell or list item, and a raw HTML block interrupting a paragraph; whether the notes' bytes changed, since only byte counts and a truncated head were read back; and the markup behind the Embeds, Anchors, Pre and Sup-and-sub sections, since the 2367-byte source of `Raw HTML.md` is truncated after 700 bytes in the evidence.
+
+## Observed remote image behavior, Obsidian 1.14.4 (installer build 1.13.7)
+
+Observed on 2026-10-18 with a throwaway plugin in a scratch vault: a table of
+image syntaxes rendered through `MarkdownRenderer` into a detached container,
+one note opened in the reading view, and a local HTTP server logging every
+request with its headers. Ten of the sixteen requests came from the detached
+container — that is the renderer API, not a note anyone opened; the other six
+(`rv-inline.png`, `slow`, `404`, `rv-sized.png`, `cache-probe.png`,
+`rv-rawhtml.png`) came from the opened note.
+
+Fetching:
+
+- Every `http:` destination in rendered markdown is requested, with no prompt,
+  no allowlist and no gate: sixteen `GET`s in a 9.3 s run, one per distinct URL.
+- The six images of the opened note were all requested inside 2 ms of each
+  other, and no sampled `<img>` carries a `loading` or `decoding` attribute.
+- Mounting one URL repeatedly produces no further request: the DOM held four
+  elements on that URL (the probe accounts for three of them — two extra mounts
+  plus the reading-view one) and the server logged exactly one `GET`, with a
+  single `PerformanceResourceTiming` entry. Whether that cache is Obsidian's or
+  Chromium's ordinary one cannot be told apart here.
+- An image request carries no `Referer`, no `Origin` and no `Cookie`. The
+  plugin's own `XMLHttpRequest` in the same run does send
+  `Origin: app://obsidian.md`, so the absence is specific to images.
+- What it does send: `Sec-Fetch-Dest: image`, `Sec-Fetch-Mode: no-cors`,
+  `Sec-Fetch-Site: cross-site`, `Sec-Fetch-Storage-Access: active`,
+  `Accept: image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8`,
+  `Accept-Encoding: gzip, deflate, br, zstd`, `Accept-Language: en-US`,
+  `Connection: keep-alive`, the `sec-ch-ua` trio, and a Chrome user agent
+  ending `obsidian/1.13.7 Chrome/150.0.7871.47 Electron/43.1.0`.
+
+What each syntax renders to, and whether it is fetched:
+
+| Source | Emitted | Fetched |
+| --- | --- | --- |
+| `![alt](http://h/x.png)` | `<img alt="alt" src="http://h/x.png" referrerpolicy="no-referrer">` | yes |
+| `![alt\|200x100](http://h/x.png)` | adds `height="100" width="200"`, `alt="alt"` | yes |
+| `![alt\|200](http://h/x.png)` | adds `width="200"`, no `height` attribute | yes |
+| `![200x100](http://h/x.png)` | `alt="200x100"` *and* `height="100" width="200"` | yes |
+| `![alt\|200x100](http://h/x.png "the title")` | adds `title="the title"` | yes |
+| `![alt](<http://h/x.png>)` | same as the plain form | yes |
+| `![ref alt][rr]`, `[rr]: http://h/x.png "Ref title"` | `<img title="Ref title" alt="ref alt" src=…>` | yes |
+| `<img src="http://h/x.png">` (raw HTML) | `<img src=… referrerpolicy="no-referrer">` | yes |
+| `![alt](http://h/noext?format=png&x=1)` | loads (`naturalWidth` 1): no extension sniffing | yes |
+| `![alt](data:image/png;base64,…)` | inline `<img>`, `referrerpolicy` still added | n/a |
+| `![alt\|120x60](data:image/svg+xml;base64,…)` | `height="60" width="120"` honoured | n/a |
+| `![[http://h/x.png]]` | `<span class="internal-embed is-loaded file-embed mod-empty-attachment">“http://h/x.png” could not be found.</span>`, no `<img>` | no |
+| `![[http://h/x.png\|200]]` | the same span, plus `width="200"` on it | no |
+| `![alt](//h/x.png)` | `<img src="//h/x.png">`, resolving to `app://h/x.png` — scheme *and* port dropped — `naturalWidth` 0 | no |
+| `![alt](file:///abs/path.svg)` | rewritten to `app://<36 hex>/abs/path.svg`, loads | n/a |
+| `![alt](app://local/abs/path.svg)` | left as written, `naturalWidth` 0 | no |
+| `![[probe-pic.svg]]` (internal control) | `span.internal-embed.media-embed.image-embed` wrapping `<img src="app://<36 hex>/abs/path.svg?1792374924921">` | n/a |
+
+A URL inside a wikilink embed is therefore not remote content at all: it is an
+unresolved file embed, and nothing is requested. The internal embed's query
+string is the file's mtime in milliseconds, matching the vault listing exactly
+— a cache-buster keyed on modification time.
+
+`referrerpolicy="no-referrer"` is on every markdown-rendered `<img>`, raw-HTML
+and `data:` ones included. The internal embed's `<img>` has none
+(`referrerPolicy` is `""`).
+
+Attribute order is not canonical, so nothing should depend on it. The
+markdown-rendered sized image serialises as `height, width, title, alt, src,
+referrerpolicy`; a plain one as `alt, src, referrerpolicy`; the raw-HTML one
+written `src, width, height, alt` comes back as `alt, height, width, src,
+referrerpolicy`; the internal sized embed as `alt, width, src`. The raw-HTML
+case shows the sanitizer rebuilds the element rather than passing it through.
+
+A size hint is stripped from the alt text and applied as attributes. `|200`
+sets `width` only and no `height` attribute; the rendered height then follows
+the intrinsic ratio — demonstrated by the internal 300x150 embed
+(`width="200"` → 200x100), not by the external cases, whose probe image is 1x1.
+
+The opened-note run captured nodes from more than one surface, and they differ:
+
+| | Markup | Computed |
+| --- | --- | --- |
+| Wrapper surface | `<div class="image-wrapper"><img src=… alt=…><div class="image-resize-corner"></div></div>`, **no** `referrerpolicy` | `display: block`, `width: 100%`, `max-width: 100%` |
+| Raw HTML there | `<img>` inside `span.cm-html-embed`, no `referrerpolicy` | `display: inline`, `width: auto`, `max-width: 100%` |
+| Reading view | `<div class="el-p"><p dir="auto">Text before <img alt="inline ext" src=… referrerpolicy="no-referrer"> and text after…</p></div>` | not captured |
+
+The wrapper and its resize corner are present around a 404 and around a slow
+image that has not loaded, so they do not depend on load state. Which leaf the
+wrapper nodes belong to was not established: the view mode was `preview` and
+the sampling was document-wide. Computed sizes from the detached render
+container are not evidence of layout — it has none of the reading view's CSS,
+and every `<img>` in it computes `display: inline`.
+
+Load states, sampled on the wrapper surface:
+
+- A 404 stays a plain `<img>`: `complete` true, `naturalWidth` 0, no class, no
+  placeholder element, no alt substitution in the DOM.
+- A five-second image is `complete` false with `currentSrc` `""` at 250 ms and
+  at 1451 ms, and `complete` true with `naturalWidth` 1 at 6652 ms; its
+  resource timing reads 5004.9 ms.
+- `https://` to the plain-HTTP probe port never reached the server, but a
+  resource-timing entry exists for it (2.7 ms), so the attempt was made and
+  failed in transport. This says nothing about how Obsidian treats `https:`.
+
+No remote-content setting surfaced. `vault.getConfig` returned undefined for
+ten guessed keys (`showRemoteContent`, `allowRemoteContent`, `remoteContent`,
+`remoteImages`, `externalImages`, `loadRemoteImages`, `trustedExternalContent`,
+`privacyMode`, `offlineMode`, `imageCache`) in the same call that returned
+values for `attachmentFolderPath`, `showInlineTitle` and `strictLineBreaks`,
+and `app.json` held only `foldHeading` and `propertiesInDocument`. Of the nine
+setting tabs, three were rendered — Interface (8 items), Editor (25), Files and
+links (22) — and none of their items concerns remote content. The window's own
+CSP meta constrains `style-src` only, so it is not what governs image loading;
+`document.cookie`, `document.referrer` and the meta referrer are all empty.
+
+**Unprobed:** which leaf the `image-wrapper` nodes come from, since sampling was
+document-wide while the view mode was `preview`; the reading view's own markup
+for the slow, 404, sized and raw-HTML images, because the captured
+`previewHTML` is truncated (`…[+770 chars]`) before them; layout of any kind —
+every sampled rect is 0x0 and the layout capture is null, so whether space is
+reserved before an image arrives, and how it flows with surrounding text, is
+unmeasured; whether `div.image-resize-corner` resizes a remote image and
+whether a drag writes a `|WxH` hint back into the note; lazy loading, since
+nothing was scrolled and no image was shown to be offscreen; how `https:` URLs
+behave, since the probe server spoke plain HTTP; why `app://local/<abs path>`
+failed while `app://<36 hex>/<abs path>` loaded; caching across restarts or to
+disk, revalidation, and `Cache-Control`/`ETag` handling — no response headers
+are in the capture and no conditional request appears in the log; redirects,
+a non-image `Content-Type`, authentication, and very large images, none of
+which were requested; what `CachedMetadata` records for an external image, the
+run having measured DOM mounts rather than the cache; how a broken image looks
+to the eye, no screenshot being taken; and whether a user-facing switch exists,
+six setting tabs (General, Appearance, Hotkeys, Keychain, Core plugins,
+Community plugins) having been skipped unrendered.
+
+## Observed properties-in-reading-view behavior, Obsidian 1.14.4
+
+Observed on 2026-10-18 with a throwaway plugin in a scratch vault, on Obsidian
+1.14.4 (installer build 1.13.7), reading the reading view's DOM, the two
+properties panes and `app.metadataTypeManager`, and the vault's files back as
+raw bytes. That run read and clicked; it never succeeded in typing into a
+property, so what it settled is structure and layout. The editing path was
+settled on 2026-10-19 by a CDP-driven run
+([[Development#Driving Obsidian over CDP, 2026-10-18]]): real browser-injected
+keystrokes and mouse clicks against the same build, with every file read from
+disk by the host rather than through the API. Its vault was fresh —
+`.obsidian/app.json` written as `{}` and nothing else — holding `Note A.md`
+(`Status: draft`, `zebra: alpha-note`, `alpha: 1`, `tags` one/two, `aliases`
+Alpha, `count: 3`, `done: true`, `due: 2026-10-18`, `link: "[[Note B]]"`,
+`long value`), `Note B.md` (`status:`), `Note C.md` (`STATUS:`), `Dotted.md`
+(`book.title`, `book.year`), `Nested.md` (`shelf:` holding a map),
+`Past Date.md` (`due: 2020-03-04`), `No Frontmatter.md` and `Plain.txt`; the
+Properties and Daily notes core plugins were already on. All thirteen run steps
+and both post-restart steps completed. Two things about that session bound
+every pixel below: the window was 1024×800, and the File properties pane
+opened in step 6 stayed open for the rest of the run, so the main leaf was
+680 px wide for the first text edits and 380 px (block width 304) from then
+on. Where the two runs disagree the bytes win; where only the plugin run saw
+something, it says so.
+
+`propertiesInDocument`, with a ten-property note open in reading mode:
+
+| Value | Reading view | Side panes |
+| --- | --- | --- |
+| `visible` | the properties table | all 10 rows / all 13 registry rows |
+| `source` | the **same table** — the reading view never shows raw YAML | unchanged |
+| `hidden` | the block is gone from the rendered text; `div.metadata-container` is still in the DOM, with its text run together | unchanged |
+
+So `source` is an editor-only mode: only the editor swaps the widget for the
+YAML. `hidden` drops the block from the document in both views and changes
+neither pane. The CDP run adds the mechanism: under `hidden` the preview root
+(`div.markdown-preview-view`) loses its `show-properties` class and the
+container's computed display is `none`; under `visible` and `source` the class
+is present and the container is `block`. `--metadata-display-reading` reads
+`block` in all three modes, so the class, not the variable, carries the
+switch. The File properties pane kept all 11 rows under every mode. (That
+run's block happened to be folded throughout the step, so under `source` it
+saw only the 51 px heading; the table itself under `source` rests on the
+plugin run.) In all three modes the frontmatter also emits a
+`div.el-pre.mod-frontmatter.mod-ui` element holding a
+`pre.frontmatter.language-yaml` with `style="display: none"` whose `code` is
+the YAML as Prism tokens (`span.token.key.atrule` for each key) — the plugin
+run read it as empty because it sampled text, and it never reaches the
+rendered text. Under `hidden` the note's `div.mod-header.mod-ui` element holds
+only the inline title; under the other two it holds the title and the whole
+block.
+
+The write of the setting is **deferred**. Immediately after the probe restored
+`propertiesInDocument`, `.obsidian/app.json` still read `{\n  "foldHeading": true\n}`
+with no such key; the key appeared only in the final read about 4.8 s later, as
+`{\n  "foldHeading": true,\n  "propertiesInDocument": "visible"\n}` —
+two-space indent, no trailing newline, written even though `visible` is the
+default. The file held one prior key, which also sorts before the new one, so
+this run cannot tell insertion order from sorted output; it was also not a
+clean baseline, since `foldHeading` flipped from `false` to `true` mid-session
+without the scenario touching it. The CDP run's baseline was clean, and it set
+each mode with `app.vault.setConfig` (the Settings dropdown was not used):
+the file's mtime landed 1001, 1002 and 1003 ms after the three calls, and each
+1 s read already held the new bytes — `{\n  "propertiesInDocument": "source"\n}`
+(38 bytes), then `"hidden"` (38), then `"visible"` (39, explicit again) — so
+the save is debounced about one second. Each save also rewrote
+`appearance.json` (`{}`, 2 bytes) with an mtime within 2 ms of `app.json`'s,
+though nothing in it changed.
+
+The in-document block, from the reading view's DOM:
+
+```
+div.metadata-container[tabindex=-1][data-property-count="10"]
+  div.metadata-error-container                      style="display: none;"
+  div.metadata-properties-heading[tabindex=0]
+    div.collapse-indicator.collapse-icon > svg.right-triangle
+    div.metadata-properties-title                   "Properties"
+  div.metadata-content > div.metadata-properties
+    div.metadata-property[tabindex=0][data-property-key="status"]
+      div.metadata-property-key
+        span.metadata-property-icon[aria-disabled=false] > svg.lucide-text
+        input.metadata-property-key-input[autocapitalize=none]
+                                        [enterkeyhint=next][type=text]
+                                        [aria-label="Status"]
+      div.metadata-property-value[data-property-type="text"] > <widget>
+      div.clickable-icon.metadata-property-warning-icon
+                      [aria-label="Type mismatch, expected Text"]  display:none
+```
+
+- The type is an attribute of the **value wrapper**, `data-property-type`, not
+  of the row: the row element carries no type attribute at all.
+- Rows follow the file's key order, unsorted. `data-property-key` is the key
+  lower-cased; the key input's `aria-label` keeps the file's casing — `Status:`
+  in one note gives key `status` labelled "Status", `status:` in another gives
+  `status` labelled "status".
+- Every row carries the hidden warning icon, the `link` row included. The six
+  labels seen are "Type mismatch, expected" Text, Number, Tags, Aliases,
+  Checkbox, Date.
+- The block's text ends "Add property": the add affordance is inside the
+  in-document container too, not only in the sidebar. It is
+  `div.metadata-add-button.text-icon-button[tabindex=0]` holding
+  `span.text-button-icon` (lucide-plus) and `span.text-button-label`.
+- `data-property-count` follows the row count: 10 at the start, 11 once
+  `demo` was added.
+
+Value markup by inferred type, from one note's ten properties:
+
+| Type | Value element |
+| --- | --- |
+| text | `div.metadata-input-longtext[contenteditable=true][placeholder=Empty][spellcheck=true][tabindex=0]` |
+| number | `input.metadata-input.metadata-input-number[type=number][inputmode=decimal][step=any][placeholder=Empty]` |
+| checkbox | `input.metadata-input-checkbox` |
+| date | `input.metadata-input.metadata-input-text.mod-date` |
+| tags, aliases | `div.multi-select-container` holding a contenteditable `div.multi-select-input` |
+
+A `text` property whose value is a wikilink (`link: "[[Note B]]"`, widget
+`text` in the registry) is drawn instead as a non-editable `div.metadata-link`:
+a `div.metadata-link-inner.internal-link[data-href="Note B"][draggable=true]`
+with the link text and a `div.metadata-link-flair` holding a pencil
+(lucide-pencil). A tag pill is `div.multi-select-pill[tabindex=0]` holding
+`div.multi-select-pill-content > span` and a `div.multi-select-pill-remove-button`
+(lucide-x). The `date` row also showed a visible 22×22 `clickable-icon`
+labelled "Open daily note" (lucide-link) inside its value area, with the
+daily-notes core plugin on. It is not tied to today's date: `Past Date.md`'s
+`due: 2020-03-04` row drew the same icon at the same size and x.
+
+Key-column icons, one per type: text `lucide-text`, number `lucide-binary`,
+checkbox `lucide-check-square`, date `lucide-calendar`, tags `lucide-tags`,
+aliases `lucide-forward`. `multitext` is `lucide-list`, seen only on the All
+properties row for `cssclasses`; a key whose value is a nested map (`shelf`)
+gets `lucide-file-question` there.
+
+The two views and their five commands:
+
+| Id | Name |
+| --- | --- |
+| `properties:open` | Properties view: Show all properties |
+| `properties:open-local` | Properties view: Show file properties |
+| `editor:toggle-fold-properties` | Toggle fold properties in current file |
+| `markdown:add-metadata-property` | Add file property |
+| `markdown:clear-metadata-properties` | Clear file properties |
+
+The last three are `checkCallback` commands; the two view commands are plain
+callbacks. The registered view types are `all-properties` and
+`file-properties`. `properties:open-local` created a 300 px-wide
+`file-properties` leaf in the right split, shrinking the main leaf from 680 to
+380 — identically in both runs.
+
+The File properties pane, titled "File properties", draws the rows with **no**
+"Properties" heading and ends with
+`div.metadata-add-button.text-icon-button` reading "Add property"
+(lucide-plus). (The CDP run's dump of the pane while its tab was hidden shows a
+`div.metadata-properties-heading` inside the pane's `metadata-container`, so the
+heading is in the markup and its absence is a matter of style; whether CSS
+hides it was not measured.) Its key inputs are editable in every row. Its
+"More options" menu holds only "Split right" (disabled) and "Split down" —
+nothing property-specific. For a Markdown note with no frontmatter the pane
+shows zero rows and its visible text is just "Add property" (a "No properties
+found." element — `div.pane-empty`, `display: none` — exists in the DOM but is
+not in that text); for a `.canvas` file the pane's text *is* "No properties
+found." with no rows and no "Add property". The view stays bound to the file in
+both cases.
+
+**The pane's text drops input-valued widgets.** A note with `status: shipped`,
+`zebra: beta-note` and `count: 7` renders pane text
+`"shipped\nbeta-note\nAdd property"` — the number lives in `input.value`, as do
+checkbox and date. Any fixture built from these strings silently loses them.
+
+**Editing in the reading view**, from the CDP run. Clicking a text value opens
+a field in place: `document.activeElement` becomes that row's
+`div.metadata-input-longtext` — contenteditable, inside
+`.markdown-reading-view`, no sidebar involved — with a collapsed caret where
+the click landed: at the end of the 10-character `alpha-note` when the click
+fell past its text, at offset 35 of the 97-character `long value` when it fell
+on the text. Typing changes the field and nothing else: 200 ms after
+` edited` was typed the file still read `zebra: alpha-note`. Clicking the note
+body commits: at the 400 ms read the file held `zebra: alpha-note edited`, and
+the 5 s read was identical. The line diff against the fixture is exactly one
+line — unquoted, `link: "[[Note B]]"` keeps its double quotes, key order,
+indentation and the trailing newline unchanged. Nothing in the run shows a
+write before blur; the samples are 200 ms after typing and 150 ms before
+Escape, so a longer debounce that blur or Escape pre-empts is not excluded.
+
+Keys inside an open value field:
+
+| Key | Field | Focus afterwards | File |
+| --- | --- | --- | --- |
+| Enter, on the untouched `long value` | no newline; text unchanged | the row's `div.metadata-property`, selection `rangeCount` 0 | unchanged |
+| Escape after typing `zzz` | the `zzz` is gone, the committed text is back | the row container, `rangeCount` 0 | unchanged — still `zebra: alpha-note edited` |
+| Tab after typing `qqq` | committed | the **next** row's `div.metadata-property` (`alpha`), `rangeCount` 1 — not its key input, not its value, not out of the table | `zebra: alpha-note editedqqq`, one line changed |
+| Ctrl+Z twice, focus on that row container | — | stays on `alpha`'s container | unchanged; `editedqqq` still on disk and in the row after a body click |
+
+Enter was only pressed on an untouched field, so it is known not to insert a
+newline and to leave the field; that it commits a *modified* value is inferred
+from Tab, not observed. Escape on the row container afterwards did nothing
+visible. Ctrl+Z was pressed in reading mode with no editor focused: undo from a
+property row does not reach a committed edit.
+
+The key input is live in the reading view too. The run's clicks on `count` and
+`due` landed on the key column (x 392–516 at that layout: the row's first
+`input` is the key input), which turned the step into key renames. End, `9`
+and a click elsewhere turned `count: 3` into `count9: 3` on the same line —
+value and position kept, on disk at the 400 ms read after the blur. Ctrl+A and
+`2026-10-20` in the `due` key input gave the unquoted line
+`2026-10-20: 2026-10-18`, again in place, committed by the next click away.
+So a UI rename keeps the entry where it is — unlike the delete-then-set rename
+through `processFrontMatter` in [[#Observed properties behavior, Obsidian 1.14.4]],
+which moves the key to the end. Two oddities on the way: the first click at
+the `due` key input's left edge left focus on the *previous* row's
+`input.metadata-input-checkbox` (`done`, 16×16 at x 524), and ArrowRight then
+ArrowUp on that focused checkbox left it checked and the file at
+`done: true`; a second click at the same point reached the `due` key input.
+Why focus went there is unobserved.
+
+Removing a tag writes the list back in block form. Hovering the `one` pill and
+clicking its remove button dropped the pill at once; after a body click the
+file read `tags:\n  - two` with every other line as before — no collapse to
+`[two]`. Whether the removal writes on its own or on the blur was not
+separated. (The click meant to add a tag left `body` as the active element, no
+suggestion popup appeared and the typed `three` reached nothing, so adding is
+unobserved.)
+
+**Add property**, clicked in the in-document block, appends a blank row —
+`div.metadata-property[data-property-key=""]` with
+`span.metadata-property-icon[aria-disabled="true"]` (lucide-text), an empty key
+input and a `text` value — focuses its key input and opens
+`div.suggestion-container.mod-property-key` over it. The popup lists registry
+keys the note does not already have, each a `suggestion-item.mod-complex` with
+the type icon in `span.suggestion-flair` and the name in
+`div.suggestion-title`, first item `is-selected`: `cssclasses`, `book.title`,
+`book.year`, `shelf`, `count`, `due`, `other` — neither alphabetical nor by
+count, and the ordering rule was not found. After typing `demo` the popup was
+gone (no "create" row; sampled 400 ms later). Enter on the key writes at once:
+the file gained `demo:` — bare colon, no `""` — as the last line of the block,
+and focus moved into the new row's value field (an empty
+`div.metadata-input-longtext`). Typing `hello` and clicking the body rewrote
+that line as `demo: hello`; nothing else in the block changed. A second blank
+row left with an empty key and clicked away wrote nothing — no `:`, no `""` —
+and the row disappeared from the table.
+
+**The type icon's menu.** Clicking the glyph left of a key opens a `div.menu`
+at the icon: "Property type" (lucide-info, `has-submenu`, chevron-right); a
+group with `data-section="clipboard"` — Cut (lucide-scissors), Copy
+(lucide-copy), Paste (lucide-clipboard-check); two consecutive
+`div.menu-separator`s; then "Remove" (`is-warning`, lucide-trash-2,
+`data-section="danger"`). So a row's remove affordance lives in this menu, and
+hovering a row adds nothing to its markup. The submenu was never expanded and
+nothing was picked, so the type list, what a retype writes and what Remove
+writes stay open. None of the run's edits created `.obsidian/types.json`, and
+the type manager's raw map stayed null before and after the restart.
+
+**Folding.** Clicking the heading's `collapse-indicator` folds the block:
+`is-collapsed` is added to `div.metadata-container`,
+`div.metadata-properties-heading` and the indicator, `div.metadata-content`
+goes `display: none` and the container's text shrinks to "Properties".
+`editor:toggle-fold-properties` runs in reading view (`executeCommandById`
+returned `true` with the preview leaf active) and toggles the same fold: run
+once it unfolded, run again it folded. The fold is per file and outlives the
+view: Note B opened unfolded, Note A came back folded, and after a scripted
+quit and relaunch Note A was restored in preview mode with the block folded.
+The record is the one heading folds use
+([[#Observed heading fold behavior, Obsidian 1.14.4]]): the `localStorage` key
+`<vault id>-note-fold-<path>`, here `e1e76222977ba271-note-fold-Note A.md`,
+value `{"folds":[{"from":0,"to":0}],"lines":20}` — the properties fold is the
+range `0`–`0`, the opening fence line, and `lines` is 20 for the 19-line note
+plus the empty line after its final newline. `app.json` was unchanged 10 s
+after the fold (`{}`), and `workspace.json`, though rewritten by the note
+switch (5439 → 5458 bytes), holds no fold state. `localStorage` is shared
+across vaults and namespaced only by the id: the scratch vault's store also
+listed `5c0r1ac0rpu50001-note-fold-Fold Probe.md` and
+`5c0r1ac0rpu50001-file-explorer-unfold` from another vault.
+
+At the 380 px main leaf the reading view's rows stayed 29 px tall at a 304 px
+block width — key and value did not stack there.
+
+The All properties pane holds one `div.tree-item` per registry key, each with
+`div.tree-item-self tappable is-clickable`, a type icon, the display name and a
+count. With `sortOrder: "frequency"` the plugin run's order was `tags`6, `STATUS`3,
+`title`3, `zebra`3, `count`2, `aliases`1, `alpha`1, `done`1, `due`1, `link`1,
+`long value`1, `other`1, `cssclasses`0 — counts merge casings, and
+`cssclasses` is listed at zero. Its sort menu is "Property name (A to Z)",
+"Property name (Z to A)", a separator, then "Frequency (high to low)"
+(`mod-checked`, with the check icon) and "Frequency (low to high)". Its nav
+header has "Change sort order" (lucide-sort-asc) and "Show search filter"
+(lucide-search); the latter's target is already in the markup as a hidden
+`div.search-input-container` holding
+`input[type=search][enterkeyhint=search][spellcheck=false][placeholder="Search..."]`
+and `div.search-input-clear-button[aria-label="Clear search"]`, so it reveals
+an in-pane field rather than a popup. Clicking the `tags` row made the
+already-open search leaf the active one at 300 px with 6 results; a
+`searchQuery` of `["tags"]` was read back.
+
+The CDP run filled the pane in. The fresh vault's default workspace already
+held a hidden `all-properties` leaf in the right split; `properties:open`,
+with the right sidebar open at 300 px and the File properties tab active
+there, activated it in that same tab group at x 724, 300 px wide — the
+sidebar's existing width, not one the command chose. Its tab header is
+`div.workspace-tab-header[data-type="all-properties"][aria-label="All properties"]`
+(lucide-archive), and its right-click menu is Close, Pin, Link with tab...,
+Move to new window, Split right (disabled), Split down. Closing the tab and
+running `properties:open` again created a new leaf in the same place. Rows
+are flat: `div.tree-item > div.tree-item-self.tappable.is-clickable` (inline
+`padding-inline-start: 24px !important`), `div.tree-item-icon`,
+`div.tree-item-inner > div.tree-item-inner-text`, `div.tree-item-flair-outer >
+span.tree-item-flair` with the count; each row 25 px tall at x 736, 276 px
+wide, 27 px apart, and no `tree-item-children` anywhere. Dotted keys
+`book.title` / `book.year` are two depth-0 rows with their own types (text,
+number); the nested map `shelf` is one depth-0 row with `lucide-file-question`.
+
+Frequency order (18 rows, before the rename): `Status` 3, `zebra` 3,
+`2026-10-20` 1, then `aliases`, `alpha`, `book.title`, `book.year`, `count`,
+`count9`, `demo`, `done`, `due`, `link`, `long value`, `other`, `shelf`, `tags`
+at 1, `cssclasses` 0. Ties run in ascending name order with digits first;
+`Status`/`zebra` agree under both case rules, so the tie-break's case
+sensitivity stays open. Picking "Property name (A to Z)" (after the rename)
+gave `2026-10-20`, `aliases`, `alpha`, `book.title`, `book.year`, `count`,
+`count9`, `cssclasses` (0, in place), `demo`, `done`, `due`, `link`,
+`long value`, `other`, `shelf`, `state`, `Status` (2), `tags`, `zebra` (3):
+case-insensitive (`state` before `Status`), digits first, zero-count keys not
+segregated. The choice is view state, not a vault setting: the leaf's
+`getViewState().state` went from
+`{"sortOrder":"frequency","showSearch":false,"searchQuery":""}` to
+`sortOrder: "alphabetical"`, `workspace.json` carried it inside that leaf's
+`state` within 6 s and `app.json` did not change; a leaf created later started
+at `frequency` again.
+
+Rename: the row's right-click menu is Rename (lucide-edit-3,
+`data-section="action"`), "Property type" (lucide-menu, `has-submenu` — the
+icon menu's twin uses lucide-info), a separator, "Delete property"
+(`is-warning`, lucide-trash-2, `data-section="danger"`). Rename is in-pane: the
+`tree-item-self` gains `has-focus is-being-renamed`, its
+`div.tree-item-inner-text` becomes `contenteditable="true" spellcheck="true"`
+and holds a non-collapsed selection (anchor 0, focus 1 — the whole name or its
+first character; the sample cannot tell, and the run pressed Ctrl+A before
+typing); no modal and no scope dialog appeared at any point. Typing `state`
+and Enter rewrote **only Note A**, `Status: draft` → `state: draft` in place,
+one line changed; `Note B.md` (`status:`) and `Note C.md` (`STATUS:`) were
+byte-identical before and after. Whether that is current-file scope or a
+case-sensitive match on `Status` the data cannot say — both fit, and the
+view's `propertyRenameScope` read back only as an object. The reading view's
+row followed at once (`state`, `draft`). The pane then listed `zebra` 3,
+`Status` 2, …, `state` 1: the merged entry kept the display name `Status` with
+no file holding `Status:` any more — the casing is fixed when the key is first
+indexed and not recomputed on a rename; after the relaunch the same entry read
+`status` 2, indexed afresh from `status:` and `STATUS:`.
+
+Search filter: clicking "Show search filter" shows the
+`div.search-input-container` (x 732, 284×30) and focuses its
+`input[type=search]`; typing `zeb` filtered the list live to the single
+`zebra` 3 row; Escape hid the container, put all 19 rows back and left focus
+on `body`.
+
+**Obsidian rewrites `.obsidian` files it did not change.** The fixture wrote
+only `app.json`. At launch Obsidian rewrote it byte-identical (`{}`, mtime
+moved) and created `appearance.json` (`{}`), `core-plugins.json` (666 bytes)
+and `workspace.json`; on the relaunch all four were rewritten with unchanged
+sizes (`app.json` …847403 → …880304, `appearance.json` …847403 → …880305,
+`core-plugins.json` …761193 → …879846, `workspace.json` …875554 → …880394).
+Byte-identical mtimes are not something Obsidian itself provides, so 's
+stricter rule is not needed for compatibility — only for not being the thing
+that changes a file.
+
+`Plain.txt`: with `showUnsupportedFiles` false the explorer DOM still holds its
+`nav-file-title[data-path="Plain.txt"]`, but with a zero rect — hidden — so
+the click on it was skipped.
+
+`app.metadataTypeManager` keys every property by its **lower-cased** name and
+keeps one display name per key: `Status`, `status` and `STATUS` across three
+notes give the single entry mapKey `status`, name "STATUS". Its
+`registeredTypeWidgets` are `aliases`, `checkbox`, `date`, `datetime`, `file`,
+`folder`, `multitext`, `property`, `number`, `tags`, `text` — there is no
+`cssclasses` widget, and `cssclasses` is carried as `multitext`. None of the
+inferred widgets is persisted: the manager's own raw types map is null and
+`.obsidian/types.json` was absent before and after both runs;
+`getPropertyInfo('zebra')` read `{name: "zebra", widget: "text"}` throughout.
+
+Layout, from one session: the sidebar's key column held a fixed width beside
+the value at pane widths 300 and 280, and at 180 the key and value **stack**,
+each taking the full row width and the row growing from 29 px to 54 px. The
+relevant variables are `--metadata-label-width: 9em` (computed 135 px, `flex:
+0 0 auto`) and `--metadata-input-longtext-lines: 3`. That session's metadata
+variables were visibly customized (`--metadata-property-radius: 0px`, a
+`color-mix()` label background, a non-default font stack), so the pixel
+constants are this vault's, not necessarily Obsidian's defaults; the stacking
+behavior itself is not theme-dependent in any way the run could show.
+
+**Unprobed:** the non-text widgets' writes — the number input (`count`'s
+click hit the key column), the checkbox (`done`'s too; arrow keys on a focused
+checkbox did not toggle it, but a click on the box itself was never made) and
+the date input (quoted or not once changed) — and adding a tag (the click on
+the pill input left `body` focused, no suggestion popup appeared and `three`
+reached nothing). Enter in a *modified* value field (only an untouched one was
+tried). Undo from inside the body editor after a property commit (Ctrl+Z was
+pressed on a row container in reading mode). Why the first click at the `due`
+key input focused the `done` checkbox, and whether a key rename moves focus
+into the row's value. Whether a pill removal writes on its own or on the next
+blur. Right-click menus on a row, in the reading view and in the File
+properties pane: both CDP right-clicks captured empty menus
+(`Input.dispatchMouseEvent` with the right button may not raise `contextmenu`
+in Electron), so the only row menu seen is the icon's, and any
+reading-vs-sidebar difference is open. "Remove" from that menu and the bytes
+after it; the "Property type" submenu's items and order; what
+`zebra: alpha-note editedqqq` becomes when retyped as Number; Cut, Copy and
+Paste on a row — none was picked. The first shape `types.json` takes from a UI
+retype (its API-written shape is in
+[[#Observed properties behavior, Obsidian 1.14.4]]). The ordering rule of the
+key-suggestion popup, and what it offers on a partial match (it closed on
+`demo`, which matched nothing). The Settings dropdown path for
+`propertiesInDocument` (the run used `setConfig`). The All properties rename's
+scope — current file or case-sensitive match. Whether the File properties
+pane's heading element is hidden by CSS. Whether the fold record is written on
+unfold as well as on fold (the key was first read after folding), and where
+`properties:open` puts its leaf when the right sidebar is collapsed. Pane
+geometry on a default theme beyond the row rects above. What clicking
+`Plain.txt` does and what the File properties pane shows for it. Whether the
+frequency tie-break is case-sensitive and whether keys other than `cssclasses`
+list at count 0 (this fixture discriminates neither). Whether `types.json`
+entries and the reserved keys `tags`/`aliases` match case-insensitively (no
+type assigned, no `Tags:`). Which casing wins when a key is first indexed
+(`Status` in the run, `status` after the relaunch with `Status:` gone — "first
+file indexed" fits but is unproven). `markdown:add-metadata-property` and
+`markdown:clear-metadata-properties` were not run; and the exact string the
+search box receives from a property row was not re-read (`["tags"]` from the
+plugin run stands).
+
+## Observed auto-pair behavior, Obsidian 1.14.4
+
+Observed on 2026-10-18 with a throwaway plugin in a scratch vault, against
+Obsidian 1.14.4 (installer build 1.13.7) — those are the API and installer
+versions the plugin read back; the running app version came back `null` and
+was not observed. Typing is `document.execCommand("insertText")` on the
+CodeMirror contentDOM, the one JS path that reaches the input handler; the
+run proved the path first (typing `(` on an empty note gave `()`) and every
+typing row took it. **Backspace and undo rows are different**: they are
+synthetic, untrusted `KeyboardEvent`s, so they record what CodeMirror's
+keymap and Obsidian's handlers did together, with no native editing
+fallback behind them.
+
+Both toggles read back `true` when the run opened. The run then flipped
+them: all four combinations of `autoPairBrackets` and `autoPairMarkdown`
+were typed through on an empty document, and the captured starting values
+were restored at the end (nothing was restored from a guessed default).
+
+**The two settings own disjoint character sets**, on an empty document with
+the cursor at 0:
+
+| Typed | `autoPairBrackets` | `autoPairMarkdown` | Closes when |
+| --- | --- | --- | --- |
+| `(` `[` `{` | `()` `[]` `{}` | — | `autoPairBrackets` |
+| `"` `'` | `""` `''` | — | `autoPairBrackets` |
+| `` ` `` `*` `_` | — | ` `` ` `**` `__` | `autoPairMarkdown` |
+| `<` `~` `=` `$` `%` | — | — | never |
+
+Each set follows its own toggle and ignores the other's; with both off
+nothing closes. `<`, `~`, `=`, `$` and `%` never close under any
+combination, and typing a second one just adds the character (`~~`, `==`,
+`$$`, `%%`). The membership claim is bounded by the thirteen characters
+probed — no other quote or bracket form was tried.
+
+**A second identical character nests for brackets and skips for the rest.**
+`(` `(` gives `(())` with the cursor at ch 2; `"` `"` leaves `""` and only
+moves the cursor to ch 2. The same skip holds for `'`, `` ` ``, `*` and
+`_`.
+
+**Closing depends on the characters either side of the cursor**, not on the
+setting alone. With both settings on, seven characters were typed in five
+positions:
+
+| Cursor | `(` `[` `{` | `"` `'` `` ` `` `*` |
+| --- | --- | --- |
+| `|word` — word char ahead | no (`(word`) | no (`"word`) |
+| `don|t` — inside a word | no (`don(t`) | no (`don't`) |
+| `word|` — after a word char, end of line | closes (`word()`) | no (`word"`) |
+| `say |` — after a space, end of line | closes (`say ()`) | closes (`say ""`) |
+| `(|)` — before a `)` | closes (`(())`) | no (`(")`) |
+
+So brackets close unless the next character is a word character, and the
+quote and markdown characters were seen to close only where the preceding
+character is a space or the start of the document and the line ends at the
+cursor. Two mid-line controls sharpen that: in `para| text here` (word char
+before, space after) `(` closes to `para() text here` while `*` does not
+(`para* text here`), and in `x =| 1` (`=` before, space after) `(` closes
+and `*` does not — a preceding `=` suppresses markdown pairing even though
+it is not a word character. Two collapsed cursors on `alpha` / `beta` at ch
+0 each got a bare `(` for the same reason: `(alpha` / `(beta`.
+
+**A fenced code block and a `$$` math block do not suppress bracket
+pairing**: `let x| = 1` inside a ```js fence gives `let x() = 1`, and
+`x =| 1` inside `$$` gives `x =() 1`, the same as the plain-paragraph
+control.
+
+**Frontmatter follows the same rule, with no YAML special case.** In source
+mode at `title: |`, `"`, `'`, `[` and `*` all close (`title: ""`,
+`title: ''`, `title: []`, `title: **`), and on the body line `|body text`
+`"` does not. In Live Preview the YAML is replaced by the properties widget
+and is not CodeMirror-editable text, so these rows are source mode only.
+
+**Typing a closer over an auto-inserted one moves the cursor instead of
+inserting.** `(|)` typed `)` leaves `()` with the cursor at ch 2. It still
+skips after an unrelated edit — typing `(`, then `q` after the pair, then
+coming back inside, still skips. Typing `)` at `x|)`, where the `)` was
+planted rather than inserted by the editor, writes `x))`; that document has
+no `(` anywhere, so what decides — provenance or an unmatched opener — is
+not settled (see Unprobed).
+
+**Backspace between an empty pair deletes both characters**, whether or not
+the editor inserted the pair: an auto-inserted `(|)` and a planted `(|)`
+both leave an empty document, against a control where `pla|in` loses one
+character. With content inside, `(|x)` leaves `x)` — only the opener goes.
+`*|*` also leaves an empty document, and `**|` leaves `*`; the run does not
+record whether that `**` was typed or planted, so the "whoever inserted it"
+half is established for brackets only.
+
+**With a selection, every pair character wraps it** and keeps the selection
+over the inner text: `alpha` selected and `(` typed gives `(alpha) beta`
+with `alpha` still selected. This includes `~`, `=`, `$` and `%`, which
+never close at a bare cursor. `<` is the exception — it replaces the
+selection (`< beta`). Wrapping is per range: two selections and one `(`
+give `(alpha)` and `(beta)`, both selections kept.
+
+**`[` twice gives `[[]]`** with the cursor at ch 2, and the file suggester
+opens there (70 items, four registered suggesters). With `autoPairBrackets`
+off the same two keys give `[[` and the suggester still opens, so the popup
+does not depend on the closers. Sending Escape left the document `[[]]`,
+unchanged.
+
+**One undo removes the opener and its auto closer together**: typing `(`
+at `seed|` gives `seed()`, and one undo gives `seed`. After skipping over a
+closer the same single undo reaches `seed`, so the skip adds no undo step
+of its own. The probe left 600 ms between keystrokes, so each keystroke was
+its own CodeMirror history group, and the second undo in each case
+re-entered the probe's own `setValue` seeding — those snapshots are noise.
+
+**The closer is ordinary text.** Typing `(` then `a` and running save left
+the file reading `(a)` (char codes 40, 97, 41, decimal). That is a decoded
+string rather than a byte read; the file's prior content and whether a
+trailing newline survived were not recorded.
+
+**Unprobed:** skip-over for any closer but `)`; whether the auto-inserted
+pair survives a cursor round trip (the step recording it kept no
+before-state); word-boundary behavior for `_`, `~`, `=`, `$`, `%` and `<` (only `(`, `[`,
+`{`, `"`, `'`, `` ` ``, `*` were run through the five positions); which
+half of the markdown rule fails — preceding whitespace specifically, or end
+of line ahead; whether inline code or a blockquote suppresses pairing (a fenced
+code block does not; both earlier rows put the cursor before a word
+character, which already suppresses it everywhere) and likewise whether any
+context suppresses markdown pairing;
+whether the "source mode" rows really ran in source mode — they are
+byte-identical to the Live Preview rows, but nothing reads the mode back
+after the switch, and the Live Preview rows' own validity check (requested
+cursor versus `cursorBefore`) cannot be run because the requested positions
+were not recorded; whether the `**` in the backspace rows was typed or
+planted; whether Escape closes the link popup (no popup state was captured
+at that moment); what typing `]` inside `[[|]]` does; whether an abandoned auto
+closer is ever removed; how a fast-typed `(` plus following text groups for
+undo; whether both toggles are Obsidian's factory defaults (they were read
+from the API in a scratch vault, not from a pristine `app.json`); and
+behavior under Vim mode, on mobile, or with an IME composition in flight.
+
+## Observed attachment paste behavior, Obsidian 1.14.4
+
+Observed on 2026-10-18 with a throwaway plugin in a scratch vault, on Obsidian
+1.14.4 (installer build 1.13.7): synthetic `paste` events carrying a `File`
+item were dispatched on the CodeMirror content element, and the vault listing,
+the editor text, the bytes written and the bytes on disk were read back around
+each one. Twenty-three pastes over seventeen steps, every step reporting `ok`.
+The vault's baseline was `attachmentFolderPath: "/"`, `newLinkFormat:
+shortest`, `useMarkdownLinks: false`, `alwaysUpdateLinks: false`, and the
+naming, collision, format, cursor and undo steps all ran at that baseline, so
+their files land at the vault root.
+
+**Naming.** A pasted image is saved as `Pasted image ` + a 14-digit
+**local**-time stamp `yyyyMMddHHmmss` + the extension. The run's clock
+separated the two readings (local `20261018205534`, UTC `20261019015534`,
+`America/Chicago`) and the file took the local form.
+
+Which clipboard items get that name, and which keep their own:
+
+| Clipboard item | Written as |
+| --- | --- |
+| `image/png`, clipboard name not recorded | `Pasted image 20261018205534.png` |
+| `image/png`, clipboard name `image` (no extension) | `Pasted image 20261018205535 1.png` |
+| `image/jpeg`, clipboard name `image.jpg` | `Pasted image 20261018205535.jpg` |
+| `image/webp`, clipboard name `image.webp` | `image.webp` |
+| `image/gif`, clipboard name `image.gif` | `image.gif` |
+| `text/plain` file item, clipboard name `notes.txt` | `notes.txt` |
+
+The run does not separate "the item's own name is ignored" from "the item's
+name carried no usable extension": the only png whose clipboard name was
+recorded was called `image`, and the jpeg's name already ended `.jpg`. Every
+one of these, the plain-text file included, was inserted as an embed
+(`![[notes.txt]]`).
+
+**Collisions** append a space and an ascending integer before the extension,
+and the comparison is against the whole file name, extension included:
+`Pasted image 20261018205535.png` and `Pasted image 20261018205535.jpg` both
+exist unsuffixed, while a second png in that same second became `Pasted image
+20261018205535 1.png`. Three pastes inside one wall-clock second gave ` 1`,
+` 2`, ` 3`. `fileManager.getAvailablePathForAttachment` resolves the same way
+and continues past existing suffixes (asked for a name whose ` 1`–` 3` were
+taken, it returned ` 4`); it returns a free name, a dotted name and a name
+with no dot unchanged, and creates no file.
+
+**Bytes.** For all five formats the written byte count equals the source byte
+count (png 68/68, jpeg 160/160, webp 44/44, gif 42/42, text 24/24) and the
+first sixteen bytes carry each format's own magic (`89 50 4e 47 …`,
+`ff d8 ff e0 … JFIF`, `RIFF…WEBP`, `GIF89a`). No hash or byte-for-byte
+comparison was recorded and the fixtures are 24–160 bytes, so this is evidence
+against re-encoding rather than proof of its absence.
+
+**Insertion.** The embed goes in at the cursor with no padding added on either
+side (`BEFORE ![[…]]AFTER`). Over a selection it replaces it (`BEFORE `
+selected gives `![[…]] AFTER`). With two cursors one paste writes **one** file
+and inserts the same link at both (`one![[…]]\ntwo![[…]]`), leaving two
+selections. Right after a paste the note was on disk with exactly the editor's
+text — 49 bytes, trailing newline kept.
+
+One undo put the text back to `BEFORE AFTER` in a single step and left the
+attachment alone: the file stayed in the vault index through every entry of
+the undo trace and was still listed on disk at 68 bytes at the end of the run.
+The trace's later entries show another step's buffer, so only the first undo
+is clean evidence of the step size.
+
+A clipboard carrying only `text/plain` and no `File` item creates nothing:
+`/home/user/pictures/snap.png` was inserted verbatim. That is a path-shaped
+clipboard, not an OS file-manager copy.
+
+Every paste that recorded the DOM event came back `defaultPrevented` — the
+text-only one that wrote no file included — so the flag does not separate
+Obsidian's handler from CodeMirror's own paste handling.
+
+**Where the file lands.** `fileManager.getAvailablePathForAttachment` for each
+`attachmentFolderPath` and two source notes (API only, no file written):
+
+| `attachmentFolderPath` | Source note | Path returned |
+| --- | --- | --- |
+| `""` or `/` | `Target.md`, `Sub/Nested.md` | vault root |
+| `Attachments` | `Target.md`, `Sub/Nested.md` | `Attachments/` |
+| `./att` | `Target.md` | `att/` |
+| `./att` | `Sub/Nested.md` | `Sub/att/` |
+| `Sub` | `Target.md`, `Sub/Nested.md` | `Sub/` |
+| `Blocker.md` (an existing **file**) | `Target.md`, `Sub/Nested.md` | vault root |
+
+Three settings were confirmed by a real paste, each from a single source note:
+`Attachments` from `Target.md` wrote `Attachments/…`, `./att` from
+`Sub/Nested.md` wrote `Sub/att/…`, and `Blocker.md` from `Target.md` wrote to
+the vault root. The rest of the table is API output only.
+
+**The link a real paste writes**, from `Sub/Nested.md` to a uniquely named
+file in `Attachments/`:
+
+| `useMarkdownLinks` | `newLinkFormat` | Inserted |
+| --- | --- | --- |
+| false | `shortest` | `![[Pasted image 20261018205538 1.png]]` |
+| false | `relative` | `![[../Attachments/Pasted image 20261018205539.png]]` |
+| false | `absolute` | `![[Attachments/Pasted image 20261018205539 1.png]]` |
+| true | `shortest` | `![](Pasted%20image%2020261018205539%202.png)` |
+| true | `relative` | `![](../Attachments/Pasted%20image%2020261018205539%203.png)` |
+
+`absolute` carries no leading slash. A markdown link has **empty** link text
+and its spaces encoded as `%20`; no name in the run held any other character
+whose encoding would show. `app.fileManager.generateMarkdownLink` over the
+same file returns these same forms without the leading `!`.
+
+`shortest` is not "the bare name unless the basename is ambiguous". Three real
+pastes wrote the same base name into three folders, in this order:
+`Attachments/Pasted image 20261018205538.png` from `Target.md` gave
+`![[Pasted image 20261018205538.png]]`; then the same name under `Sub/att/`
+from `Sub/Nested.md` gave the full path `![[Sub/att/Pasted image
+20261018205538.png]]`; then the vault-root copy from `Target.md` gave the bare
+name again, with the other two already in place. What the three agree on is
+the shortest form that resolves back to *that* file from the source note.
+
+**Notices.** The eight pastes that recorded a `notices` array recorded none —
+including the paste whose attachment folder pointed at an existing file, and
+the text-only paste — as did the final restore step. The other fifteen pastes
+record no notice field at all.
+
+At the end of the run, after the probe restored `attachmentFolderPath` to `/`,
+`newLinkFormat` to `shortest` and `useMarkdownLinks` to `false`,
+`.obsidian/app.json` held `{"foldHeading": true, "propertiesInDocument":
+"visible"}` — none of the three keys present, while `propertiesInDocument` sat
+there at its own default. How the restore wrote those three keys is not
+recorded, so this does not settle whether setting a key to its default removes
+it (see [[Specification#Observed settings write behavior, Obsidian 1.14.4]],
+which observed the opposite through `vault.setConfig`).
+
+**Unprobed:** whether a *paste* creates a missing attachment folder — the
+folders already existed by the time the real-paste step ran — and whether the
+API call is what created them: `Attachments`, `att` and `Sub/att` were folders
+afterwards and `att` never received a file, but the run's "before" listing is
+a file listing and cannot show a folder was absent. `attachmentFolderPath =
+"./"` (Obsidian's "Same folder as current file") was never set, nor a deep
+non-existent path. `useMarkdownLinks` with `absolute` was never pasted for
+real, only generated by the API. No png with a real, distinct clipboard name
+(`photo.png`) was ever pasted, so the rename rule for named png and jpeg items
+is unsettled, as is the extension chosen for a `image/jpeg` item named `*.jpeg`
+or unnamed. Nothing beyond png, jpeg, webp, gif and `text/plain` was pasted —
+no svg, avif, bmp or pdf — and no attachment name contained `#`, `?`, `&`,
+parentheses or non-ASCII, so only the space is known to be percent-encoded. A
+real OS file-manager copy and drag-and-drop were not exercised; neither were
+reading view, a canvas or any non-markdown view. Whether the note's save was
+the paste's doing or the probe's is unrecorded, as is whether any further undo
+ever removes the attachment, whether a Notice appears for the fifteen pastes
+that recorded none, whether the `Pasted image` prefix is localized or
+configurable, and what a collision across different folders does.
+`alwaysUpdateLinks` was read (`false`) but never varied, and `appVersion` was
+null, so only the API version 1.14.4 and installer 1.13.7 identify the build.
+
+## Observed file explorer drag-and-drop and inline rename behavior, Obsidian 1.14.4
+
+Observed on 2026-10-18 with a throwaway plugin in a scratch vault, Obsidian
+1.14.4 (installer build 1.13.7), dispatching synthetic `DragEvent`s over real
+explorer rows, calling the explorer view's own rename entry points, and reading
+the vault back after every step. Every move below is backed by both the
+`fileManager.renameFile` call the probe saw and the vault diff it read
+afterwards. The run forced `alwaysUpdateLinks` on (it had been off) and left it
+on; `newLinkFormat` was `shortest`, `useMarkdownLinks` off.
+
+Every row in the file explorer, file and folder alike, carries
+`draggable="true"` — all 37 rows present. The payload the row sets has the keys
+`source, type, icon, title, file`:
+
+| Dragged | `type` | `icon` | `title` | `file` |
+| --- | --- | --- | --- | --- |
+| `Root.md` | `file` | `lucide-file` | `Root` | `Root.md` |
+| `Deep` (folder) | `folder` | `lucide-folder-open` | `Deep` | `Deep` |
+
+So a file's `title` is its basename without the extension. Only `.md` files
+were ever dragged.
+
+Where a drop lands:
+
+| Dropped on | Result |
+| --- | --- |
+| a folder row | the file moves into that folder (`Root.md` → `Dest/Root.md`) |
+| a file row | the file moves into *that file's parent folder* (`Inbox/Gamma.md` dropped on `Notes/Beta.md` → `Notes/Gamma.md`) |
+| the folder it already lives in | nothing: no `renameFile` call, no notice, no change on disk — though the hover highlight and the `Move into “Dest”` label still appear |
+| `.nav-files-container` (the scrolling file list) | the file moves to the vault root (`Dest/Root.md` → `Root.md`) |
+| a workspace tab header | accepted, but as a different action: the label reads `Open as new tab` and a `.workspace-drop-overlay` element appears |
+| `.nav-header`, `.nav-buttons-container`, `.workspace-leaf-content`, `.workspace-drawer-vault-name` | nothing is accepted: no highlight, no new drag action |
+
+The drag ghost is a `.drag-ghost` element holding the item's title plus an
+action line, `Move into “Dest”`, in curly quotes. Over the root zone the name
+in it was `probe` — which is both the vault's name and its folder name in this
+run, so the two are not distinguished. A ghost with no action line is 31 px
+tall against 46 px for one that carries one.
+
+The hover highlight is the class `is-being-dragged-over`, and it lands on the
+*container*, not on the row that received the event: on the outer
+`.tree-item.nav-folder` while `.tree-item-self.nav-folder-title` is unchanged,
+and on `.nav-files-container` itself for the root zone. A file row, although it
+accepts the drop, takes no highlight anywhere — the ghost's action line is the
+only affordance.
+
+A name collision at the destination neither prompts nor refuses. `Notes/Alpha.md`
+dropped onto `Dest`, which already held `Alpha.md`, moved in as `Dest/Alpha 1.md`
+— space before the digit — leaving `Dest/Alpha.md` untouched and showing no
+modal. That is one collision, not a series.
+
+A move that changes the file's basename rewrites the links to it in `shortest`
+form and shows a Notice reading exactly `Updated 1 link in 1 file.` — `Linker.md`
+went from `- unrelated: [[Notes/Alpha]]` to `- unrelated: [[Alpha 1]]`. With
+`alwaysUpdateLinks` on no prompt or modal appears at any point in the run. Moves
+that leave the basename alone produced no notice at all, and the note read
+immediately after `Root.md` moved to `Dest/Root.md` still said
+`- markdown: [Root](Root.md)` and `- wikilink: [[Root]]`.
+
+A folder dragged onto its own descendant (`Deep` onto `Deep/Sub`) did nothing:
+no highlight, no action line on the ghost, no drag action recorded, vault
+unchanged. No folder was dragged onto a *valid* folder anywhere in the run, so
+this is not isolated from "folder drags offer no move under synthetic
+`DragEvent`s" — only the vault-unchanged half is certain. The API behind it is
+not guarded the same way: `fileManager.renameFile("Deep", "Deep/Sub/Deep")`
+fails with a raw `EINVAL: invalid argument, rename '…/Deep' -> '…/Deep/Sub/Deep'`,
+and leaves no partial state (`Deep/`, `Deep/Sub/`, `Deep/Sub/Leaf.md` all still
+there), while `renameFile("Deep", "Deep")` is a silent no-op.
+
+A collapsed folder hovered continuously during a drag spring-loads open between
+the 700 ms and the 800 ms tick (collapsed with 1 child row at 700, expanded with
+2 at 800). One run, sampled at 100 ms, with synthetic events.
+
+Inline rename edits the row in place. The row's
+`.tree-item-inner.nav-file-title-content` div becomes `contenteditable="true"
+spellcheck="true"` and the row gains `is-active has-focus is-being-renamed`:
+
+```
+<div class="tree-item-self nav-file-title tappable is-clickable is-active has-focus is-being-renamed" data-path="blurme.md" draggable="true">
+  <div class="tree-item-inner nav-file-title-content" contenteditable="true" spellcheck="true">blurme</div>
+</div>
+```
+
+The editable holds the basename alone and the whole of it is selected when the
+editor opens. For a non-markdown file the extension sits outside the editable in
+a sibling `.nav-file-tag` div — `cover.png` renders as `cover` + `png` — and is
+not part of the editable text.
+
+Blur commits: `blurme.md` became `blurred.md`, extension intact, with the
+editable closed afterwards. Escape abandons the edit, and a blur dispatched
+after the Escape does not commit the discarded text (`escme.md` survived both).
+The probe set the editable's text by a means it did not record, so how a typed
+character reaches the commit path (`onFileRenameInput` versus plain
+`textContent`) is not established by this run. The explorer view exposes the
+whole state machine: `startRenameFile`, `onFileRenameInput`, `onTitleBlur`,
+`saveRename`, `exitRename`, `onKeyEnterInRename`, `onKeyEscInRename`,
+`onKeyRename`, `displayError`.
+
+The command `workspace:edit-file-title` is present, is named `Rename file`, and
+the registry declares F2 with no modifiers as its default (user hotkeys: none).
+That is registry data: every F2 keystroke the run actually dispatched did
+nothing, and all three inline renames were opened by calling
+`view.startRenameFile` directly. Invoked with focus in a CodeMirror editor the
+command made a title element editable with its whole basename selected and
+renamed nothing by itself — but the two invocations, from the same
+`cm-content` focus, produced two different elements: once `.inline-title`
+(text `Linker`), once `.view-header-title` (text `Beta`). Which element the
+command targets, and on what, is not settled by this run.
+
+Ctrl+click on explorer rows opened files rather than selecting them: markdown
+leaves went from 0 to 2, and afterwards the only row carrying an extra class was
+`Dest/Keep.md` with `is-active`. The probe's read of the view's selection list
+returned null (a failed read, not an observed empty), and the drag payload it
+then captured was for a row it had not clicked, so nothing here shows whether a
+selection travels with a drag. The API says multi-selection is modelled:
+`dragManager` has `dragFiles` alongside `dragFile` and `dragFolder`, the
+explorer view has `dragFiles` and `onDeleteSelectedFiles`, and every file and
+folder item carries a `selectable` field.
+
+Two recording caveats for anyone re-running this. The recorder double-records:
+the one blur rename appears twice in `renameFileCalls` and the one link notice
+twice in `notices`, so no count may be read off those arrays — only the text.
+And the highlight detector watches class churn document-wide: one capture picked
+up an unrelated `search-result-container … is-loading`, so a positive is not
+automatically drag-related (the negatives are the stronger evidence). The scratch
+vault's `alwaysUpdateLinks` was deliberately left forced on, which will bias a
+re-run from the same vault.
+
+**Unprobed:** whether F2 pressed with focus genuinely on an explorer row opens
+the in-row editor, and what `workspace:edit-file-title` does with focus in the
+explorer rather than the editor (the "explorer" context never took focus — the
+active element was `cm-content` in both invocations); whether Enter commits an
+inline rename (`onKeyEnterInRename` exists but no Enter was dispatched); what an
+inline rename onto a name already taken does, and whether committing an inline
+rename on a non-markdown file keeps its extension (the `cover.png` editor was
+opened but never committed); inline rename of a *folder*, never opened at all;
+whether a drag-move prompts before rewriting links with `alwaysUpdateLinks` off;
+whether a markdown-style link's destination is rewritten on a move at all, and
+after what delay, since the only read was immediate and the file later moved
+back; whether `fileManager.renameFile` auto-numbers or errors on a collision
+(the direct API check could not run — the drop had already moved the file); what
+a drop on a file row does when the destination folder already holds that name;
+whether a folder dropped on a valid, non-descendant folder moves at all under
+these synthetic events, the control this run lacks; whether `.view-content`,
+and a collapsed folder's children area, are drop zones (the `.view-content`
+probe grabbed `.workspace-leaf-content` twice, and a planned `root-fileItem`
+probe found no element); whether the explorer multi-selects under any other
+modifier and whether `dragManager.dragFiles` can carry several paths; when the
+`is-being-dragged-over` and `is-being-dragged` classes are torn down (one step
+still carried both after its drop, four did not, and no `dragend` was ever
+dispatched); whether dropping between rows reorders or inserts; what a drop on
+an editor pane or another vault window does; and whether a drag-move offers an
+undo path.
+
+## Observed graph.json write behavior, Obsidian 1.14.4 (installer build 1.13.7)
+
+Observed on 2026-10-18 with a throwaway plugin in a scratch vault (47 nodes, 15
+links), polling `.obsidian/graph.json`'s bytes, size and mtime around each
+interaction. One run, one vault, no restart; the version is the baseline step's
+`appVersion` — the run's own `meta.appVersion` is null.
+
+**Obsidian creates the file; an enabled plugin does not.** At baseline the graph
+core plugin was found and enabled, and `.obsidian` held only `app.json`,
+`appearance.json`, `community-plugins.json`, `core-plugins.json`,
+`workspace.json` and a `plugins/` folder — no `graph.json`. Opening the global
+graph view created it, once, with nobody touching the controls. It was present
+at the first poll after the view opened, and the poller ran at roughly 120 ms
+(14 polls over 1691 ms), so every latency below is a poll-granularity upper
+bound, not a measurement.
+
+The created file is a complete twenty-key document — never sparse — in this
+order, with these values:
+
+```json
+{
+  "collapse-filter": true,
+  "search": "",
+  "showTags": false,
+  "showAttachments": false,
+  "hideUnresolved": false,
+  "showOrphans": true,
+  "collapse-color-groups": true,
+  "colorGroups": [],
+  "collapse-display": true,
+  "showArrow": false,
+  "textFadeMultiplier": 0,
+  "nodeSizeMultiplier": 1,
+  "lineSizeMultiplier": 1,
+  "collapse-forces": true,
+  "centerStrength": 0.518713248970312,
+  "repelStrength": 10,
+  "linkStrength": 1,
+  "linkDistance": 250,
+  "scale": 1,
+  "close": false
+}
+```
+
+All four control sections start collapsed. Two-space indentation, one key per
+line, no trailing newline — the last byte is `}` and the file is 494 bytes.
+Numbers come out the way JavaScript prints them: integers with no decimal point
+(`0`, `1`, `10`, `250`) and everything else at full round-trip precision, with
+no fixed number of decimal places — `0.518713248970312` at fifteen significant
+digits, and `5.0625` for a zoom. Later states measured 503, 498 and 497 bytes.
+
+**The file is a serialization of the graph core plugin's own options object.**
+The plugin instance's `options` holds exactly the same twenty keys in exactly
+the same order as the file, and its prototype carries `saveOptions`,
+`onExternalSettingsChange`, `openGraphView` and `openLocalGraph`. That accounts
+for the fixed key order, the whole-document rewrite, and for no `local*` key
+ever reaching the file.
+
+Every observed file state carries those same twenty keys in that same order —
+the creation write, the writes whose bytes were recorded afterwards, and every
+later snapshot. One interaction changes exactly one value and leaves the other
+nineteen untouched; nothing is appended and nothing is reordered. Whether a
+write is atomic is not observable from size/mtime polling.
+
+What wrote, and what it wrote:
+
+| Interaction | Written | Seen |
+| --- | --- | --- |
+| Open the global graph view | the whole file, created | first poll (~120 ms grain) |
+| Click the `Filters` section header | `collapse-filter` `true` → `false` | one write, ~300 ms after the click |
+| Click `Groups` | `collapse-color-groups` `true` → `false` | one write, ~300 ms |
+| Click `Display` | `collapse-display` `true` → `false` | one write, ~300 ms |
+| Click `Forces` | `collapse-forces` `true` → `false` | one write, ~300 ms |
+| Wheel zoom | `scale` `1` → `5.0625`, then a second write `5.0625` → `8` | one write each, see below |
+| Click the panel's Close button | `close` `false` → `true` | one write, ~100 ms |
+| Open a local graph | nothing | 0 writes in ~2.8 s |
+| Detach every graph view | nothing | 0 writes in ~1.2 s |
+
+Only the expand direction of a section header was exercised: every click went
+`true` → `false`, and re-collapsing was not tried. The ~300 ms figures are
+quantized by the same ~120 ms polling, so they say "a write landed about a third
+of a second later", not "the debounce is 300 ms".
+
+**Controls panel.** The panel is `div.graph-controls[data-ignore-swipe="true"]`.
+Each section is `div.tree-item.graph-control-section` plus one of `mod-filter`,
+`mod-color-groups`, `mod-display`, `mod-forces`, and expanding removes
+`is-collapsed` from that div; the header div keeps `tree-item-self
+mod-collapsible` unchanged. While a section is collapsed its setting rows are
+absent from the DOM, not merely hidden — a query for setting-items under the
+collapsed panel returned none. The panel has four
+`div.clickable-icon.graph-controls-button`: `mod-close` ("Close"), `mod-open`
+("Open graph settings"), `mod-animate` ("Start timelapse animation"),
+`mod-reset` ("Restore default settings"). Clicking Close adds `is-close` to
+`.graph-controls` and writes `"close": true`; the graph view itself stays open.
+
+**Zoom.** Wheel zoom persists to `scale`, and both values that reached the file
+match a wheel-tick target rather than the animating scale: `5.0625` is exactly
+1.5⁴, and the second write was exactly `8` at a moment when the renderer read
+`7.9319604902379455` at both samples taken around it. The renderer's `scale` was
+never sampled at write time, so nothing here shows what the writer reads; what
+it does not read is the animated value. The second write's mtime is exactly
+2000 ms after the first; a pan drag was dispatched inside that window but moved
+nothing (`panX`/`panY` identical before and after), so the second write cannot
+be attributed to the drag, to the zoom settling, or to a periodic flush — the
+three are indistinguishable in this run. The renderer's `targetScale` read `8`
+at every sample after the wheel burst.
+
+`graph.json` carries no pan or offset coordinates in any observed state, and the
+key set never grows.
+
+**Local graph.** Opening a local graph wrote nothing to `graph.json`. Its
+options live in the workspace leaf state: `type: "localgraph"`, `state.file`
+(`"Alpha.md"`), `state.options`. That option set is not `graph.json`'s — it
+drops `showOrphans` and adds `localJumps` (`1`), `localBacklinks` (`true`),
+`localForelinks` (`true`), `localInterlinks` (`false`). The renderer engine's
+own live `options` object is a third, filter-only set: `showTags`,
+`showAttachments`, `hideUnresolved`, `showOrphans`, `localFile`, `localJumps`,
+`localInterlinks`, `localForelinks`, `localBacklinks`. The `local*` keys exist
+in the engine and the leaf state and never appear in the file.
+
+The local graph opened at a point when `graph.json` already held
+`collapse-filter: false`, `scale: 8`, `close: true`; its own options read
+`collapse-filter: true`, `scale: 1`, `close: false` — the values the file was
+created with, and its four control sections were all collapsed while the global
+panel's four had been expanded. So a local graph does not start from the current
+`graph.json`. Whether it starts from built-in defaults or from a snapshot of the
+plugin's options taken earlier in the session cannot be told from one local
+graph in one session.
+
+The view types are `graph` (title "Graph view") and `localgraph` (title "Local
+graph"), both icon `lucide-git-fork`. `getViewState()` on the global graph leaf
+reports an empty `state` object; no write to `workspace.json` was observed, but
+the baseline for that file was taken after both leaves were already open.
+Detaching every graph view wrote nothing further; the file kept the last state
+written while a view was open.
+
+**Unprobed:** whether a filter checkbox (`showTags`, `showAttachments`,
+`hideUnresolved`, `showOrphans`) writes at all — the sections were still
+collapsed, so no row existed to click; whether a slider writes on `input` or
+only on `change`, and which key the probed slider owns — its five synthetic
+frames ended on the slider's starting value and fired no `change` event, so the
+zero writes prove nothing, and only `min -3 / max 3 / step 0.1` was captured
+(that range matches the Display section's text-fade control, which makes
+`textFadeMultiplier` the likely owner, unconfirmed); whether toggling a *local*
+graph option writes anything — that sub-step silently did not run (`toggled`,
+`boxKind` and both `boxClass` fields all null) even though the step reported
+success; whether pan persists anywhere — the synthetic drag never moved the
+renderer; re-collapsing a section (`false` → `true`); the search box,
+`colorGroups` edits, `showArrow`, and the "Restore default settings" and
+timelapse buttons, none of which were touched (`search` stayed `""` and
+`colorGroups` `[]` throughout); the real debounce and whether writes are
+periodic; whether a write is atomic (temp file plus rename) or in place; whether
+`8` is a zoom clamp, and what the lower bound is; whether
+`onExternalSettingsChange` actually makes Obsidian reload `graph.json` when
+something else rewrites it, which the prototype suggests but the run never
+tested; whether unknown keys in a hand-written `graph.json` survive, since the
+file did not exist at baseline and Obsidian only ever rewrote its own; and
+whether a local graph's options ever reach `workspace.json`. Every figure above
+comes from a single ~14 s run against one 47-node scratch vault: the file shape
+and key order are robust to that, the timings and the saturation at `8` are not.
+
+## Observed search pane behavior, Obsidian 1.14.4
+
+Two runs. The first, on 2026-10-18, used a throwaway plugin in a scratch
+vault, on Obsidian 1.14.4 (installer build 1.13.7): the Search view was opened
+through the `global-search` plugin's `openGlobalSearch`, then the view object,
+its header elements, its result DOM, the menus its surfaces open, `.obsidian/`
+and `localStorage` were read back. `Menu.showAtMouseEvent`,
+`Menu.showAtPosition`, `Modal`, `navigator.clipboard` and Electron's
+`clipboard` were all patched to record anything the pane did. **That run never
+changed the sort order and never invoked the copy action.** The 2026-10-19
+observations came from a CDP-driven run — real browser-injected keystrokes and
+mouse clicks, with file bytes read from disk by the host
+([[Development#Driving Obsidian over CDP, 2026-10-18]]) — on the same Obsidian
+1.14.4 (installer build 1.13.7) in a fresh scratch vault of twelve fixtures:
+eleven `.md` notes containing `needle` (`_needle.md`, `9 needle.md`,
+`Apple Pie.md`, `apple.md`, `apple2.md`, `apple10.md`, `kiwi.md`, `mango.md`,
+`zebra.md`, `notes/apple.md`, `notes/banana.md`) and `plain.txt`, every file
+given a distinct mtime. Three bounds on that run: each sort switch was a
+script-dispatched `change` event on the native `<select>` — ArrowDown on the
+focused select changed nothing — which reached `setSortOrder` through the
+dropdown's `changeCallback`; the copy modal's two selects were set the same way
+(its toggle, the count control, the menu items and the buttons were real
+clicks); and the query was empty by the time the toggle and keyboard steps ran,
+so those steps settled state keys and handler sources, not visible effects.
+A sentence below that names no date holds for both runs.
+
+The view:
+
+- Type `search`, icon `lucide-search`, display title `Search`; the command is
+  `global-search:open`, "Search: Search in all files".
+- Its serialized state is exactly six keys — `query`, `matchingCase`,
+  `explainSearch`, `collapseAll`, `extraContext`, `sortOrder`. `getState` reads
+  the first three off the view and the last three off the result-DOM object:
+  `t.collapseAll=this.dom.collapseAll,t.extraContext=this.dom.extraContext,t.sortOrder=this.dom.sortOrder`.
+  Sort order and the two display flags live on the result list, not on the view.
+- In a vault where none was ever chosen, `sortOrder` is `alphabetical` and all
+  four flags are `false`. A never-searched leaf already serializes all six:
+  `.obsidian/workspace.json` read right after launch, before any search, held
+  `"query": "", "matchingCase": false, "explainSearch": false, "collapseAll": false, "extraContext": false, "sortOrder": "alphabetical"`
+  for the search leaf, in that order — the keys are emitted even at their
+  defaults — and the file-explorer leaf uses the same
+  `"sortOrder": "alphabetical"` string.
+- `setSortOrder` is `function(e){var t=this.dom;t.sortOrder=e,t.changed()}`: it
+  assigns `dom.sortOrder` and calls `dom.changed()`, and nothing else.
+  `dom.changed()` is a generic debounce wrapper; its inner body was not captured
+  in either run.
+- The result list is virtualized — the DOM object carries `infinityScroll`,
+  `vChildren`, `resultDomLookup`, `focusedItem`, `pusherEl`, `emptyStateEl`,
+  `showingEmptyState` and `working`.
+- The view's container holds, in order, `search-row`, `search-info-container`,
+  `search-params`, `search-results-info` and
+  `search-result-container mod-global-search`. The sort control is a native
+  `<select class="dropdown">`, not a menu, and it sits in the
+  `search-results-info` bar beside the result count — not in the settings
+  section, which holds only the three toggles. (The bar's text content is the
+  count, the six option labels and the current label once more, the last from
+  the hidden `is-measuring` twin select the dropdown component sizes itself
+  with.) The view owns `sortOrderDropdown`, `collapseResultsToggle`,
+  `extraContextToggle`, `explainSearchToggle`, `filterSectionToggleEl` and
+  `searchParamsContainerEl`, with `toggleFilterSection` on the prototype.
+  `onPaneMenu` is `function(e,t){}`, an empty body.
+- Other prototype surface that bounds the feature: `saveSearch` (with
+  `requestSaveSearch` on the instance), `startSearch`/`stopSearch`,
+  `setQuery`/`getQuery`, `renderSearchInfo`, `onCopyResultsClick`,
+  `onTabHeaderClick`, and the focus-key handlers `onKeyEnterInFocus`,
+  `onKeyArrow{Up,Down,Left,Right}InFocus`, `onKeyShowMore{Before,After}`.
+- `startSearch` (source, not driven) calls `stopSearch`, empties the result
+  list and clears the focused item, compiles the input with the `matchingCase`
+  flag (`new NL(n,o,this.matchingCase)`) and returns early when that yields no
+  matcher, re-renders the search-info block, feeds each file through
+  `addResult`/`removeResult`, sets the count from
+  `labelResultCount({count: dom.getMatchCount()})` when its queue stops, and
+  ends with `app.workspace.requestSaveLayout()` then `requestSaveSearch()` —
+  every query run schedules a layout save and a recent-searches save.
+
+The header holds three elements:
+
+| Element | Class | Icon | Label |
+| --- | --- | --- | --- |
+| Match case | `input-right-decorator clickable-icon` | `uppercase-lowercase-a` | `Match case` |
+| Search settings | `clickable-icon` | `lucide-sliders-horizontal` | `Search settings` |
+| Result count | `clickable-icon search-results-result-count` | `lucide-more-horizontal` | none |
+
+A real click on Search settings switches `search-params` from `display: none`
+to `display: flex` and marks the icon `is-active`. The section holds exactly
+three `setting-item mod-toggle` rows with empty descriptions, top to bottom:
+`Collapse results`, `Show more context`, `Explain search terms`. Match case is
+not in it: it is the decorator inside the input, and it gains `is-active` when
+on.
+
+The count element's text is `<span>7 results</span>` for four files holding 1,
+1, 3 and 2 matches: it counts matches, not files, and names no file count. Its
+markup is a `clickable-icon` wrapping a `more-options-icon`. On 2026-10-19 it
+read `16 results` over eleven rows whose flairs sum to 14; the two files whose
+names contain the term (`_needle`, `9 needle`) carry flair 1 each and render
+`needle` in their titles inside `search-result-file-matched-text`. That fits
+filename hits counting as results without adding to the file's flair — an
+inference from one count, since `getMatchCount` was not read. The same text
+read `0 results` once the query had been emptied in-session, and an empty
+string right after a restart with no search run.
+
+**A real left-click on the count opens a two-item menu**, both items section
+`action`: `Copy search results` (`lucide-copy`) and `Bookmark...`
+(`lucide-bookmark`). Escape closes it. The first is the control for
+`onCopyResultsClick` — see Copying results; the second was never clicked.
+
+Results, for the query `needle`:
+
+- On 2026-10-18 the order was `apple.md`, `notes/banana.md`, `mango.md`,
+  `zebra.md` under `sortOrder: alphabetical` — basename order. Path order
+  would put `notes/banana.md` last; creation order (ctime 870845, 870851,
+  870852, 870854, 870863 for apple, kiwi, mango, banana, zebra) would put
+  mango second; the match counts 1, 1, 3, 2 rule out ordering by number of
+  matches.
+- Rows start expanded (`collapsed: false` on every row) and carry a match
+  count: apple 1, banana 1, mango 3, zebra 2. With `extraContext: false`, each
+  match rendered as a single short string.
+- A write to `kiwi.md` during the 2026-10-18 run (82 bytes before, 32 after —
+  overwritten, not appended) put a fifth file in the list within the 451 ms the
+  probe waited, `kiwi.md` inserted between `notes/banana.md` and `mango.md`,
+  with `sortOrder` unchanged. 451 ms is the wait the probe used, not a measured
+  latency.
+- Default search is case-insensitive: on 2026-10-19 `kiwi.md` contained only
+  `Needle` and was listed with flair 1 for the lowercase query under
+  `matchingCase: false`.
+- A `.txt` file holding the term is never listed: `plain.txt` was absent in
+  every sort order and again in the copy run, while present in the vault on
+  disk.
+- A real click on a row's collapse icon (`tree-item-icon collapse-icon`,
+  `right-triangle`) collapses that row only (`is-collapsed`) and opens no file
+  (`getActiveFile()` stayed null). The click meant to re-expand it later landed
+  inside the rect the count control occupied, so re-expansion by a second
+  click is unobserved. Each match line (`search-result-file-match tappable`)
+  carries two hidden hover buttons labelled `Show more context` —
+  `search-result-hover-button mod-top` (`lucide-chevron-up`) and `mod-bottom`
+  (`lucide-chevron-down`) — so context expands per match, above and below.
+
+**Sort orders.** The `<select>` has exactly six options and index 0 is selected
+in a vault that never chose one. The native popup is not in the DOM and was
+never opened; the options and labels were read from its `<option>` children.
+Paths below drop `.md`.
+
+| Stored value | Label | Order observed for `needle` |
+| --- | --- | --- |
+| `alphabetical` | File name (A to Z) | `_needle`, `9 needle`, `notes/apple`, `apple`, `Apple Pie`, `apple2`, `apple10`, `notes/banana`, `kiwi`, `mango`, `zebra` |
+| `alphabeticalReverse` | File name (Z to A) | `zebra`, `mango`, `kiwi`, `notes/banana`, `apple10`, `apple2`, `Apple Pie`, `notes/apple`, `apple`, `9 needle`, `_needle` |
+| `byModifiedTime` | Modified time (new to old) | `zebra`, `mango`, `_needle`, `apple`, `apple2`, `Apple Pie`, `notes/apple`, `kiwi`, `9 needle`, `notes/banana`, `apple10` |
+| `byModifiedTimeReverse` | Modified time (old to new) | the exact reverse of `byModifiedTime` |
+| `byCreatedTime` | Created time (new to old) | `apple10`, `notes/banana`, `9 needle`, `kiwi`, `notes/apple`, `Apple Pie`, `apple2`, `_needle`, `mango`, `apple`, `zebra` |
+| `byCreatedTimeReverse` | Created time (old to new) | `apple`, `zebra`, then the other nine in their `byCreatedTime` order |
+
+What the orders show:
+
+- Alphabetical compares the basename without extension, not the path:
+  `notes/apple` sits with `apple`, `notes/banana` between `apple10` and
+  `kiwi`. Case is folded (`Apple Pie` between `apple` and `apple2`); digit
+  runs compare numerically (`apple2` before `apple10`); a space sorts before a
+  digit (`Apple Pie` before `apple2`); a bare prefix sorts first (`apple`
+  before both); `_` sorts before `9`, which sorts before letters. Byte order
+  is ruled out three times over — it puts `apple10` before `apple2`,
+  `9 needle` before `_needle`, and `Apple Pie` first among the apples — and
+  the data is consistent with a locale-aware numeric collation.
+- `alphabeticalReverse` reversed every pair except the one basename tie:
+  `notes/apple` stayed ahead of `apple` in both directions. That ties keep
+  their order is likely, not certain — one tie pair, corroborated by the
+  created-time groups below. Why `notes/apple` led `apple` on the fresh render
+  is not known (the fixtures were written `apple.md` first).
+- `byModifiedTime` matched the fixtures' mtime order exactly, newest first;
+  its reverse is the exact reverse. No two fixtures shared an mtime.
+- Created time put nine files in one group and `apple`/`zebra`, the two
+  written first, in an older one; inside a group the rows kept the order they
+  had before the switch (the nine stand in their `byModifiedTimeReverse` order
+  with `apple` and `zebra` removed, in both directions). The host's `fs.stat`
+  has `apple` and `zebra` at birthtime `…566.33` ms, `kiwi` at `…567.58` and
+  the rest from `…567.62` to `…568.04`, with one identical `ctimeMs` for all
+  twelve. The grouping fits Obsidian keying on the birthtime rounded to whole
+  milliseconds — floor would have split `kiwi` from the rest, `ctime` proper
+  would have made a single group — but those are the host's stats, not
+  Obsidian's own, so this stays likely.
+
+**Changing the sort order re-sorts the existing list without re-running the
+query.** With every method on the result DOM and on the view wrapped in
+counters, each of the five switches recorded `view.setSortOrder` 1,
+`changeFocusedItem` 1 and `setFocusedItem` 1 (absent in one case), and never
+`startSearch`, `stopSearch`, `emptyResults`, `addResult` or `removeResult`.
+The count stayed `16 results`, though the sampler started 120 ms after the
+change, so it is the counters, not the samples, that rule out a transient. The
+one row collapsed by hand before the switches (`_needle`) stayed collapsed
+through all five orders and after `alphabetical` was restored. Four of the five
+switches left one row carrying `has-focus` (`_needle`, `_needle`, `apple`,
+none, `zebra`); which row gets it was not worked out.
+
+Where state lives:
+
+- The six keys persist in the search leaf's `state` in
+  `.obsidian/workspace.json`, and nowhere else that was looked. With
+  `byModifiedTime`, `extraContext` and `explainSearch` set, the file after
+  Ctrl+Q held
+  `"query": "", "matchingCase": false, "explainSearch": true, "collapseAll": false, "extraContext": true, "sortOrder": "byModifiedTime"`;
+  `app.json` stayed `{}` with no sort key at any point; and after a restart the
+  dropdown showed `Modified time (new to old)` and the two toggles came back
+  enabled. When the write happened is not known: the bytes were read at launch
+  and after quit, and `startSearch` ends in `requestSaveLayout()`, so the save
+  may well precede the quit.
+- Recent searches live in `localStorage` under `<appId>-recent-searches`,
+  holding a JSON array of query strings — `["needle"]` on 2026-10-19, the
+  vault's only key, and it survived the restart; `["[\"tags\"]"]` on
+  2026-10-18, one of six keys for that vault. That lines up with
+  `saveSearch`/`requestSaveSearch` and with `bookmarks:bookmark-current-search`.
+- `.obsidian/global-search.json` appeared between launch (when `.obsidian/`
+  held `app.json`, `appearance.json`, `core-plugins.json`, `workspace.json`)
+  and the post-quit listing; no step read its bytes, so what it holds — and
+  whether the first search's `requestSaveSearch` wrote it — is unknown.
+- The 2026-10-18 vault's `.obsidian/` held `app.json`, `appearance.json`,
+  `community-plugins.json`, `core-plugins.json`, `graph.json` and
+  `workspace.json` plus a `plugins/` folder — there was no `search.json`.
+  `app.json` was `{"foldHeading": true, "propertiesInDocument": "visible"}`,
+  with no `searchSortOrder`, `sortOrder` or `searchSort` key; that absence now
+  reads as expected, since the sort order is leaf state.
+- The 2026-10-18 scratch vault held `Notes/` and `notes/` as two distinct
+  folders, so nothing here speaks to folder-name case handling.
+
+**Copying results opens a modal; nothing reaches the clipboard until its button
+is pressed.** `onCopyResultsClick` is
+`function(e){e.preventDefault(),new x2(this.app,this.dom).open()}`, and a real
+click on the menu item left a sentinel clipboard untouched. The modal is titled
+`Copy search results`, has a close button, and its content holds, in DOM
+order, a `textarea.copy-search-result-textarea` (prefilled, editable,
+`rows=2`), three settings rows, and two buttons:
+
+| Control | Label | Description | Values (stored → label) | Default |
+| --- | --- | --- | --- | --- |
+| toggle | Show path | Display full path of the file rather than just the file name. | — | off |
+| select | Link style | Optionally turn each file result in to a link. | `none` → None, `wikilink` → Wikilink, `markdown` → Markdown link | `none` |
+| select | List prefix | Optionally add a list item prefix to each file result. | `none` → None, `-` → Dash (-), `*` → Asterisk (*), `num` → Numbered | `none` |
+
+Buttons: `Copy results` (`mod-cta`) and `Done`. The textarea holds one line
+per file in the list's order — the list was in default alphabetical order in
+this run; copying under another sort was not tried — joined by `\n` with no
+trailing newline, no match lines, no indentation; a file with two matches gives
+one line. All 24 combinations were read from the textarea over `apple.md`,
+`Apple Pie.md`, `notes/banana.md`, `mango.md`; the `notes/banana.md` line per
+combination, before any prefix:
+
+| Show path | Link style | Line |
+| --- | --- | --- |
+| off | None | `banana` |
+| off | Wikilink | `[[banana]]` |
+| off | Markdown link | `[banana](banana)` |
+| on | None | `notes/banana.md` |
+| on | Wikilink | `[[notes/banana.md]]` |
+| on | Markdown link | `[banana](notes/banana.md)` |
+
+So the name form is the basename without extension, the path form is the
+vault-relative path with extension and folder kept, a Markdown link's text is
+always the basename and its target is not percent-encoded
+(`[Apple Pie](Apple Pie.md)`). The prefix prepends `- `, `* ` or `1. `, `2. `,
+… (numbered from 1 in list order) to every line. A real click on
+`Copy results` put the textarea text on the system clipboard byte for byte —
+`1. [apple](apple.md)\n2. [Apple Pie](Apple Pie.md)\n3. [banana](notes/banana.md)\n4. [mango](mango.md)`,
+LF only, no trailing newline, read through Electron's clipboard — showed the
+notice `Results copied to your clipboard.`, and left the modal open; Escape
+closed it. `Done` was never pressed, and no `paste.md` was created, so the
+bytes a paste lands in a note are unobserved.
+
+204 commands are registered. The ones the 2026-10-18 probe's filter surfaced
+that touch copying or search are `workspace:copy-path`,
+`workspace:copy-full-path`, `workspace:copy-url`, `bases:copy-table`,
+`bookmarks:bookmark-current-search` and `global-search:open`. The other ids
+were not recorded, so nothing is established about them.
+
+**The four toggles each flip one state key**, clicked for real with an empty
+query, and clicking again restores `false`:
+
+| Toggle | Where | State key | Class when on | Also set on the result DOM |
+| --- | --- | --- | --- | --- |
+| Collapse results | settings section | `collapseAll` | `checkbox-container is-enabled` | `dom.collapseAll` |
+| Show more context | settings section | `extraContext` | `checkbox-container is-enabled` | `dom.extraContext` |
+| Explain search terms | settings section | `explainSearch` | `checkbox-container is-enabled` | (the probe read only `collapseAll`, `extraContext`, `sortOrder` off the DOM object) |
+| Match case | input decorator | `matchingCase` | `input-right-decorator clickable-icon is-active` | — |
+
+Enabling `Explain search terms` moved its own row down 45 px (y 164 at the
+click that enabled it, 209 at the click that disabled it) while the other three
+rows stayed put, so it renders something above the settings section even with
+an empty query — `search-info-container` precedes `search-params`. The probe's
+`[class*="explain"]` selector found nothing, so that block is not classed
+`explain`. What the other three do to a populated list was not seen.
+
+Context menus:
+
+- 2026-10-18, synthetic right-clicks: a result's file title opens a 13-item
+  menu. A match line opens the same menu with "Delete file" dropped — 12 items,
+  every callback byte-identical to the file-title one (item 0 is
+  `function(){r.app.workspace.openLinkText(t,n,"tab")}` in both). A match row's
+  menu acts on the file; nothing in it is match-specific — no copy-match, no
+  line target.
+- The dump below is the menu's insertion order with each item's `data-section`,
+  not the order a reader sees: Obsidian renders a menu grouped by section,
+  which is why three titles are fragments that only read under a Copy heading.
+
+| # | Title | Section |
+| --- | --- | --- |
+| 0 | Open in new tab | `open` |
+| 1 | Open to the right | `open` |
+| 2 | Rename... | `action` |
+| 3 | as Obsidian URL | `info.copy` |
+| 4 | Open in default app | `system` |
+| 5 | Move file to... | `action` |
+| 6 | from vault folder | `info.copy` |
+| 7 | from system root | `info.copy` |
+| 8 | Show in system explorer | `system` |
+| 9 | Open in new window | `open` |
+| 10 | Reveal file in navigation | `system` |
+| 11 | Bookmark... | `action` |
+| 12 | Delete file | `danger` |
+
+- Right-clicking the result container (`search-result-container`) and the
+  results children (`search-results-children`) opened no menu at all on
+  2026-10-18. The pane's tab header did open one, with exactly one item:
+  "Close" (section `close`, icon `lucide-x`, callback
+  `function(){return t.leaf.detach()}`). A real right-click on 2026-10-19,
+  read 735 ms later, gave the same one item, which removes most of the worry
+  that the synthetic click read the menu before it was populated. A real
+  right-click on the `workspace-tab-header-spacer` beside the tabs opened
+  nothing, and the view has no `nav-header` element in this layout. The two
+  empty result surfaces stay weak negatives: on 2026-10-19 there was no empty
+  space below the last result to click.
+- The 2026-10-19 run could not re-dump the search rows' menus: no rows existed
+  when that step ran. Between the copy step and the menu step the rows
+  disappeared and the query read empty from then on. The copy step's real
+  click had opened one modal; because the clipboard stayed unchanged the
+  script then called `onCopyResultsClick` directly and opened a second,
+  pressed Escape once, and the next step began by re-running
+  `global-search:open` — a stacked modal is the likely cause, but nothing
+  recorded the moment the query emptied.
+- The Files view's menu for `apple.md`, from a real right-click, in displayed
+  order:
+
+| Title | Section | Note |
+| --- | --- | --- |
+| Open in new tab | `open` | `lucide-file-plus` |
+| Open to the right | `open` | `lucide-separator-vertical` |
+| Open in new window | `open` | `lucide-picture-in-picture-2` |
+| --- | | |
+| Make a copy | `action` | `lucide-files` |
+| Move file to... | `action` | `lucide-folder-tree` |
+| Bookmark... | `action` | `lucide-bookmark` |
+| Merge entire file with... | `action` | `lucide-git-merge` |
+| --- | | |
+| Copy path | none | `has-submenu`, `lucide-clipboard` |
+| --- | | |
+| Open version history | `view` | `lucide-history` |
+| --- | | |
+| Open in default app | `system` | `lucide-arrow-up-right` |
+| Show in system explorer | `system` | `lucide-arrow-up-right` |
+| --- | | two separators in a row |
+| --- | | |
+| Rename... | `danger` | `lucide-edit-3` |
+| Delete | `danger` | `is-warning`, `lucide-trash-2` |
+
+  Against the synthetic search-row dump it has `Rename...` in `danger` rather
+  than `action`, `Delete` rather than `Delete file`, a `Copy path` submenu in
+  place of the three `info.copy` fragments, no `Reveal file in navigation`,
+  and three items the search dump lacks (`Make a copy`,
+  `Merge entire file with...`, `Open version history`); whether a search row's
+  real menu matches it item for item is still open.
+
+Keyboard, from the handler sources on the view prototype — none was driven
+against a populated list:
+
+| Key | Handler |
+| --- | --- |
+| ArrowDown | `e.defaultPrevented` aside, calls `cE()` (unread) then `dom.changeFocusedItem("forwards")`; no input guard |
+| ArrowLeft | nothing while the search input is the active element; else on a file row `setCollapse(true, true)`; on a match row collapses the parent file row and moves focus up to the nearest uncollapsed ancestor; on the list root `setCollapseAll(true)` |
+| ArrowRight | same input guard; on the list root `setCollapseAll(false)`; on a file row `setCollapse(false, true)` |
+| Enter | `focusedItem.onResultClick(e)` when the focused item is a file row or a match row |
+
+So file rows and match rows are both focusable, and the Ctrl/Shift Enter
+variants are decided inside `onResultClick`, which was not read. The driven
+sequence (five ArrowDown, ArrowUp, two ArrowLeft, two ArrowRight, Enter,
+Ctrl+Enter, Shift+Enter) ran over an empty list: `focusedItem` stayed null,
+the input stayed the active element for the arrows, and no Markdown leaf,
+popout window or vault file appeared after any Enter — which says nothing was
+focused, not that Enter does nothing.
+
+**Unprobed:** the visible effect of each toggle on a populated list — the
+`Needle` hit set under Match case (the capitalised query never landed), whether
+Collapse results drops match lines, how many lines Show more context adds and
+whether they are trimmed, and what Explain search terms renders (only its
+layout shift was seen). Keyboard navigation as driven: what the focus ring
+moves over, what Enter, Ctrl+Enter and Shift+Enter open and where, and what
+`cE()` in the ArrowDown handler is. The real context menu of a result's file
+title and of a match line, whether it matches the Files view's menu for the
+same file item for item, and the menu — if any — of the empty space below the
+last result. Ctrl+C on a focused result row (never pressed; the only keyboard
+step around the count menu pressed ArrowDown then Enter and read an unchanged
+clipboard). What `Bookmark...` in the count menu does, what `Done` in the copy
+modal does, whether the modal's textarea tracks the result list after an edit
+or a sort change, and the bytes a paste of the copied text lands in a note.
+The contents of `.obsidian/global-search.json` and which action writes it.
+What a restored non-empty `query` does on restart (the query was empty at
+quit). Whether the sort re-sort moves existing DOM nodes or re-renders rows,
+and which row takes `has-focus` after a switch. The tie-break of a fresh list
+(only re-sort stability was seen, from one tie pair), mtime ties (none
+existed), the exact created-time key (birthtime rounded to milliseconds fits
+one grouping of host stats), and the native `<select>` popup itself, which was
+never opened — every switch was a synthetic `change` event. Whether a second
+click on a row's collapse icon re-expands it, and whether clicking a row's
+title collapses or opens.

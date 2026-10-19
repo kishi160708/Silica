@@ -129,6 +129,211 @@ of mixed use in both apps. The gate run opened on 2026-10-18, see
 | Round-trip harness | done, see [[#Round-trip harness, 2026-10-18]] |
 | The gate itself | open: the harness passes on the real vault, the week of mixed use has not run, see [[#The gate run opens, 2026-10-18]] |
 
+### Porting two checklist blocks to CDP, 2026-10-19
+
+The first two blocks of [[Interaction probes]] — the search pane and
+properties in the reading view — were ported from hand steps to scripts
+under `tools/obsidian-probe/` and run against Obsidian 1.14.4 (installer
+build 1.13.7) in fresh scratch vaults. Each script runs in three phases:
+`fixtures` with Obsidian down (the notes are written with `fs`, mtimes set
+with `utimes`), `run` with it up, and `after-restart` if `run` ended by
+quitting it — which is how "does the sort survive a restart" and "does the
+fold survive a restart" are answered with a real relaunch. `run-block.sh`
+owns the lifecycle: fresh vault, fresh id, `obsidian.json` swapped in and
+restored byte-identical. Search took 31 steps and properties 15, no
+failures, and the observations are in [[Specification]] under the two
+sections' 2026-10-19 paragraphs.
+
+**Three traps in the runner, each found the hard way.**
+
+- The anchored kill pattern from the plugin days,
+  `^/nix/store/[^ ]*electron /nix/store/[^ ]*obsidian`, never matches an
+  Obsidian launched with `--remote-debugging-port`: the flag sits between the
+  binary and the asar. So the kill was a no-op, the survivor's single-instance
+  lock swallowed the next launch, and the properties script drove the
+  **search** vault for thirteen steps while believing otherwise. The script
+  had even recorded `vault: "vault-search"` in its first step and carried on.
+  The runner now waits for both the process and the CDP endpoint to be gone,
+  and `launch` refuses to proceed unless `app.vault.adapter.basePath` is the
+  vault it asked for.
+- A vault id in `obsidian.json` must be sixteen hex characters. A malformed
+  one is silently ignored and no vault window opens.
+- Reusing an id across folders inherits that id's IndexedDB cache: a search
+  on a brand-new vault returned the previous vault's files until the re-index
+  caught up. Fresh id per scratch vault, and no trust dialog is involved when
+  no plugin is enabled — CDP needs none.
+
+**The copy-results detour.** "Copy search results" lives in the result-count
+menu, and a real click on it left the clipboard untouched for two seconds,
+with no notice. Calling the handler directly threw on `preventDefault`;
+reading its source gave `function(e){e.preventDefault(),new
+x2(this.app,this.dom).open()}` — it opens a **modal**, and three scripts had
+watched the clipboard and the menus without once looking for one. The modal
+has a Show path toggle, Link style (None, Wikilink, Markdown link) and List
+prefix (None, Dash, Asterisk, Numbered) dropdowns, a preview textarea and a
+`Copy results` button; a fourth script enumerated all twenty-four
+combinations and pressed the button, and the clipboard matched the preview
+byte for byte. The lesson is general: after a click, also ask the DOM whether
+a `.modal-container` appeared.
+
+**A second kind of mistake, caught by reading the output.** The first
+twenty-four-variant run looked complete and was wrong: it set the *first*
+`<select>` for every setting, so the List prefix rows measured the Link style
+control being handed values it did not have. The rows did not change, which
+read as "List prefix does nothing" until the script was reread. A probe that
+reports its own input back is the failure mode the verifier stage exists for;
+here it was caught before that stage by noticing the rows were identical.
+
+### Driving Obsidian over CDP, 2026-10-18
+
+[[#The probe batch, 2026-10-18]] concluded that interaction could not be
+probed on this machine, because a synthetic DOM event carries no focus and
+there is no `xdotool`. That conclusion was wrong, and the correction matters
+more than the batch did.
+
+**Obsidian is Electron, so it speaks the Chrome DevTools Protocol.** Launch
+it as `obsidian --remote-debugging-port=9222` and `http://127.0.0.1:9222/json`
+lists the page target. CDP's `Input.dispatchKeyEvent` and
+`Input.dispatchMouseEvent` are injected by the *browser*, not by JavaScript,
+so they carry focus and run the same input path a person's keyboard does —
+exactly what `el.dispatchEvent` cannot do. Node 24 has a built-in
+`WebSocket`, so the client needs no dependencies at all; the throwaway
+plugin is not needed either, since `Runtime.evaluate` reaches `app`.
+
+The endpoint also settles the version question the batch left open: the
+target title reads **Obsidian 1.14.4** while the user agent reads
+`obsidian/1.13.7 Chrome/150.0.7871.47 Electron/43.1.0`. App 1.14.4 on
+installer 1.13.7.
+
+The first run typed thirteen characters and answered the whole auto-pair
+item — the one [[Interaction probes]] ranked first and estimated at fifty
+minutes of hand work — in about a minute, including the question the batch
+had flagged as confounded: **skip-over is provenance-tracked** (Obsidian
+skips only a closer it inserted; a planted `)` is pushed along) while
+**backspace-deletes-both is positional** (it fires on any empty pair).
+Both are now in [[Specification#Observed auto-pair behavior, Obsidian 1.14.4]].
+
+**What this means for the rest of [[Interaction probes]].** Nearly every
+block in it is CDP-automatable: real clicks on the search sort dropdown,
+real typing into a property field, real mouse drags in the file explorer,
+a real anchor click, a scripted quit-and-relaunch for the cold-load case.
+What stays human is aesthetic judgement — how `<sup>` looks, whether a
+hover affordance feels right — which is a small residue, not eight hours.
+
+**It does not belong in CI, and the reason is not the plumbing.** These
+runs assert *Obsidian's* behavior, not 's: a red build would mean
+Obsidian changed or the app flaked, which is not a reason to block a merge,
+and Obsidian is proprietary, needs a display, and would have to be pinned
+and installed on a self-hosted runner. The division that works is the one
+this repo already uses for autocompletion in
+`-suggest/tests/obsidian_rows.rs`:
+
+- **CI, every push:**  asserted against the *recorded* observation
+  tables. Pure Rust, deterministic, no Obsidian. A failure here is a real
+   regression.
+- **On demand, when the Obsidian pin moves:** the CDP harness re-derives
+  those tables from the live app and the diff is read by a person. A change
+  here is news about Obsidian, and it is the moment to update the tables
+  and the spec together.
+- **By hand, rarely:** the aesthetic residue.
+
+### The probe batch, 2026-10-18
+
+Eleven of the thirteen small-backlog items were blocked on the same thing:
+the project implements from observed Obsidian behavior, and nobody had
+observed it. So they were probed in one batch rather than one at a time.
+
+**Method.** A throwaway plugin in a disposable scratch vault under the
+already-trusted id `5c0r1ac0rpu50001`, eleven independent scenarios run in
+sequence from `onLayoutReady`, each in its own `try`/`catch` behind a 25 s
+`Promise.race`, with the result file rewritten after every scenario so a
+later hang could not cost the earlier answers. A local HTTP server on
+127.0.0.1:8731 served images and logged request headers. `obsidian.json` was
+backed up, pointed at the scratch vault, and restored byte-identical after
+each of the four launches. The gate vault was untouched: PLMCRZY's mtimes all
+predate the run and it still matches `snapshot-2026-10-18` exactly.
+
+Three traps, all new:
+
+- **Obsidian's CSP blocks the plugin's own `fetch`.** The run's
+  `fetch('http://127.0.0.1:8731/log')` failed with `TypeError: Failed to
+  fetch` even though the renderer had just loaded twenty images from that
+  same origin. Read a probe server's log from the shell, not from the plugin.
+- **A dispatched click on a raw `<a>` navigates the frame.** The HTML
+  scenario would have taken the whole app down mid-batch; it needs a
+  bubble-phase listener that records `defaultPrevented` as Obsidian left it
+  and then cancels the default itself.
+- **One hung step loses the whole scenario.** `html-render` burned both a
+  25 s and a 90 s budget inside a single step. Bounding every *step*, not
+  just the scenario, recovered eleven of its thirteen steps.
+
+**Version.** `apiVersion` reports **1.14.4** while the installer build and
+the HTTP user agent both say **1.13.7** (`obsidian/1.13.7 Chrome/150`). The
+new sections are labelled 1.14.4 with the installer build named, since the
+running code is what was observed.
+
+**Outcome.** Ten new `## Observed ...` sections in [[Specification]], every
+one ending in an `**Unprobed:**` paragraph. Each section was written from a
+first pass that an adversarial reader then checked claim by claim against the
+raw JSON; the checks killed real errors, among them a graph.json claim about
+zoom that its own timestamps contradicted, and an attachment-name claim about
+percent-encoding that the run never exercised.
+
+**No item came back ready to build.** The limitation is structural and worth
+recording: there is no input automation on this machine, and a synthetic
+event does not carry focus. Anything that needs a real keystroke or a real
+drag — typing into a property field, opening the search sort dropdown, F2
+with the explorer focused, a drag with timing — returned nothing. The probe
+settled formats, storage, DOM shapes and command ids; it could not settle
+interaction. Those remainders are listed per feature in [[Specification]],
+and closing them wants a person at the keyboard, not a bigger plugin.
+
+**One result reversed a planned change.** See
+[[#The checkbox the padding hid, 2026-10-18]]: clicking a task with a custom
+status writes `[ ]` in Obsidian too, so  already matches and
+`editor.rs` stays as it is.
+
+### The checkbox the padding hid, 2026-10-18
+
+Planning the reading view's checkbox toggle turned up a defect in the one that
+already ships. Live Preview's checkbox came from `highlight.rs`, which placed
+the brackets by arithmetic:
+
+```rust
+let start = item.marker.end + 1;
+```
+
+The block parser is looser than that. `- [x]` may carry **1 to 4 spaces or a
+tab** between the marker and the brackets (`block.rs`, `spaces_after_marker` in
+`1..5`), so `marker.end + 1` is right for one space, right for a tab by
+coincidence, and wrong for every other padding. A `starts_with('[')` guard
+caught the miss and dropped the span, so nothing corrupt was ever written —
+the checkbox simply **was not there**: `-  [x] a` parsed as a task, rendered
+without a box, and ignored the click. Confirmed before the fix across the five
+paddings; only one space and a tab produced a span.
+
+The repair is the ground rule applied literally. `ListItem` now carries
+`task_span` alongside `task`, recorded in the one place that already knows
+where the brackets are — the detection site in `block.rs`, where `self.offset`
+is absolute and container markers are consumed, so a task inside a blockquote
+or callout spans correctly for free. `highlight.rs` reads that span instead of
+recomputing it, and the arithmetic is gone. One parser, one answer.
+
+Two tests pin it: every padding the parser accepts yields exactly one span
+that starts and ends on a bracket, and the shapes it rejects (`- [ ]` at end
+of line, `- [ ]no space`, five spaces) yield none. Both ratchets are unmoved —
+1007/1009 corpus notes and all 652 CommonMark examples — because `render_html`
+never read the old derivation.
+
+One thing that looked like a second defect is not one. Clicking a task writes
+`[ ]` whenever the status byte is not a space, so `[X]`, `[?]`, `[-]` and
+`[>]` all collapse to empty, and the corpus has all four
+(`tests/corpus/vault/edge/Blocks.md`) while [[Specification]] commits to "task
+items with any single character". That looked like data loss — but the probe
+run the same day shows **Obsidian does exactly the same thing**, so
+`editor.rs` is right and stays as it is. See
+[[#The probe batch, 2026-10-18]].
+
 ### What opening the vault in Obsidian changed, 2026-10-18
 
 The vault was opened in Obsidian once, to start the mixed-use half. Sixteen of
@@ -769,8 +974,7 @@ method as the file operations: `-probe` in a scratch vault drove
 `processFrontMatter` through about forty scenarios, dumped
 `registeredTypeWidgets` and the inferred and assigned type of every value
 shape, ran the three property commands, and read every file back byte for
-byte. What it showed is listed in [[Specification#Observed properties
-behavior, Obsidian 1.14.4]] and encoded in the tests. The headline:
+byte. What it showed is listed in [[Specification#Observed properties behavior, Obsidian 1.14.4]] and encoded in the tests. The headline:
 
 - Obsidian rewrites the **whole** block on any property write. A
   `processFrontMatter` call that mutates nothing still deletes YAML comments,
