@@ -220,6 +220,27 @@ chronologically still steps correctly. A format  cannot render is
 refused outright, because here the format is a path and a wrong one is a
 note in the wrong place.
 
+### Driving the app's writes from a test, 2026-10-18
+
+The gate review's other finding was that no test drove a write from the app
+to the disk: the harness reaches `-text` and the corpus ratchets
+reach `-cache`, but everything the app itself writes went through
+`VaultState` or GPUI with nothing exercising the bytes that land.
+
+Four tests close most of it, in the app crate against a temporary vault:
+writing a block id reaches the target's bytes and a second write of the
+same plan is refused; a CRLF note keeps its endings when an id goes in;
+creating a daily note writes the template expanded and leaves the template
+itself alone, and a second run finds the note rather than making another;
+and a daily note whose folder is missing creates nothing at all.
+
+`Workspace::flush_save` is the one left. It needs a GPUI window, and gpui's
+`TestAppContext` is behind a `test-support` feature that pulls a leak
+detector and proptest — too much weight for the three lines of IO around a
+guard that is itself tested in `-text` and was verified in the
+running app with `--stress`. Worth revisiting if the app grows more of
+these.
+
 ### Line endings and the byte order mark, 2026-10-18
 
 The specification has carried an **Unprobed** note since the reader
