@@ -15,6 +15,7 @@ use gpui::{
 use rayon::prelude::*;
 use _cache::{all_tags, CachedMetadata};
 use _search::{Search, SearchFile, TaskLine};
+use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::ops::Range;
 use std::sync::Arc;
@@ -103,6 +104,54 @@ impl SearchPane {
     /// Runs the current query again, after the vault changed.
     pub fn rerun(&mut self, cx: &mut Context<Self>) {
         self.run(cx);
+    }
+
+    /// What the pane is showing, for the control socket's state dump: the two
+    /// counts of the summary line, the message a bad query produced, and the
+    /// result rows themselves. A collapsed file still reports its matches,
+    /// since the count beside its name does too.
+    pub fn describe(&self, rows: usize, cx: &App) -> Value {
+        let total: usize = self.results.iter().map(|f| f.matches.len()).sum();
+        // The note text turns a match's byte offset into a line number; it is
+        // absent for a file the vault dropped since the search ran.
+        let texts = self.state.as_ref().map(|state| state.texts());
+        let results: Vec<Value> = self
+            .results
+            .iter()
+            .take(rows)
+            .map(|file| {
+                let text = texts.as_ref().and_then(|t| t.get(&file.path));
+                let hits = file.matches.len();
+                let matches: Vec<Value> = file
+                    .matches
+                    .iter()
+                    .take(rows)
+                    .map(|m| {
+                        json!({
+                            "line": text.and_then(|t| line_number(t.as_str(), m.offset)),
+                            "text": m.snippet,
+                        })
+                    })
+                    .collect();
+                // One note can hold more hits than the dump carries, so it
+                // says how many it has, the same way every other capped list
+                // in the dump does: `null` when nothing was dropped.
+                let shown = matches.len();
+                json!({
+                    "path": file.path,
+                    "name": file.name,
+                    "matches": matches,
+                    "matches_total": if hits > shown { Some(hits) } else { None },
+                })
+            })
+            .collect();
+        json!({
+            "query": self.input.read(cx).text(),
+            "error": self.error,
+            "files": self.results.len(),
+            "matches": total,
+            "results": results,
+        })
     }
 
     fn run(&mut self, cx: &mut Context<Self>) {
@@ -396,6 +445,14 @@ pub fn run_search(search: &Search, state: &VaultState) -> Vec<FileResult> {
             .then_with(|| a.path.cmp(&b.path))
     });
     results
+}
+
+/// Zero-based line of a byte offset, like Obsidian's `Pos`. `None` when the
+/// offset no longer falls on a character boundary of the text, which a stale
+/// result over a changed note can do.
+fn line_number(text: &str, offset: usize) -> Option<usize> {
+    text.get(..offset)
+        .map(|before| before.matches('\n').count())
 }
 
 /// Groups hit ranges by line and windows each line around its first hit.

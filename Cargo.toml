@@ -6,7 +6,9 @@ members = [
     "crates/-markdown",
     "crates/-cache",
     "crates/-formats",
+    "crates/-mcp",
     "crates/-commands",
+    "crates/-control",
     "crates/-search",
     "crates/-text",
     "crates/-suggest",
@@ -28,6 +30,7 @@ publish = false
 -cache = { path = "crates/-cache" }
 -formats = { path = "crates/-formats" }
 -commands = { path = "crates/-commands" }
+-control = { path = "crates/-control" }
 -search = { path = "crates/-search" }
 -text = { path = "crates/-text" }
 -suggest = { path = "crates/-suggest" }
@@ -38,6 +41,7 @@ thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 serde_yaml = "0.9"
+async-channel = "2"
 # Order-preserving map: Obsidian writes types.json in insertion order, so a
 # sorted map would rewrite the file on every save.
 indexmap = { version = "2", features = ["serde"] }

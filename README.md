@@ -23,8 +23,15 @@ Obsidian's command ids, so a vault's `hotkeys.json` applies unchanged.
 ```
 cargo run --release -p  -- "C:\path\to\your\vault"
 cargo run --release -p  -- docs/ --synthetic 50000 --stress   # editor spike with a report
+cargo run --release -p  -- "/path/to/vault" --control /run/user/1000/.sock
 cargo test --workspace
 ```
+
+`--control` exposes the running app on a Unix socket speaking newline-delimited
+JSON: open a note, run a command id, send keystrokes or clicks, and read back a
+dump of the window's whole state. `-mcp` wraps that protocol as a Model
+Context Protocol server over stdio, so an agent can launch , drive it and
+screenshot it. Both are described in `docs//Development.md`.
 
 ## Compatibility tiers
 

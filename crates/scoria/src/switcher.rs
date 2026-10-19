@@ -14,6 +14,7 @@ use gpui::{
 use _cache::frontmatter_aliases;
 use _formats::FileKind;
 use _search::fuzzy_match;
+use serde_json::{json, Value};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -162,6 +163,26 @@ impl QuickSwitcher {
         self.input.update(cx, |i, cx| i.set_text(query, cx));
         window.focus(&self.input.focus_handle(cx), cx);
         self.refresh(cx);
+    }
+
+    /// What the switcher is showing, for the control socket's state dump. The
+    /// switcher has no error line, so `error` is always null; it is in the
+    /// dump so that every modal reports the same keys.
+    pub fn describe(&self, rows: usize, cx: &App) -> Value {
+        let total = self.items.len();
+        let shown: Vec<&str> = self
+            .items
+            .iter()
+            .take(rows)
+            .map(|item| item.candidate.label.as_str())
+            .collect();
+        json!({
+            "query": self.input.read(cx).text(),
+            "selected": self.selected,
+            "rows": shown,
+            "rows_total": if total > shown.len() { Some(total) } else { None },
+            "error": Value::Null,
+        })
     }
 
     fn refresh(&mut self, cx: &mut Context<Self>) {

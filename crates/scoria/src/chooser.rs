@@ -15,6 +15,7 @@ use gpui::{
     UniformListScrollHandle, Window,
 };
 use _search::fuzzy_match;
+use serde_json::{json, Value};
 use std::ops::Range;
 
 /// One thing that can be picked.
@@ -105,6 +106,27 @@ impl Chooser {
         self.input.update(cx, |i, cx| i.set_text(query, cx));
         self.refresh(cx);
         self.choose(cx);
+    }
+
+    /// What the chooser is showing, for the control socket's state dump. The
+    /// list has no error line of its own, so `error` carries the message that
+    /// stands in for the rows when nothing matches, which is the only thing a
+    /// caller could otherwise not see.
+    pub fn describe(&self, rows: usize, cx: &App) -> Value {
+        let total = self.matches.len();
+        let shown: Vec<&str> = self
+            .matches
+            .iter()
+            .take(rows)
+            .map(|m| m.row.label.as_str())
+            .collect();
+        json!({
+            "query": self.input.read(cx).text(),
+            "selected": self.selected,
+            "rows": shown,
+            "rows_total": if total > shown.len() { Some(total) } else { None },
+            "error": if total == 0 { Some(&self.empty) } else { None },
+        })
     }
 
     fn refresh(&mut self, cx: &mut Context<Self>) {

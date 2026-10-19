@@ -37,8 +37,31 @@ cargo run --release -p  -- <vault> --note X --template Daily   # open the templa
 cargo run --release -p  -- <vault> --note X --find word     # open with the find panel up and the query matched
 cargo run --release -p  -- <vault> --note X --prompt rename  # open the rename prompt (move, delete, folder) for screenshots
 cargo run --release -p  -- <vault> --note X --rename "New"   # rename the note at startup, rewriting links (use a scratch vault)
+cargo run --release -p  -- <vault> --control /run/user/1000/.sock   # the JSON control socket, see the section below (not with --stress)
+cargo run --release -p  -- <vault> --control <sock> --size 1400x900       # window size for a reproducible screenshot
 cargo run --release -p -bench -- generate <dir>
 cargo run --release -p -bench -- index <vault>
+```
+
+`-mcp` speaks the control protocol as an MCP server over stdio, and
+launches the app itself. Register it in `.mcp.json`, with an absolute repo path
+since `SCORIA_MCP_BIN` runs through `sh -c` when it contains a space:
+
+```json
+{
+  "mcpServers": {
+    "": {
+      "command": "/path/to//target/release/-mcp",
+      "env": {
+        "SCORIA_MCP_REPO": "/path/to/",
+        "SCORIA_MCP_BIN": "nix-shell --run \"target/release/\"",
+        "SCORIA_MCP_SOCKET": "/run/user/1000/-mcp.sock",
+        "SCORIA_MCP_SCREENSHOT": "spectacle -b -n -a -o {path}",
+        "SCORIA_MCP_TIMEOUT_MS": "15000"
+      }
+    }
+  }
+}
 ```
 
 In the app: click a file or a link to open it, Ctrl+P opens the command
@@ -129,6 +152,151 @@ of mixed use in both apps. The gate run opened on 2026-10-18, see
 | Round-trip harness | done, see [[#Round-trip harness, 2026-10-18]] |
 | Canvas writer | done: the bytes Obsidian writes on an edited save, see [[#Canvas writer, 2026-10-19]]; nothing in the app calls it yet |
 | The gate itself | open: the harness passes on the real vault, the week of mixed use has not run, see [[#The gate run opens, 2026-10-18]] |
+
+### Control socket and MCP server, 2026-10-19
+
+The flag list under [[#Commands]] kept growing, and every flag on it does the
+same kind of thing: it arranges a state at startup and then the app is on its
+own. `--type` can open the autocompletion popup for a screenshot, but it cannot
+ask whether the popup opened, which row is selected, or what the status bar said
+afterwards. [[#The probe batch, 2026-10-18]] recorded why the obvious escape is
+shut: there is no `xdotool` on this machine and a synthetic event carries no
+focus, so input has to be driven from inside the process — which is what
+`--stress`, `--type` and `--accept` already were, self-driven input one scenario
+at a time, compiled in. A socket keeps the self-driven input and moves the loop
+outside the binary, so whatever drives can read the answer and decide what to
+do next.
+
+It is the -side counterpart to `tools/obsidian-probe/`. That harness
+drives a real Obsidian over CDP to learn what Obsidian does
+([[#Driving Obsidian over CDP, 2026-10-18]]); this one drives  to check
+what  does against it. Two apps, the same shape of harness, and neither
+belongs in CI.
+
+**The protocol.** `--control <path>` binds a Unix domain socket and speaks
+newline-delimited JSON over it: one request per line, one response line per
+request, in order.
+
+```
+--> {"id":1,"method":"state","params":{"text":false}}
+<-- {"id":1,"result":{...}}
+<-- {"id":2,"error":"unknown method: frobnicate"}
+```
+
+Positions are window-local logical pixels. Byte offsets are zero-based into the
+note's UTF-8 bytes, like Obsidian's `Pos`, and line and column are zero-based
+too. Every failure — unknown method, a parameter of the wrong type, no vault
+open, a path outside the vault — comes back as a plain string in `error`.
+Nothing that crosses the socket may panic.
+
+| method | params | result |
+| --- | --- | --- |
+| `ping` | – | `{"ok","protocol","version"}` |
+| `protocol` | – | the method table as JSON |
+| `wait_loaded` | `timeout_ms?` | `{"loaded","timed_out"}` |
+| `wait_idle` | `frames?`, `timeout_ms?` | `{"frames","parsing","timed_out"}` |
+| `state` | `text?`, `rows?` | the state dump |
+| `open` | `name` (`Note#Heading`, `Note#^id`), `mode?` | `{"current"}` |
+| `open_path` | `path`, `mode?` | `{"current"}` |
+| `set_mode` | `mode`: reading, live, source, graph | `{"mode"}` |
+| `command` | `id` | `{"status"}` — the status bar after it ran |
+| `keys` | `keys`: gpui keystrokes, `["ctrl-shift-f","enter"]` | `{"handled","pending"}` |
+| `type` | `text` | `{"target"}`: editor, input or none |
+| `click` | `x`, `y`, `button?`, `count?`, `mods?` | `{"ok"}` |
+| `mouse` | `action`: down, up, move; `x`, `y`, `button?`, `mods?` | `{"ok"}` |
+| `scroll` | `x`, `y`, `dx`, `dy`, `unit?`: pixels, lines | `{"ok"}` |
+| `set_selection` | `start`, `end?` (byte offsets) | `{"cursor"}` |
+| `scroll_to` | `line` | `{"ok"}` |
+| `focus` | `set?`: workspace, editor, reading, graph | `{"name","context_stack"}` |
+| `window` | `activate?`, `width?`, `height?` | `{"width","height","scale","active"}` |
+| `read_file` | `path` | `{"text","bytes"}` |
+| `write_file` | `path`, `text` | `{"bytes"}` |
+| `list_files` | `folder?` | path, kind and size per file |
+| `list_commands` | – | id, name, hotkeys and whether it is runnable |
+| `notice_clear` | – | `{"ok"}` |
+| `quit` | – | `{"ok"}`, written before the app exits |
+
+**The state dump.** `state` answers one object in which every key is always
+present and absence is `null`, so a driver can index into it without guarding
+each step. `vault` is the root, name and load state; `file` the open path, mode,
+dirty flag and tab history; `docks` the explorer's rows and the search pane's
+query, counts and results on the left, outline, backlinks, outgoing links and
+tags on the right; `modal` which of the switcher, palette, Settings, prompt or
+chooser is up and its query, selection and row labels; `editor` the cursor,
+selection, scroll, visible line range, line count, find panel and suggest
+popup; then `reading`, `graph`, `status`, `focus` and `window`. The note's text
+is there only when `params.text` is true, and list-valued keys are cut to
+`params.rows` entries with a sibling `*_total` saying how many there were.
+
+**What the MCP server adds.** `-mcp` is the thing a user registers in
+`.mcp.json`: a Model Context Protocol server over stdio, JSON-RPC 2.0, with no
+dependencies beyond `-control`, `serde` and `serde_json`. Stdout carries
+the protocol, so everything it logs goes to stderr. Three things it does that
+the socket cannot: it launches and reaps the app itself, so `_launch`
+spawns the binary with `--control`, waits for the socket to appear and then
+blocks on `wait_loaded`; it takes screenshots, through `spectacle` into base64
+image content; and it builds its tool input schemas from
+`_control::METHODS` and `params_schema` instead of hand-writing them, so
+a method added to the table above arrives as a tool with the right parameters
+and no second description to keep in step. After any tool that changes state it
+calls `wait_idle` before returning, so the next `_state` or screenshot is
+current rather than one frame behind. A tool that fails is `isError: true`
+content, not a JSON-RPC error — only an unknown method or malformed parameters
+are those.
+
+**Five pitfalls, in the order they are likely to bite.**
+
+- **Focus decides where keys go.** `type` routes text to whatever is focused
+  and reports which of the editor, a text input or nothing received it; `focus`
+  names the focused handle and returns the key context stack. Read one of them
+  before typing, not after wondering where the text went.
+- **A modal captures keys.** While `modal.kind` is anything but `none`, the
+  switcher, palette, prompt, chooser or Settings has the keyboard, and keys
+  meant for the editor go there instead. `state.modal` carries its query,
+  selection and rows, which is also how a driver tells a modal apart from a
+  slow frame.
+- **Autosave's two-second delay makes `read_file` stale.** Edits save on their
+  own two seconds after the last keystroke, so a `read_file` straight after a
+  `type` reads the bytes from before the edit. Either wait the delay out or run
+  the save command — `list_commands` has its id — before reading.
+- **`wait_idle` can time out with nothing wrong.** KWin stops delivering frame
+  callbacks when the monitors sleep, so a wait for the next frames never
+  completes; it answers `timed_out: true` rather than hanging, and the fix is
+  at the desk, not in the code. Wake the display before a run that needs
+  repaints.
+- **Wayland reports no window origin.** `Window::bounds().origin` is always
+  zero there, so `window` answers size, scale and active state and no position,
+  and the screenshot grabs the *active* window (`spectacle -a`) rather than a
+  rectangle on the screen. The window sets its `app_id` to `` for that
+  reason: KWin honours the xdg-activation token `activate_window()` asks for
+  only from a window it can identify, and without it a screenshot can catch
+  whatever had focus before.
+
+**The first thing it caught.** Eight readers went over the window looking for
+places where  and Obsidian disagree, and the list is in
+[[UI parity backlog]]; what the socket added was a way to settle one of them
+without squinting at a screenshot. Three of those findings were the same bug
+seen from three panes: following `[[Note#Heading]]`, clicking an outline row,
+a backlink or a search hit only scrolled the reading view. Asking the running
+app, in Live Preview, what the editor did after a heading jump:
+
+```
+live    scroll   0 ->   0  cursor   0 ->   0  visible [0, 33]
+```
+
+Nothing. The jump went to a view that was not on screen, and Live Preview is
+the default mode, so the whole of that navigation did nothing a user could
+see. `Workspace::reveal_offset` now moves both views and `Editor::reveal_offset`
+puts the cursor on the target, revealing it on the next paint through the
+editor's own `pending_reveal` (there is no window at hand on that path, so the
+scroll cannot be computed where the click is handled). The same question
+afterwards:
+
+```
+live    scroll   0 ->  89  cursor   0 -> 123  visible [89, 123]
+```
+
+Obsidian also flashes the target line, which is still missing.
 
 ### Canvas writer, 2026-10-19
 

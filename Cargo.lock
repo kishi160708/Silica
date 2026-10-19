@@ -4759,6 +4759,7 @@ name = ""
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-channel 2.5.0",
  "chrono",
  "gpui",
  "gpui_platform",
@@ -4768,6 +4769,7 @@ dependencies = [
  "regex",
  "-cache",
  "-commands",
+ "-control",
  "-formats",
  "-markdown",
  "-search",
@@ -4810,6 +4812,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "-control"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "-formats"
 version = "0.1.0"
 dependencies = [
@@ -4822,6 +4832,15 @@ dependencies = [
 [[package]]
 name = "-markdown"
 version = "0.1.0"
+
+[[package]]
+name = "-mcp"
+version = "0.1.0"
+dependencies = [
+ "-control",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "-search"

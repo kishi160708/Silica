@@ -10,7 +10,7 @@
 
 use crate::chooser::{Chooser, ChooserEvent, Row as ChooserRow};
 use crate::editor::{Editor, EditorEvent};
-use crate::explorer::{display_name, ExplorerEvent, FileExplorer, FileTree};
+use crate::explorer::{display_name, kind_name, ExplorerEvent, FileExplorer, FileTree};
 use crate::graph::{GraphEvent, GraphView};
 use crate::mentions::{Finder, Name};
 use crate::palette::{CommandPalette, PaletteCommand, PaletteEvent};
@@ -41,9 +41,10 @@ use _markdown::Subpath;
 use _templates as templates;
 use _text::table::TableCommand;
 use _vault::{FileChange, TrashOption, Vault};
+use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::ops::Range;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 use std::time::{Duration, Instant};
 
@@ -738,6 +739,29 @@ impl ViewMode {
     pub fn is_editing(self) -> bool {
         matches!(self, ViewMode::LivePreview | ViewMode::Source)
     }
+
+    /// The name a mode goes by outside the app: the control socket's
+    /// `set_mode` and the `mode` in its state dump.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ViewMode::Reading => "reading",
+            ViewMode::LivePreview => "live",
+            ViewMode::Source => "source",
+            ViewMode::Graph => "graph",
+        }
+    }
+
+    /// The mode one of those names stands for; `None` for anything else,
+    /// so a bad request is answered rather than guessed at.
+    pub fn parse(name: &str) -> Option<ViewMode> {
+        match name {
+            "reading" => Some(ViewMode::Reading),
+            "live" => Some(ViewMode::LivePreview),
+            "source" => Some(ViewMode::Source),
+            "graph" => Some(ViewMode::Graph),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -862,6 +886,10 @@ pub struct Workspace {
     _watcher: Option<watch::Watcher>,
     /// Pending autosave, two seconds after the last edit.
     save_task: Option<Task<()>>,
+    /// Whether the startup flags have been applied. A client driving the
+    /// control socket needs to know that the window has stopped arranging
+    /// itself, not just that the vault finished indexing.
+    started: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -926,8 +954,7 @@ impl Workspace {
                 SearchEvent::Open(path, offset) => {
                     this.open_file(path.clone(), None, cx);
                     if let Some(offset) = *offset {
-                        this.reading
-                            .update(cx, |r, cx| r.scroll_to_offset(offset, cx));
+                        this.reveal_offset(offset, cx);
                     }
                 }
             }),
@@ -1041,6 +1068,7 @@ impl Workspace {
             chars: 0,
             _watcher: None,
             save_task: None,
+            started: false,
             _subscriptions: subscriptions,
         };
         if let Some(root) = root {
@@ -1531,6 +1559,17 @@ impl Workspace {
             }
         }
         cx.notify();
+    }
+
+    /// Called once the startup flags have run, so `wait_loaded` can answer
+    /// for a window that is finished opening rather than one still doing it.
+    pub fn mark_started(&mut self) {
+        self.started = true;
+    }
+
+    /// Whether the startup flags have been applied.
+    pub fn is_started(&self) -> bool {
+        self.started
     }
 
     pub fn is_loaded(&self) -> bool {
@@ -2172,6 +2211,18 @@ impl Workspace {
         .detach();
     }
 
+    /// Scrolls whichever view is showing the open note to a byte offset.
+    ///
+    /// Both views move. The reading view is the one a reading-mode jump
+    /// scrolls, but Live Preview is the default mode, and until this moved the
+    /// editor too every outline row, backlink and search hit scrolled a view
+    /// nobody was looking at.
+    fn reveal_offset(&mut self, offset: usize, cx: &mut Context<Self>) {
+        self.reading
+            .update(cx, |r, cx| r.scroll_to_offset(offset, cx));
+        self.editor.update(cx, |e, cx| e.reveal_offset(offset, cx));
+    }
+
     fn scroll_to_subpath(
         &mut self,
         path: &str,
@@ -2199,8 +2250,7 @@ impl Workspace {
         };
         drop(cache);
         if let Some(offset) = offset {
-            self.reading
-                .update(cx, |r, cx| r.scroll_to_offset(offset, cx));
+            self.reveal_offset(offset, cx);
         }
     }
 
@@ -2815,6 +2865,384 @@ impl Workspace {
         }
     }
 
+    // ----- the control socket ----------------------------------------------------
+
+    /// The whole shell as JSON, for the control socket's `state` method: a
+    /// test driving the app over the socket reads this instead of a
+    /// screenshot. Every key is always there, `null` when there is nothing
+    /// to say, so a caller can index into it without guessing. Each view
+    /// describes itself; the rest is the shell's own.
+    pub fn describe(&self, text: bool, rows: usize, window: &Window, cx: &App) -> Value {
+        let mut vault = Map::new();
+        vault.insert(
+            "root".into(),
+            json!(self.state.as_ref().map(|s| s.root.display().to_string())),
+        );
+        vault.insert("name".into(), json!(self.vault_name.to_string()));
+        vault.insert("loaded".into(), json!(self.state.is_some()));
+        vault.insert(
+            "loading".into(),
+            json!(self.loading.as_ref().map(|l| l.to_string())),
+        );
+
+        let mut file = Map::new();
+        file.insert("path".into(), json!(self.current));
+        file.insert("mode".into(), json!(self.mode.as_str()));
+        file.insert("dirty".into(), json!(self.editor.read(cx).is_dirty()));
+        put_capped(
+            &mut file,
+            "history",
+            self.history.iter().map(|p| json!(p)).collect(),
+            rows,
+        );
+        file.insert("history_ix".into(), json!(self.history_ix));
+
+        let mut left = Map::new();
+        left.insert("visible".into(), json!(self.left_visible));
+        left.insert(
+            "tab".into(),
+            json!(match self.left_tab {
+                LeftTab::Files => "files",
+                LeftTab::Search => "search",
+            }),
+        );
+        left.insert("explorer".into(), self.explorer.read(cx).describe(rows));
+        left.insert("search".into(), self.search.read(cx).describe(rows, cx));
+
+        let mut right = Map::new();
+        right.insert("visible".into(), json!(self.right_visible));
+        right.insert(
+            "tab".into(),
+            json!(match self.right_tab {
+                RightTab::Backlinks => "backlinks",
+                RightTab::Outgoing => "outgoing",
+                RightTab::Outline => "outline",
+                RightTab::Tags => "tags",
+            }),
+        );
+        put_capped(
+            &mut right,
+            "outline",
+            self.outline.iter().map(outline_json).collect(),
+            rows,
+        );
+        put_capped(
+            &mut right,
+            "backlinks",
+            self.backlink_rows.iter().map(pane_row_json).collect(),
+            rows,
+        );
+        put_capped(
+            &mut right,
+            "outgoing",
+            self.outgoing_rows.iter().map(pane_row_json).collect(),
+            rows,
+        );
+        put_capped(
+            &mut right,
+            "tags",
+            self.tags.iter().map(tag_json).collect(),
+            rows,
+        );
+
+        // Whether the graph is on screen is the shell's to say; the view
+        // itself only knows what it would draw.
+        let mut graph = self.graph.read(cx).describe();
+        if let Some(object) = graph.as_object_mut() {
+            object.insert("open".into(), json!(matches!(self.mode, ViewMode::Graph)));
+        }
+
+        json!({
+            "vault": Value::Object(vault),
+            "file": Value::Object(file),
+            "docks": {"left": Value::Object(left), "right": Value::Object(right)},
+            "modal": self.describe_modal(rows, cx),
+            "editor": self.editor.read(cx).describe(text, cx),
+            "reading": self.reading.read(cx).describe(),
+            "graph": graph,
+            "status": self.status.to_string(),
+            "focus": {
+                "name": self.focus_name(window, cx),
+                "context_stack": context_names(window),
+            },
+            "window": {
+                "width": window.viewport_size().width.as_f32(),
+                "height": window.viewport_size().height.as_f32(),
+                "scale": window.scale_factor(),
+                "active": window.is_window_active(),
+            },
+        })
+    }
+
+    /// The overlay that is up, if any: its kind plus whatever the modal
+    /// itself says about its query and rows.
+    fn describe_modal(&self, rows: usize, cx: &App) -> Value {
+        let mut modal = Map::new();
+        modal.insert(
+            "kind".into(),
+            json!(match self.modal {
+                Modal::None => "none",
+                Modal::Switcher => "switcher",
+                Modal::Palette => "palette",
+                Modal::Settings => "settings",
+                Modal::Prompt => "prompt",
+                Modal::Chooser => "chooser",
+            }),
+        );
+        // The four list modals fill these in; with no modal up they stay
+        // empty rather than disappearing.
+        modal.insert("query".into(), Value::Null);
+        modal.insert("selected".into(), Value::Null);
+        modal.insert("error".into(), Value::Null);
+        modal.insert("rows".into(), Value::Array(Vec::new()));
+        let view = match self.modal {
+            Modal::Switcher => Some(self.switcher.read(cx).describe(rows, cx)),
+            Modal::Palette => Some(self.palette.read(cx).describe(rows, cx)),
+            Modal::Prompt => Some(self.prompt.read(cx).describe(rows, cx)),
+            Modal::Chooser => Some(self.chooser.read(cx).describe(rows, cx)),
+            Modal::Settings => Some(self.settings.read(cx).describe(cx)),
+            Modal::None => None,
+        };
+        if let Some(Value::Object(view)) = view {
+            for (key, value) in view {
+                modal.insert(key, value);
+            }
+        }
+        // Settings has tabs rather than rows; the tab it is on is the part
+        // a caller steers by.
+        modal.insert(
+            "settings_tab".into(),
+            modal.get("tab").cloned().unwrap_or(Value::Null),
+        );
+        modal.insert(
+            "pending_op".into(),
+            match &self.pending {
+                None => Value::Null,
+                Some(PendingOp::Rename(path)) => json!({"op": "rename", "path": path}),
+                Some(PendingOp::Move(path)) => json!({"op": "move", "path": path}),
+                Some(PendingOp::Delete(path)) => json!({"op": "delete", "path": path}),
+                Some(PendingOp::NewFolder { parent }) => {
+                    json!({"op": "new-folder", "parent": parent})
+                }
+                Some(PendingOp::UpdateLinks { from, to }) => {
+                    json!({"op": "update-links", "from": from, "to": to})
+                }
+            },
+        );
+        Value::Object(modal)
+    }
+
+    /// Where typed text would land: "editor", "input" or "none". Deciding
+    /// is separate from doing because only one of the two routes may run
+    /// with this workspace borrowed: delivering a keystroke to a focused
+    /// input re-enters the focused view, and that view can be this one.
+    pub fn type_target(&self, window: &Window, cx: &App) -> &'static str {
+        match self.focus_name(window, cx) {
+            // A property row or a table cell is the editor's own field.
+            "editor" | "property-field" | "cell-field" => "editor",
+            "workspace" | "reading" | "graph" | "none" => "none",
+            _ => "input",
+        }
+    }
+
+    /// Types `text` into the editor, for the socket's `type` method, and
+    /// says so. Only the editor is reachable from here: the inputs belong
+    /// to the views that own them and are typed into from outside this
+    /// borrow, so a caller asks [`Workspace::type_target`] first and
+    /// anything but "editor" is answered the other way.
+    pub fn type_into_focused(
+        &mut self,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> &'static str {
+        match self.type_target(window, cx) {
+            "editor" => {
+                // `type_text` already routes to an open property row or
+                // table cell rather than the body.
+                self.editor
+                    .update(cx, |e, cx| e.type_text(text, window, cx));
+                "editor"
+            }
+            // Nothing else is reachable from here, so nothing else is
+            // typed into: a focused input is answered by the caller, which
+            // asked where the text would go before handing it over.
+            _ => "none",
+        }
+    }
+
+    /// A name for whatever has focus, for the state dump and to decide
+    /// where typed text goes. Only handles this shell can reach are named
+    /// by handle; the find panel's two fields belong to the editor, which
+    /// is asked, and the Settings fields are named from the dispatch path.
+    /// `explorer` never comes back: the file tree's rows are painted
+    /// without a focus handle, so the keyboard is never in it.
+    pub fn focus_name(&self, window: &Window, cx: &App) -> &'static str {
+        if window.focused(cx).is_none() {
+            return "none";
+        }
+        if self.editor.read(cx).focus_handle_ref().is_focused(window) {
+            // An open property row or table cell takes the editor's keys
+            // without taking the focus.
+            return match self.editor.read(cx).field_kind() {
+                Some("cell") => "cell-field",
+                Some(_) => "property-field",
+                None => "editor",
+            };
+        }
+        if self.reading.focus_handle(cx).is_focused(window) {
+            return "reading";
+        }
+        if self.graph.focus_handle(cx).is_focused(window) {
+            return "graph";
+        }
+        if self.switcher.focus_handle(cx).is_focused(window) {
+            return "switcher-input";
+        }
+        if self.palette.focus_handle(cx).is_focused(window) {
+            return "palette-input";
+        }
+        if self.prompt.focus_handle(cx).is_focused(window) {
+            return "prompt-input";
+        }
+        if self.chooser.focus_handle(cx).is_focused(window) {
+            return "chooser-input";
+        }
+        if self.search.focus_handle(cx).is_focused(window) {
+            return "search-input";
+        }
+        if self.settings.focus_handle(cx).is_focused(window) {
+            return "settings";
+        }
+        if self.focus_handle.is_focused(window) {
+            return "workspace";
+        }
+        // Both find fields sit in one key context, so the stack cannot tell
+        // them apart; the editor holds the two handles and can.
+        if let Some(name) = self.editor.read(cx).find_focus(window, cx) {
+            return name;
+        }
+        let stack = context_names(window);
+        if stack.iter().any(|c| c == "Settings") {
+            return "settings";
+        }
+        "unknown"
+    }
+
+    /// Focuses one of the main views by name, for the socket's `focus`
+    /// method. The mode is left alone: focus is all that is asked for.
+    pub fn focus_view(
+        &mut self,
+        name: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let handle = match name {
+            "workspace" => self.focus_handle.clone(),
+            "editor" => self.editor.focus_handle(cx),
+            "reading" => self.reading.focus_handle(cx),
+            "graph" => self.graph.focus_handle(cx),
+            other => return Err(format!("unknown view: {other}")),
+        };
+        window.focus(&handle, cx);
+        cx.notify();
+        Ok(())
+    }
+
+    /// Empties the status bar, so a caller can tell the next notice from
+    /// the one already there.
+    pub fn clear_status(&mut self, cx: &mut Context<Self>) {
+        self.status = "".into();
+        cx.notify();
+    }
+
+    /// What the status bar says, which is how every command reports.
+    pub fn status_text(&self) -> String {
+        self.status.to_string()
+    }
+
+    /// The open vault's folder, if one is open.
+    pub fn vault_root(&self) -> Option<PathBuf> {
+        self.state.as_ref().map(|s| s.root.clone())
+    }
+
+    /// An absolute path for a vault-relative one, refusing anything that
+    /// points outside the vault. This is the only path the socket reads and
+    /// writes through, and the vault folder is the only thing  may
+    /// touch.
+    pub fn vault_path(&self, path: &str) -> Result<PathBuf, String> {
+        let root = self
+            .vault_root()
+            .ok_or_else(|| "No vault is open".to_string())?;
+        vault_path_in(&root, path)
+    }
+
+    /// The vault's own spelling of a vault-relative path, if the index
+    /// carries one: that spelling is the key every pane is looked up by, so
+    /// the caller's casing is only a request for it.
+    pub fn vault_file_path(&self, path: &str) -> Option<String> {
+        let state = self.state.as_ref()?;
+        state
+            .vault()
+            .files()
+            .iter()
+            .find(|f| f.path.eq_ignore_ascii_case(path))
+            .map(|f| f.path.clone())
+    }
+
+    /// The open vault's files, for the socket's `list_files`: the same list
+    /// the explorer is built from, under `folder` when one is given.
+    pub fn list_vault_files(&self, folder: Option<&str>) -> Vec<Value> {
+        let Some(state) = self.state.as_ref() else {
+            return Vec::new();
+        };
+        // Vault paths keep their case and compare without it, so a folder
+        // stored as `Sub` answers to `sub` as well.
+        let prefix = folder
+            .map(|f| f.trim_matches('/'))
+            .filter(|f| !f.is_empty())
+            .map(|f| format!("{}/", f.to_lowercase()));
+        state
+            .vault()
+            .files()
+            .iter()
+            .filter(|f| {
+                prefix
+                    .as_deref()
+                    .is_none_or(|p| f.path.to_lowercase().starts_with(p))
+            })
+            .map(|f| json!({"path": f.path, "kind": kind_name(f.kind), "size": f.size}))
+            .collect()
+    }
+
+    /// Every command in the registry with the hotkeys `hotkeys.json` leaves
+    /// it, and whether [`Workspace::run_command`] can run it today.
+    pub fn list_commands(&self, cx: &App) -> Vec<Value> {
+        cx.global::<Commands>()
+            .0
+            .iter()
+            .map(|c| {
+                let hotkeys: Vec<String> = c.hotkeys.iter().filter_map(keystroke).collect();
+                json!({
+                    "id": c.id,
+                    "name": c.name,
+                    "hotkeys": hotkeys,
+                    "runnable": RUNNABLE.contains(&c.id.as_str()),
+                })
+            })
+            .collect()
+    }
+
+    /// The mode a socket request names, if it names one at all.
+    pub fn open_mode(&self, mode: Option<&str>) -> Result<Option<ViewMode>, String> {
+        match mode {
+            None => Ok(None),
+            Some(name) => ViewMode::parse(name)
+                .map(Some)
+                .ok_or_else(|| format!("unknown mode: {name}")),
+        }
+    }
+
     // ----- rendering -------------------------------------------------------------
 
     fn dock_tab(
@@ -2867,8 +3295,7 @@ impl Workspace {
                         .overflow_hidden()
                         .hover(|s| s.bg(theme.bg_alt))
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.reading
-                                .update(cx, |r, cx| r.scroll_to_offset(offset, cx));
+                            this.reveal_offset(offset, cx);
                         }))
                         .child(row.text),
                 )
@@ -2918,8 +3345,7 @@ impl Workspace {
                                 if let Some(path) = path.clone() {
                                     this.open_file(path, None, cx);
                                     if let Some(offset) = offset {
-                                        this.reading
-                                            .update(cx, |r, cx| r.scroll_to_offset(offset, cx));
+                                        this.reveal_offset(offset, cx);
                                     }
                                 }
                             }))
@@ -3200,6 +3626,126 @@ fn mention_rows(state: &VaultState, path: &str, finder: Option<&Finder>) -> Ment
         incoming,
         outgoing,
     }
+}
+
+/// An absolute path inside `root` for a vault-relative one, refusing
+/// everything that points outside the vault: the folder is the only thing
+///  may write, and one socket line must not be able to aim a write
+/// out of it.
+///
+/// The leaf usually does not exist yet - `write_file` is what creates it -
+/// so the check cannot be a `canonicalize` of the whole path. It is the
+/// deepest ancestor that exists at all that has to resolve inside the
+/// vault, because a symlinked parent is how a path that is not there yet
+/// still leaves. `symlink_metadata` counts a dangling link as existing: a
+/// write through one creates the file at its target, wherever that is, and
+/// nothing is left to resolve, so it is refused.
+fn vault_path_in(root: &Path, path: &str) -> Result<PathBuf, String> {
+    let mut absolute = root.to_path_buf();
+    for component in Path::new(path).components() {
+        match component {
+            Component::Normal(part) => absolute.push(part),
+            Component::CurDir => {}
+            Component::ParentDir => return Err(format!("{path} leaves the vault")),
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(format!("{path} is not a vault-relative path"))
+            }
+        }
+    }
+    if absolute.as_path() == root {
+        return Err(format!("{path} names the vault folder, not a file"));
+    }
+    let real_root = root
+        .canonicalize()
+        .map_err(|error| format!("{}: {error}", root.display()))?;
+    let mut existing: &Path = absolute.as_path();
+    let inside = loop {
+        if existing.symlink_metadata().is_ok() {
+            break match existing.canonicalize() {
+                Ok(real) => real.starts_with(&real_root),
+                // A dangling link has nothing to resolve; so has a path the
+                // process may not look at. Neither can be shown to stay in
+                // the vault, so neither is written through.
+                Err(_) => false,
+            };
+        }
+        match existing.parent() {
+            // The walk stops at `root` at the latest: it canonicalized
+            // above, so it exists.
+            Some(parent) if parent.starts_with(root) => existing = parent,
+            _ => break false,
+        }
+    };
+    if !inside {
+        return Err(format!("{path} leaves the vault"));
+    }
+    Ok(absolute)
+}
+
+/// Inserts `list` under `key`, capped to `rows`, with a sibling
+/// `{key}_total`. The total is always there, `null` when the cap dropped
+/// nothing, so a caller has one rule for every list in the dump.
+fn put_capped(into: &mut Map<String, Value>, key: &str, list: Vec<Value>, rows: usize) {
+    let total = list.len();
+    into.insert(
+        key.to_string(),
+        Value::Array(list.into_iter().take(rows).collect()),
+    );
+    into.insert(
+        format!("{key}_total"),
+        if total > rows {
+            json!(total)
+        } else {
+            Value::Null
+        },
+    );
+}
+
+/// An Outline row, with the offset the pane scrolls the note to.
+fn outline_json(row: &OutlineRow) -> Value {
+    json!({"level": row.level, "text": row.text.to_string(), "offset": row.offset})
+}
+
+/// A Backlinks or Outgoing links row. A header carries nothing but its
+/// label, and an unresolved link has no path to open.
+fn pane_row_json(row: &PaneRow) -> Value {
+    match row {
+        PaneRow::Header(label) => json!({
+            "kind": "header",
+            "label": label.to_string(),
+            "detail": Value::Null,
+            "path": Value::Null,
+            "offset": Value::Null,
+        }),
+        PaneRow::Item {
+            path,
+            label,
+            detail,
+            offset,
+        } => json!({
+            "kind": "item",
+            "label": label.to_string(),
+            "detail": detail.to_string(),
+            "path": path,
+            "offset": offset,
+        }),
+    }
+}
+
+/// A tag row, with the `#` the pane paints in front of the name.
+fn tag_json(row: &TagRow) -> Value {
+    json!({"name": format!("#{}", row.name), "count": row.count})
+}
+
+/// The key contexts of the focused element, outermost first: the names
+/// `key_context` puts on each view, which is what a hotkey is matched
+/// against.
+pub(crate) fn context_names(window: &Window) -> Vec<String> {
+    window
+        .context_stack()
+        .iter()
+        .filter_map(|c| c.primary().map(|e| e.key.to_string()))
+        .collect()
 }
 
 fn empty_pane(text: &'static str, theme: &Theme) -> gpui::AnyElement {
@@ -3560,6 +4106,7 @@ impl Render for Workspace {
 mod tests {
     use super::*;
     use std::fs;
+    use std::os::unix::fs::symlink;
 
     fn vault() -> (tempfile::TempDir, VaultState) {
         let dir = tempfile::tempdir().unwrap();
@@ -3824,6 +4371,67 @@ mod tests {
             "a unique name moving folders changes no shortest link"
         );
         assert_eq!(state.rename_preview("B.md", "Sub/Bee.md"), (2, 2));
+    }
+
+    /// The names the control socket calls the four modes by, both ways;
+    /// `preview` is Obsidian's config value, not one of them.
+    #[test]
+    fn mode_names_round_trip() {
+        for mode in [
+            ViewMode::Reading,
+            ViewMode::LivePreview,
+            ViewMode::Source,
+            ViewMode::Graph,
+        ] {
+            assert_eq!(ViewMode::parse(mode.as_str()), Some(mode));
+        }
+        assert_eq!(ViewMode::parse("preview"), None);
+        assert_eq!(ViewMode::parse(""), None);
+    }
+
+    /// A write through the control socket can only land inside the vault
+    /// folder, and the path it is given is usually one that does not exist
+    /// yet, so the folders it goes through are what the check has to look
+    /// at.
+    #[test]
+    fn vault_paths_cannot_leave_the_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        fs::create_dir(root.join("Sub")).unwrap();
+        fs::write(root.join("A.md"), "a").unwrap();
+
+        assert_eq!(vault_path_in(&root, "A.md").unwrap(), root.join("A.md"));
+        assert_eq!(
+            vault_path_in(&root, "Sub/New.md").unwrap(),
+            root.join("Sub/New.md"),
+            "a note that is not there yet, under a folder that is"
+        );
+        assert_eq!(vault_path_in(&root, "./A.md").unwrap(), root.join("A.md"));
+
+        assert!(vault_path_in(&root, "../escape.md").is_err());
+        assert!(vault_path_in(&root, "Sub/../../escape.md").is_err());
+        assert!(vault_path_in(&root, "/etc/passwd").is_err());
+        assert!(vault_path_in(&root, "").is_err(), "the folder itself");
+
+        // A symlinked folder in the vault: the path is innocent, the folder
+        // it goes through is not.
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("there.md"), "o").unwrap();
+        symlink(outside.path(), root.join("linked")).unwrap();
+        assert!(vault_path_in(&root, "linked/new.md").is_err());
+        assert!(vault_path_in(&root, "linked/there.md").is_err());
+
+        // A dangling link resolves to nothing, and a write through it would
+        // create the file wherever it points.
+        symlink(outside.path().join("gone.md"), root.join("dangling.md")).unwrap();
+        assert!(vault_path_in(&root, "dangling.md").is_err());
+    }
+
+    /// A file kind reaches the state dump in lower case.
+    #[test]
+    fn file_kinds_are_named_in_lower_case() {
+        assert_eq!(kind_name(FileKind::Markdown), "markdown");
+        assert_eq!(kind_name(FileKind::Other), "other");
     }
 
     #[test]

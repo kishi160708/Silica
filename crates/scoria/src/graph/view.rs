@@ -19,6 +19,7 @@ use gpui::{
 use _formats::config::GraphConfig;
 use _formats::FileKind;
 use _search::{Search, SearchFile};
+use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -159,6 +160,23 @@ impl GraphView {
 
     pub fn is_local(&self) -> bool {
         self.local.is_some()
+    }
+
+    /// What the graph is showing, for the control socket's state dump. The
+    /// offset is the pan in screen pixels from the element centre, and
+    /// `hovered` the label under the pointer, which is the only node the
+    /// view names on screen.
+    pub fn describe(&self) -> Value {
+        json!({
+            "local": self.is_local(),
+            "nodes": self.nodes.len(),
+            "scale": self.scale,
+            "offset": [self.offset.x, self.offset.y],
+            "hovered": self
+                .hovered
+                .and_then(|ix| self.nodes.get(ix))
+                .map(|node| node.label.clone()),
+        })
     }
 
     fn forces(&self) -> Forces {

@@ -34,6 +34,7 @@ use _formats::config::{
     AppConfig, AppearanceConfig, CorePlugins, SwitcherConfig, CORE_PLUGINS,
 };
 use _search::fuzzy_match;
+use serde_json::{json, Value};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -100,6 +101,23 @@ impl Tab {
                 .find(|(pid, _)| *pid == id)
                 .map(|(_, name)| *name)
                 .unwrap_or(id),
+        }
+    }
+
+    /// The name [`Tab::parse`] takes back, for `--settings` and for the
+    /// control socket's state dump; [`Tab::name`] is the label on the tab,
+    /// which does not round trip ("Files and links").
+    pub fn id(self) -> &'static str {
+        match self {
+            Tab::General => "general",
+            Tab::Appearance => "appearance",
+            Tab::Interface => "interface",
+            Tab::Editor => "editor",
+            Tab::Files => "files",
+            Tab::Hotkeys => "hotkeys",
+            Tab::CorePlugins => "core-plugins",
+            Tab::CommunityPlugins => "community-plugins",
+            Tab::Plugin(id) => id,
         }
     }
 
@@ -925,6 +943,18 @@ impl SettingsView {
         }
         self.focus_tab(window, cx);
         cx.notify();
+    }
+
+    /// Which tab is open and what it has in hand, for the control socket's
+    /// state dump. A dropdown and a text field are reported by the config key
+    /// they write, which is how the view itself identifies them.
+    pub fn describe(&self, cx: &App) -> Value {
+        json!({
+            "tab": self.tab.id(),
+            "menu": self.menu,
+            "editing": self.editing.map(|field| field.key),
+            "hotkey_search": self.hotkey_search.read(cx).text(),
+        })
     }
 
     fn focus_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {

@@ -5,9 +5,11 @@
 //! middle, and Backlinks, Outline and Tags on the right. `--synthetic N`
 //! and `--stress` keep the editor spike from the first gate runnable; the
 //! other flags open the app in a given state for screenshots and smoke
-//! tests (see `docs//Development.md`).
+//! tests, and `--control <socket>` lets a test or the MCP server drive the
+//! running app instead (see `docs//Development.md`).
 
 mod chooser;
+mod control;
 mod editor;
 mod explorer;
 mod graph;
@@ -162,6 +164,17 @@ struct Args {
     template: Option<String>,
     /// Open the Settings dropdown that writes this key, for screenshots.
     menu: Option<String>,
+    /// Bind the control socket at this path, so something outside the app
+    /// can read its state and drive it.
+    control: Option<PathBuf>,
+    /// Window size in logical pixels, `--size 1400x900`.
+    size: Option<(f32, f32)>,
+}
+
+/// `1400x900` as a width and a height; anything else leaves the default.
+fn parse_size(value: &str) -> Option<(f32, f32)> {
+    let (width, height) = value.split_once(['x', 'X'])?;
+    Some((width.trim().parse().ok()?, height.trim().parse().ok()?))
 }
 
 fn parse_args() -> Args {
@@ -188,6 +201,8 @@ fn parse_args() -> Args {
         command: None,
         template: None,
         menu: None,
+        control: None,
+        size: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -215,6 +230,8 @@ fn parse_args() -> Args {
             "--command" => args.command = it.next(),
             "--template" => args.template = it.next(),
             "--menu" => args.menu = it.next(),
+            "--control" => args.control = it.next().map(PathBuf::from),
+            "--size" => args.size = it.next().as_deref().and_then(parse_size),
             _ if args.vault.is_none() => args.vault = Some(PathBuf::from(a)),
             _ => args.note = Some(a),
         }
@@ -257,7 +274,8 @@ fn main() {
         prompt::bind_keys(cx);
         cx.bind_keys([KeyBinding::new("ctrl-q", Quit, None)]);
 
-        let bounds = Bounds::centered(None, size(px(1400.0), px(900.0)), cx);
+        let (width, height) = args.size.unwrap_or((1400.0, 900.0));
+        let bounds = Bounds::centered(None, size(px(width), px(height)), cx);
         let vault = args.vault.clone();
         let window = cx
             .open_window(
@@ -267,6 +285,10 @@ fn main() {
                         title: Some("".into()),
                         ..Default::default()
                     }),
+                    // KWin only honours the xdg-activation token that
+                    // `activate_window` asks for when it can tie it to an
+                    // application, which is what this id is for.
+                    app_id: Some("".into()),
                     ..Default::default()
                 },
                 |window, cx| cx.new(|cx| Workspace::new(vault, window, cx)),
@@ -294,8 +316,23 @@ fn main() {
         cx.on_action(move |_: &Quit, cx| {
             // Save before the window goes away.
             window.update(cx, |ws, _, cx| ws.flush_save(cx)).ok();
+            control::cleanup();
             cx.quit();
         });
+        // Ctrl+Q is not the only way out: closing the window from the
+        // titlebar quits too, and a socket file left behind makes the next
+        // run look like one that is already listening.
+        cx.on_app_quit(|_| {
+            control::cleanup();
+            async {}
+        })
+        .detach();
+
+        // Bound before the startup flags are applied, so `--control`
+        // composes with `--note`, `--source` and the rest of them.
+        if let Some(path) = args.control.clone() {
+            control::start(path, window, cx);
+        }
 
         let note = args.note.clone();
         let search = args.search.clone();
@@ -325,6 +362,9 @@ fn main() {
                         editor.set_text(format!("synthetic-{lines}.md"), text, cx)
                     });
                     ws.set_mode(ViewMode::Source, window, cx);
+                    // The flag loop below never runs for a synthetic note, so
+                    // this is as arranged as the window is going to get.
+                    ws.mark_started();
                 } else {
                     window.focus(&ws.focus_handle(cx), cx);
                 }
@@ -413,6 +453,7 @@ fn main() {
                         if let Some(key) = &menu {
                             ws.open_settings_menu(key, cx);
                         }
+                        ws.mark_started();
                         true
                     })
                     .unwrap_or(true);
@@ -423,7 +464,14 @@ fn main() {
             .detach();
         }
 
-        if let Some(steps) = args.stress {
+        let stress = match args.stress {
+            Some(_) if args.control.is_some() => {
+                eprintln!("--stress is ignored with --control: the socket drives the app");
+                None
+            }
+            steps => steps,
+        };
+        if let Some(steps) = stress {
             cx.spawn(async move |cx| {
                 // Without `--synthetic` the run edits the opened note (and
                 // saves it): wait for the vault to index and the note to open.

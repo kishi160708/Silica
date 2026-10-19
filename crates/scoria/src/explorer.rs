@@ -13,6 +13,7 @@ use gpui::{
 };
 use _formats::FileKind;
 use _vault::VaultFile;
+use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashSet};
 use std::ops::Range;
 
@@ -108,7 +109,6 @@ impl FileTree {
     }
 
     /// Rows currently shown, in order.
-    #[cfg(test)]
     pub fn rows(&self) -> impl ExactSizeIterator<Item = &Row> {
         self.visible.iter().map(|&ix| &self.all[ix])
     }
@@ -220,6 +220,21 @@ fn flatten(folder: &Folder, prefix: &str, depth: usize, out: &mut Vec<Row>) {
     }
 }
 
+/// The name a [`FileKind`] goes by outside the app: in the control socket's
+/// state dump, and anywhere else a kind has to survive as text.
+pub fn kind_name(kind: FileKind) -> &'static str {
+    match kind {
+        FileKind::Markdown => "markdown",
+        FileKind::Canvas => "canvas",
+        FileKind::Base => "base",
+        FileKind::Image => "image",
+        FileKind::Audio => "audio",
+        FileKind::Video => "video",
+        FileKind::Pdf => "pdf",
+        FileKind::Other => "other",
+    }
+}
+
 /// Markdown files show without their extension, everything else with it.
 pub fn display_name(file_name: &str) -> &str {
     match file_name.rsplit_once('.') {
@@ -286,6 +301,32 @@ impl FileExplorer {
             self.scroll.scroll_to_item(ix, ScrollStrategy::Center);
         }
         cx.notify();
+    }
+
+    /// What the tree is showing, for the control socket's state dump: the
+    /// rows a collapsed folder hides are not in it, because they are not on
+    /// screen either.
+    pub fn describe(&self, rows: usize) -> Value {
+        let total = self.tree.len();
+        let shown: Vec<Value> = self
+            .tree
+            .rows()
+            .take(rows)
+            .map(|row| {
+                json!({
+                    "path": row.path,
+                    "name": row.name,
+                    "depth": row.depth,
+                    "folder": row.is_folder,
+                    "kind": kind_name(row.kind),
+                })
+            })
+            .collect();
+        json!({
+            "active": self.active,
+            "rows": shown,
+            "rows_total": if total > shown.len() { Some(total) } else { None },
+        })
     }
 
     fn click(&mut self, ix: usize, cx: &mut Context<Self>) {

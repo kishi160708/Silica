@@ -13,6 +13,7 @@ use gpui::{
 };
 use _commands::{hotkey_label, Command};
 use _search::fuzzy_match;
+use serde_json::{json, Value};
 use std::ops::Range;
 
 const MAX_RESULTS: usize = 60;
@@ -107,6 +108,26 @@ impl CommandPalette {
         self.input.update(cx, |i, cx| i.set_text(query, cx));
         window.focus(&self.input.focus_handle(cx), cx);
         self.refresh(cx);
+    }
+
+    /// What the palette is showing, for the control socket's state dump. The
+    /// rows are command names, the same text the query matches; `error` is
+    /// always null, and is here only so every modal reports the same keys.
+    pub fn describe(&self, rows: usize, cx: &App) -> Value {
+        let total = self.items.len();
+        let shown: Vec<&str> = self
+            .items
+            .iter()
+            .take(rows)
+            .map(|item| item.command.name.as_str())
+            .collect();
+        json!({
+            "query": self.input.read(cx).text(),
+            "selected": self.selected,
+            "rows": shown,
+            "rows_total": if total > shown.len() { Some(total) } else { None },
+            "error": Value::Null,
+        })
     }
 
     fn refresh(&mut self, cx: &mut Context<Self>) {

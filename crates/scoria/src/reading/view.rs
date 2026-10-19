@@ -20,6 +20,7 @@ use gpui::{
 use _formats::config::PropertyTypes;
 use _formats::properties::{PropertiesInDocument, Property, PropertyType};
 use _markdown::Alignment;
+use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::ops::Range;
 use std::rc::Rc;
@@ -177,6 +178,21 @@ impl ReadingView {
     pub fn scroll_to_end(&mut self, cx: &mut Context<Self>) {
         self.list.scroll_to_end();
         cx.notify();
+    }
+
+    /// What the reader is looking at, for the control socket's state dump.
+    /// The scroll position is the list's own: the top-level block at the top
+    /// of the view and how far into it the view starts, which is what
+    /// [`ReadingView::scroll_to_block`] takes back.
+    pub fn describe(&self) -> Value {
+        let top = self.list.logical_scroll_top();
+        json!({
+            "path": self.path,
+            "scroll": {
+                "item": top.item_ix,
+                "offset": f32::from(top.offset_in_item),
+            },
+        })
     }
 
     fn toggle_callout(&mut self, id: usize, cx: &mut Context<Self>) {

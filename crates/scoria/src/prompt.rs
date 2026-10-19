@@ -11,6 +11,7 @@ use gpui::{
     Subscription, UniformListScrollHandle, Window,
 };
 use _search::fuzzy_match;
+use serde_json::{json, Value};
 use std::ops::Range;
 
 actions!(prompt, [Confirm, Dismiss]);
@@ -111,6 +112,26 @@ impl Prompt {
     pub fn set_error(&mut self, message: impl Into<SharedString>, cx: &mut Context<Self>) {
         self.error = Some(message.into());
         cx.notify();
+    }
+
+    /// What the prompt is asking, for the control socket's state dump: the
+    /// field's text, the suggestions it filtered down to, and the error line
+    /// a failed operation left on screen.
+    pub fn describe(&self, rows: usize, cx: &App) -> Value {
+        let total = self.filtered.len();
+        let shown: Vec<&str> = self
+            .filtered
+            .iter()
+            .take(rows)
+            .filter_map(|(ix, _)| self.spec.suggestions.get(*ix).map(String::as_str))
+            .collect();
+        json!({
+            "query": self.input.read(cx).text(),
+            "selected": self.selected,
+            "rows": shown,
+            "rows_total": if total > shown.len() { Some(total) } else { None },
+            "error": self.error,
+        })
     }
 
     fn refresh(&mut self, cx: &mut Context<Self>) {

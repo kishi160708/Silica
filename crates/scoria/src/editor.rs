@@ -879,6 +879,169 @@ impl Editor {
         self.layout.prepaint_ms
     }
 
+    // ----- the control socket ---------------------------------------------------
+
+    /// The `editor` part of the control socket's state dump: what the
+    /// buffer holds, where the cursor is, and what the panels are showing.
+    ///
+    /// Everything here is read back out of the buffer and the last frame's
+    /// layout rather than from state kept alongside them, so a dump can
+    /// never disagree with what the keystrokes before it left behind.
+    pub fn describe(&self, text: bool, cx: &App) -> serde_json::Value {
+        let cursor = self.buf.cursor();
+        let sel = self.buf.selection();
+        let (first, last) = self.visible_line_range();
+        let mut out = serde_json::json!({
+            "name": self.name.to_string(),
+            "live_preview": self.live_preview,
+            "dirty": self.buf.is_dirty(),
+            "cursor": {"line": cursor.line, "col": cursor.col, "offset": self.buf.head},
+            "selection": [sel.start, sel.end],
+            "cursors": self.buf.cursor_count(),
+            "scroll": {"line": self.scroll_line, "px": f32::from(self.scroll_px)},
+            "visible_lines": [first, last],
+            "line_count": self.buf.line_count(),
+            "field": self.field_kind(),
+            "parsing": self.is_parsing(),
+            "find": {
+                "open": self.find.open,
+                "replace": self.find.replace_shown,
+                "query": self.find.query.read(cx).text(),
+                "replacement": self.find.replacement.read(cx).text(),
+                "matches": self.find.matches.len(),
+                "current": self.find.current,
+                "case": self.find.opts.match_case,
+                "regex": self.find.opts.regex,
+            },
+            "suggest": self.describe_suggest(),
+        });
+        if text {
+            out["text"] = serde_json::Value::String(self.buf.text().to_string());
+        }
+        out
+    }
+
+    /// The open autocompletion popup: what it is completing, the query it
+    /// is completing, and the rows it is offering.
+    ///
+    /// The popup keeps only the rows and the columns accepting one
+    /// replaces, so the kind and the query come from asking the trigger
+    /// about those columns again -- the same call that opened it. A cursor
+    /// that has since left the query answers nothing, and the markers it
+    /// replaces name the kind instead.
+    fn describe_suggest(&self) -> Option<serde_json::Value> {
+        let s = self.suggest.as_ref()?;
+        let line = if s.line < self.buf.line_count() {
+            self.buf.line_text(s.line)
+        } else {
+            ""
+        };
+        let replaced = line.get(s.range.clone()).unwrap_or_default();
+        let t = suggest::trigger(line, s.range.end.min(line.len()));
+        let kind = match t.as_ref().map(|t| t.kind) {
+            Some(suggest::Kind::Link) => "link",
+            Some(suggest::Kind::Embed) => "embed",
+            Some(suggest::Kind::Tag) => "tag",
+            None if replaced.starts_with("![[") => "embed",
+            None if replaced.starts_with("[[") => "link",
+            None => "tag",
+        };
+        Some(serde_json::json!({
+            "kind": kind,
+            "query": t.map(|t| t.query).unwrap_or_default(),
+            "selected": s.selected,
+            "rows": s.items.iter().map(|i| i.label.as_str()).collect::<Vec<_>>(),
+        }))
+    }
+
+    /// Selects `start..end`, byte offsets clamped to the buffer, and
+    /// reveals the cursor: the primary selection a drag over those bytes
+    /// would have left, with the other cursors dropped.
+    /// Puts the cursor at `offset` and reveals it on the next frame.
+    ///
+    /// Navigation that starts outside the editor — an outline row, a backlink,
+    /// a search hit, a `[[Note#Heading]]` link — has no window at hand, so the
+    /// scroll cannot be computed here; `pending_reveal` is the editor's own
+    /// way of saying "put the cursor on screen when you next paint".
+    pub fn reveal_offset(&mut self, offset: usize, cx: &mut Context<Self>) {
+        self.buf.collapse_cursors();
+        let offset = self.buf.clamp_offset(offset);
+        self.buf.anchor = offset;
+        self.buf.head = offset;
+        self.buf.goal = None;
+        self.buf.marked = None;
+        self.update_suggest(false, cx);
+        self.pending_reveal = true;
+        cx.notify();
+    }
+
+    pub fn set_selection_range(
+        &mut self,
+        start: usize,
+        end: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.buf.collapse_cursors();
+        self.buf.anchor = self.buf.clamp_offset(start);
+        self.buf.head = self.buf.clamp_offset(end);
+        self.buf.goal = None;
+        self.buf.marked = None;
+        // Like any other cursor move: refresh a popup that is open, and
+        // close it once the cursor has left its query.
+        self.update_suggest(false, cx);
+        self.reveal_cursor(window);
+        cx.notify();
+    }
+
+    /// Whether a decoration pass is in flight: one running on the
+    /// background thread, or one queued behind it for an edit that landed
+    /// while it ran. Nothing waiting on the editor is settled until this
+    /// is false.
+    pub fn is_parsing(&self) -> bool {
+        self.pending_parse.is_some() || self.parse_queued
+    }
+
+    /// Which of the find panel's two fields has the keys, when one does.
+    /// Both sit in the same key context, so the focus path cannot tell them
+    /// apart and the editor, which owns the handles, is asked instead.
+    pub fn find_focus(&self, window: &Window, cx: &App) -> Option<&'static str> {
+        if self.find.query.focus_handle(cx).is_focused(window) {
+            Some("find-query")
+        } else if self.find.replacement.focus_handle(cx).is_focused(window) {
+            Some("find-replacement")
+        } else {
+            None
+        }
+    }
+
+    /// The field the keys are going to while one is open: a property row's
+    /// or a table cell's.
+    pub fn field_kind(&self) -> Option<&'static str> {
+        if self.property_field.is_some() {
+            Some("property")
+        } else if self.table_field.is_some() {
+            Some("cell")
+        } else {
+            None
+        }
+    }
+
+    /// First and last line painted in the last frame. Nothing is measured
+    /// before the first paint, so the scroll anchor stands in for both.
+    pub fn visible_line_range(&self) -> (usize, usize) {
+        match (self.layout.visible.first(), self.layout.visible.last()) {
+            (Some(first), Some(last)) => (first.line, last.line),
+            _ => (self.scroll_line, self.scroll_line),
+        }
+    }
+
+    /// The focus handle itself, so the workspace can tell whether the
+    /// window's focus is this editor's without cloning it.
+    pub fn focus_handle_ref(&self) -> &FocusHandle {
+        &self.focus_handle
+    }
+
     // ----- shaping outside a frame ----------------------------------------------
 
     /// The parts of the selections (and cursors) on `line`, line-relative;
@@ -1060,8 +1223,8 @@ impl Editor {
     }
 
     /// Puts `line` at the top of the view (clamped so the note's end stays
-    /// at the bottom), from the scrollbar.
-    fn scroll_to_line(&mut self, line: usize, window: &mut Window, cx: &mut Context<Self>) {
+    /// at the bottom), from the scrollbar and from the control socket.
+    pub fn scroll_to_line(&mut self, line: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.scroll_line = line.min(self.line_count() - 1);
         self.scroll_px = px(0.);
         self.clamp_scroll_end(window);
