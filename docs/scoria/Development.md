@@ -111,7 +111,8 @@ browse their real vault with no missing content. Passed 2026-10-16, see
 ## Writer (phase 3)
 
 Started 2026-10-17. Gate: the vault round-trips byte-identical after a week
-of mixed use in both apps.
+of mixed use in both apps. The gate run opened on 2026-10-18, see
+[[#The gate run opens, 2026-10-18]].
 
 | Writer item | Status |
 | --- | --- |
@@ -126,6 +127,67 @@ of mixed use in both apps.
 | File recovery | out of phase 3: Obsidian keeps its snapshots in IndexedDB outside the vault, so it cannot affect the gate |
 | Writing settings back | done for every control Obsidian itself offers as one, see [[#Settings writing, 2026-10-18]], [[#Settings dropdowns, 2026-10-18]] and [[#Settings sliders and text fields, 2026-10-18]] |
 | Round-trip harness | done, see [[#Round-trip harness, 2026-10-18]] |
+| The gate itself | open: the harness passes on the real vault, the week of mixed use has not run, see [[#The gate run opens, 2026-10-18]] |
+
+### The gate run opens, 2026-10-18
+
+Every Writer item is done, so the gate is the work. It has two halves. The
+half that is ours to decide — every path from a keystroke to a file's bytes —
+is the harness, and it now passes over the real vault: all thirteen
+properties, `SCORIA_ROUNDTRIP_VAULT=~/bstore2/raga/plmcrzy/PLMCRZY`,
+nothing written to the vault (checked after the run by mtime, as the harness
+promises: every edit happens in a buffer in memory). The other half is a week
+of a person using both apps on the same folder, which has not run.
+
+A **baseline manifest** makes that week measurable rather than remembered:
+
+```
+cd ~/bstore2/raga/plmcrzy/PLMCRZY
+find . -type f ! -name 'workspace.json' -print0 | sort -z | xargs -0 sha256sum \
+  > ~/bstore2/raga/-gate/plmcrzy-<date>.sha256
+sha256sum -c ~/bstore2/raga/-gate/plmcrzy-2026-10-18.sha256   # after the week
+```
+
+Seventeen files on 2026-10-18. `workspace.json` is left out for the reason it
+is left out of the harness:  neither models nor writes it, and Obsidian
+rewrites it constantly. A file that fails the check at the end of the week is
+the gate's evidence — then the question is which app moved it, and whether
+the move was a user's edit or an app rewriting bytes nobody touched.
+
+The vault is not registered in Obsidian yet (`~/.config/obsidian/obsidian.json`
+holds only `docs/`), so the mixed-use half cannot start until it is
+opened there once with **Open folder as vault**.
+
+Three gaps came out of pointing the harness at a real vault, all in the
+configs rather than the notes:
+
+- **The config round trip ignored the vault.** `config_dirs()` named the two
+  sets in the repository and nothing else, so `SCORIA_ROUNDTRIP_VAULT` covered
+  a person's notes but never their `.obsidian` — the set that has what a repo
+  fixture cannot invent: files missing outright, an `appearance.json` that is
+  a bare `{}`, no trailing newline on any of them. It now includes the named
+  vault's, and all four of PLMCRZY's round-trip byte-identical.
+- **The test could not tell whether the vault had run.** It asserted
+  `checked >= 7` against a total the two repository sets reach on their own
+  (they hold eight files between them). Each set now has to contribute a file
+  of its own, so naming a vault that round-trips nothing fails instead of
+  passing quietly.
+- **`switcher.json` is written by the app and ratcheted nowhere.**
+  `Workspace` writes `app.json`, `appearance.json`, `switcher.json`,
+  `core-plugins.json`, `community-plugins.json` and `types.json`; the harness
+  listed neither `switcher.json` nor the other per-plugin files. All four are
+  listed now, but Obsidian does not create any of them until a setting in that
+  plugin is written, so no set on this machine has one and they still cover
+  nothing. The same is true of `hotkeys.json`, which no set here has either —
+  though  never writes that one. `types.json` has its own round trips in
+  `-vault`.
+
+**Thin, and worth saying plainly:** the real vault adds ten hand-written notes
+to the corpus's thousand. Pointing the harness at the whole
+`~/bstore2/raga/plmcrzy` tree finds 214 more `.md` files, but they are
+`node_modules` READMEs rather than notes a person wrote — breadth of Markdown,
+not breadth of vault. The corpus is still what covers the shapes; the real
+vault covers that a real `.obsidian` survives a write.
 
 ### Table editing, 2026-10-18
 

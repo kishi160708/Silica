@@ -34,7 +34,8 @@
 use _cache::links::LinkFormat;
 use _cache::{index_markdown, note_properties, LinkResolver, MetadataCache};
 use _formats::config::{
-    AppConfig, AppearanceConfig, CommunityPlugins, CorePlugins, GraphConfig, Hotkeys, PropertyTypes,
+    AppConfig, AppearanceConfig, CommandPaletteConfig, CommunityPlugins, CorePlugins,
+    DailyNotesConfig, GraphConfig, Hotkeys, PropertyTypes, SwitcherConfig, TemplatesConfig,
 };
 use _formats::properties::{self as props, Change, Value};
 use _text::{find, Cursors, EditKind, Sel, TextBuffer};
@@ -836,10 +837,21 @@ fn replacing_every_match_and_undoing_restores_the_note() {
 /// vault  dogfoods. Both were written by Obsidian itself.
 fn config_dirs() -> Vec<PathBuf> {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    vec![
+    let mut dirs = vec![
         corpus_root().join(".obsidian"),
         repo.parent().unwrap().join("docs//.obsidian"),
-    ]
+    ];
+    // The gate's real vault, when one is named: its `.obsidian` is the set a
+    // person actually accumulated, which the repository's two cannot imitate
+    // — files missing outright, an `appearance.json` that is a bare `{}`, no
+    // trailing newline. A tree that is not a vault root simply has none.
+    if let Some(root) = std::env::var_os("SCORIA_ROUNDTRIP_VAULT") {
+        let dir = PathBuf::from(root).join(".obsidian");
+        if dir.is_dir() {
+            dirs.push(dir);
+        }
+    }
+    dirs
 }
 
 /// A vault whose `.obsidian` is a copy of `dir`, so a write never touches
@@ -890,6 +902,7 @@ fn every_config_file_is_written_back_byte_identical() {
     for dir in config_dirs() {
         assert!(dir.is_dir(), "missing config set: {}", dir.display());
         let (_tmp, vault) = vault_with_config(&dir);
+        let before = checked;
         checked += usize::from(config_round_trips::<AppConfig>(&vault, &dir, "app.json"));
         checked += usize::from(config_round_trips::<AppearanceConfig>(
             &vault,
@@ -917,12 +930,47 @@ fn every_config_file_is_written_back_byte_identical() {
             &dir,
             "types.json",
         ));
+        // The per-plugin files. Obsidian does not create any of them until a
+        // setting in that plugin is written, so no set here has one yet and
+        // these contribute nothing — they are listed so a set that does have
+        // one covers it, `switcher.json` above all: the app writes it.
+        checked += usize::from(config_round_trips::<SwitcherConfig>(
+            &vault,
+            &dir,
+            "switcher.json",
+        ));
+        checked += usize::from(config_round_trips::<CommandPaletteConfig>(
+            &vault,
+            &dir,
+            "command-palette.json",
+        ));
+        checked += usize::from(config_round_trips::<TemplatesConfig>(
+            &vault,
+            &dir,
+            "templates.json",
+        ));
+        checked += usize::from(config_round_trips::<DailyNotesConfig>(
+            &vault,
+            &dir,
+            "daily-notes.json",
+        ));
+        // Every set has to contribute, or naming a vault proves nothing
+        // about its own `.obsidian`.
+        assert!(
+            checked > before,
+            "no config file round-tripped in {}",
+            dir.display()
+        );
     }
     // `workspace.json` is deliberately not here:  neither models nor
     // writes it (`docs//.obsidian` keeps it out of version control for
     // the same reason).
+    //
+    // The two repository sets hold eight files between them. No set in the
+    // repository has a `hotkeys.json` or a `types.json`, so those two writers
+    // are only covered when a vault that has them is named.
     assert!(
-        checked >= 7,
+        checked >= 8,
         "only {checked} config files were round-tripped"
     );
 }
