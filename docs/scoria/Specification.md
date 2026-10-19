@@ -59,7 +59,7 @@ with the command inventory and bundle evidence.
 | Config files are sparse and optional; unknown keys round-trip | `-formats::config`, `-vault::Vault::read_config` |
 | Writing a config file changes only what the value changed: the new value is merged into the file's own JSON, so key order, number spelling (`1` not `1.0`, and more digits than an `f32` field holds), and keys the type does not serialize all survive | `-vault::Vault::write_config` |
 | `core-plugins.json` map and legacy array shapes | `-formats::config::CorePlugins` |
-| JSON Canvas 1.0 fields, z-order by array order, tab-indented output. The byte-level form Obsidian writes is **not** reproduced yet, see [[#Observed canvas write behavior, Obsidian 1.13.7]] | `-formats::canvas` |
+| JSON Canvas 1.0 fields, z-order by array order, unknown keys at every level; written as Obsidian 1.14.4 writes an edited save: the file's own key order kept with the model's keys appended in its fixed order, groups first, default edge ends dropped, one object per line unless it nests one, tabs, no trailing newline, see [[#Observed canvas write behavior, Obsidian 1.14.4 (installer build 1.13.7)]] | `-formats::canvas`, `-formats/tests/canvas_obsidian.rs` (ratchet), `-text/tests/writer_roundtrip.rs` |
 | Bases top-level keys and recursive filters | `-formats::base` |
 | Command ids, palette names and default hotkeys as Obsidian 1.14.4 registers them; `hotkeys.json` entries replace the defaults and an empty list unbinds; labels read `Ctrl + Shift + F` | `-commands` |
 | Command palette: fuzzy over names, pinned ids from `command-palette.json` first, then this session's recent commands, then registration order; commands that cannot run are not listed | `::palette` |
@@ -565,42 +565,78 @@ emptied field writes `""` rather than dropping the key.
 step of the two sliders — the run drove the keys rather than the controls,
 so it settled what is written and not what the tab reads.
 
-## Observed canvas write behavior, Obsidian 1.13.7
+## Observed canvas write behavior, Obsidian 1.14.4 (installer build 1.13.7)
 
-Observed on 2026-10-18 from a real vault: a canvas authored outside Obsidian
-(2-space pretty-printed, every field on its own line, key order `id, x, y,
-width, height, type, text, color`) was opened in Obsidian once and came back
-rewritten whole, 6215 bytes down to 4731. The pre-open bytes were recovered
-from Obsidian's file-recovery store and hash to the original, so this is a
-diff rather than a reconstruction.
+First seen on 2026-10-18 in the gate vault: a canvas authored outside
+Obsidian (2-space pretty-printed, every field on its own line, key order
+`id, x, y, width, height, type, text, color`) was opened once and came back
+rewritten whole, 6215 bytes down to 4731, every node on one line in the
+order `id, type, text, x, y, width, height, color`. Then pinned down on
+2026-10-19 over CDP (`tools/obsidian-probe/canvas.mjs`, four runs, raw
+results in `tools/obsidian-probe/results/2026-10-19-canvas.json`) with
+scratch canvases carrying every node and edge type, every optional key in a
+scrambled order, and unknown keys at every level. `-formats::canvas`
+reproduces all of it, and `-formats/tests/canvas_obsidian.rs` holds
+the files the probe wrote beside what Obsidian wrote back.
 
-What Obsidian writes:
+**When Obsidian writes.** Opening a canvas writes nothing. Closing it
+rewrites the file even when nobody edited it, through the formatter below
+but from the data as loaded: keys stay in file order and nothing is added
+or dropped. An edit (a node moved, an edge drawn) saves within about two
+seconds and rebuilds every object from the model, which is the form below.
+`canvas:new-file` creates `Untitled.canvas` as an **empty file** (zero
+bytes) and writes `{"nodes":[...],"edges":[]}` once something is in it.
 
-| Trait | Observed |
-| --- | --- |
-| Indentation | tabs |
-| A node or an edge | one per line, a compact object — no space after `:` or `,` |
-| `nodes` and `edges` | `"nodes":[` on its own line, members indented one tab deeper, `]` on its own line |
-| Node key order | `id`, `type`, `text`, `x`, `y`, `width`, `height`, `color` |
-| Edge key order | `id`, `fromNode`, `fromSide`, `toNode`, `toSide` — every edge in the observed file carries exactly these |
-| Trailing newline | none |
+**The formatter.** Tab indentation, no space after `:` or `,`, no trailing
+newline. A container is written on one line unless one of its values is
+`null`, an object or an array (`typeof v === 'object'`); then every value
+goes on its own line one tab deeper and the closing bracket on its own line
+at the container's indent. So a plain node or edge is one line, a node that
+carries a plugin's nested object is spread over several, and `"edges":[]`
+and `{}` stay as written. Numbers and strings are `JSON.stringify`'s: `1e3`
+comes back `1000`, `-0` as `0`, `0.5` as `0.5`; `\n`, `\"`, `\\` and `\t`
+are escaped, `é` and U+2028 are not.
 
-So `text` comes before the geometry, not after it, and an absent optional key
-is simply absent. A canvas Obsidian has never saved is rewritten whole the
-first time it does — the same shape as a table command rewriting its whole
-table.
+**Key order on an edited save** — the model's `getData` writes each object
+as the keys of the object it was read from, in file order, minus the keys
+the model owns, and then the model's keys in a fixed order, each
+overwriting in place when the file already had it and appended otherwise:
 
-`Canvas::to_json` does not match this: serde_json's pretty formatter puts
-every field on its own line and `Node` declares `text` after `color`, so the
-file above comes back as 6011 bytes with every line different. Nothing writes
-a canvas yet, so nothing is lost today; a phase 4 canvas writer needs the key
-order above and a formatter that keeps a node on one line.
+| Object | Keys the model owns (removed from the file order) | Appended, in this order |
+| --- | --- | --- |
+| every node | `x`, `y`, `width`, `height`, `color` | `id`, `x`, `y`, `width`, `height`, `color` (when set), `type`, then the type's own keys |
+| text node | — | `text` |
+| file node | — (`file` and `subpath` keep their place) | `file`, `subpath` |
+| link node | — (`url` keeps its place) | `url` |
+| group node | `label`, `background` as well (`backgroundStyle` keeps its place) | `label`, `background`, `backgroundStyle` |
+| edge | everything but `id` and unknown keys | `id`, `fromNode`, `fromSide`, `toNode`, `toSide`, `fromEnd`, `toEnd`, `color`, `label` |
+| the file | — (`nodes` and `edges` keep their place) | `nodes`, `edges` |
 
-**Unprobed:** whether Obsidian rewrites a canvas it opens but nobody edits
-(the observed file was open in front of a person, and six nodes also moved);
-the key order for `file`, `link` and `group` nodes, since every node in this
-canvas is a `text` one; and where the optional edge keys `toEnd`, `fromEnd`,
-`color` and `label` sit, since no edge in it has any of them.
+Consequences, each observed:
+
+- A node Obsidian made itself has no file order, so it is written `id, x,
+  y, width, height, color, type, text` (`file, subpath`; `url`; `label`).
+  Read back and saved after an edit, the same node comes out `id, type,
+  text, x, y, width, height, color` — Obsidian's own output is not a fixed
+  point, which is exactly what the gate vault's canvas showed. The output
+  for a file it has read *is* one.
+- Unknown keys survive at every level (`pluginTop`, `pluginNode`,
+  `pluginEdge` in the probe), in place.
+- An edge's `fromEnd: none` and `toEnd: arrow` are defaults and are dropped
+  even when the file spelled them out; `fromEnd: arrow` and `toEnd: none`
+  are written, after `toSide` and before `color`.
+- Reading a file puts the **groups first**, then the rest in file order,
+  and the nodes are written in that order; a node created afterwards goes
+  on the end in creation order (the probe created text, file, link, group,
+  group, text and got them back in that order). A new group gets the label
+  `Untitled group`.
+- A file with no `edges` key gets one appended after `nodes` on its first
+  edited save.
+
+**Unprobed:** a canvas whose node geometry is fractional after a drag at an
+odd zoom (the writer formats `0.5` as JavaScript would, but exponent forms
+from 1e21 and below 1e-6 are not reproduced), and whether `backgroundStyle`
+is written for a group that has no `background`.
 
 ## Observed task checkbox behavior, Obsidian 1.14.4 (installer build 1.13.7)
 

@@ -127,7 +127,66 @@ of mixed use in both apps. The gate run opened on 2026-10-18, see
 | File recovery | out of phase 3: Obsidian keeps its snapshots in IndexedDB outside the vault, so it cannot affect the gate |
 | Writing settings back | done for every control Obsidian itself offers as one, see [[#Settings writing, 2026-10-18]], [[#Settings dropdowns, 2026-10-18]] and [[#Settings sliders and text fields, 2026-10-18]] |
 | Round-trip harness | done, see [[#Round-trip harness, 2026-10-18]] |
+| Canvas writer | done: the bytes Obsidian writes on an edited save, see [[#Canvas writer, 2026-10-19]]; nothing in the app calls it yet |
 | The gate itself | open: the harness passes on the real vault, the week of mixed use has not run, see [[#The gate run opens, 2026-10-18]] |
+
+### Canvas writer, 2026-10-19
+
+[[#What opening the vault in Obsidian changed, 2026-10-18]] left
+`Canvas::to_json` as a known byte loss waiting for phase 4 to connect it,
+with three open questions. Rather than fix it to the one observed file, the
+questions went to the CDP harness first: `tools/obsidian-probe/canvas.mjs`
+writes scratch canvases with every node and edge type, every optional key in
+a scrambled order and unknown keys at every level, then opens, closes,
+drags, moves and creates in a real Obsidian and reads the bytes back. Four
+runs, a few minutes each. The answers are in
+[[Specification#Observed canvas write behavior, Obsidian 1.14.4 (installer build 1.13.7)]];
+what follows is what they changed in the design.
+
+**The key order is not a table, it is an algorithm.** The first file
+suggested a fixed order with `text` before the geometry. The scrambled
+fixture showed the truth: Obsidian's `getData` starts from the object it
+read, with the keys the model owns deleted, and assigns the model's keys
+onto it — JavaScript keeps an existing key's position and appends a new
+one. So `text`, `type`, `file`, `url`, `backgroundStyle` and any plugin key
+stay where the file had them, and `x, y, width, height, color` always land
+after them. That is why the gate vault's `id, x, y, ..., type, text` became
+`id, type, text, x, y, ...`, and why a node Obsidian creates (no file order)
+is written `id, x, y, width, height, type, text` — an order that is *not* a
+fixed point of its own reader. `Node`, `Edge` and `Canvas` now carry the
+file's key order and write through that algorithm; a node made in 
+carries none and comes out as an app-made one.
+
+**Two mistakes the fixtures caught.** The first draft sorted groups first
+on every write, because the loaded fixtures came back that way. The nodes
+created through the API did not: Obsidian partitions on *load* and appends
+afterwards, so the partition moved into the reader. The second draft
+asserted that every Obsidian-written fixture round-trips byte-identical,
+and two did not — the app-made ones, for the reason above. Both are now
+tests that say the opposite of what the draft assumed.
+
+**The formatter rule is `typeof`.** A container stays on one line unless
+one of its values is `null`, an object or an array — JavaScript's
+`typeof v === 'object'`, null included, which took a fourth run with
+`[true,false]` against `[null]` to separate from "has a nested container".
+Numbers follow `JSON.stringify` (`1e3` → `1000`, `-0` → `0`), so `Node`'s
+geometry is `f64` now; a canvas with `"x":0.5` parsed in Obsidian and
+would have been refused by the old `i64`.
+
+**Closing is a write.** Opening a canvas writes nothing; closing it
+rewrites the file through the formatter even when nothing was edited,
+keeping the file's own key order. For the gate run that means a canvas
+Obsidian merely looked at will show in the diff — reformatted, not
+reordered — and , which writes nothing on close, will not do the
+same. That asymmetry is recorded rather than copied.
+
+**Checked against the real vault.** The harness has a new property: every
+`.canvas` in Obsidian's layout is written back byte-identical. The gate
+vault's `Data Pipeline Mindmap.canvas`, the 4731-byte file Obsidian wrote
+on 2026-10-18, passes; `PLMCRZY Mindmap.canvas` is reported as authored
+elsewhere, since Obsidian itself will rewrite it whole the first time it is
+saved there. Nothing in the app calls the writer yet; when phase 4 does,
+the bytes are settled.
 
 ### Porting two checklist blocks to CDP, 2026-10-19
 
