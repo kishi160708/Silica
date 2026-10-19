@@ -220,12 +220,8 @@ fn collect_blocks(
             BlockKind::List { items, .. } => {
                 for item in items {
                     out.push((item.marker, HighlightKind::ListMarker));
-                    if item.task.is_some() {
-                        let start = item.marker.end + 1;
-                        let end = (start + 3).min(src.len());
-                        if src.get(start..end).is_some_and(|s| s.starts_with('[')) {
-                            out.push((Span::new(start, end), HighlightKind::Task));
-                        }
+                    if let Some(task) = item.task_span {
+                        out.push((task, HighlightKind::Task));
                     }
                     collect_blocks(src, &item.children, lines, quote_depth, out);
                 }
@@ -317,6 +313,55 @@ mod tests {
         assert_eq!(markers(3), vec![0..2]);
         assert_eq!(markers(4), vec![0..2]);
         assert!(lines[3].iter().any(|s| s.kind == HighlightKind::Callout));
+    }
+
+    /// The brackets sit 1-4 spaces or a tab after the marker, so the span has
+    /// to come from the parser. Deriving it as `marker.end + 1` silently lost
+    /// the checkbox for every padding but one space and a tab.
+    #[test]
+    fn task_spans_follow_the_parser_through_every_padding() {
+        for src in [
+            "- [x] a\n",
+            "-  [x] a\n",
+            "-   [x] a\n",
+            "-    [x] a\n",
+            "-\t[x] a\n",
+            "* [X] a\n",
+            "1.  [?] a\n",
+            "> - [ ] a\n",
+        ] {
+            let doc = parse(src);
+            let lines = highlight_lines(&doc);
+            let tasks: Vec<&str> = lines[0]
+                .iter()
+                .filter(|s| s.kind == HighlightKind::Task)
+                .map(|s| &src[s.range.clone()])
+                .collect();
+            assert_eq!(tasks.len(), 1, "no task span for {src:?}");
+            assert_eq!(
+                &tasks[0][..1],
+                "[",
+                "span does not start at the bracket for {src:?}"
+            );
+            assert_eq!(
+                &tasks[0][2..3],
+                "]",
+                "span does not end at the bracket for {src:?}"
+            );
+        }
+    }
+
+    /// A task that the block parser rejects must not get a span either.
+    #[test]
+    fn non_tasks_get_no_task_span() {
+        for src in ["- [ ]\n", "- [ ]no space\n", "-     [x] five spaces\n"] {
+            let doc = parse(src);
+            let lines = highlight_lines(&doc);
+            assert!(
+                !lines[0].iter().any(|s| s.kind == HighlightKind::Task),
+                "unexpected task span for {src:?}"
+            );
+        }
     }
 
     #[test]

@@ -29,6 +29,7 @@ pub(crate) struct RawItem<'a> {
     pub span: Span,
     pub marker: Span,
     pub task: Option<char>,
+    pub task_span: Option<Span>,
     pub children: Vec<RawBlock<'a>>,
 }
 
@@ -113,6 +114,7 @@ enum NodeKind<'a> {
         marker: Span,
         content_indent: usize,
         task: Option<char>,
+        task_span: Option<Span>,
     },
     FootnoteDefinition {
         label: &'a str,
@@ -467,13 +469,20 @@ impl<'a, 'o> BlockParser<'a, 'o> {
         let node = self.open.pop().unwrap();
         let ends_blank = node.ends_with_blank_line();
         if matches!(node.kind, NodeKind::Item { .. }) {
-            let NodeKind::Item { marker, task, .. } = node.kind else {
+            let NodeKind::Item {
+                marker,
+                task,
+                task_span,
+                ..
+            } = node.kind
+            else {
                 unreachable!()
             };
             let item = RawItem {
                 span: Span::new(node.start, node.end),
                 marker,
                 task,
+                task_span,
                 children: node.children,
             };
             if let NodeKind::List {
@@ -1297,6 +1306,7 @@ impl<'a, 'o> BlockParser<'a, 'o> {
                         marker: item.marker,
                         content_indent: item.marker_offset + item.padding,
                         task: item.task,
+                        task_span: item.task_span,
                     },
                     item.marker.start,
                 );
@@ -1378,6 +1388,7 @@ impl<'a, 'o> BlockParser<'a, 'o> {
             marker_len + spaces_after_marker
         };
         let mut task = None;
+        let mut task_span = None;
         if self.opts.task_lists && !blank_item {
             let after = &self.src[self.offset..self.line.end];
             let ab = after.as_bytes();
@@ -1386,6 +1397,10 @@ impl<'a, 'o> BlockParser<'a, 'o> {
                 let ok = is_space_or_tab(ab[3]);
                 if ok {
                     task = Some(ab[1] as char);
+                    // `self.offset` is absolute into `self.src`, and any
+                    // container markers are already consumed, so a task inside
+                    // a blockquote or callout gets a correct span too.
+                    task_span = Some(Span::new(self.offset, self.offset + 3));
                     self.advance_offset(3, false);
                     if self.byte(self.offset).is_some_and(is_space_or_tab) {
                         self.advance_offset(1, true);
@@ -1399,6 +1414,7 @@ impl<'a, 'o> BlockParser<'a, 'o> {
             marker_offset,
             padding,
             task,
+            task_span,
         })
     }
 }
@@ -1409,6 +1425,7 @@ struct ListMarker {
     marker_offset: usize,
     padding: usize,
     task: Option<char>,
+    task_span: Option<Span>,
 }
 
 fn lists_match(a: ListKind, b: ListKind) -> bool {

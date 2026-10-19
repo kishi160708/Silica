@@ -139,6 +139,10 @@ pub struct ListItem<'a> {
     pub marker: Span,
     /// `Some(' ')` for `[ ]`, `Some('x')` for `[x]`, any single character otherwise.
     pub task: Option<char>,
+    /// The three bytes `[`, status, `]`, when `task` is `Some`. The padding
+    /// between the marker and the brackets is 1-4 spaces or a tab, so this
+    /// cannot be re-derived from `marker`.
+    pub task_span: Option<Span>,
     pub children: Vec<Block<'a>>,
 }
 

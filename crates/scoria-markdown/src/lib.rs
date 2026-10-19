@@ -154,6 +154,7 @@ fn lower_items<'a>(cx: &InlineContext<'a, '_>, items: Vec<RawItem<'a>>) -> Vec<L
             span: i.span,
             marker: i.marker,
             task: i.task,
+            task_span: i.task_span,
             children: lower_blocks(cx, i.children),
         })
         .collect()
