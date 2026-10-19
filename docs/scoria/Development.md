@@ -129,6 +129,49 @@ of mixed use in both apps. The gate run opened on 2026-10-18, see
 | Round-trip harness | done, see [[#Round-trip harness, 2026-10-18]] |
 | The gate itself | open: the harness passes on the real vault, the week of mixed use has not run, see [[#The gate run opens, 2026-10-18]] |
 
+### What opening the vault in Obsidian changed, 2026-10-18
+
+The vault was opened in Obsidian once, to start the mixed-use half. Sixteen of
+the seventeen files came back byte-identical. The one that moved is worth the
+whole exercise.
+
+**The four `.obsidian` files were all rewritten and all byte-identical.**
+Every one carries a fresh mtime from the moment Obsidian opened the vault, and
+every hash matches. So Obsidian rewrites its config set on open and reproduces
+it exactly — which is the behavior `Vault::write_config` was built to match,
+now confirmed from the other side.
+
+**`Data Pipeline Mindmap.canvas` changed.** The pre-open bytes were recovered
+from Obsidian's own file-recovery store
+(`~/.config/obsidian/IndexedDB/app_obsidian.md_0.indexeddb.leveldb`, the
+canvas text sitting in the log in the clear) and they hash to the baseline
+exactly, so the diff is a real one and not a guess. It has two separable
+halves:
+
+- **Geometry.** Six nodes have different `x`, `y` or `height`. That is content,
+  not formatting, and it is a canvas that was open in front of a person.
+- **Format, for the whole file.** 6215 bytes became 4731. The old file was
+  2-space pretty-printed with every field on its own line and the key order
+  `id, x, y, width, height, type, text, color`. Obsidian wrote back **one node
+  per line**, tab-indented, `"nodes":[` with no space after the colon, and the
+  key order `id, type, text, x, y, width, height, color`. Neither file ends in
+  a newline.
+
+So a canvas written by anything but Obsidian is rewritten whole the first time
+Obsidian saves it — the same shape as a table command rewriting its whole
+table, one level up. Worth knowing before phase 4 writes one.
+
+**And  could not reproduce that file today.** `Canvas::to_json` uses
+serde_json's pretty formatter with a tab, which puts every field on its own
+line, and `Node`'s field order puts `text` after `color`. Fed the canvas
+Obsidian had just written, it returns 6011 bytes for 4731 in — every line
+different. Nothing is broken by it yet, because nothing in  writes a
+canvas: `to_json` has no caller outside its own test, and that test only
+asserts the output starts `{\n\t"nodes"` and re-parses equal, which a
+semantically faithful but byte-different file passes. It is a byte loss
+waiting for phase 4 to connect it, and the fix is known: Obsidian's key order
+and a formatter that holds a node on one line.
+
 ### The gate run opens, 2026-10-18
 
 Every Writer item is done, so the gate is the work. It has two halves. The
@@ -139,20 +182,29 @@ nothing written to the vault (checked after the run by mtime, as the harness
 promises: every edit happens in a buffer in memory). The other half is a week
 of a person using both apps on the same folder, which has not run.
 
-A **baseline manifest** makes that week measurable rather than remembered:
+A **baseline snapshot** makes that week measurable rather than remembered.
+It is a copy, not a list of hashes: a hash says a file moved, and the next
+question is always *which bytes*.
 
 ```
-cd ~/bstore2/raga/plmcrzy/PLMCRZY
-find . -type f ! -name 'workspace.json' -print0 | sort -z | xargs -0 sha256sum \
-  > ~/bstore2/raga/-gate/plmcrzy-<date>.sha256
-sha256sum -c ~/bstore2/raga/-gate/plmcrzy-2026-10-18.sha256   # after the week
+GATE=~/bstore2/raga/-gate; VAULT=~/bstore2/raga/plmcrzy/PLMCRZY
+rsync -a --exclude workspace.json "$VAULT"/ "$GATE"/snapshot-<date>/   # take it
+diff -r "$GATE"/snapshot-<date> "$VAULT" --exclude workspace.json      # after the week
 ```
 
 Seventeen files on 2026-10-18. `workspace.json` is left out for the reason it
 is left out of the harness:  neither models nor writes it, and Obsidian
-rewrites it constantly. A file that fails the check at the end of the week is
-the gate's evidence — then the question is which app moved it, and whether
-the move was a user's edit or an app rewriting bytes nobody touched.
+rewrites it constantly. A file the diff reports is the gate's evidence — then
+the question is which app moved it, and whether the move was a user's edit or
+an app rewriting bytes nobody touched.
+
+A hash manifest is kept beside the snapshot for a quick check, but note that
+its paths are relative to the vault root, so it only means anything run from
+there:
+
+```
+( cd "$VAULT" && sha256sum -c "$GATE"/plmcrzy-2026-10-18b.sha256 )
+```
 
 The vault is not registered in Obsidian yet (`~/.config/obsidian/obsidian.json`
 holds only `docs/`), so the mixed-use half cannot start until it is

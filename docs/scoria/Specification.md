@@ -59,7 +59,7 @@ with the command inventory and bundle evidence.
 | Config files are sparse and optional; unknown keys round-trip | `-formats::config`, `-vault::Vault::read_config` |
 | Writing a config file changes only what the value changed: the new value is merged into the file's own JSON, so key order, number spelling (`1` not `1.0`, and more digits than an `f32` field holds), and keys the type does not serialize all survive | `-vault::Vault::write_config` |
 | `core-plugins.json` map and legacy array shapes | `-formats::config::CorePlugins` |
-| JSON Canvas 1.0 fields, z-order by array order, tab-indented output | `-formats::canvas` |
+| JSON Canvas 1.0 fields, z-order by array order, tab-indented output. The byte-level form Obsidian writes is **not** reproduced yet, see [[#Observed canvas write behavior, Obsidian 1.13.7]] | `-formats::canvas` |
 | Bases top-level keys and recursive filters | `-formats::base` |
 | Command ids, palette names and default hotkeys as Obsidian 1.14.4 registers them; `hotkeys.json` entries replace the defaults and an empty list unbinds; labels read `Ctrl + Shift + F` | `-commands` |
 | Command palette: fuzzy over names, pinned ids from `command-palette.json` first, then this session's recent commands, then registration order; commands that cannot run are not listed | `::palette` |
@@ -564,3 +564,40 @@ emptied field writes `""` rather than dropping the key.
 **Unprobed:** the option *labels* each dropdown shows, and the min, max and
 step of the two sliders — the run drove the keys rather than the controls,
 so it settled what is written and not what the tab reads.
+
+## Observed canvas write behavior, Obsidian 1.13.7
+
+Observed on 2026-10-18 from a real vault: a canvas authored outside Obsidian
+(2-space pretty-printed, every field on its own line, key order `id, x, y,
+width, height, type, text, color`) was opened in Obsidian once and came back
+rewritten whole, 6215 bytes down to 4731. The pre-open bytes were recovered
+from Obsidian's file-recovery store and hash to the original, so this is a
+diff rather than a reconstruction.
+
+What Obsidian writes:
+
+| Trait | Observed |
+| --- | --- |
+| Indentation | tabs |
+| A node or an edge | one per line, a compact object — no space after `:` or `,` |
+| `nodes` and `edges` | `"nodes":[` on its own line, members indented one tab deeper, `]` on its own line |
+| Node key order | `id`, `type`, `text`, `x`, `y`, `width`, `height`, `color` |
+| Edge key order | `id`, `fromNode`, `fromSide`, `toNode`, `toSide` — every edge in the observed file carries exactly these |
+| Trailing newline | none |
+
+So `text` comes before the geometry, not after it, and an absent optional key
+is simply absent. A canvas Obsidian has never saved is rewritten whole the
+first time it does — the same shape as a table command rewriting its whole
+table.
+
+`Canvas::to_json` does not match this: serde_json's pretty formatter puts
+every field on its own line and `Node` declares `text` after `color`, so the
+file above comes back as 6011 bytes with every line different. Nothing writes
+a canvas yet, so nothing is lost today; a phase 4 canvas writer needs the key
+order above and a formatter that keeps a node on one line.
+
+**Unprobed:** whether Obsidian rewrites a canvas it opens but nobody edits
+(the observed file was open in front of a person, and six nodes also moved);
+the key order for `file`, `link` and `group` nodes, since every node in this
+canvas is a `text` one; and where the optional edge keys `toEnd`, `fromEnd`,
+`color` and `label` sit, since no edge in it has any of them.
