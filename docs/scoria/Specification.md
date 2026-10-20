@@ -2644,3 +2644,146 @@ one grouping of host stats), and the native `<select>` popup itself, which was
 never opened — every switch was a synthetic `change` event. Whether a second
 click on a row's collapse icon re-expands it, and whether clicking a row's
 title collapses or opens.
+
+## Observed tab group behavior, Obsidian 1.14.4 (installer build 1.13.7)
+
+One CDP-driven run on 2026-10-20 (`tools/obsidian-probe/splits-bookmarks.mjs`,
+raw results in `tools/obsidian-probe/results/2026-10-20-splits-bookmarks.json`)
+in a fresh scratch vault of four notes (`A.md`, `B.md`, `C.md`, `sub/D.md`),
+reading `app.workspace.rootSplit` after every step and `workspace.json` after
+`app.workspace.saveLayout()`. Everything below was seen, not read from docs.
+
+The layout:
+
+- `main` is always a `split` with `direction: "vertical"`, even around one
+  group: `{"id", "type": "split", "children": [...], "direction"}` in that key
+  order. A group is `{"id", "type": "tabs", "children": [leaves]}` plus
+  `"currentTab": n` after `children` when the active tab is not the first.
+- `workspace:split-vertical` ("Split right", `hasCheck`) on a group inside a
+  vertical split inserts a new `tabs` node **right after it** in the same split.
+  `workspace:split-horizontal` ("Split down") on a group inside a vertical split
+  **replaces the group's node with a `split` of `direction: "horizontal"`** whose
+  children are the old group and the new one. The rule is the same both ways:
+  a sibling when the enclosing split already runs that way, a wrapping split
+  otherwise. Splitting a group inside the horizontal split with "Split right"
+  wrapped it in a vertical split, three levels deep.
+- The new group holds **a copy of the active leaf**: same file, same `mode` and
+  `source`, a fresh leaf id. It becomes the active leaf. Splitting an empty tab
+  makes a new group with an `empty` leaf; splitting the graph makes one with a
+  `graph` leaf.
+- Dragging the divider between two children writes **`"dimension"`** on *both*
+  of them: a percentage of the split, `29.411764705882355` / `70.58823529411765`,
+  inserted **after `type` and before `children`** (`id, type, dimension,
+  children`; for a split, `id, type, dimension, children, direction`). The DOM
+  carries it as `flex-grow: 29.4118`. Before any drag no child has the key.
+  Splitting a child that has a dimension gives each half of it (`29.41` became
+  `14.70` and `14.70`); closing a child rescales the rest to a hundred (`14.70`,
+  `70.59` became `17.24`, `82.76`); a split left with one child loses the key.
+- Closing a group's last tab (`workspace:close`) **removes the group**, unless it
+  is the only group, which keeps an empty leaf. A split left with one child is
+  **not collapsed**: the root kept a nested horizontal split around a single
+  `tabs` node. A split left with no child goes.
+- `workspace:close-tab-group` ("Close this tab group") removes the active group
+  with all its tabs. `workspace:close-others-tab-group` ("Close others in tab
+  group") closes the **other tabs of the active group**, not other groups.
+- After a group closes, the active leaf becomes the **most recently active leaf
+  elsewhere** (the one active before the closed group was), not the layout's
+  first.
+- `editor:focus-left/right/top/bottom` ("Focus on tab group to the left/right",
+  "above/below") step to the sibling on that side of the nearest enclosing split
+  that runs that way; when the sibling is itself a split, focus lands on the
+  group used most recently inside it (from the left column, focus-right went
+  back to the bottom-right group that had been active last, not the top-right).
+  At an edge nothing happens. All four are `hasCheck`.
+- `editor:open-link-in-new-split` ("Open link under cursor to the right",
+  default hotkey Mod+Alt+Enter) is "Split right" and then the link opened in
+  the new group — a **new** sibling next to the current group, even when a group
+  already exists to its right.
+- The tabs container of the active group carries `mod-active`; its active tab
+  header has `mod-active is-active`, an inactive group's active tab only
+  `is-active`. A click in a group's content makes it active.
+- A nested layout survives a quit and a relaunch byte for byte: `workspace.json`
+  after the restart equalled the file written at quit, and was not rewritten
+  within 3 s of the layout being ready.
+
+ implements all of this since 2026-10-20 ([[Development#Tab groups, 2026-10-20]]),
+with one graph view shared between groups: a second group showing the graph
+says so in place of it.
+
+**Unprobed:** the `dimension` a drag writes when only *some* siblings have one;
+`workspace:close-others` (without `-tab-group`) across groups; dragging a tab
+header into another group or onto a split edge; `workspace:toggle-stacked-tabs`;
+what "Split right" does from the sidebar's "More options" menu.
+
+## Observed bookmarks behavior, Obsidian 1.14.4 (installer build 1.13.7)
+
+Same run and vault as [[#Observed tab group behavior, Obsidian 1.14.4 (installer build 1.13.7)]],
+with the `bookmarks` core plugin enabled and `.obsidian/bookmarks.json` read
+from disk after every command.
+
+The file:
+
+- `{"items": [...]}`, two-space indented, **no trailing newline**. New items are
+  appended at the end. It is written within a second of the change.
+- Every item has `"type"` first and `"ctime"` (Unix milliseconds) second; what
+  follows depends on the type:
+
+| Type | Keys after `type`, `ctime` | Made by |
+| --- | --- | --- |
+| `file` | `path`; `subpath` (`"#Second heading"` or `"#^b56db2"`) when a heading or block | `bookmarks:bookmark-current-view`, `bookmark-current-heading`, `bookmark-current-section` |
+| `search` | `query` | `bookmarks:bookmark-current-search` with the Search pane showing a query |
+| `graph` | `title`, `options` (the whole graph config: `collapse-filter`, `search`, `showTags`, ... `close`) | `bookmark-current-view` with the graph active; the default title is `Untitled Graph` |
+| `group` | `items` (nested items), `title` | `bookmarks:bookmark-all-tabs`; the default title is the moment formatted `MMMM D, YYYY h:mm A` (`October 20, 2026 1:49 PM`); every file item in it shares one `ctime`, the group's is later |
+| `folder` | `path` | added through the plugin API in this run, so the key order Obsidian's own UI writes is unprobed |
+| `url` | `url`, `title` | likewise through the API |
+
+- `"title"` is written only when the modal's Title field was filled in; an
+  empty field writes no key, and the pane shows the path (`A`,
+  `A#Second heading`, `A#^b56db2`), the query, or the group's title.
+- `bookmarks:bookmark-current-section` **writes a block id into the note** when
+  the paragraph has none: ` ^b56db2` appended to the line (six lowercase
+  hex-ish characters, a space before the caret), then bookmarks
+  `"subpath": "#^b56db2"`.
+- `bookmarks:unbookmark-current-view` ("Remove bookmark for the current file")
+  removed **one** plain `file` item for the open file — in this run the one
+  inside the group that had been added last, leaving the older top-level one.
+  It is a lookup by path, last added wins.
+- Running `bookmark-current-view` on a file already bookmarked opens
+  **"Edit bookmark"** (with a Remove button) and writes nothing on Save.
+
+The modal, "Add bookmark": a `Path` row (the file, read-only text input holding
+`A`, `A#Second heading`, `A#^b56db2`; `Query` for a search), a `Title` row (an
+empty input whose placeholder is that same text), a `Bookmark group` row, and
+`Cancel` / `Save`. The graph's has no Path row and its Title input starts
+filled with `Untitled Graph`. "Bookmark all tabs" opens "Add 3 bookmarks" with
+only Title (placeholder the date) and Bookmark group. Enter saves.
+
+The pane (view type `bookmarks`): a `nav-header` of four buttons in order —
+"Bookmark the active tab..." (`lucide-bookmark-plus`), "New group"
+(`lucide-folder-plus`), "Collapse all" (`lucide-chevrons-down-up`), "Show
+search filter" (`lucide-search`) — then one `tree-item` per item in file order.
+Icons by type: file `lucide-file`, heading `lucide-heading`, block
+`lucide-toy-brick`, search `lucide-search`, graph `lucide-git-fork`, folder
+`lucide-folder`, url `lucide-globe-2`; a group is a collapsible row with the
+`right-triangle` and its items indented under it. The row for the open file
+carries `is-active`.
+
+Commands and names: `bookmarks:open` "Bookmarks: Show bookmarks";
+`bookmarks:bookmark-current-view` "Bookmarks: Bookmark..." (check: a file or
+graph view is active); `bookmarks:bookmark-current-search` "Bookmarks: Bookmark
+current search..." (check); `bookmarks:unbookmark-current-view` "Bookmarks:
+Remove bookmark for the current file" (check); `bookmarks:bookmark-current-section`
+"Bookmarks: Bookmark block under cursor..." (check); `bookmarks:bookmark-current-heading`
+"Bookmarks: Bookmark heading under cursor..." (check); `bookmarks:bookmark-all-tabs`
+"Bookmarks: Bookmark all tabs..." (no check). None has a default hotkey.
+
+ implements this since 2026-10-20 ([[Development#Bookmarks, 2026-10-20]]): the file
+in these bytes, the seven commands, and the pane less its search filter and
+the "Bookmark group" dropdown.
+
+**Unprobed:** what clicking a search or heading bookmark in the pane does (the
+clicks dispatched in this run landed on nothing); the item context menu and the
+file menu's "Bookmark..." entries (the explorer was hidden behind the Search
+pane when they were tried); the order of `folder` and `url` keys as the UI
+writes them; the "Bookmark group" dropdown; renaming and dragging items; the
+search filter.
