@@ -8,6 +8,11 @@
 //! tests, and `--control <socket>` lets a test or the MCP server drive the
 //! running app instead (see `docs//Development.md`).
 
+// The `describe` and `rows` methods across the views exist to be read over the
+// control socket; where there is no socket they have no caller, and that is
+// not a defect to deny the build over.
+#![cfg_attr(not(unix), allow(dead_code))]
+
 mod chooser;
 #[cfg(unix)]
 mod control;
