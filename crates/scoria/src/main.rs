@@ -314,8 +314,8 @@ fn main() {
             }
         }
         cx.on_action(move |_: &Quit, cx| {
-            // Save before the window goes away.
-            window.update(cx, |ws, _, cx| ws.flush_save(cx)).ok();
+            // Save the note and the layout before the window goes away.
+            window.update(cx, |ws, _, cx| ws.on_quit(cx)).ok();
             control::cleanup();
             cx.quit();
         });
@@ -383,22 +383,30 @@ fn main() {
                         if !ws.is_loaded() {
                             return false;
                         }
-                        // The vault's default view mode, unless a flag says otherwise.
+                        // The vault's default view mode, unless a flag says
+                        // otherwise — or `workspace.json` restored the tabs,
+                        // each in the mode it recorded.
                         let mode = if source {
-                            ViewMode::Source
+                            Some(ViewMode::Source)
                         } else if reading {
-                            ViewMode::Reading
+                            Some(ViewMode::Reading)
+                        } else if ws.layout_restored() {
+                            None
                         } else {
-                            ws.default_mode()
+                            Some(ws.default_mode())
                         };
-                        ws.set_mode(mode, window, cx);
-                        match &note {
-                            Some(n) => {
-                                if !ws.open_by_name(n, cx) {
-                                    ws.open_first(cx);
-                                }
-                            }
-                            None => ws.open_first(cx),
+                        if let Some(mode) = mode {
+                            ws.set_mode(mode, window, cx);
+                        }
+                        // With a layout restored and no note asked for, the
+                        // window stays as `workspace.json` left it, which is
+                        // the empty state when nothing was open.
+                        let opened = match &note {
+                            Some(n) => ws.open_by_name(n, cx),
+                            None => false,
+                        };
+                        if !opened && !ws.layout_restored() {
+                            ws.open_first(cx);
                         }
                         if let Some(q) = &search {
                             ws.show_search(q, Some(window), cx);

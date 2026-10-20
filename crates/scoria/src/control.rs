@@ -581,7 +581,7 @@ fn handle(
             .map(Some),
         "quit" => {
             ctl.workspace(|ws, _, cx| {
-                ws.flush_save(cx);
+                ws.on_quit(cx);
                 Ok(())
             })?;
             let _ = reply.send(Response::ok(request.id, json!({"ok": true})).line());

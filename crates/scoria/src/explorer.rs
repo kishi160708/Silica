@@ -248,6 +248,8 @@ pub fn display_name(file_name: &str) -> &str {
 
 pub enum ExplorerEvent {
     Open(String),
+    /// A Ctrl+click: the file goes to a new tab.
+    OpenInNewTab(String),
     /// Context-menu actions; paths are vault-relative, folders without a
     /// trailing slash (`""` is the vault root).
     NewNote {
@@ -297,6 +299,13 @@ impl FileExplorer {
         cx.notify();
     }
 
+    /// No file is open: nothing is highlighted.
+    pub fn clear_active(&mut self, cx: &mut Context<Self>) {
+        if self.active.take().is_some() {
+            cx.notify();
+        }
+    }
+
     /// Marks `path` as the open file and scrolls it into view.
     pub fn reveal(&mut self, path: &str, cx: &mut Context<Self>) {
         self.active = Some(path.to_string());
@@ -332,13 +341,15 @@ impl FileExplorer {
         })
     }
 
-    fn click(&mut self, ix: usize, cx: &mut Context<Self>) {
+    fn click(&mut self, ix: usize, new_tab: bool, cx: &mut Context<Self>) {
         let Some(row) = self.tree.row(ix).cloned() else {
             return;
         };
         if row.is_folder {
             self.tree.toggle(&row.path);
             cx.notify();
+        } else if new_tab {
+            cx.emit(ExplorerEvent::OpenInNewTab(row.path));
         } else {
             cx.emit(ExplorerEvent::Open(row.path));
         }
@@ -488,7 +499,10 @@ impl FileExplorer {
                         .text_color(if faint { theme.text_muted } else { theme.text })
                         .when(active, |d| d.bg(theme.bg_active))
                         .hover(|s| s.bg(theme.bg_alt))
-                        .on_click(cx.listener(move |this, _, _, cx| this.click(ix, cx)))
+                        .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                            let modifiers = event.modifiers();
+                            this.click(ix, modifiers.control || modifiers.platform, cx)
+                        }))
                         .on_mouse_down(
                             MouseButton::Right,
                             cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {

@@ -127,6 +127,8 @@ pub(crate) struct ReadingHost {
 
 pub enum ReadingEvent {
     OpenLink(LinkTarget),
+    /// A Ctrl+click on a link: it opens in a new tab.
+    OpenLinkInNewTab(LinkTarget),
 }
 
 /// A reader clicked a task checkbox. The reading view does not write the
@@ -294,8 +296,16 @@ impl ReadingView {
         let view = cx.entity();
         let on_link: LinkHandler = Rc::new({
             let view = view.clone();
-            move |target, _, cx| {
-                view.update(cx, |_, cx| cx.emit(ReadingEvent::OpenLink(target)));
+            move |target, window, cx| {
+                let modifiers = window.modifiers();
+                let new_tab = modifiers.control || modifiers.platform;
+                view.update(cx, |_, cx| {
+                    cx.emit(if new_tab {
+                        ReadingEvent::OpenLinkInNewTab(target)
+                    } else {
+                        ReadingEvent::OpenLink(target)
+                    })
+                });
             }
         });
         let on_toggle: ToggleHandler = Rc::new({

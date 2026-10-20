@@ -122,6 +122,7 @@ pub const RUNNABLE: &[&str] = &[
     "editor:insert-wikilink",
     "editor:insert-embed",
     "editor:follow-link",
+    "editor:open-link-in-new-leaf",
     "switcher:open",
     "global-search:open",
     "graph:open",
@@ -166,6 +167,21 @@ pub const RUNNABLE: &[&str] = &[
     "file-explorer:move-file",
     "file-explorer:duplicate-file",
     "workspace:edit-file-title",
+    "workspace:new-tab",
+    "workspace:close",
+    "workspace:close-others",
+    "workspace:next-tab",
+    "workspace:previous-tab",
+    "workspace:goto-tab-1",
+    "workspace:goto-tab-2",
+    "workspace:goto-tab-3",
+    "workspace:goto-tab-4",
+    "workspace:goto-tab-5",
+    "workspace:goto-tab-6",
+    "workspace:goto-tab-7",
+    "workspace:goto-tab-8",
+    "workspace:goto-last-tab",
+    "workspace:undo-close-pane",
     "app:delete-file",
     "backlink:open",
     "backlink:open-backlinks",
@@ -1014,6 +1030,52 @@ enum PendingOp {
     },
 }
 
+/// One tab of the main area: what it shows and where it has been. The
+/// active tab's fields live on the workspace itself — `current`, `mode`,
+/// `history`, `history_ix` — so every path that opens a note keeps working
+/// unchanged; `tabs[active_tab]` is a snapshot of them, refreshed by
+/// [`Workspace::stash_active_tab`] before anything reads it.
+#[derive(Debug, Clone, PartialEq)]
+struct Tab {
+    path: Option<String>,
+    mode: ViewMode,
+    history: Vec<String>,
+    history_ix: usize,
+    /// The `workspace.json` leaf this tab was restored from, so a layout
+    /// nothing changed is written back with the keys Obsidian gave it.
+    leaf: Option<Value>,
+}
+
+impl Tab {
+    fn empty(mode: ViewMode) -> Tab {
+        Tab {
+            path: None,
+            mode,
+            history: Vec::new(),
+            history_ix: 0,
+            leaf: None,
+        }
+    }
+
+    /// The tab's title as the strip shows it: the note's name, or Obsidian's
+    /// "New tab" for one with nothing in it.
+    fn title(&self) -> SharedString {
+        match (&self.path, self.mode) {
+            (Some(p), _) => display_name(p.rsplit('/').next().unwrap_or(p))
+                .to_string()
+                .into(),
+            (None, ViewMode::Graph) => "Graph view".into(),
+            (None, _) => "New tab".into(),
+        }
+    }
+}
+
+/// How many closed tabs `workspace:undo-close-pane` can bring back.
+const CLOSED_TABS_KEPT: usize = 20;
+
+/// How many paths `workspace.json`'s `lastOpenFiles` keeps.
+const LAST_OPEN_FILES_KEPT: usize = 10;
+
 pub struct Workspace {
     focus_handle: FocusHandle,
     /// Set when something changed what the main area shows and the keyboard
@@ -1050,6 +1112,24 @@ pub struct Workspace {
     detached: Option<SharedString>,
     history: Vec<String>,
     history_ix: usize,
+    /// The main area's tabs; the active one's fields are the live ones above.
+    tabs: Vec<Tab>,
+    active_tab: usize,
+    /// Tabs closed this session with the index they had, oldest first.
+    closed_tabs: Vec<(usize, Tab)>,
+    /// `workspace.json` as it was read at load, `None` when the vault has
+    /// none; what the quit write is merged into.
+    layout: Option<Value>,
+    /// A `workspace.json` was read, so the startup flags leave the first
+    /// note unopened the way Obsidian does.
+    layout_restored: bool,
+    /// `lastOpenFiles`: the notes opened, most recent first.
+    last_open_files: Vec<String>,
+    /// What the window's title bar says, set only when it changes.
+    window_title: SharedString,
+    /// The next link followed opens in a new tab: a Ctrl+click, or
+    /// `editor:open-link-in-new-leaf`. Taken by [`Workspace::follow_link`].
+    link_in_new_tab: bool,
     right_tab: RightTab,
     outline: Vec<OutlineRow>,
     backlink_rows: Vec<PaneRow>,
@@ -1113,6 +1193,9 @@ impl Workspace {
                 window,
                 |this, _, event: &ExplorerEvent, window, cx| match event {
                     ExplorerEvent::Open(path) => this.open_file(path.clone(), None, cx),
+                    ExplorerEvent::OpenInNewTab(path) => {
+                        this.open_in_new_tab(path.clone(), None, cx)
+                    }
                     ExplorerEvent::NewNote { folder } => this.new_note(folder, window, cx),
                     ExplorerEvent::NewFolder { parent } => {
                         this.start_new_folder(parent, window, cx)
@@ -1182,6 +1265,10 @@ impl Workspace {
             ),
             cx.subscribe(&reading, |this, _, event: &ReadingEvent, cx| match event {
                 ReadingEvent::OpenLink(target) => this.follow_link(target.clone(), cx),
+                ReadingEvent::OpenLinkInNewTab(target) => {
+                    this.link_in_new_tab = true;
+                    this.follow_link(target.clone(), cx);
+                }
             }),
             cx.subscribe(&reading, |this, _, event: &TaskToggled, cx| {
                 this.toggle_task(&event.path, event.marker, cx)
@@ -1217,7 +1304,7 @@ impl Workspace {
         let this = cx.entity().downgrade();
         window.on_window_should_close(cx, move |_, cx| {
             if let Some(ws) = this.upgrade() {
-                ws.update(cx, |ws, cx| ws.flush_save(cx));
+                ws.update(cx, |ws, cx| ws.on_quit(cx));
             }
             true
         });
@@ -1249,6 +1336,14 @@ impl Workspace {
             detached: None,
             history: Vec::new(),
             history_ix: 0,
+            tabs: vec![Tab::empty(ViewMode::Reading)],
+            active_tab: 0,
+            closed_tabs: Vec::new(),
+            layout: None,
+            layout_restored: false,
+            last_open_files: Vec::new(),
+            window_title: SharedString::default(),
+            link_in_new_tab: false,
             right_tab: RightTab::Backlinks,
             outline: Vec::new(),
             backlink_rows: Vec::new(),
@@ -1396,6 +1491,8 @@ impl Workspace {
         self.start_watching(&state, cx);
         if let Some(current) = self.current.clone() {
             self.open_file(current, None, cx);
+        } else {
+            self.restore_layout(&state, cx);
         }
         cx.notify();
     }
@@ -1748,6 +1845,12 @@ impl Workspace {
             if let FileChange::Removed(path) = change {
                 if !state.vault().absolute(path).exists() {
                     self.forget_history(path);
+                    let active = self.active_tab;
+                    for (ix, tab) in self.tabs.iter_mut().enumerate() {
+                        if ix != active && tab.path.as_deref() == Some(path.as_str()) {
+                            tab.path = None;
+                        }
+                    }
                 }
             }
         }
@@ -2093,6 +2196,15 @@ impl Workspace {
                     self.editor.update(cx, |e, cx| e.follow_link_at_cursor(cx));
                 }
             }
+            "editor:open-link-in-new-leaf" => {
+                if self.editing_or_report(id, window, cx) {
+                    self.link_in_new_tab = true;
+                    let found = self.editor.update(cx, |e, cx| e.follow_link_at_cursor(cx));
+                    if !found {
+                        self.link_in_new_tab = false;
+                    }
+                }
+            }
             "insert-current-date" | "insert-current-time" => {
                 if self.editing_or_report(id, window, cx) {
                     let date = id == "insert-current-date";
@@ -2151,6 +2263,17 @@ impl Workspace {
             "file-explorer:new-file"
             | "file-explorer:new-file-in-current-tab"
             | "file-explorer:new-file-in-new-pane" => {
+                // Obsidian's "Create new note" goes to a new tab too, unless
+                // the active one is empty; "in current tab" replaces the
+                // note, and "to the right" would split, which is a new tab
+                // in the one strip  has.
+                let fresh_tab = match id {
+                    "file-explorer:new-file-in-current-tab" => false,
+                    "file-explorer:new-file-in-new-pane" => true,
+                    _ => self.current.is_some(),
+                };
+                // The folder follows the note that was open, so it is
+                // settled before the new tab empties the main area.
                 let folder = self
                     .state
                     .as_ref()
@@ -2162,6 +2285,9 @@ impl Workspace {
                         )
                     })
                     .unwrap_or_default();
+                if fresh_tab {
+                    self.new_tab(cx);
+                }
                 self.new_note(&folder, window, cx);
             }
             "file-explorer:new-folder" => self.start_new_folder("", window, cx),
@@ -2178,6 +2304,23 @@ impl Workspace {
             "workspace:edit-file-title" => {
                 if let Some(current) = self.current.clone() {
                     self.start_rename(&current, window, cx);
+                }
+            }
+            "workspace:new-tab" => self.new_tab(cx),
+            "workspace:close" => self.close_tab(self.active_tab, cx),
+            "workspace:close-others" => self.close_other_tabs(cx),
+            "workspace:next-tab" => self.cycle_tab(1, cx),
+            "workspace:previous-tab" => self.cycle_tab(self.tabs.len().saturating_sub(1), cx),
+            "workspace:goto-last-tab" => self.activate_tab(self.tabs.len().saturating_sub(1), cx),
+            "workspace:undo-close-pane" => self.undo_close_tab(cx),
+            _ if id.starts_with("workspace:goto-tab-") => {
+                let n: usize = id
+                    .rsplit('-')
+                    .next()
+                    .and_then(|n| n.parse().ok())
+                    .unwrap_or(0);
+                if n >= 1 && n <= self.tabs.len() {
+                    self.activate_tab(n - 1, cx);
                 }
             }
             "app:delete-file" => {
@@ -2454,6 +2597,9 @@ impl Workspace {
             self.history.truncate(self.history_ix);
             self.history.push(path.clone());
             self.history_ix = self.history.len();
+            self.last_open_files.retain(|p| *p != path);
+            self.last_open_files.insert(0, path.clone());
+            self.last_open_files.truncate(LAST_OPEN_FILES_KEPT);
         }
         self.show_file(&path, &state, cx);
         // Opening a note is a move into the main area, wherever it was asked
@@ -2670,6 +2816,12 @@ impl Workspace {
     /// and forward can never navigate to a file the vault no longer has.
     fn forget_history(&mut self, path: &str) {
         self.history_ix = prune_history(&mut self.history, self.history_ix, path);
+        let active = self.active_tab;
+        for (ix, tab) in self.tabs.iter_mut().enumerate() {
+            if ix != active {
+                tab.history_ix = prune_history(&mut tab.history, tab.history_ix, path);
+            }
+        }
     }
 
     fn refresh_panes(&mut self, state: &Arc<VaultState>, cx: &mut Context<Self>) {
@@ -2829,6 +2981,7 @@ impl Workspace {
     }
 
     fn follow_link(&mut self, target: LinkTarget, cx: &mut Context<Self>) {
+        let new_tab = std::mem::take(&mut self.link_in_new_tab);
         match target {
             LinkTarget::Internal(body) => {
                 let Some(state) = self.state.clone() else {
@@ -2838,6 +2991,7 @@ impl Workspace {
                 let parsed = _markdown::parse_linktext(&body);
                 let resolved = state.cache().resolve(&body, &source).map(str::to_string);
                 match resolved {
+                    Some(path) if new_tab => self.open_in_new_tab(path, parsed.subpath, cx),
                     Some(path) => {
                         if path == source {
                             if let Some(sub) = parsed.subpath {
@@ -2849,6 +3003,9 @@ impl Workspace {
                     }
                     None => {
                         // Obsidian creates the note a dangling link points at.
+                        if new_tab {
+                            self.new_tab(cx);
+                        }
                         let name = parsed.path.to_string();
                         self.create_note_for(&name, None, cx);
                     }
@@ -3409,6 +3566,17 @@ impl Workspace {
                 *entry = new.to_string();
             }
         }
+        let active = self.active_tab;
+        for (ix, tab) in self.tabs.iter_mut().enumerate() {
+            if ix == active {
+                continue;
+            }
+            for entry in tab.history.iter_mut().chain(tab.path.iter_mut()) {
+                if let Some(new) = renamed.get(entry.as_str()) {
+                    *entry = new.to_string();
+                }
+            }
+        }
         if let Some(current) = self.current.clone() {
             if let Some(new) = renamed.get(current.as_str()) {
                 let new = new.to_string();
@@ -3590,6 +3758,472 @@ impl Workspace {
             .into_any_element()
     }
 
+    // ----- tabs ------------------------------------------------------------------
+
+    /// Copies the active tab's live fields into its slot.
+    fn stash_active_tab(&mut self) {
+        let leaf = self.tabs.get(self.active_tab).and_then(|t| t.leaf.clone());
+        let tab = Tab {
+            path: self.current.clone(),
+            mode: self.mode,
+            history: self.history.clone(),
+            history_ix: self.history_ix,
+            leaf,
+        };
+        match self.tabs.get_mut(self.active_tab) {
+            Some(slot) => *slot = tab,
+            None => {
+                self.tabs.push(tab);
+                self.active_tab = self.tabs.len() - 1;
+            }
+        }
+    }
+
+    /// Every tab as it stands, the active one from the live fields.
+    fn tab_snapshots(&self) -> Vec<Tab> {
+        let mut tabs = self.tabs.clone();
+        if let Some(slot) = tabs.get_mut(self.active_tab) {
+            slot.path = self.current.clone();
+            slot.mode = self.mode;
+            slot.history = self.history.clone();
+            slot.history_ix = self.history_ix;
+        }
+        tabs
+    }
+
+    /// Puts `tabs[active_tab]` on screen: its note in its mode, or the
+    /// empty state.
+    fn load_tab(&mut self, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get(self.active_tab).cloned() else {
+            return;
+        };
+        self.history = tab.history;
+        self.history_ix = tab.history_ix;
+        if tab.mode == ViewMode::Graph && self.mode != ViewMode::Graph {
+            self.mode_before_graph = self.mode;
+        }
+        self.mode = tab.mode;
+        if tab.mode.is_editing() {
+            self.editor.update(cx, |e, cx| {
+                e.set_live_preview(tab.mode == ViewMode::LivePreview, cx)
+            });
+        }
+        match (tab.path, self.state.clone()) {
+            (Some(path), Some(state)) => {
+                self.current = None;
+                self.show_file(&path, &state, cx);
+            }
+            (None, Some(state)) => self.show_empty(&state, cx),
+            (path, None) => self.current = path,
+        }
+        self.request_focus_main(cx);
+        cx.notify();
+    }
+
+    /// The empty tab: no note in the main area and nothing describing one.
+    /// A buffer with unsaved edits nowhere else stays, marked as saved
+    /// nowhere, the way a file that went away leaves it.
+    fn show_empty(&mut self, state: &Arc<VaultState>, cx: &mut Context<Self>) {
+        self.release_buffer(cx);
+        self.reading.update(cx, |r, cx| {
+            r.set_note(
+                None,
+                reading::build_with("", "", state.as_ref(), state.build_options()),
+                cx,
+            )
+        });
+        self.current = None;
+        self.explorer.update(cx, |e, cx| e.clear_active(cx));
+        self.graph.update(cx, |g, cx| g.set_current(None, cx));
+        self.clear_panes(cx);
+        self.status = SharedString::default();
+    }
+
+    /// `workspace:new-tab`: an empty tab to the right of the active one,
+    /// in the mode "Default view for new tabs" names.
+    pub fn new_tab(&mut self, cx: &mut Context<Self>) {
+        self.flush_save(cx);
+        self.stash_active_tab();
+        let mode = self.default_mode();
+        let at = (self.active_tab + 1).min(self.tabs.len());
+        self.tabs.insert(at, Tab::empty(mode));
+        self.active_tab = at;
+        self.load_tab(cx);
+    }
+
+    /// Opens `path` in a new tab, leaving the active one as it is.
+    pub fn open_in_new_tab(
+        &mut self,
+        path: String,
+        subpath: Option<Subpath<'_>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.new_tab(cx);
+        self.open_file(path, subpath, cx);
+    }
+
+    pub fn activate_tab(&mut self, ix: usize, cx: &mut Context<Self>) {
+        if ix >= self.tabs.len() || ix == self.active_tab {
+            return;
+        }
+        self.flush_save(cx);
+        self.stash_active_tab();
+        self.active_tab = ix;
+        self.load_tab(cx);
+    }
+
+    /// `workspace:next-tab` and `previous-tab`: `step` tabs along, wrapping.
+    fn cycle_tab(&mut self, step: usize, cx: &mut Context<Self>) {
+        let n = self.tabs.len();
+        if n > 1 {
+            self.activate_tab((self.active_tab + step) % n, cx);
+        }
+    }
+
+    /// `workspace:close`: the last close leaves the empty tab, as Obsidian's
+    /// does; the tab to the right takes over, or the one to the left at the
+    /// end of the strip.
+    pub fn close_tab(&mut self, ix: usize, cx: &mut Context<Self>) {
+        self.flush_save(cx);
+        self.stash_active_tab();
+        if ix >= self.tabs.len() {
+            return;
+        }
+        let tab = self.tabs.remove(ix);
+        self.remember_closed(ix, tab);
+        if self.tabs.is_empty() {
+            self.tabs.push(Tab::empty(self.default_mode()));
+            self.active_tab = 0;
+            self.load_tab(cx);
+        } else if ix == self.active_tab {
+            self.active_tab = ix.min(self.tabs.len() - 1);
+            self.load_tab(cx);
+        } else {
+            if ix < self.active_tab {
+                self.active_tab -= 1;
+            }
+            cx.notify();
+        }
+    }
+
+    fn remember_closed(&mut self, ix: usize, tab: Tab) {
+        // An empty tab is not worth bringing back.
+        if tab.path.is_some() || tab.mode == ViewMode::Graph {
+            self.closed_tabs.push((ix, tab));
+            if self.closed_tabs.len() > CLOSED_TABS_KEPT {
+                self.closed_tabs.remove(0);
+            }
+        }
+    }
+
+    /// `workspace:close-others`: every tab but the active one.
+    fn close_other_tabs(&mut self, cx: &mut Context<Self>) {
+        self.stash_active_tab();
+        let keep = self.tabs.remove(self.active_tab);
+        let others = std::mem::take(&mut self.tabs);
+        for (ix, tab) in others.into_iter().enumerate() {
+            self.remember_closed(ix, tab);
+        }
+        self.tabs.push(keep);
+        self.active_tab = 0;
+        cx.notify();
+    }
+
+    /// `workspace:undo-close-pane`: the most recently closed tab, back
+    /// where it was.
+    fn undo_close_tab(&mut self, cx: &mut Context<Self>) {
+        let Some((ix, tab)) = self.closed_tabs.pop() else {
+            return;
+        };
+        self.flush_save(cx);
+        self.stash_active_tab();
+        let at = ix.min(self.tabs.len());
+        self.tabs.insert(at, tab);
+        self.active_tab = at;
+        self.load_tab(cx);
+    }
+
+    fn render_tab_strip(&self, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
+        let tabs = self.tab_snapshots();
+        let active_ix = self.active_tab;
+        div()
+            .flex()
+            .flex_row()
+            .items_end()
+            .h(px(34.))
+            .pt(px(4.))
+            .px_1()
+            .gap(px(2.))
+            .bg(theme.bg_secondary)
+            .border_b_1()
+            .border_color(theme.border)
+            .overflow_hidden()
+            .children(tabs.iter().enumerate().map(|(ix, tab)| {
+                let active = ix == active_ix;
+                let title = tab.title();
+                div()
+                    .id(("tab", ix))
+                    .group("tab")
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_1()
+                    .h(px(30.))
+                    .min_w(px(60.))
+                    .max_w(px(200.))
+                    .pl_3()
+                    .pr_1()
+                    .rounded_t_md()
+                    .cursor_pointer()
+                    .text_size(px(12.))
+                    .bg(if active { theme.bg } else { theme.bg_secondary })
+                    .text_color(if active { theme.text } else { theme.text_muted })
+                    .when(!active, |d| d.hover(|s| s.bg(theme.bg_alt)))
+                    .on_click(cx.listener(move |this, _, _, cx| this.activate_tab(ix, cx)))
+                    .on_mouse_down(
+                        gpui::MouseButton::Middle,
+                        cx.listener(move |this, _, _, cx| this.close_tab(ix, cx)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .child(title),
+                    )
+                    .child(
+                        div()
+                            .id(("tab-close", ix))
+                            .px_1()
+                            .rounded_sm()
+                            .text_color(theme.text_muted)
+                            .when(!active, |d| {
+                                d.invisible().group_hover("tab", |s| s.visible())
+                            })
+                            .hover(|s| s.bg(theme.bg_active).text_color(theme.text))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.close_tab(ix, cx);
+                            }))
+                            .child("×"),
+                    )
+            }))
+            .child(
+                div()
+                    .id("new-tab")
+                    .mb(px(3.))
+                    .px_2()
+                    .py_px()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .text_size(px(14.))
+                    .text_color(theme.text_muted)
+                    .hover(|s| s.bg(theme.bg_alt).text_color(theme.text))
+                    .on_click(cx.listener(|this, _, _, cx| this.new_tab(cx)))
+                    .child("+"),
+            )
+    }
+
+    // ----- workspace.json --------------------------------------------------------
+
+    /// Whether a `workspace.json` was read at load. The startup flags then
+    /// leave the first note alone: with nothing recorded Obsidian shows the
+    /// empty state rather than picking a note.
+    pub fn layout_restored(&self) -> bool {
+        self.layout_restored
+    }
+
+    /// Restores the layout `workspace.json` records: the main area's tabs
+    /// and the active one, each sidebar's collapse state and its tab.
+    /// Tab groups are flattened into the one strip  has.
+    fn restore_layout(&mut self, state: &Arc<VaultState>, cx: &mut Context<Self>) {
+        let layout = match state.vault().workspace_json() {
+            Ok(Some(layout)) => layout,
+            Ok(None) => return,
+            Err(err) => {
+                self.report(format!("workspace.json could not be read: {err}"), cx);
+                return;
+            }
+        };
+        self.layout_restored = true;
+        self.last_open_files = layout
+            .get("lastOpenFiles")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if let Some(main) = layout.get("main") {
+            let default_mode = self.default_mode();
+            let mut leaves = Vec::new();
+            collect_leaves(main, &mut leaves);
+            let mut tabs: Vec<(String, Tab)> = Vec::new();
+            for leaf in leaves {
+                let Some(id) = leaf.get("id").and_then(Value::as_str) else {
+                    continue;
+                };
+                let view = leaf
+                    .get("state")
+                    .and_then(|s| s.get("type"))
+                    .and_then(Value::as_str);
+                let inner = leaf.get("state").and_then(|s| s.get("state"));
+                let file = inner.and_then(|s| s.get("file")).and_then(Value::as_str);
+                let tab = match (view, file) {
+                    (_, Some(file)) => {
+                        // A leaf naming a file the vault no longer has is
+                        // dropped, the way Obsidian drops one it cannot open.
+                        let known = state.vault().absolute(file).is_file();
+                        if !known {
+                            continue;
+                        }
+                        let mode = match inner.and_then(|s| s.get("mode")).and_then(Value::as_str) {
+                            Some("preview") => ViewMode::Reading,
+                            Some("source")
+                                if inner
+                                    .and_then(|s| s.get("source"))
+                                    .and_then(Value::as_bool)
+                                    .unwrap_or(false) =>
+                            {
+                                ViewMode::Source
+                            }
+                            Some("source") => ViewMode::LivePreview,
+                            _ => default_mode,
+                        };
+                        Tab {
+                            path: Some(file.to_string()),
+                            mode,
+                            history: vec![file.to_string()],
+                            history_ix: 1,
+                            leaf: Some(leaf.clone()),
+                        }
+                    }
+                    (Some("empty"), None) => Tab {
+                        leaf: Some(leaf.clone()),
+                        ..Tab::empty(default_mode)
+                    },
+                    (Some("graph"), None) => Tab {
+                        leaf: Some(leaf.clone()),
+                        ..Tab::empty(ViewMode::Graph)
+                    },
+                    _ => continue,
+                };
+                tabs.push((id.to_string(), tab));
+            }
+            if !tabs.is_empty() {
+                let active_id = layout.get("active").and_then(Value::as_str);
+                let active = tabs
+                    .iter()
+                    .position(|(id, _)| Some(id.as_str()) == active_id)
+                    .or_else(|| tabs.iter().position(|(_, t)| t.path.is_some()))
+                    .unwrap_or(0);
+                self.tabs = tabs.into_iter().map(|(_, t)| t).collect();
+                self.active_tab = active;
+                self.load_tab(cx);
+            }
+        }
+        let collapsed = |dock: &str| {
+            layout
+                .get(dock)
+                .and_then(|d| d.get("collapsed"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        };
+        self.left_visible = !collapsed("left");
+        self.right_visible = !collapsed("right");
+        match dock_current_view(&layout, "left").as_deref() {
+            Some("search") => self.left_tab = LeftTab::Search,
+            Some(_) => self.left_tab = LeftTab::Files,
+            None => {}
+        }
+        match dock_current_view(&layout, "right").as_deref() {
+            Some("backlink") => self.right_tab = RightTab::Backlinks,
+            Some("outgoing-link") => self.right_tab = RightTab::Outgoing,
+            Some("outline") => self.right_tab = RightTab::Outline,
+            Some("tag") => self.right_tab = RightTab::Tags,
+            _ => {}
+        }
+        self.layout = Some(layout);
+    }
+
+    /// `workspace.json` as this session would leave it: the file that was
+    /// read with the tabs, the active leaf, the sidebars' collapse state
+    /// and `lastOpenFiles` brought up to date, and every other key as it
+    /// was. A main area with more than one tab group is left alone — 
+    /// flattened it to show it, and writing that back would be a loss.
+    fn layout_json(&self) -> Value {
+        let mut layout = self.layout.clone().unwrap_or_else(|| json!({}));
+        let Some(object) = layout.as_object_mut() else {
+            return layout;
+        };
+        let tabs = self.tab_snapshots();
+        let leaves: Vec<Value> = tabs.iter().map(leaf_json).collect();
+        let active_id = leaves
+            .get(self.active_tab)
+            .and_then(|l| l.get("id"))
+            .cloned()
+            .unwrap_or(Value::Null);
+        let groups = object.get("main").map(count_tab_groups).unwrap_or(0);
+        if groups <= 1 {
+            let main = object.entry("main").or_insert_with(|| {
+                json!({
+                    "id": leaf_id(),
+                    "type": "split",
+                    "children": [{"id": leaf_id(), "type": "tabs", "children": []}],
+                    "direction": "vertical",
+                })
+            });
+            if let Some(group) = find_tab_group(main) {
+                group.insert("children".into(), Value::Array(leaves));
+                if self.active_tab > 0 {
+                    group.insert("currentTab".into(), json!(self.active_tab));
+                } else {
+                    group.shift_remove("currentTab");
+                }
+            }
+            object.insert("active".into(), active_id);
+        }
+        for (dock, visible) in [("left", self.left_visible), ("right", self.right_visible)] {
+            if let Some(d) = object.get_mut(dock).and_then(Value::as_object_mut) {
+                if visible {
+                    d.shift_remove("collapsed");
+                } else {
+                    d.insert("collapsed".into(), json!(true));
+                }
+            }
+        }
+        object.insert("lastOpenFiles".into(), json!(self.last_open_files));
+        layout
+    }
+
+    /// Writes `workspace.json` back if the session changed the layout.
+    /// Called on the way out, where Obsidian writes it.
+    pub fn save_layout(&mut self, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let fresh = self.layout_json();
+        if self.layout.as_ref() == Some(&fresh) {
+            return;
+        }
+        if let Err(err) = state.vault().write_config("workspace.json", &fresh) {
+            self.report(format!("workspace.json could not be written: {err}"), cx);
+            return;
+        }
+        self.layout = Some(fresh);
+    }
+
+    /// Everything that has to reach the disk before the app goes away: the
+    /// note's unsaved edits and the layout.
+    pub fn on_quit(&mut self, cx: &mut Context<Self>) {
+        self.flush_save(cx);
+        self.save_layout(cx);
+    }
+
     // ----- the control socket ----------------------------------------------------
 
     /// The whole shell as JSON, for the control socket's `state` method: a
@@ -3625,6 +4259,15 @@ impl Workspace {
             rows,
         );
         file.insert("history_ix".into(), json!(self.history_ix));
+
+        let tabs = json!({
+            "active": self.active_tab,
+            "items": self
+                .tab_snapshots()
+                .iter()
+                .map(|t| json!({"path": t.path, "mode": t.mode.as_str(), "title": t.title()}))
+                .collect::<Vec<Value>>(),
+        });
 
         let mut left = Map::new();
         left.insert("visible".into(), json!(self.left_visible));
@@ -3684,6 +4327,7 @@ impl Workspace {
         json!({
             "vault": Value::Object(vault),
             "file": Value::Object(file),
+            "tabs": tabs,
             "docks": {"left": Value::Object(left), "right": Value::Object(right)},
             "modal": self.describe_modal(rows, cx),
             "editor": self.editor.read(cx).describe(text, cx),
@@ -4537,6 +5181,161 @@ fn prune_history(history: &mut Vec<String>, ix: usize, path: &str) -> usize {
     cursor.min(history.len())
 }
 
+/// Every `leaf` node under `node`, depth first, in the order Obsidian
+/// lays them out.
+fn collect_leaves(node: &Value, out: &mut Vec<Value>) {
+    if node.get("type").and_then(Value::as_str) == Some("leaf") {
+        out.push(node.clone());
+        return;
+    }
+    if let Some(children) = node.get("children").and_then(Value::as_array) {
+        for child in children {
+            collect_leaves(child, out);
+        }
+    }
+}
+
+/// How many `tabs` groups `node` holds.
+fn count_tab_groups(node: &Value) -> usize {
+    let own = usize::from(node.get("type").and_then(Value::as_str) == Some("tabs"));
+    own + node
+        .get("children")
+        .and_then(Value::as_array)
+        .map(|c| c.iter().map(count_tab_groups).sum())
+        .unwrap_or(0)
+}
+
+/// The first `tabs` group under `node`, to put the leaves in.
+fn find_tab_group(node: &mut Value) -> Option<&mut Map<String, Value>> {
+    if node.get("type").and_then(Value::as_str) == Some("tabs") {
+        return node.as_object_mut();
+    }
+    let children = node.get_mut("children")?.as_array_mut()?;
+    children.iter_mut().find_map(find_tab_group)
+}
+
+/// The view type of the sidebar's current tab: the `tabs` group's
+/// `currentTab` child (the first when the key is absent).
+fn dock_current_view(layout: &Value, dock: &str) -> Option<String> {
+    let mut groups = Vec::new();
+    fn find_groups<'a>(node: &'a Value, out: &mut Vec<&'a Value>) {
+        if node.get("type").and_then(Value::as_str) == Some("tabs") {
+            out.push(node);
+        }
+        if let Some(children) = node.get("children").and_then(Value::as_array) {
+            for child in children {
+                find_groups(child, out);
+            }
+        }
+    }
+    find_groups(layout.get(dock)?, &mut groups);
+    let group = groups.first()?;
+    let ix = group.get("currentTab").and_then(Value::as_u64).unwrap_or(0) as usize;
+    let leaf = group.get("children")?.as_array()?.get(ix)?;
+    leaf.get("state")?.get("type")?.as_str().map(str::to_string)
+}
+
+/// A fresh leaf id in Obsidian's shape: sixteen hex digits.
+fn leaf_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let mut x = nanos
+        ^ (COUNTER
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15));
+    x ^= x >> 30;
+    x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x ^= x >> 27;
+    x = x.wrapping_mul(0x94D0_49BB_1331_11EB);
+    x ^= x >> 31;
+    format!("{x:016x}")
+}
+
+/// The `workspace.json` leaf for a tab: the one it was restored from with
+/// its state brought up to date, or a new one.
+fn leaf_json(tab: &Tab) -> Value {
+    let (mode, source) = match tab.mode {
+        ViewMode::Reading => ("preview", false),
+        ViewMode::Source => ("source", true),
+        ViewMode::LivePreview | ViewMode::Graph => ("source", false),
+    };
+    let title = tab.title();
+    let mut leaf = tab
+        .leaf
+        .clone()
+        .filter(|l| {
+            let file = l
+                .get("state")
+                .and_then(|s| s.get("state"))
+                .and_then(|s| s.get("file"))
+                .and_then(Value::as_str);
+            let view = l
+                .get("state")
+                .and_then(|s| s.get("type"))
+                .and_then(Value::as_str);
+            match (&tab.path, tab.mode) {
+                (Some(p), _) => file == Some(p.as_str()),
+                (None, ViewMode::Graph) => view == Some("graph"),
+                (None, _) => view == Some("empty"),
+            }
+        })
+        .unwrap_or_else(|| match (&tab.path, tab.mode) {
+            (Some(p), _) => json!({
+                "id": leaf_id(),
+                "type": "leaf",
+                "state": {
+                    "type": leaf_view_type(p),
+                    "state": {"file": p},
+                    "icon": "lucide-file",
+                    "title": title,
+                },
+            }),
+            (None, ViewMode::Graph) => json!({
+                "id": leaf_id(),
+                "type": "leaf",
+                "state": {"type": "graph", "state": {}, "icon": "lucide-git-fork", "title": title},
+            }),
+            (None, _) => json!({
+                "id": leaf_id(),
+                "type": "leaf",
+                "state": {"type": "empty", "state": {}, "icon": "lucide-file", "title": title},
+            }),
+        });
+    if let Some(path) = &tab.path {
+        if leaf_view_type(path) == "markdown" {
+            if let Some(inner) = leaf
+                .get_mut("state")
+                .and_then(|s| s.get_mut("state"))
+                .and_then(Value::as_object_mut)
+            {
+                inner.insert("mode".into(), json!(mode));
+                inner.insert("source".into(), json!(source));
+            }
+        }
+        if let Some(state) = leaf.get_mut("state").and_then(Value::as_object_mut) {
+            state.insert("title".into(), json!(title));
+        }
+    }
+    leaf
+}
+
+/// The leaf view type Obsidian gives a file of this kind.
+fn leaf_view_type(path: &str) -> &'static str {
+    match FileKind::from_path(path) {
+        FileKind::Markdown => "markdown",
+        FileKind::Image => "image",
+        FileKind::Pdf => "pdf",
+        FileKind::Canvas => "canvas",
+        FileKind::Audio => "audio",
+        FileKind::Video => "video",
+        _ => "markdown",
+    }
+}
+
 fn empty_pane(text: &'static str, theme: &Theme) -> gpui::AnyElement {
     div()
         .p_3()
@@ -4637,7 +5436,7 @@ impl Render for Workspace {
                         d.child(div().text_color(theme.text_muted).child(crumbs.clone()))
                             .child(div().text_color(theme.text_muted).child("/"))
                     })
-                    .child(div().text_color(theme.text).child(title)),
+                    .child(div().text_color(theme.text).child(title.clone())),
             )
             .child(
                 div()
@@ -4684,6 +5483,15 @@ impl Render for Workspace {
             self.render_main(&theme, cx)
         };
 
+        let wanted_title: SharedString = match &self.current {
+            Some(_) => format!("{title} - {} - ", self.vault_name).into(),
+            None => format!("{} - ", self.vault_name).into(),
+        };
+        if self.window_title != wanted_title {
+            window.set_window_title(&wanted_title);
+            self.window_title = wanted_title;
+        }
+
         let main = div()
             .flex()
             .flex_col()
@@ -4691,6 +5499,7 @@ impl Render for Workspace {
             .min_w_0()
             .h_full()
             .overflow_hidden()
+            .child(self.render_tab_strip(&theme, cx))
             .child(header)
             .child(div().flex_1().overflow_hidden().child(main_body));
 
@@ -5030,6 +5839,136 @@ mod tests {
     /// A deleted note leaves the history, so back and forward cannot land
     /// on a file the vault no longer has. Entries before the cursor take it
     /// back with them; the notes it can still reach do not change.
+    fn leaf(id: &str, file: &str, mode: &str, source: bool) -> Value {
+        json!({
+            "id": id,
+            "type": "leaf",
+            "state": {
+                "type": "markdown",
+                "state": {"file": file, "mode": mode, "source": source},
+                "icon": "lucide-file",
+                "title": file.rsplit('/').next().unwrap().trim_end_matches(".md"),
+                "pinned": true,
+            },
+        })
+    }
+
+    #[test]
+    fn a_restored_leaf_is_written_back_as_it_was_read() {
+        let read = leaf("a1072f377b3d1c69", "Sub/Note.md", "source", false);
+        let tab = Tab {
+            path: Some("Sub/Note.md".into()),
+            mode: ViewMode::LivePreview,
+            history: vec!["Sub/Note.md".into()],
+            history_ix: 1,
+            leaf: Some(read.clone()),
+        };
+        assert_eq!(leaf_json(&tab), read);
+    }
+
+    #[test]
+    fn a_mode_change_rewrites_only_the_mode_keys() {
+        let read = leaf("a1072f377b3d1c69", "Note.md", "source", false);
+        let tab = Tab {
+            path: Some("Note.md".into()),
+            mode: ViewMode::Reading,
+            history: Vec::new(),
+            history_ix: 0,
+            leaf: Some(read.clone()),
+        };
+        let written = leaf_json(&tab);
+        assert_eq!(written["id"], read["id"]);
+        assert_eq!(written["state"]["pinned"], json!(true));
+        assert_eq!(written["state"]["state"]["mode"], json!("preview"));
+        assert_eq!(written["state"]["state"]["source"], json!(false));
+        let tab = Tab {
+            mode: ViewMode::Source,
+            ..tab
+        };
+        let written = leaf_json(&tab);
+        assert_eq!(written["state"]["state"]["mode"], json!("source"));
+        assert_eq!(written["state"]["state"]["source"], json!(true));
+    }
+
+    #[test]
+    fn a_tab_that_moved_to_another_note_gets_a_fresh_leaf() {
+        let read = leaf("a1072f377b3d1c69", "Old.md", "source", false);
+        let tab = Tab {
+            path: Some("New.md".into()),
+            mode: ViewMode::LivePreview,
+            history: Vec::new(),
+            history_ix: 0,
+            leaf: Some(read),
+        };
+        let written = leaf_json(&tab);
+        let id = written["id"].as_str().unwrap();
+        assert_eq!(id.len(), 16);
+        assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(id, "a1072f377b3d1c69");
+        assert_eq!(written["state"]["type"], json!("markdown"));
+        assert_eq!(written["state"]["state"]["file"], json!("New.md"));
+        assert_eq!(written["state"]["title"], json!("New"));
+        assert!(written["state"].get("pinned").is_none());
+    }
+
+    #[test]
+    fn an_empty_tab_and_a_graph_tab_write_their_own_leaf_types() {
+        let empty = leaf_json(&Tab::empty(ViewMode::LivePreview));
+        assert_eq!(empty["state"]["type"], json!("empty"));
+        assert_eq!(empty["state"]["title"], json!("New tab"));
+        let graph = leaf_json(&Tab::empty(ViewMode::Graph));
+        assert_eq!(graph["state"]["type"], json!("graph"));
+        assert_eq!(graph["state"]["icon"], json!("lucide-git-fork"));
+    }
+
+    #[test]
+    fn leaves_are_collected_depth_first_across_groups() {
+        let layout = json!({
+            "type": "split",
+            "children": [
+                {"type": "tabs", "children": [leaf("a", "A.md", "source", false)]},
+                {"type": "split", "children": [
+                    {"type": "tabs", "children": [leaf("b", "B.md", "preview", false)]}
+                ]},
+            ],
+        });
+        let mut leaves = Vec::new();
+        collect_leaves(&layout, &mut leaves);
+        let ids: Vec<&str> = leaves.iter().map(|l| l["id"].as_str().unwrap()).collect();
+        assert_eq!(ids, ["a", "b"]);
+        assert_eq!(count_tab_groups(&layout), 2);
+        let mut single = json!({"type": "split", "children": [{"type": "tabs", "children": []}]});
+        assert_eq!(count_tab_groups(&single), 1);
+        assert!(find_tab_group(&mut single).is_some());
+    }
+
+    #[test]
+    fn a_docks_current_tab_is_the_leaf_current_tab_points_at() {
+        let layout = json!({
+            "left": {"type": "split", "children": [{
+                "type": "tabs",
+                "currentTab": 1,
+                "children": [
+                    {"type": "leaf", "state": {"type": "file-explorer"}},
+                    {"type": "leaf", "state": {"type": "search"}},
+                ],
+            }]},
+            "right": {"type": "split", "children": [{
+                "type": "tabs",
+                "children": [{"type": "leaf", "state": {"type": "backlink"}}],
+            }]},
+        });
+        assert_eq!(
+            dock_current_view(&layout, "left").as_deref(),
+            Some("search")
+        );
+        assert_eq!(
+            dock_current_view(&layout, "right").as_deref(),
+            Some("backlink")
+        );
+        assert_eq!(dock_current_view(&layout, "main"), None);
+    }
+
     #[test]
     fn prune_history_forgets_a_deleted_note() {
         let mut h = history(&["A.md", "B.md", "C.md"]);

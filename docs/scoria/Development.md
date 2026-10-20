@@ -418,7 +418,8 @@ Nothing that crosses the socket may panic.
 **The state dump.** `state` answers one object in which every key is always
 present and absence is `null`, so a driver can index into it without guarding
 each step. `vault` is the root, name and load state; `file` the open path, mode,
-dirty flag and tab history; `docks` the explorer's rows and the search pane's
+dirty flag and tab history; `tabs` the strip — each tab's path, mode and
+title, and which is active; `docks` the explorer's rows and the search pane's
 query, counts and results on the left, outline, backlinks, outgoing links and
 tags on the right; `modal` which of the switcher, palette, Settings, prompt or
 chooser is up and its query, selection and row labels; `editor` the cursor,
