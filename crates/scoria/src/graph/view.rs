@@ -94,6 +94,12 @@ pub struct GraphView {
     building: bool,
     /// The user zoomed or panned; stop auto-fitting the view.
     user_adjusted: bool,
+    /// A zoom read from `graph.json`: the auto-fit then only centers the
+    /// layout and leaves the scale alone.
+    pinned_scale: Option<f32>,
+    /// The `graph.json` scale the camera has already acted on, so that a
+    /// refresh does not keep reinstating a zoom the user has reset away from.
+    adopted_scale: Option<f32>,
 }
 
 impl EventEmitter<GraphEvent> for GraphView {}
@@ -126,13 +132,19 @@ impl GraphView {
             generation: 0,
             building: false,
             user_adjusted: false,
+            pinned_scale: None,
+            adopted_scale: None,
         }
     }
 
     pub fn set_state(&mut self, state: Arc<VaultState>, cx: &mut Context<Self>) {
         self.config = state.vault().graph_config().unwrap_or_default();
-        if let Some(scale) = self.config.scale {
-            self.scale = scale.clamp(0.1, 8.0);
+        if adopts_saved_scale(self.config.scale, self.adopted_scale, self.user_adjusted) {
+            self.adopted_scale = self.config.scale;
+            self.pinned_scale = saved_pin(self.config.scale);
+            if let Some(scale) = self.pinned_scale {
+                self.scale = scale;
+            }
         }
         self.state = Some(state);
         self.rebuild(cx);
@@ -144,6 +156,8 @@ impl GraphView {
         self.current = path.clone();
         if self.local.is_some() && changed {
             self.local = path;
+            // A local graph around another note is a new view: frame it.
+            self.user_adjusted = false;
             self.rebuild(cx);
         } else if changed {
             cx.notify();
@@ -154,6 +168,7 @@ impl GraphView {
         let want = if local { self.current.clone() } else { None };
         if self.local != want || (local && self.current.is_none()) {
             self.local = want;
+            self.user_adjusted = false;
             self.rebuild(cx);
         }
     }
@@ -247,29 +262,28 @@ impl GraphView {
         self.neighbors = Arc::new(built.neighbors);
         self.hovered = None;
         self.layout = Arc::new(Mutex::new(layout));
-        self.user_adjusted = false;
+        // The loop over the old layout breaks on its next tick, when it sees
+        // the swap; clearing the flag here is what lets the new layout get a
+        // loop of its own, instead of inheriting a `running` that is already
+        // nobody's.
+        self.running = false;
         self.start_simulation(cx);
         cx.notify();
     }
 
     /// Scales and centers the view on the whole layout.
     fn fit(&mut self) {
-        let (x0, y0, x1, y1) = self
+        let world = self
             .layout
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .bounds();
         let w = f32::from(self.bounds.size.width);
         let h = f32::from(self.bounds.size.height);
-        if w <= 0.0 || h <= 0.0 {
-            return;
+        if let Some((scale, offset)) = frame(w, h, world, self.pinned_scale) {
+            self.scale = scale;
+            self.offset = offset;
         }
-        let bw = (x1 - x0).max(1.0) + 120.0;
-        let bh = (y1 - y0).max(1.0) + 120.0;
-        self.scale = (w / bw).min(h / bh).clamp(0.05, 1.5);
-        let cx = (x0 + x1) / 2.0;
-        let cy = (y0 + y1) / 2.0;
-        self.offset = point(-cx * self.scale, -cy * self.scale);
     }
 
     fn start_simulation(&mut self, cx: &mut Context<Self>) {
@@ -398,6 +412,12 @@ impl GraphView {
 
     fn reset_view(&mut self, _: &ResetView, _: &mut Window, cx: &mut Context<Self>) {
         self.user_adjusted = false;
+        // Fit to the window is what the command promises, so a zoom carried
+        // over from graph.json gives way to it. Counting that zoom as adopted
+        // is what makes the reset last: the vault refresh behind the next
+        // note saved or created would otherwise pin the camera right back.
+        self.pinned_scale = None;
+        self.adopted_scale = self.config.scale;
         self.fit();
         cx.notify();
     }
@@ -520,6 +540,45 @@ impl GraphView {
         self.config.show_tags = Some(now);
         self.rebuild(cx);
     }
+}
+
+/// The scale and pan that frame the world rectangle `(x0, y0, x1, y1)` in an
+/// element `w` by `h` pixels, or `None` while the element has no size yet. A
+/// `pinned` zoom is kept as it is and only the centering is computed.
+/// The zoom a `graph.json` `scale` pins the camera to. Obsidian writes
+/// `scale: 1` into every graph.json it creates, so only a value away from
+/// that default is a zoom the user chose; honoring 1 would pin a big vault at
+/// a scale that leaves most of it off screen.
+fn saved_pin(saved: Option<f32>) -> Option<f32> {
+    saved
+        .map(|scale| scale.clamp(0.1, 8.0))
+        .filter(|scale| (scale - 1.0).abs() > 0.001)
+}
+
+/// Whether a refresh takes its zoom from `graph.json`. The vault refresh runs
+/// on every change, so the saved zoom is adopted once — the first refresh
+/// that sees that value — and a camera the user has taken over, or reset with
+/// `Ctrl+0`, is left alone afterwards. A value that has since changed on disk
+/// is a fresh intention and is adopted again.
+fn adopts_saved_scale(saved: Option<f32>, adopted: Option<f32>, user_adjusted: bool) -> bool {
+    !user_adjusted && saved != adopted
+}
+
+fn frame(
+    w: f32,
+    h: f32,
+    (x0, y0, x1, y1): (f32, f32, f32, f32),
+    pinned: Option<f32>,
+) -> Option<(f32, Point<f32>)> {
+    if w <= 0.0 || h <= 0.0 {
+        return None;
+    }
+    let bw = (x1 - x0).max(1.0) + 120.0;
+    let bh = (y1 - y0).max(1.0) + 120.0;
+    let scale = pinned.unwrap_or_else(|| (w / bw).min(h / bh).clamp(0.05, 1.5));
+    let cx = (x0 + x1) / 2.0;
+    let cy = (y0 + y1) / 2.0;
+    Some((scale, point(-cx * scale, -cy * scale)))
 }
 
 /// Builds the node and edge lists for the current filters.
@@ -765,7 +824,7 @@ fn finish(
     let mut out_nodes = Vec::new();
     for (i, mut node) in nodes.into_iter().enumerate() {
         let kept = keep.as_ref().is_none_or(|k| k.contains(&i));
-        let orphan = degree[i] == 0 && node.kind == NodeKind::Note;
+        let orphan = degree[i] == 0;
         if !kept || (orphan && !show_orphans) {
             continue;
         }
@@ -845,7 +904,17 @@ impl Render for GraphView {
             .child(
                 canvas(
                     move |bounds, window, cx| {
-                        entity.update(cx, |view, _| view.bounds = bounds);
+                        entity.update(cx, |view, _| {
+                            let sized =
+                                view.bounds.size.width > px(0.) && view.bounds.size.height > px(0.);
+                            view.bounds = bounds;
+                            // fit() does nothing until the element has a size,
+                            // so a layout that settles before the first paint
+                            // would never be framed at all.
+                            if !sized && !view.user_adjusted {
+                                view.fit();
+                            }
+                        });
                         let _ = window;
                     },
                     move |bounds, _, window, cx| {
@@ -1088,5 +1157,100 @@ impl Render for GraphView {
                             .map(|l| div().text_size(px(11.)).text_color(theme.text).child(l)),
                     ),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn node(id: &str, kind: NodeKind) -> Node {
+        Node {
+            id: id.to_string(),
+            label: id.to_string().into(),
+            kind,
+            degree: 0,
+            color: None,
+        }
+    }
+
+    /// Obsidian's Orphans filter is about a node's degree, not about whether
+    /// it is a note: an attachment nothing links to goes with the rest.
+    #[test]
+    fn orphans_off_drops_unlinked_attachments_too() {
+        let nodes = vec![
+            node("Linker.md", NodeKind::Note),
+            node("used.png", NodeKind::Attachment),
+            node("lonely.png", NodeKind::Attachment),
+            node("Alone.md", NodeKind::Note),
+        ];
+        let built = finish(nodes, vec![(0, 1)], None, false);
+        let kept: Vec<&str> = built.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(kept, ["Linker.md", "used.png"]);
+        assert_eq!(built.edges, [(0, 1)]);
+    }
+
+    #[test]
+    fn orphans_on_keeps_every_node() {
+        let nodes = vec![
+            node("Linker.md", NodeKind::Note),
+            node("used.png", NodeKind::Attachment),
+            node("lonely.png", NodeKind::Attachment),
+            node("Alone.md", NodeKind::Note),
+        ];
+        let built = finish(nodes, vec![(0, 1)], None, true);
+        assert_eq!(built.nodes.len(), 4);
+        assert_eq!(built.nodes[2].degree, 0);
+    }
+
+    #[test]
+    fn a_pinned_zoom_survives_the_fit() {
+        let (scale, offset) = frame(800.0, 600.0, (-100.0, -50.0, 100.0, 50.0), Some(4.0)).unwrap();
+        assert_eq!(scale, 4.0);
+        assert_eq!(offset, point(0.0, 0.0));
+        // Off-center bounds still get centered, at the pinned scale.
+        let (scale, offset) = frame(800.0, 600.0, (0.0, 0.0, 200.0, 100.0), Some(4.0)).unwrap();
+        assert_eq!(scale, 4.0);
+        assert_eq!(offset, point(-400.0, -200.0));
+    }
+
+    #[test]
+    fn without_a_pinned_zoom_the_layout_is_framed() {
+        let (scale, offset) = frame(800.0, 600.0, (-500.0, -500.0, 500.0, 500.0), None).unwrap();
+        assert!((scale - 600.0 / 1120.0).abs() < 1e-6, "{scale}");
+        assert_eq!(offset, point(0.0, 0.0));
+    }
+
+    /// Obsidian's own graph.json always carries `scale`, `1` when it created
+    /// the file, so only a value away from 1 is a zoom to honor.
+    #[test]
+    fn only_a_scale_away_from_the_default_pins_the_camera() {
+        assert_eq!(saved_pin(None), None);
+        assert_eq!(saved_pin(Some(1.0)), None);
+        assert_eq!(saved_pin(Some(4.0)), Some(4.0));
+        assert_eq!(saved_pin(Some(99.0)), Some(8.0));
+        assert_eq!(saved_pin(Some(0.0)), Some(0.1));
+    }
+
+    /// A vault change refreshes the graph, and the refresh must not undo
+    /// Ctrl+0 by pinning the camera back to the zoom in graph.json.
+    #[test]
+    fn a_reset_outlives_the_next_refresh() {
+        // First sight of the saved zoom: adopt it.
+        assert!(adopts_saved_scale(Some(4.0), None, false));
+        // Every later refresh leaves the camera where it is, whether the
+        // reset cleared the pin or the user zoomed by hand.
+        assert!(!adopts_saved_scale(Some(4.0), Some(4.0), false));
+        assert!(!adopts_saved_scale(Some(4.0), None, true));
+        // A vault with no saved zoom never adopts one.
+        assert!(!adopts_saved_scale(None, None, false));
+        // The file changed under us: that is a new intention.
+        assert!(adopts_saved_scale(Some(2.0), Some(4.0), false));
+    }
+
+    #[test]
+    fn an_element_with_no_size_yet_is_not_framed() {
+        assert!(frame(0.0, 600.0, (-10.0, -10.0, 10.0, 10.0), None).is_none());
+        assert!(frame(800.0, 0.0, (-10.0, -10.0, 10.0, 10.0), Some(4.0)).is_none());
     }
 }

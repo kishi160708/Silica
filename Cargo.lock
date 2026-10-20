@@ -4878,6 +4878,7 @@ dependencies = [
  "-vault",
  "serde",
  "tempfile",
+ "unicode-segmentation",
 ]
 
 [[package]]

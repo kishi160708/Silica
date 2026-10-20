@@ -103,9 +103,23 @@ pub enum EmbedKind {
     TooDeep,
 }
 
+/// Where a task's `[ ]` marker sits in the note: a zero-based line and the
+/// byte column inside it. The editor's buffer drops a BOM and rewrites
+/// `\r\n`, so a byte offset into the file is not one of its offsets, but
+/// every line of the file is still a line of the buffer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TaskMarker {
+    pub line: usize,
+    pub col: usize,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct RItem {
     pub task: Option<char>,
+    /// Where the three bytes `[`, status, `]` are, for a task of the note
+    /// itself. An item that came out of an embed has none: its bytes
+    /// belong to another file, so clicking it must not write this one.
+    pub marker: Option<TaskMarker>,
     pub number: Option<u64>,
     pub children: Vec<RBlock>,
 }
@@ -129,6 +143,9 @@ pub enum RBlock {
         id: usize,
         language: Option<String>,
         text: String,
+        /// What the copy button writes: the body with `\n` endings and
+        /// exactly one trailing newline removed, as Obsidian's copies.
+        copy: String,
     },
     Html(String),
     Quote(Vec<RBlock>),
@@ -209,6 +226,7 @@ pub fn build_with(
         depth: 0,
         next_id: 0,
         footnotes: FootnoteState::default(),
+        line_starts: None,
     };
     b.footnotes.definitions = collect_definitions(&doc.blocks);
     let starts = doc.blocks.iter().map(|b| b.span.start).collect();
@@ -244,6 +262,7 @@ pub fn build_widgets(
         depth: 0,
         next_id: 0,
         footnotes: FootnoteState::default(),
+        line_starts: None,
     };
     b.footnotes.definitions = collect_definitions(&doc.blocks);
     let mut out = Vec::new();
@@ -253,6 +272,13 @@ pub fn build_widgets(
             // an editable table instead of raw YAML.
             BlockKind::Yaml { .. } => true,
             BlockKind::Table { .. } | BlockKind::Math { .. } => true,
+            // A callout is drawn as the same tinted block the reading view
+            // draws; a cursor inside it still brings its source lines back.
+            BlockKind::Callout { .. } => true,
+            // Only the raw HTML the renderer can actually draw earns a
+            // widget. Anything else -- a comment, a script, a bare `<div>` --
+            // would fold its source lines away to show the same muted text.
+            BlockKind::HtmlBlock { content } => html_images(content).is_some(),
             BlockKind::Paragraph { content } => match content.as_slice() {
                 [one] => matches!(
                     &one.kind,
@@ -297,6 +323,7 @@ fn build_embedded(
         depth,
         next_id: *next_id,
         footnotes: FootnoteState::default(),
+        line_starts: None,
     };
     b.footnotes.definitions = collect_definitions(&doc.blocks);
     let mut out = b.blocks(blocks, false);
@@ -338,9 +365,30 @@ struct Builder<'v> {
     depth: usize,
     next_id: usize,
     footnotes: FootnoteState,
+    /// Where each line of `text` starts, built the first time a task
+    /// marker asks for its position.
+    line_starts: Option<Vec<usize>>,
 }
 
 impl<'v> Builder<'v> {
+    /// The line and column of a byte offset in the note.
+    fn marker_at(&mut self, offset: usize) -> TaskMarker {
+        let text = self.text;
+        let starts = self.line_starts.get_or_insert_with(|| {
+            std::iter::once(0)
+                .chain(text.match_indices('\n').map(|(i, _)| i + 1))
+                .collect()
+        });
+        let line = match starts.binary_search(&offset) {
+            Ok(i) => i,
+            Err(i) => i.saturating_sub(1),
+        };
+        TaskMarker {
+            line,
+            col: offset - starts[line],
+        }
+    }
+
     fn id(&mut self) -> usize {
         self.next_id += 1;
         self.next_id
@@ -364,15 +412,39 @@ impl<'v> Builder<'v> {
                 plain: plain_text(content).trim().to_string(),
             },
             BlockKind::ThematicBreak => RBlock::ThematicBreak,
-            BlockKind::CodeBlock { info, content, .. } => RBlock::Code {
-                id: self.id(),
-                language: info
-                    .as_deref()
-                    .and_then(|i| i.split_whitespace().next())
-                    .map(str::to_string),
-                text: content.trim_end_matches('\n').to_string(),
+            BlockKind::CodeBlock { info, content, .. } => {
+                // Obsidian renders and copies a code block with `\n`
+                // endings whatever the file holds, and its copy button
+                // drops exactly one trailing newline rather than trimming.
+                let body = if content.contains('\r') {
+                    content.replace("\r\n", "\n")
+                } else {
+                    content.to_string()
+                };
+                RBlock::Code {
+                    id: self.id(),
+                    language: info
+                        .as_deref()
+                        .and_then(|i| i.split_whitespace().next())
+                        .map(str::to_string),
+                    text: body.trim_end_matches('\n').to_string(),
+                    copy: body.strip_suffix('\n').unwrap_or(&body).to_string(),
+                }
+            }
+            BlockKind::HtmlBlock { content } => match html_images(content) {
+                // Obsidian resolves a raw `<img src>` like a wikilink target
+                // and renders the run of them as one block, so they go
+                // through the same embeds a markdown image does.
+                Some(imgs) => {
+                    let mut segments = Vec::with_capacity(imgs.len());
+                    for img in imgs {
+                        let embed = self.embed(&img.src, img.alt, img.width, img.height);
+                        segments.push(Segment::Embed(embed));
+                    }
+                    RBlock::Paragraph(segments)
+                }
+                None => RBlock::Html(content.trim_end().to_string()),
             },
-            BlockKind::HtmlBlock { content } => RBlock::Html(content.trim_end().to_string()),
             BlockKind::BlockQuote { children } => RBlock::Quote(self.blocks(children, false)),
             BlockKind::Callout {
                 callout_type,
@@ -442,8 +514,13 @@ impl<'v> Builder<'v> {
                 if let Some(n) = number.as_mut() {
                     *n += 1;
                 }
+                let marker = item
+                    .task_span
+                    .filter(|_| self.depth == 0)
+                    .map(|s| self.marker_at(s.start));
                 RItem {
                     task: item.task,
+                    marker,
                     number: n,
                     children: self.blocks(&item.children, tight),
                 }
@@ -828,6 +905,142 @@ fn size_hint(s: &str) -> Option<(f32, Option<f32>)> {
     Some((w, h))
 }
 
+/// A raw `<img>` of an HTML block, with the attributes Obsidian honours.
+struct HtmlImage {
+    src: String,
+    alt: String,
+    width: Option<f32>,
+    height: Option<f32>,
+}
+
+/// The images of an HTML block that holds nothing but `<img>` tags -- the
+/// shape Obsidian renders as one `div.el-img` rather than as source. A
+/// block with any other content, or an image pointing outside the vault,
+/// gives `None` and keeps its raw text.
+fn html_images(content: &str) -> Option<Vec<HtmlImage>> {
+    let mut out = Vec::new();
+    let mut rest = content.trim();
+    while !rest.is_empty() {
+        let after = match rest.get(..4) {
+            // Only `<img` itself, not `<image>` or some longer tag name.
+            Some(tag) if tag.eq_ignore_ascii_case("<img") => &rest[4..],
+            _ => return None,
+        };
+        if !after.starts_with([' ', '\t', '\n', '\r', '/', '>']) {
+            return None;
+        }
+        let (attrs, tail) = split_tag(after)?;
+        out.push(html_image(attrs)?);
+        rest = tail.trim_start();
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+/// Splits a tag's attributes from the rest of the input at the `>` that
+/// closes it, skipping any inside a quoted value.
+fn split_tag(s: &str) -> Option<(&str, &str)> {
+    let b = s.as_bytes();
+    let mut quote = None;
+    for (i, &c) in b.iter().enumerate() {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => {}
+            None if c == b'"' || c == b'\'' => quote = Some(c),
+            None if c == b'>' => return Some((&s[..i], &s[i + 1..])),
+            None => {}
+        }
+    }
+    None
+}
+
+/// One `<img>`, from the text between `<img` and its `>`.
+fn html_image(attrs: &str) -> Option<HtmlImage> {
+    let mut src = None;
+    let mut alt = String::new();
+    let mut width = None;
+    let mut height = None;
+    for (name, value) in html_attrs(attrs.trim_end().trim_end_matches('/'))? {
+        match name.as_str() {
+            "src" => src = Some(percent_decode(&value).into_owned()),
+            "alt" => alt = value,
+            // A raw dimension is CSS pixels; a `%` or a `calc()` is not
+            // something the embed can carry, so the block stays source.
+            "width" => width = Some(value.parse().ok()?),
+            "height" => height = Some(value.parse().ok()?),
+            _ => {}
+        }
+    }
+    let src = src?;
+    // A remote image is fetched by Obsidian and shown as a link here, the
+    // way a markdown image with a scheme already is.
+    if src.is_empty() || has_scheme(&src) {
+        return None;
+    }
+    Some(HtmlImage {
+        src,
+        alt,
+        width,
+        height,
+    })
+}
+
+/// A tag's attributes as lowercase name and raw value pairs. A malformed
+/// run (an unterminated quote, a value with no name) gives `None`.
+fn html_attrs(s: &str) -> Option<Vec<(String, String)>> {
+    let b = s.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        while i < b.len() && b[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= b.len() {
+            break;
+        }
+        let start = i;
+        while i < b.len() && !b[i].is_ascii_whitespace() && b[i] != b'=' {
+            i += 1;
+        }
+        if i == start {
+            return None;
+        }
+        let name = s[start..i].to_ascii_lowercase();
+        while i < b.len() && b[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let mut value = String::new();
+        if b.get(i) == Some(&b'=') {
+            i += 1;
+            while i < b.len() && b[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            match b.get(i) {
+                Some(&q) if q == b'"' || q == b'\'' => {
+                    i += 1;
+                    let from = i;
+                    while i < b.len() && b[i] != q {
+                        i += 1;
+                    }
+                    if i >= b.len() {
+                        return None;
+                    }
+                    value = s[from..i].to_string();
+                    i += 1;
+                }
+                _ => {
+                    let from = i;
+                    while i < b.len() && !b[i].is_ascii_whitespace() {
+                        i += 1;
+                    }
+                    value = s[from..i].to_string();
+                }
+            }
+        }
+        out.push((name, value));
+    }
+    Some(out)
+}
+
 /// Display text of a wikilink without an alias: `Note`, `Note > Heading`, `Note > ^id`.
 fn wikilink_display(link: &_markdown::LinkText<'_>) -> String {
     let mut parts: Vec<String> = Vec::new();
@@ -1144,6 +1357,165 @@ mod tests {
         assert_eq!(m.starts.len(), 4);
         assert_eq!(m.block_at(0), Some(0));
         assert_eq!(m.block_at(m.starts[2] + 3), Some(2));
+    }
+
+    #[test]
+    fn task_markers_carry_the_line_and_stop_at_an_embed() {
+        let vault = Stub {
+            files: HashMap::from([("Tasks.md", "- [ ] inner\n")]),
+        };
+        let m = build(
+            "Self.md",
+            "---\na: 1\n---\n\n- [ ] alpha\n  - [x] beta\n\n![[Tasks]]\n",
+            &vault,
+        );
+        let RBlock::List { items, .. } = &m.blocks[1] else {
+            panic!("{:?}", m.blocks[1])
+        };
+        assert_eq!(items[0].marker, Some(TaskMarker { line: 4, col: 2 }));
+        let RBlock::List { items: nested, .. } = &items[0].children[1] else {
+            panic!("{:?}", items[0].children)
+        };
+        assert_eq!(nested[0].marker, Some(TaskMarker { line: 5, col: 4 }));
+        // The embedded item's bytes are another file's, so it carries no
+        // marker and the reading view leaves its box inert.
+        let RBlock::Paragraph(segments) = m.blocks.last().unwrap() else {
+            panic!("{:?}", m.blocks.last())
+        };
+        let Segment::Embed(embed) = &segments[0] else {
+            panic!("{:?}", segments[0])
+        };
+        let EmbedKind::Note { blocks, .. } = &embed.kind else {
+            panic!("{:?}", embed.kind)
+        };
+        let RBlock::List { items, .. } = &blocks[0] else {
+            panic!("{blocks:?}")
+        };
+        assert_eq!(items[0].task, Some(' '));
+        assert_eq!(items[0].marker, None);
+    }
+
+    #[test]
+    fn a_code_block_copies_lf_text_with_one_newline_removed() {
+        let m = build("Self.md", "```js\nlet x = 1;\n\n\n```\n", &stub());
+        match &m.blocks[0] {
+            RBlock::Code {
+                language,
+                text,
+                copy,
+                ..
+            } => {
+                assert_eq!(language.as_deref(), Some("js"));
+                assert_eq!(text, "let x = 1;");
+                assert_eq!(copy, "let x = 1;\n\n");
+            }
+            other => panic!("{other:?}"),
+        }
+        // A CRLF file renders and copies as LF, the way Obsidian does,
+        // while the file keeps its own endings.
+        let m = build("Self.md", "```\r\none\r\ntwo\r\n```\r\n", &stub());
+        match &m.blocks[0] {
+            RBlock::Code { text, copy, .. } => {
+                assert_eq!(text, "one\ntwo");
+                assert_eq!(copy, "one\ntwo");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    fn widgets(src: &str, vault: &dyn EmbedSource) -> Vec<Widget> {
+        let doc = parse(src);
+        build_widgets("Self.md", &doc, vault, BuildOptions::default())
+    }
+
+    #[test]
+    fn live_preview_makes_a_callout_a_widget() {
+        let src = "top\n\n> [!warning]- Careful\n> body\n> more\n\n> plain quote\n";
+        let w = widgets(src, &stub());
+        assert_eq!(w.len(), 1, "the plain quote is not a widget: {w:?}");
+        let RBlock::Callout {
+            kind,
+            fold,
+            title,
+            children,
+        } = &w[0].block
+        else {
+            panic!("{:?}", w[0].block)
+        };
+        assert_eq!(*kind, "warning");
+        assert_eq!(*fold, Some(true), "`-` opens collapsed, as in Obsidian");
+        assert_eq!(title.text, "Careful");
+        assert_eq!(children.len(), 1);
+        // The span covers every line of the callout, so Live Preview folds
+        // all three away behind the widget.
+        assert_eq!(
+            &src[w[0].span.clone()],
+            "> [!warning]- Careful\n> body\n> more"
+        );
+    }
+
+    #[test]
+    fn an_image_html_block_becomes_an_image_widget() {
+        let w = widgets("<img src=\"pic.png\" width=\"100\" alt=\"A\">\n", &stub());
+        assert_eq!(w.len(), 1);
+        let RBlock::Paragraph(segs) = &w[0].block else {
+            panic!("{:?}", w[0].block)
+        };
+        match &segs[0] {
+            Segment::Embed(Embed {
+                kind: EmbedKind::Image(path),
+                alt,
+                width,
+                height,
+                ..
+            }) => {
+                assert_eq!(path, &PathBuf::from("/vault/pic.png"));
+                assert_eq!(alt, "A");
+                assert_eq!((*width, *height), (Some(100.0), None));
+            }
+            other => panic!("{other:?}"),
+        }
+        // Consecutive raw imgs are one block and render as one run of
+        // images; a percent-escaped src is the vault path it decodes to.
+        let m = build(
+            "Self.md",
+            "<img src='pic.png'/>\n<img src=pic%2Epng height=50>\n",
+            &stub(),
+        );
+        let RBlock::Paragraph(segs) = &m.blocks[0] else {
+            panic!("{:?}", m.blocks[0])
+        };
+        assert_eq!(segs.len(), 2);
+        assert!(matches!(
+            &segs[1],
+            Segment::Embed(Embed {
+                kind: EmbedKind::Image(_),
+                height: Some(h),
+                ..
+            }) if *h == 50.0
+        ));
+    }
+
+    #[test]
+    fn other_html_blocks_stay_source() {
+        // A comment, a script and a remote image all reach the builder as
+        // the same `HtmlBlock`, and none of them is something the renderer
+        // can draw, so they keep their raw text and never fold their lines.
+        for src in [
+            "<!-- a comment -->\n",
+            "<script>window.x = 1</script>\n",
+            "<img src=\"https://e.com/a.png\">\n",
+            "<img src=\"pic.png\" width=\"50%\">\n",
+            "<div>mixed</div>\n<img src=\"pic.png\">\n",
+        ] {
+            assert!(widgets(src, &stub()).is_empty(), "{src:?} became a widget");
+            let m = build("Self.md", src, &stub());
+            assert!(
+                matches!(&m.blocks[0], RBlock::Html(_)),
+                "{src:?} -> {:?}",
+                m.blocks[0]
+            );
+        }
     }
 
     #[test]

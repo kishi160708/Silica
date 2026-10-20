@@ -102,7 +102,13 @@ impl Prompt {
         self.spec = spec;
         self.input.update(cx, |i, cx| {
             i.set_placeholder(self.spec.placeholder.clone());
+            let prefilled = !initial.is_empty();
             i.set_text(initial, cx);
+            // Rename opens on the current name, and Obsidian's inline rename
+            // selects the whole basename so the first keystroke replaces it.
+            if prefilled {
+                i.select_all(cx);
+            }
         });
         window.focus(&self.focus_handle(cx), cx);
         self.refresh(cx);
@@ -246,8 +252,13 @@ impl Render for Prompt {
         let theme = cx.global::<Theme>().clone();
         let count = self.filtered.len();
         let rows = (count.min(10) as f32) * 30.;
-        let button = |label: SharedString, primary: bool, theme: &Theme| {
+        // The id and the click listener belong on the painted button rather
+        // than on a bare wrapper around it: gpui hit-tests the element that
+        // registered the listener, and the wrapper's box is not the box the
+        // user aims at.
+        let button = |id: &'static str, label: SharedString, primary: bool, theme: &Theme| {
             div()
+                .id(id)
                 .px_3()
                 .py_1()
                 .rounded_md()
@@ -264,7 +275,13 @@ impl Render for Prompt {
         div()
             .id("prompt")
             .key_context("Prompt")
-            .track_focus(&self.focus_handle)
+            // gpui focuses a tracked handle on every mouse-down inside the
+            // element, so this has to be the same handle `Focusable` hands
+            // out: tracking the box's own handle while the field held the
+            // keyboard meant a click anywhere in the prompt — on the field
+            // itself, on a button — took the keyboard away from the field and
+            // left the prompt typeable only after Escape and a fresh F2.
+            .track_focus(&self.focus_handle(cx))
             .on_action(cx.listener(Self::confirm))
             .on_action(cx.listener(Self::dismiss))
             .w(px(480.))
@@ -313,22 +330,16 @@ impl Render for Prompt {
                     .gap_2()
                     .mt_1()
                     .children(self.spec.secondary.clone().map(|label| {
-                        div()
-                            .id("prompt-secondary")
+                        button("prompt-secondary", label, false, &theme)
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(PromptEvent::Secondary)))
-                            .child(button(label, false, &theme))
                     }))
                     .child(
-                        div()
-                            .id("prompt-cancel")
-                            .on_click(cx.listener(|_, _, _, cx| cx.emit(PromptEvent::Cancel)))
-                            .child(button("Cancel".into(), false, &theme)),
+                        button("prompt-cancel", "Cancel".into(), false, &theme)
+                            .on_click(cx.listener(|_, _, _, cx| cx.emit(PromptEvent::Cancel))),
                     )
                     .child(
-                        div()
-                            .id("prompt-confirm")
-                            .on_click(cx.listener(|this, _, _, cx| this.submit(cx)))
-                            .child(button(self.spec.confirm.clone(), true, &theme)),
+                        button("prompt-confirm", self.spec.confirm.clone(), true, &theme)
+                            .on_click(cx.listener(|this, _, _, cx| this.submit(cx))),
                     ),
             )
     }

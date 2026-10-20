@@ -132,30 +132,29 @@ pub fn fuzzy_match(query: &str, candidate: &str) -> Option<FuzzyMatch> {
 /// Every whitespace-separated token of `query` must be a case-insensitive
 /// substring of `candidate`; returns the first occurrence of each.
 pub fn simple_search(query: &str, candidate: &str) -> Option<Vec<Range<usize>>> {
-    let lower = candidate.to_lowercase();
-    // Lowercasing can change byte lengths; map through char indices.
-    let same_len = lower.len() == candidate.len();
+    // Lowercasing changes byte widths and can turn one character into
+    // several (`\u{130}` into `i` and a combining dot), so a hit found in the
+    // lowercased copy cannot be carried back by arithmetic: every byte of
+    // the copy remembers the candidate character it came from instead.
+    let mut lower = String::with_capacity(candidate.len());
+    let mut source: Vec<Range<usize>> = Vec::with_capacity(candidate.len());
+    for (at, c) in candidate.char_indices() {
+        lower.extend(c.to_lowercase());
+        source.resize(lower.len(), at..at + c.len_utf8());
+    }
     let mut ranges = Vec::new();
     for token in query.split_whitespace() {
         let t = token.to_lowercase();
         let at = lower.find(&t)?;
-        if same_len {
-            ranges.push(at..at + t.len());
-        } else {
-            let chars_before = lower[..at].chars().count();
-            let chars_len = t.chars().count();
-            let start = candidate
-                .char_indices()
-                .nth(chars_before)
-                .map(|(i, _)| i)
-                .unwrap_or(candidate.len());
-            let end = candidate
-                .char_indices()
-                .nth(chars_before + chars_len)
-                .map(|(i, _)| i)
-                .unwrap_or(candidate.len());
-            ranges.push(start..end);
-        }
+        // A hit that covers part of an expansion highlights the whole
+        // character behind it rather than half of one.
+        let start = source.get(at).map_or(candidate.len(), |r| r.start);
+        let end = source[at..at + t.len()]
+            .iter()
+            .map(|r| r.end)
+            .max()
+            .unwrap_or(start);
+        ranges.push(start..end);
     }
     ranges.sort_by_key(|r| r.start);
     Some(ranges)
@@ -207,5 +206,14 @@ mod tests {
         assert_eq!(simple_search("zzz", "File System"), None);
         assert_eq!(simple_search("ß", "Straße"), Some(vec![4..6]));
         assert_eq!(simple_search("", "x"), Some(vec![]));
+        // `İ` lowercases into two characters, so a hit after it lands a
+        // character early unless the offsets are carried rather than counted.
+        let city = "İstanbul";
+        let hit = simple_search("stan", city).unwrap();
+        assert_eq!(&city[hit[0].clone()], "stan");
+        // A hit on the combining dot that expansion produced highlights the
+        // character it came from.
+        let dot = simple_search("̇", city).unwrap();
+        assert_eq!(&city[dot[0].clone()], "İ");
     }
 }

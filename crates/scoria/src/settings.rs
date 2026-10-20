@@ -941,6 +941,12 @@ impl SettingsView {
         if let Some(tab) = tab {
             self.tab = tab;
         }
+        // The view outlives the modal, so a dropdown or a text field left
+        // open by the last session would come back expanded. Every way out
+        // of the modal commits the field first, so there is nothing to write
+        // here, only state to drop.
+        self.menu = None;
+        self.editing = None;
         self.focus_tab(window, cx);
         cx.notify();
     }
@@ -966,23 +972,67 @@ impl SettingsView {
     }
 
     fn select_tab(&mut self, tab: Tab, window: &mut Window, cx: &mut Context<Self>) {
+        // A row that is no longer on screen cannot be committed or closed by
+        // the user, so leaving the tab is one of the moments that writes.
+        self.dismiss_open_controls(cx);
         self.tab = tab;
         self.focus_tab(window, cx);
         cx.notify();
     }
 
     fn close_action(&mut self, _: &Close, _: &mut Window, cx: &mut Context<Self>) {
+        self.dismiss_open_controls(cx);
         cx.emit(SettingsEvent::Close);
+    }
+
+    /// What a click that lands anywhere but on the control itself leaves
+    /// behind: nothing. Obsidian's dropdown is a native `<select>`, which no
+    /// outside click can survive, and its text settings write on every
+    /// keystroke, so moving on is never a way to lose what was typed.
+    fn dismiss_open_controls(&mut self, cx: &mut Context<Self>) {
+        let had_menu = self.menu.take().is_some();
+        if self.editing.is_some() {
+            self.commit_field(cx);
+        } else if had_menu {
+            cx.notify();
+        }
+    }
+
+    /// Makes the change a click on a control asks for, after the text
+    /// field that click also closed has made its own.
+    ///
+    /// Every [`SettingChange`] carries a whole config file read from the
+    /// vault as it stands, and the workspace writes the file for each one.
+    /// A click on a control while a field is open changes two settings, so
+    /// emitting both from the one click would build both from the config as
+    /// it was before either landed, and the second write would drop the
+    /// first. Committing the field now and deferring the control's own
+    /// change puts that change after the field's write, which is what it has
+    /// to be built on top of.
+    fn after_open_field(
+        &mut self,
+        window: &Window,
+        cx: &mut Context<Self>,
+        change: impl FnOnce(&mut Self, &mut Context<Self>) + 'static,
+    ) {
+        if self.editing.is_some() {
+            self.commit_field(cx);
+            cx.defer_in(window, |this, _, cx| change(this, cx));
+            return;
+        }
+        change(self, cx);
     }
 
     /// A click on a toggle: ask the workspace to write the flipped value.
     /// The modal redraws from the vault's config once the write lands, so a
     /// failed write leaves the control where it was.
-    fn toggle_flag(&mut self, flag: Flag, cx: &mut Context<Self>) {
-        let Some(state) = self.state.clone() else {
-            return;
-        };
-        cx.emit(SettingsEvent::Changed(Box::new(flag.toggled(&state))));
+    fn toggle_flag(&mut self, flag: Flag, window: &Window, cx: &mut Context<Self>) {
+        self.after_open_field(window, cx, move |this, cx| {
+            let Some(state) = this.state.clone() else {
+                return;
+            };
+            cx.emit(SettingsEvent::Changed(Box::new(flag.toggled(&state))));
+        });
     }
 
     fn refresh_hotkeys(&mut self, cx: &mut Context<Self>) {
@@ -1243,13 +1293,13 @@ impl SettingsView {
                 "Pair brackets and quotes automatically.",
                 app,
                 AUTO_PAIR_BRACKETS,
-            ).not_yet(),
+            ),
             app_toggle(
                 "Auto-pair Markdown syntax",
                 "Pair symbols automatically for bold, italic, code, and more.",
                 app,
                 AUTO_PAIR_MARKDOWN,
-            ).not_yet(),
+            ),
             app_toggle(
                 "Smart lists",
                 "Automatically set indentation and place list items correctly.",
@@ -1620,7 +1670,9 @@ impl SettingsView {
                 div()
                     .id(SharedString::from(format!("settings-toggle-{}", item.name)))
                     .cursor_pointer()
-                    .on_click(cx.listener(move |this, _, _, cx| this.toggle_flag(flag.clone(), cx)))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.toggle_flag(flag.clone(), window, cx)
+                    }))
                     .child(toggle)
                     .into_any_element()
             }
@@ -1652,6 +1704,11 @@ impl SettingsView {
                             .id(SharedString::from(format!("settings-menu-{}", typed.key)))
                             .cursor_pointer()
                             .on_click(cx.listener(move |this, _, _, cx| {
+                                // The root closes whatever is open on any
+                                // click; this one has to survive it, or the
+                                // menu would shut again as the click bubbles.
+                                cx.stop_propagation();
+                                this.commit_field(cx);
                                 // A second click closes it, as the property
                                 // type menu does.
                                 this.menu = (this.menu != Some(typed.key)).then_some(typed.key);
@@ -1691,8 +1748,9 @@ impl SettingsView {
                                             .hover(|s| s.bg(theme.bg_alt))
                                             .text_color(theme.text)
                                             .child(SharedString::from(label.to_string()))
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.pick(typed, ix, cx)
+                                            .on_click(cx.listener(move |this, _, window, cx| {
+                                                cx.stop_propagation();
+                                                this.pick(typed, ix, window, cx)
                                             }))
                                     },
                                 )),
@@ -1707,8 +1765,12 @@ impl SettingsView {
                     .is_some_and(|(a, b)| a.same(&b)) =>
             {
                 div()
+                    .id("settings-field-open")
                     .min_w(px(220.))
                     .max_w(px(320.))
+                    // A click inside the open input is not a click away from
+                    // it, which is what the root would read it as.
+                    .on_click(|_, _, cx| cx.stop_propagation())
                     .child(self.field.clone())
                     .into_any_element()
             }
@@ -1739,9 +1801,13 @@ impl SettingsView {
                     } else {
                         value.clone()
                     })
-                    .on_click(
-                        cx.listener(move |this, _, window, cx| this.edit_field(field, window, cx)),
-                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        // Without this the click would bubble to the root and
+                        // be read as a click away from the field it just
+                        // opened, closing it again on the same frame.
+                        cx.stop_propagation();
+                        this.edit_field(field, window, cx)
+                    }))
                     .into_any_element()
             }
             Control::Text(value) => div()
@@ -1815,8 +1881,8 @@ impl SettingsView {
                                 } else {
                                     theme.bg_active
                                 })
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.set_number(number, step, cx)
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.set_number(number, step, window, cx)
                                 }))
                         }),
                     ))
@@ -1852,6 +1918,9 @@ impl SettingsView {
     /// Writes a slider's value, which the control also reads through.
     /// Opens a text field for typing, with what the vault holds in it.
     fn edit_field(&mut self, field: TextField, window: &mut Window, cx: &mut Context<Self>) {
+        // One input serves every row, so opening the next one is the last
+        // moment the one before it can be written.
+        self.commit_field(cx);
         let Some(state) = self.state.clone() else {
             return;
         };
@@ -1883,35 +1952,39 @@ impl SettingsView {
         cx.notify();
     }
 
-    fn set_number(&mut self, number: Number, value: i64, cx: &mut Context<Self>) {
-        let Some(state) = self.state.clone() else {
-            return;
-        };
-        let value = value.clamp(number.min, number.max);
-        if (number.read)(&state) != value {
-            cx.emit(SettingsEvent::Changed(Box::new((number.write)(
-                &state, value,
-            ))));
-        }
-        cx.notify();
+    fn set_number(&mut self, number: Number, value: i64, window: &Window, cx: &mut Context<Self>) {
+        self.after_open_field(window, cx, move |this, cx| {
+            let Some(state) = this.state.clone() else {
+                return;
+            };
+            let value = value.clamp(number.min, number.max);
+            if (number.read)(&state) != value {
+                cx.emit(SettingsEvent::Changed(Box::new((number.write)(
+                    &state, value,
+                ))));
+            }
+            cx.notify();
+        });
     }
 
     /// Writes the option a dropdown's row names. The value comes from the
     /// same table the control reads through, so the two cannot drift.
-    fn pick(&mut self, typed: Typed, option: usize, cx: &mut Context<Self>) {
+    fn pick(&mut self, typed: Typed, option: usize, window: &Window, cx: &mut Context<Self>) {
         self.menu = None;
-        let Some(state) = self.state.clone() else {
-            return;
-        };
-        let Some((_, value)) = typed.options.get(option) else {
-            return;
-        };
-        if (typed.read)(&state) != *value {
-            cx.emit(SettingsEvent::Changed(Box::new((typed.write)(
-                &state, value,
-            ))));
-        }
-        cx.notify();
+        self.after_open_field(window, cx, move |this, cx| {
+            let Some(state) = this.state.clone() else {
+                return;
+            };
+            let Some((_, value)) = typed.options.get(option) else {
+                return;
+            };
+            if (typed.read)(&state) != *value {
+                cx.emit(SettingsEvent::Changed(Box::new((typed.write)(
+                    &state, value,
+                ))));
+            }
+            cx.notify();
+        });
     }
 
     fn render_item(&self, item: &Item, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
@@ -2097,7 +2170,17 @@ impl SettingsView {
 }
 
 impl Render for SettingsView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // A committed or cancelled field stops being rendered while gpui
+        // still has the focus on it, and a focus on an element no frame
+        // contains dispatches nothing: every later keystroke, Escape
+        // included, falls outside every key context and the window goes
+        // keyboard-dead. The events that close a field arrive through a
+        // subscription, which has no window to hand `focus_tab`, so the
+        // frame that drops the input is where the focus goes back.
+        if self.editing.is_none() && self.field.focus_handle(cx).is_focused(window) {
+            self.focus_tab(window, cx);
+        }
         let theme = cx.global::<Theme>().clone();
         let tab = self.tab;
         let body: gpui::AnyElement = if tab == Tab::Hotkeys {
@@ -2115,6 +2198,11 @@ impl Render for SettingsView {
             .key_context("Settings")
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::close_action))
+            .on_click(cx.listener(|this, _, _, cx| this.dismiss_open_controls(cx)))
+            // The backdrop is outside the panel, and it closes the modal on
+            // mouse up; writing on the way down is what keeps a click there
+            // from losing what was typed.
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| this.dismiss_open_controls(cx)))
             .flex()
             .flex_row()
             .w(px(1100.))
@@ -2159,7 +2247,8 @@ impl Render for SettingsView {
                                     .text_size(px(18.))
                                     .text_color(theme.text_muted)
                                     .hover(|s| s.bg(theme.bg_alt))
-                                    .on_click(cx.listener(|_, _, _, cx| {
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.dismiss_open_controls(cx);
                                         cx.emit(SettingsEvent::Close)
                                     }))
                                     .child("×"),
@@ -2357,6 +2446,50 @@ mod tests {
         );
     }
 
+    /// A click on a control while a text field is open changes two settings
+    /// at once, and every change carries the whole config file. Both built
+    /// from the one reading of the vault, the second write puts back what
+    /// the first had just changed — which is why the view commits the field
+    /// and defers the control's own change until that write has landed.
+    #[test]
+    fn a_control_changed_with_a_field_open_has_to_be_built_after_it() {
+        let (_dir, state) = vault();
+        state
+            .apply_setting(&(NEW_FILE_FOLDER.write)(&state, "Before"))
+            .unwrap();
+        let from_one_reading = Flag::App(FOCUS_NEW_TAB).toggled(&state);
+        state
+            .apply_setting(&(NEW_FILE_FOLDER.write)(&state, "Notes"))
+            .unwrap();
+        state.apply_setting(&from_one_reading).unwrap();
+        assert_eq!(
+            state.app().new_file_folder_path.as_deref(),
+            Some("Before"),
+            "a change built before the write it lands after no longer \
+             puts back what that write changed"
+        );
+
+        let (_dir, state) = vault();
+        state
+            .apply_setting(&(NEW_FILE_FOLDER.write)(&state, "Before"))
+            .unwrap();
+        state
+            .apply_setting(&(NEW_FILE_FOLDER.write)(&state, "Notes"))
+            .unwrap();
+        let after_the_field = Flag::App(FOCUS_NEW_TAB).toggled(&state);
+        state.apply_setting(&after_the_field).unwrap();
+        assert_eq!(
+            state.app().new_file_folder_path.as_deref(),
+            Some("Notes"),
+            "the field's value was dropped by the control's write"
+        );
+        assert_eq!(
+            state.app().focus_new_tab,
+            Some(false),
+            "the toggle's own value was dropped"
+        );
+    }
+
     /// Obsidian words this one the other way round: the control is "Use
     /// [[Wikilinks]]", the key is `useMarkdownLinks`.
     #[test]
@@ -2453,6 +2586,8 @@ mod tests {
             [
                 "Readable line length",
                 "Strict line breaks",
+                "Auto-pair brackets",
+                "Auto-pair Markdown syntax",
                 "Smart lists",
                 "Indent using tabs",
                 "Automatically update internal links",

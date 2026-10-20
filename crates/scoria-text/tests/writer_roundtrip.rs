@@ -40,7 +40,7 @@ use _formats::config::{
     DailyNotesConfig, GraphConfig, Hotkeys, PropertyTypes, SwitcherConfig, TemplatesConfig,
 };
 use _formats::properties::{self as props, Change, Value};
-use _text::{find, Cursors, EditKind, Sel, TextBuffer};
+use _text::{find, Cursors, EditKind, LinePrefix, LinkSyntax, Sel, TextBuffer};
 use _vault::{Vault, VaultFile};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -162,15 +162,15 @@ fn drive_session(buf: &mut TextBuffer, at: usize, note: &Path) {
     buf.set_cursor(at, None);
     buf.insert_all("note", EditKind::Typing);
     step(buf, "typing");
-    buf.newline(true);
+    buf.newline(4, true);
     step(buf, "Enter");
     buf.insert_all("- item", EditKind::Typing);
     step(buf, "typing a list item");
     buf.indent(true, 4, true);
     step(buf, "Tab");
-    buf.outdent(true);
+    buf.outdent(4, true);
     step(buf, "Shift+Tab");
-    buf.newline(true);
+    buf.newline(4, true);
     step(buf, "Enter on an item");
     buf.backspace();
     step(buf, "Backspace");
@@ -192,6 +192,34 @@ fn drive_session(buf: &mut TextBuffer, at: usize, note: &Path) {
         None,
     );
     step(buf, "cutting the line");
+    // The formatting commands, over whatever the session has left under
+    // the cursor.
+    buf.toggle_wrap("**");
+    step(buf, "Ctrl+B");
+    buf.toggle_checklist();
+    step(buf, "Ctrl+L");
+    buf.set_heading(2);
+    step(buf, "Set as heading 2");
+    buf.set_heading(0);
+    step(buf, "Remove heading");
+    buf.toggle_line_prefix(LinePrefix::Bullet);
+    step(buf, "Toggle bullet list");
+    buf.toggle_line_prefix(LinePrefix::Ordered);
+    step(buf, "Toggle numbered list");
+    buf.toggle_line_prefix(LinePrefix::Quote);
+    step(buf, "Toggle blockquote");
+    buf.insert_link(LinkSyntax::Wikilink);
+    step(buf, "Add internal link");
+    buf.swap_lines(true);
+    step(buf, "Move line up");
+    buf.swap_lines(false);
+    step(buf, "Move line down");
+    buf.delete_paragraph();
+    step(buf, "Delete paragraph");
+    // Deleting the paragraph can empty a note that was empty to start
+    // with, and the session has to have written something.
+    buf.insert_all("tail", EditKind::Typing);
+    step(buf, "typing after the deletion");
 }
 
 /// Winds the whole history back and returns what a save would write.
@@ -700,7 +728,7 @@ fn an_edited_file_keeps_its_line_ending_and_byte_order_mark() {
     let tail = buf.len();
     buf.set_cursor(tail, None);
     buf.insert_all("tail", EditKind::Typing);
-    buf.newline(true);
+    buf.newline(4, true);
     let saved = buf.file_contents();
     assert!(
         saved.starts_with('\u{feff}'),

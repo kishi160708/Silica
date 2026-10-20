@@ -4,6 +4,7 @@
 //! file at a time.
 
 use crate::{CachedMetadata, LinkCache, LinkResolver};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// One tag as the tag pane shows it: merged case-insensitively across inline
@@ -22,7 +23,13 @@ pub struct TagEntry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Backlink<'a> {
     pub source: &'a str,
-    pub link: &'a LinkCache,
+    /// The occurrence. A link written in a property has no `LinkCache` of its
+    /// own in Obsidian's cache shape, so that one is rebuilt from the
+    /// `FrontmatterLinkCache` and owned by the row.
+    pub link: Cow<'a, LinkCache>,
+    /// Property path (`related`, `aliases.1`) when the link was written in
+    /// frontmatter, which Obsidian shows as the row's context.
+    pub key: Option<&'a str>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -210,8 +217,8 @@ impl MetadataCache {
             .flat_map(|s| s.iter().map(String::as_str))
     }
 
-    /// Every link and embed in other notes that resolves to `path`, grouped
-    /// by source file in path order.
+    /// Every link, embed and property link in other notes that resolves to
+    /// `path`, grouped by source file in path order.
     pub fn backlinks(&self, path: &str) -> Vec<Backlink<'_>> {
         let Some(sources) = self.backlinks.get(path) else {
             return Vec::new();
@@ -221,11 +228,27 @@ impl MetadataCache {
             let Some(meta) = self.files.get(source) else {
                 continue;
             };
+            // Properties first, the order they are written in the file.
+            for link in &meta.frontmatter_links {
+                if self.resolver.resolve(&link.link, source) == Some(path) {
+                    out.push(Backlink {
+                        source: source.as_str(),
+                        link: Cow::Owned(LinkCache {
+                            link: link.link.clone(),
+                            original: link.original.clone(),
+                            display_text: link.display_text.clone(),
+                            position: link.position,
+                        }),
+                        key: Some(link.key.as_str()),
+                    });
+                }
+            }
             for link in meta.links.iter().chain(meta.embeds.iter()) {
                 if self.resolver.resolve(&link.link, source) == Some(path) {
                     out.push(Backlink {
                         source: source.as_str(),
-                        link,
+                        link: Cow::Borrowed(link),
+                        key: None,
                     });
                 }
             }
@@ -365,6 +388,49 @@ mod tests {
         );
         assert!(c.backlinks("Assets/pic.png").len() == 1);
         assert!(c.backlinks("nope.md").is_empty());
+    }
+
+    #[test]
+    fn a_link_written_in_a_property_is_a_backlink() {
+        let source = "---\ntitle: Source\nrelated: \"[[Target]]\"\n---\nNo link in the body.\n";
+        let c = MetadataCache::new(
+            LinkResolver::new(["Source.md", "Target.md"]),
+            [
+                ("Source.md", index_markdown(source)),
+                ("Target.md", index_markdown("# Target")),
+            ],
+        );
+        assert_eq!(
+            c.resolved_links("Source.md").unwrap().get("Target.md"),
+            Some(&1)
+        );
+        let back = c.backlinks("Target.md");
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].source, "Source.md");
+        assert_eq!(back[0].key, Some("related"));
+        let at = back[0].link.position;
+        assert_eq!(at.start.line, 2);
+        assert_eq!(&source[at.start.offset..at.end.offset], "[[Target]]");
+    }
+
+    #[test]
+    fn property_occurrences_come_before_body_ones() {
+        let c = MetadataCache::new(
+            LinkResolver::new(["Source.md", "Target.md"]),
+            [
+                (
+                    "Source.md",
+                    index_markdown(
+                        "---\nrelated:\n  - \"[[Target]]\"\n---\nAlso [[Target|here]].\n",
+                    ),
+                ),
+                ("Target.md", index_markdown("# Target")),
+            ],
+        );
+        let back = c.backlinks("Target.md");
+        let keys: Vec<Option<&str>> = back.iter().map(|b| b.key).collect();
+        assert_eq!(keys, vec![Some("related.0"), None]);
+        assert_eq!(back[1].link.display_text.as_deref(), Some("here"));
     }
 
     #[test]

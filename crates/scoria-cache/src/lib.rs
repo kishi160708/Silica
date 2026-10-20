@@ -22,7 +22,7 @@ pub use vault::{
 use _markdown::{
     parse, walk_inlines, Block, BlockKind, Document, Inline, InlineKind, ListItem,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Obsidian's `SectionCache.type` vocabulary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -121,6 +121,11 @@ pub struct FrontmatterLinkCache {
     pub link: String,
     pub original: String,
     pub display_text: Option<String>,
+    /// Obsidian's own `FrontmatterLinkCache` has no position, but the
+    /// backlinks pane has to show a property link beside its line like any
+    /// other occurrence, so the indexer finds the written text again in the
+    /// raw YAML.
+    pub position: Loc,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -258,7 +263,9 @@ impl<'a> Indexer<'a> {
                     .filter(|v| v.is_mapping());
                 self.meta.frontmatter_position = Some(self.lines.loc(block.span));
                 if let Some(fm) = self.meta.frontmatter.clone() {
+                    let first = self.meta.frontmatter_links.len();
                     self.frontmatter_links("", &fm);
+                    self.locate_frontmatter_links(first, block.span);
                 }
             }
             BlockKind::Paragraph { content } => self.inlines(content),
@@ -417,6 +424,7 @@ impl<'a> Indexer<'a> {
                                     link,
                                     original: inline.span.of(s).to_string(),
                                     display_text: parsed.alias.map(str::to_string),
+                                    position: Loc::default(),
                                 });
                             }
                         });
@@ -454,6 +462,31 @@ impl<'a> Indexer<'a> {
             _ => {}
         }
     }
+
+    /// Gives the links collected from the parsed properties their place in
+    /// the file: `serde_yaml` hands back scalars without a source span, so
+    /// the only way back is to find the written text again in the YAML, the
+    /// search the link rewriter also makes. A value the YAML parser unescaped
+    /// is not found again and keeps the frontmatter block's own position.
+    fn locate_frontmatter_links(&mut self, first: usize, span: Span) {
+        let yaml = span.of(self.src);
+        let lines = &self.lines;
+        let block = lines.loc(span);
+        let mut seen: BTreeSet<usize> = BTreeSet::new();
+        for link in self.meta.frontmatter_links.iter_mut().skip(first) {
+            let found = yaml
+                .match_indices(link.original.as_str())
+                .map(|(at, _)| at)
+                .find(|at| seen.insert(*at));
+            link.position = match found {
+                Some(at) => lines.loc(Span::new(
+                    span.start + at,
+                    span.start + at + link.original.len(),
+                )),
+                None => block,
+            };
+        }
+    }
 }
 
 #[cfg(test)]
@@ -487,8 +520,23 @@ mod tests {
             m.frontmatter_links[0].display_text.as_deref(),
             Some("shown")
         );
+        let at = m.frontmatter_links[0].position;
+        assert_eq!(at.start.line, 4);
+        assert_eq!(&NOTE[at.start.offset..at.end.offset], "[[Other|shown]]");
         assert_eq!(m.footnotes.len(), 1);
         assert_eq!(m.footnote_refs.len(), 1);
+    }
+
+    #[test]
+    fn repeated_property_links_get_one_position_each() {
+        let src = "---\nfirst: \"[[X]]\"\nsecond: \"[[X]]\"\n---\n";
+        let m = index_markdown(src);
+        let lines: Vec<u32> = m
+            .frontmatter_links
+            .iter()
+            .map(|l| l.position.start.line)
+            .collect();
+        assert_eq!(lines, vec![1, 2]);
     }
 
     #[test]

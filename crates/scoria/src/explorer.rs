@@ -2,7 +2,9 @@
 //!
 //! [`FileTree`] is the pure model (ordering, collapse state, visible rows)
 //! and [`FileExplorer`] the GPUI entity that draws it with a uniform list, so
-//! a 20k-file vault costs one row element per visible line. A right click
+//! a 20k-file vault costs one row element per visible line. Names are ordered
+//! with [`natural_cmp`], the collation the search pane uses, so two lists of
+//! the same files in one window cannot disagree. A right click
 //! opens the file menu (new note, new folder, rename, move, copy, delete);
 //! the explorer only reports the choice, the workspace does the work.
 
@@ -12,6 +14,7 @@ use gpui::{
     Pixels, Point, ScrollStrategy, SharedString, UniformListScrollHandle, Window,
 };
 use _formats::FileKind;
+use _search::natural_cmp;
 use _vault::VaultFile;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashSet};
@@ -41,10 +44,6 @@ pub struct FileTree {
     all: Vec<Row>,
     collapsed: HashSet<String>,
     visible: Vec<usize>,
-}
-
-fn sort_key(name: &str) -> (String, String) {
-    (name.to_lowercase(), name.to_string())
 }
 
 impl FileTree {
@@ -187,7 +186,7 @@ impl FileTree {
 
 fn flatten(folder: &Folder, prefix: &str, depth: usize, out: &mut Vec<Row>) {
     let mut names: Vec<&String> = folder.folders.keys().collect();
-    names.sort_by_key(|n| sort_key(n));
+    names.sort_by(|a, b| natural_cmp(a, b));
     for name in names {
         let path = if prefix.is_empty() {
             name.clone()
@@ -204,7 +203,11 @@ fn flatten(folder: &Folder, prefix: &str, depth: usize, out: &mut Vec<Row>) {
         flatten(&folder.folders[name], &path, depth + 1, out);
     }
     let mut files: Vec<&(String, FileKind)> = folder.files.iter().collect();
-    files.sort_by_key(|(n, _)| sort_key(display_name(n)));
+    // Two files can share a display name once the `.md` is dropped, so the
+    // full file name breaks the tie and keeps the order of a rescan stable.
+    files.sort_by(|(a, _), (b, _)| {
+        natural_cmp(display_name(a), display_name(b)).then_with(|| natural_cmp(a, b))
+    });
     for (name, kind) in files {
         out.push(Row {
             path: if prefix.is_empty() {
@@ -568,6 +571,40 @@ mod tests {
             shown.len(),
             5,
             "notes.zip appears with unsupported files on"
+        );
+    }
+
+    /// Obsidian collates names numerically, so `n2` comes before `n10`; the
+    /// search pane already does and the two panes have to agree.
+    #[test]
+    fn names_sort_numerically_within_each_group() {
+        let files = files(&[
+            "n10.md",
+            "n2.md",
+            "n1.md",
+            "n20.md",
+            "n3.md",
+            "f10/a.md",
+            "f2/a.md",
+            "Img 10.png",
+            "Img 2.png",
+        ]);
+        let tree = FileTree::new(&files, &[], false);
+        let names: Vec<&str> = tree.rows().map(|r| r.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "f2",
+                "f10",
+                "Img 2.png",
+                "Img 10.png",
+                "n1",
+                "n2",
+                "n3",
+                "n10",
+                "n20"
+            ],
+            "folders stay ahead of files, and both groups count"
         );
     }
 

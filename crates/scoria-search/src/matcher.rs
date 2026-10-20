@@ -55,6 +55,23 @@ impl SearchFile<'_> {
     }
 }
 
+/// What a query matched in one file. Content ranges are byte ranges into
+/// `SearchFile::content`; name ranges are byte ranges into its base name,
+/// which Obsidian highlights in the result's title rather than in a match
+/// line, so the two kinds never mix.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MatchSet {
+    pub content: Vec<Range<usize>>,
+    pub name: Vec<Range<usize>>,
+}
+
+impl MatchSet {
+    fn extend(&mut self, other: MatchSet) {
+        self.content.extend(other.content);
+        self.name.extend(other.name);
+    }
+}
+
 /// A query compiled for matching.
 #[derive(Debug, Clone)]
 pub struct Search {
@@ -101,28 +118,35 @@ impl Search {
         self.query.is_empty()
     }
 
-    /// Whether `file` matches; on success the byte ranges in its content to
-    /// highlight, sorted and merged (empty when only the name, path, tags or
-    /// properties matched).
-    pub fn matches(&self, file: &SearchFile<'_>) -> Option<Vec<Range<usize>>> {
+    /// Whether `file` matches; on success the ranges to highlight, sorted and
+    /// merged (both empty when only the path, tags or properties matched).
+    pub fn matches(&self, file: &SearchFile<'_>) -> Option<MatchSet> {
         let scope = Scope {
             text: file.content,
             base: 0,
+            names_file: true,
         };
-        let mut hits = Vec::new();
+        let mut hits = MatchSet::default();
         if !eval(&self.node, file, scope, false, &mut hits) {
             return None;
         }
-        hits.sort_by_key(|r| (r.start, r.end));
-        let mut merged: Vec<Range<usize>> = Vec::new();
-        for r in hits {
-            match merged.last_mut() {
-                Some(last) if r.start <= last.end => last.end = last.end.max(r.end),
-                _ => merged.push(r),
-            }
-        }
-        Some(merged)
+        Some(MatchSet {
+            content: merge(hits.content),
+            name: merge(hits.name),
+        })
     }
+}
+
+fn merge(mut ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
+    ranges.sort_by_key(|r| (r.start, r.end));
+    let mut merged: Vec<Range<usize>> = Vec::new();
+    for r in ranges {
+        match merged.last_mut() {
+            Some(last) if r.start <= last.end => last.end = last.end.max(r.end),
+            _ => merged.push(r),
+        }
+    }
+    merged
 }
 
 fn compile(q: &Query) -> Result<Node, SearchError> {
@@ -183,19 +207,23 @@ struct Scope<'a> {
     text: &'a str,
     /// Offset of `text` inside the file content, for reported ranges.
     base: usize,
+    /// Whether a bare term here also matches the file name. True only for the
+    /// unscoped top level: inside `content:`, `line:`, a property value or any
+    /// other operator the user named a scope and the name is not it.
+    names_file: bool,
 }
 
-/// Evaluates `node` in `scope`, appending content ranges to `hits`.
+/// Evaluates `node` in `scope`, appending the ranges it matched to `hits`.
 fn eval(
     node: &Node,
     file: &SearchFile<'_>,
     scope: Scope<'_>,
     case_sensitive: bool,
-    hits: &mut Vec<Range<usize>>,
+    hits: &mut MatchSet,
 ) -> bool {
     match node {
         Node::All(children) => {
-            let mut local = Vec::new();
+            let mut local = MatchSet::default();
             for c in children {
                 if !eval(c, file, scope, case_sensitive, &mut local) {
                     return false;
@@ -207,7 +235,7 @@ fn eval(
         Node::Any(children) => {
             let mut any = false;
             for c in children {
-                let mut local = Vec::new();
+                let mut local = MatchSet::default();
                 if eval(c, file, scope, case_sensitive, &mut local) {
                     any = true;
                     hits.extend(local);
@@ -216,7 +244,7 @@ fn eval(
             any
         }
         Node::Not(child) => {
-            let mut local = Vec::new();
+            let mut local = MatchSet::default();
             !eval(child, file, scope, case_sensitive, &mut local)
         }
         Node::Text {
@@ -228,14 +256,11 @@ fn eval(
             } else {
                 insensitive
             };
-            let mut found = false;
-            for m in re.find_iter(scope.text) {
-                found = true;
-                if m.end() > m.start() {
-                    hits.push(scope.base + m.start()..scope.base + m.end());
-                } else {
-                    break;
-                }
+            let mut found = find_all(re, scope.text, scope.base, &mut hits.content);
+            if scope.names_file {
+                // Obsidian matches a bare term against the file name as well
+                // as the content, and highlights the hit in the result title.
+                found |= find_all(re, file.name(), 0, &mut hits.name);
             }
             found || (re.as_str().is_empty())
         }
@@ -245,23 +270,40 @@ fn eval(
             .iter()
             .any(|t| t == tag || t.starts_with(&format!("{tag}/"))),
         Node::Field(field, child) => match field {
-            Field::Content => eval(child, file, scope, case_sensitive, hits),
+            Field::Content => eval(
+                child,
+                file,
+                Scope {
+                    names_file: false,
+                    ..scope
+                },
+                case_sensitive,
+                hits,
+            ),
             Field::File => {
-                let mut local = Vec::new();
+                // The child ran over the name, so its ranges are name ranges:
+                // an explicit `file:` hit highlights the title the same way a
+                // bare term's does.
+                let mut local = MatchSet::default();
                 let name = file.name();
-                eval(
+                let found = eval(
                     child,
                     file,
                     Scope {
                         text: name,
                         base: 0,
+                        names_file: false,
                     },
                     case_sensitive,
                     &mut local,
-                )
+                );
+                if found {
+                    hits.name.extend(local.content);
+                }
+                found
             }
             Field::Path => {
-                let mut local = Vec::new();
+                let mut local = MatchSet::default();
                 let path = file.path;
                 eval(
                     child,
@@ -269,6 +311,7 @@ fn eval(
                     Scope {
                         text: path,
                         base: 0,
+                        names_file: false,
                     },
                     case_sensitive,
                     &mut local,
@@ -277,11 +320,15 @@ fn eval(
             Field::Tag => {
                 // A non-literal tag query (regex, group): match against each tag.
                 file.tags.iter().any(|t| {
-                    let mut local = Vec::new();
+                    let mut local = MatchSet::default();
                     eval(
                         child,
                         file,
-                        Scope { text: t, base: 0 },
+                        Scope {
+                            text: t,
+                            base: 0,
+                            names_file: false,
+                        },
                         case_sensitive,
                         &mut local,
                     )
@@ -292,10 +339,11 @@ fn eval(
                 let mut at = 0;
                 for line in scope.text.split_inclusive('\n') {
                     let trimmed = line.trim_end_matches(['\n', '\r']);
-                    let mut local = Vec::new();
+                    let mut local = MatchSet::default();
                     let s = Scope {
                         text: trimmed,
                         base: scope.base + at,
+                        names_file: false,
                     };
                     if eval(child, file, s, case_sensitive, &mut local) {
                         any = true;
@@ -347,11 +395,15 @@ fn eval(
         }),
         Node::PropertyMatch(name, child) => property(file, name).is_some_and(|v| {
             value_strings(v).iter().any(|s| {
-                let mut local = Vec::new();
+                let mut local = MatchSet::default();
                 eval(
                     child,
                     file,
-                    Scope { text: s, base: 0 },
+                    Scope {
+                        text: s,
+                        base: 0,
+                        names_file: false,
+                    },
                     case_sensitive,
                     &mut local,
                 )
@@ -360,13 +412,28 @@ fn eval(
     }
 }
 
+/// Appends every non-empty match of `re` in `text`, shifted by `base`, to
+/// `out`; true when the regex matched at all, empty match included.
+fn find_all(re: &Regex, text: &str, base: usize, out: &mut Vec<Range<usize>>) -> bool {
+    let mut found = false;
+    for m in re.find_iter(text) {
+        found = true;
+        if m.end() > m.start() {
+            out.push(base + m.start()..base + m.end());
+        } else {
+            break;
+        }
+    }
+    found
+}
+
 fn eval_ranges(
     child: &Node,
     file: &SearchFile<'_>,
     scope: Scope<'_>,
     ranges: impl Iterator<Item = Range<usize>>,
     case_sensitive: bool,
-    hits: &mut Vec<Range<usize>>,
+    hits: &mut MatchSet,
 ) -> bool {
     // Ranges are in content coordinates; only those inside the current scope apply.
     let scope_end = scope.base + scope.text.len();
@@ -378,10 +445,11 @@ fn eval_ranges(
         let Some(text) = scope.text.get(r.start - scope.base..r.end - scope.base) else {
             continue;
         };
-        let mut local = Vec::new();
+        let mut local = MatchSet::default();
         let s = Scope {
             text,
             base: r.start,
+            names_file: false,
         };
         if eval(child, file, s, case_sensitive, &mut local) {
             any = true;
@@ -505,13 +573,25 @@ mod tests {
         }
     }
 
-    fn run(q: &str) -> Option<Vec<String>> {
+    fn hits(q: &str) -> Option<MatchSet> {
         let f = fixture();
         let file = file(&f.tags, &f.fm, &f.blocks, &f.sections, &f.tasks);
-        Search::new(q)
-            .unwrap()
-            .matches(&file)
-            .map(|rs| rs.iter().map(|r| NOTE[r.clone()].to_string()).collect())
+        Search::new(q).unwrap().matches(&file)
+    }
+
+    fn run(q: &str) -> Option<Vec<String>> {
+        hits(q).map(|m| {
+            m.content
+                .iter()
+                .map(|r| NOTE[r.clone()].to_string())
+                .collect()
+        })
+    }
+
+    /// The matched substrings of the file name, "Fox Note.md".
+    fn names(q: &str) -> Option<Vec<String>> {
+        let name = "Fox Note.md";
+        hits(q).map(|m| m.name.iter().map(|r| name[r.clone()].to_string()).collect())
     }
 
     #[test]
@@ -612,7 +692,42 @@ mod tests {
     }
 
     #[test]
+    fn bare_terms_match_the_file_name_too() {
+        // "note" is in the name only, "fox" in both, "quick" in the content only.
+        assert_eq!(run("note"), Some(vec![]));
+        assert_eq!(names("note"), Some(vec!["Note".into()]));
+        assert_eq!(names("fox"), Some(vec!["Fox".into()]));
+        assert_eq!(names("quick"), Some(vec![]));
+        assert_eq!(names("\"fox note\""), Some(vec!["Fox Note".into()]));
+        assert_eq!(names("/n.te/"), Some(vec!["Note".into()]));
+        assert_eq!(names("note.md"), Some(vec!["Note.md".into()]));
+        // A name hit satisfies its half of an AND and of an OR.
+        assert_eq!(
+            run("note quick"),
+            Some(vec!["Quick".into(), "quick".into()])
+        );
+        assert_eq!(names("note quick"), Some(vec!["Note".into()]));
+        assert_eq!(run("note OR zebra"), Some(vec![]));
+        assert_eq!(run("-note"), None, "a name hit is a hit to exclude");
+    }
+
+    #[test]
+    fn a_named_scope_excludes_the_file_name() {
+        assert_eq!(run("content:note"), None);
+        assert_eq!(run("line:(note)"), None);
+        assert_eq!(run("block:(note)"), None);
+        assert_eq!(run("section:(note)"), None);
+        assert_eq!(run("task:note"), None);
+        assert_eq!(run("[status:note]"), None);
+        assert_eq!(run("path:note"), Some(vec![]), "the path still matches");
+        // An explicit file: hit highlights the title, like a bare term's.
+        assert_eq!(names("file:note"), Some(vec!["Note".into()]));
+        assert_eq!(names("path:projects"), Some(vec![]));
+    }
+
+    #[test]
     fn empty_query_matches_everything_without_ranges() {
         assert_eq!(run(""), Some(vec![]));
+        assert_eq!(names(""), Some(vec![]));
     }
 }

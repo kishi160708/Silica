@@ -7,12 +7,18 @@
 //! included) and matches it against a [`SearchFile`], returning the byte
 //! ranges to highlight. [`fuzzy_match`] and [`simple_search`] are the
 //! `prepareFuzzySearch` and `prepareSimpleSearch` counterparts used by the
-//! quick switcher and pickers.
+//! quick switcher and pickers. [`match_lines`] windows a note's hits into
+//! the context lines a result row shows. [`natural_cmp`] orders names the
+//! way Obsidian's numeric, locale-aware collation does.
 
+pub mod collate;
 pub mod fuzzy;
 pub mod matcher;
 pub mod query;
+pub mod snippet;
 
+pub use collate::natural_cmp;
 pub use fuzzy::{fuzzy_match, simple_search, FuzzyMatch};
-pub use matcher::{Search, SearchError, SearchFile, TaskLine};
+pub use matcher::{MatchSet, Search, SearchError, SearchFile, TaskLine};
 pub use query::{parse, Compare, Field, Query};
+pub use snippet::{match_lines, MatchLine};

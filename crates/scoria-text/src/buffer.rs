@@ -6,11 +6,14 @@
 //! table. Everything that decides *bytes* lives here, so the Writer gate's
 //! round trips can drive the same code the keys do.
 
+use crate::autopair;
+use crate::format;
 use crate::lists;
 use crate::plan::{indent_plan, newline_plan, shifted};
 use crate::table;
 use std::ops::Range;
 use std::time::{Duration, Instant};
+use unicode_segmentation::GraphemeCursor;
 
 /// Typing or deleting within this of the previous step of the same kind
 /// joins its undo group.
@@ -385,39 +388,52 @@ impl TextBuffer {
     }
 
     pub fn clamp_offset(&self, offset: usize) -> usize {
-        let mut at = offset.min(self.text.len());
-        while !self.text.is_char_boundary(at) {
-            at -= 1;
-        }
-        at
+        floor_char_boundary(&self.text, offset)
     }
 
+    /// One caret step back: the start of the grapheme cluster before
+    /// `offset`.
+    pub fn prev_grapheme_boundary(&self, offset: usize) -> usize {
+        prev_grapheme_boundary(&self.text, offset)
+    }
+
+    /// One caret step forward: the end of the grapheme cluster at `offset`.
+    pub fn next_grapheme_boundary(&self, offset: usize) -> usize {
+        next_grapheme_boundary(&self.text, offset)
+    }
+
+    /// The caret step under the name the editor view still calls it by.
     pub fn prev_char_boundary(&self, offset: usize) -> usize {
-        let mut i = offset.saturating_sub(1);
-        while i > 0 && !self.text.is_char_boundary(i) {
-            i -= 1;
-        }
-        i
+        self.prev_grapheme_boundary(offset)
     }
 
     pub fn next_char_boundary(&self, offset: usize) -> usize {
-        let mut i = (offset + 1).min(self.text.len());
-        while i < self.text.len() && !self.text.is_char_boundary(i) {
-            i += 1;
-        }
-        i
+        self.next_grapheme_boundary(offset)
+    }
+
+    /// The class of the grapheme cluster starting at `at`, taken from the
+    /// cluster's first character so that a combining accent counts as part
+    /// of the letter it sits on rather than as punctuation of its own.
+    fn class_at(&self, at: usize) -> Option<u8> {
+        self.text[at..].chars().next().map(char_class)
+    }
+
+    /// The class of the cluster that ends at `at`.
+    fn class_before(&self, at: usize) -> Option<u8> {
+        (at > 0)
+            .then(|| self.class_at(self.prev_grapheme_boundary(at)))
+            .flatten()
     }
 
     /// Word-boundary scan: whitespace, then a run of one character class.
     pub fn word_left(&self, from: usize) -> usize {
         let mut i = from;
-        let class_at = |i: usize| self.text[..i].chars().next_back().map(char_class);
-        while i > 0 && class_at(i) == Some(0) {
-            i = self.prev_char_boundary(i);
+        while i > 0 && self.class_before(i) == Some(0) {
+            i = self.prev_grapheme_boundary(i);
         }
-        let class = class_at(i);
-        while i > 0 && class_at(i) == class {
-            i = self.prev_char_boundary(i);
+        let class = self.class_before(i);
+        while i > 0 && self.class_before(i) == class {
+            i = self.prev_grapheme_boundary(i);
         }
         i
     }
@@ -425,20 +441,19 @@ impl TextBuffer {
     pub fn word_right(&self, from: usize) -> usize {
         let mut i = from;
         let len = self.text.len();
-        let class_at = |i: usize| self.text[i..].chars().next().map(char_class);
-        while i < len && class_at(i) == Some(0) {
-            i = self.next_char_boundary(i);
+        while i < len && self.class_at(i) == Some(0) {
+            i = self.next_grapheme_boundary(i);
         }
-        let class = class_at(i);
-        while i < len && class_at(i) == class {
-            i = self.next_char_boundary(i);
+        let class = self.class_at(i);
+        while i < len && self.class_at(i) == class {
+            i = self.next_grapheme_boundary(i);
         }
         i
     }
 
     pub fn word_at(&self, at: usize) -> Range<usize> {
-        let class_before = self.text[..at].chars().next_back().map(char_class);
-        let class_after = self.text[at..].chars().next().map(char_class);
+        let class_before = self.class_before(at);
+        let class_after = self.class_at(at);
         // Prefer the word the cursor is in or just after; whitespace selects itself.
         let class = match (class_before, class_after) {
             (_, Some(c)) if c != 0 => c,
@@ -449,21 +464,17 @@ impl TextBuffer {
         };
         let mut start = at;
         while start > 0
-            && self.text[..start]
-                .chars()
-                .next_back()
-                .is_some_and(|c| char_class(c) == class && c != '\n')
+            && self.class_before(start) == Some(class)
+            && !self.text[..start].ends_with('\n')
         {
-            start = self.prev_char_boundary(start);
+            start = self.prev_grapheme_boundary(start);
         }
         let mut end = at;
         while end < self.text.len()
-            && self.text[end..]
-                .chars()
-                .next()
-                .is_some_and(|c| char_class(c) == class && c != '\n')
+            && self.class_at(end) == Some(class)
+            && !self.text[end..].starts_with('\n')
         {
-            end = self.next_char_boundary(end);
+            end = self.next_grapheme_boundary(end);
         }
         start..end
     }
@@ -679,6 +690,91 @@ impl TextBuffer {
         self.edit_all(edits, kind)
     }
 
+    /// Auto-pairs one typed character at every cursor: the closer it
+    /// brings with it, the closer it steps over, or the pair a selection
+    /// is wrapped in, per [`autopair`]. False when the character does
+    /// nothing special anywhere, and the caller should insert it the
+    /// ordinary way.
+    pub fn type_pair(&mut self, typed: char, opts: autopair::Options) -> bool {
+        let cursors = self.cursors();
+        let acts: Vec<autopair::Act> = cursors
+            .sels
+            .iter()
+            .map(|sel| autopair::act(&self.text, sel.range(), typed, opts))
+            .collect();
+        if acts.iter().all(|a| *a == autopair::Act::Insert) {
+            return false;
+        }
+        let mut edits: Vec<(Range<usize>, String)> = Vec::new();
+        let mut after = Vec::with_capacity(acts.len());
+        // Each edit shifts the cursors after it, and `apply_edits` wants
+        // them in post-edit coordinates.
+        let mut delta: isize = 0;
+        for (sel, act) in cursors.sels.iter().zip(&acts) {
+            let range = sel.range();
+            let shift = |at: usize| (at as isize + delta) as usize;
+            match *act {
+                autopair::Act::Insert | autopair::Act::Close(_) => {
+                    let mut new = String::from(typed);
+                    if let autopair::Act::Close(close) = *act {
+                        new.push(close);
+                    }
+                    after.push(Sel::at(shift(range.start) + typed.len_utf8()));
+                    delta += new.len() as isize - range.len() as isize;
+                    edits.push((range, new));
+                }
+                autopair::Act::Skip => {
+                    after.push(Sel::at(shift(range.start) + typed.len_utf8()));
+                }
+                autopair::Act::Wrap(open, close) => {
+                    let (start, end) = (
+                        shift(range.start) + open.len_utf8(),
+                        shift(range.end) + open.len_utf8(),
+                    );
+                    // The selection stays over the inner text, facing the
+                    // way it did.
+                    let reversed = sel.head < sel.anchor;
+                    after.push(Sel {
+                        anchor: if reversed { end } else { start },
+                        head: if reversed { start } else { end },
+                        goal: None,
+                    });
+                    delta += (open.len_utf8() + close.len_utf8()) as isize;
+                    // One edit over the whole selection rather than an
+                    // insertion at each end: two selections that touch
+                    // would otherwise put an opener and a closer at the
+                    // same offset, where the order they land in is the
+                    // sort's to decide and not this loop's.
+                    let mut new = String::with_capacity(range.len() + 2);
+                    new.push(open);
+                    new.push_str(&self.text[range.clone()]);
+                    new.push(close);
+                    edits.push((range, new));
+                }
+            }
+        }
+        let after = Cursors {
+            sels: after,
+            primary: cursors.primary,
+        };
+        // A skip writes nothing, so it must not leave an undo step of its
+        // own to walk back over.
+        if edits.is_empty() {
+            self.set_cursors(after);
+            self.marked = None;
+            return true;
+        }
+        // A wrap starts its own step; a closer joins the run of typing it
+        // belongs to, so one undo takes the opener and the closer.
+        let kind = if acts.iter().any(|a| matches!(a, autopair::Act::Wrap(..))) {
+            EditKind::Other
+        } else {
+            EditKind::Typing
+        };
+        self.apply_edits(edits, after, kind);
+        true
+    }
+
     /// Deletes at every cursor: the selection, or what `range` gives for a
     /// collapsed one.
     pub fn delete_all(
@@ -863,14 +959,14 @@ impl TextBuffer {
 
     /// Enter: with `smart_indent_list`, a newline that continues list and
     /// quote markers and the numbering of ordered lists, and clears or
-    /// outdents an empty item. With several cursors, or a selection, a
-    /// plain newline at each.
-    pub fn newline(&mut self, smart_indent_list: bool) -> bool {
+    /// outdents an empty item by one `tab_size` step. With several cursors,
+    /// or a selection, a plain newline at each.
+    pub fn newline(&mut self, tab_size: u8, smart_indent_list: bool) -> bool {
         let sel = self.selection();
         if !smart_indent_list || sel.start != sel.end || !self.extra.is_empty() {
             return self.insert_all("\n", EditKind::Other);
         }
-        let (edits, cursor) = newline_plan(&self.text, &self.line_starts, self.head);
+        let (edits, cursor) = newline_plan(&self.text, &self.line_starts, self.head, tab_size);
         self.edit_many(edits, cursor, None)
     }
 
@@ -910,9 +1006,23 @@ impl TextBuffer {
     /// with the cursor in the first header cell.
     pub fn insert_table(&mut self) -> bool {
         let edit = table::insert_table();
-        let at = self.line_range(self.cursor().line).end;
-        let cursor = at + edit.cursor;
-        self.edit_many(vec![(at..at, edit.text)], cursor, None)
+        let line = self.cursor().line;
+        let at = self.line_range(line).end;
+        let mut text = edit.text;
+        let mut cursor = at + edit.cursor;
+        if !self.line_text(line).trim().is_empty() {
+            // A table cannot interrupt a longer paragraph, so without a blank
+            // line of its own the block stays paragraph text in Obsidian and
+            // in our own parser.
+            text.insert(0, '\n');
+            cursor += 1;
+        }
+        if line + 1 < self.line_count() && self.line_text(line + 1).trim().is_empty() {
+            // The line we insert before is blank already: one more newline
+            // would leave two blank lines under the table.
+            text.pop();
+        }
+        self.edit_many(vec![(at..at, text)], cursor, None)
     }
 
     /// Tab: indents list items and the selected lines by one step
@@ -933,6 +1043,7 @@ impl TextBuffer {
             &self.line_starts,
             lines,
             &unit,
+            tab_size,
             true,
             smart_indent_list,
         );
@@ -940,20 +1051,160 @@ impl TextBuffer {
         self.edit_many(edits, head, Some(anchor))
     }
 
-    /// Shift+Tab: removes one indentation step from the selected lines,
-    /// renumbering the ordered lists it touches.
-    pub fn outdent(&mut self, smart_indent_list: bool) -> bool {
+    /// Shift+Tab: removes one indentation step from the selected lines, a
+    /// tab or `tab_size` spaces as Tab put there, renumbering the ordered
+    /// lists it touches.
+    pub fn outdent(&mut self, tab_size: u8, smart_indent_list: bool) -> bool {
         let lines = self.selected_lines();
         let edits = indent_plan(
             &self.text,
             &self.line_starts,
             lines,
             "",
+            tab_size,
             false,
             smart_indent_list,
         );
         let (head, anchor) = (shifted(self.head, &edits), shifted(self.anchor, &edits));
         self.edit_many(edits, head, Some(anchor))
+    }
+
+    /// A formatting toggle (`editor:toggle-bold` and the rest): every
+    /// selection is wrapped in `marker`, or loses the marker it is already
+    /// wrapped in, as one undo step. An empty selection gets the pair with
+    /// the caret between the halves; the selection stays on the text it
+    /// was on.
+    pub fn toggle_wrap(&mut self, marker: &str) -> bool {
+        let cursors = self.cursors();
+        let m = marker.len();
+        let mut edits: Vec<(Range<usize>, String)> = Vec::new();
+        let mut after = Vec::with_capacity(cursors.sels.len());
+        // `apply_edits` wants the selections in post-edit coordinates, and
+        // every earlier selection's markers have moved the later ones.
+        let mut delta: isize = 0;
+        let mut floor = 0;
+        for sel in &cursors.sels {
+            let range = sel.range();
+            let reversed = sel.head < sel.anchor;
+            let shift = |at: usize| (at as isize + delta) as usize;
+            let (start, end) = match format::toggle_wrap(&self.text, range.clone(), marker, floor) {
+                format::Toggle::Strip(open, close) => {
+                    let ends = (shift(open.start), shift(close.start) - m);
+                    floor = close.end;
+                    delta -= 2 * m as isize;
+                    edits.push((open, String::new()));
+                    edits.push((close, String::new()));
+                    ends
+                }
+                format::Toggle::Wrap(r) => {
+                    let ends = (shift(r.start) + m, shift(r.end) + m);
+                    floor = r.end;
+                    delta += 2 * m as isize;
+                    // One edit over the whole selection rather than an
+                    // insertion at each end, for the reason `type_pair`
+                    // gives: two markers at one offset would land in
+                    // whichever order the sort chose.
+                    let mut new = String::with_capacity(r.len() + 2 * m);
+                    new.push_str(marker);
+                    new.push_str(&self.text[r.clone()]);
+                    new.push_str(marker);
+                    edits.push((r, new));
+                    ends
+                }
+            };
+            after.push(Sel {
+                anchor: if reversed { end } else { start },
+                head: if reversed { start } else { end },
+                goal: None,
+            });
+        }
+        if edits.is_empty() {
+            return false;
+        }
+        let after = Cursors {
+            sels: after,
+            primary: cursors.primary,
+        };
+        self.apply_edits(edits, after, EditKind::Other);
+        true
+    }
+
+    /// `editor:toggle-checklist-status`: flips the checkbox on each
+    /// selected line that has one. The three bytes are replaced by three,
+    /// so nothing moves under the cursor.
+    pub fn toggle_checklist(&mut self) -> bool {
+        let lines = self.selected_lines();
+        let edits = format::checklist_plan(&self.text, &self.line_starts, lines);
+        let (head, anchor) = (self.head, self.anchor);
+        self.edit_many(edits, head, Some(anchor))
+    }
+
+    /// `editor:set-heading-<n>`: rewrites the selected lines' leading
+    /// `#`s, or removes them when `level` is 0.
+    pub fn set_heading(&mut self, level: u8) -> bool {
+        let lines = self.selected_lines();
+        let edits = format::heading_plan(&self.text, &self.line_starts, lines, level);
+        let (head, anchor) = (shifted(self.head, &edits), shifted(self.anchor, &edits));
+        self.edit_many(edits, head, Some(anchor))
+    }
+
+    /// `editor:toggle-bullet-list`, `-numbered-list` and `-blockquote`:
+    /// adds the prefix to the selected lines, or takes it off when they
+    /// all already have it.
+    pub fn toggle_line_prefix(&mut self, kind: format::LinePrefix) -> bool {
+        let lines = self.selected_lines();
+        let edits = format::line_prefix_plan(&self.text, &self.line_starts, lines, kind);
+        let (head, anchor) = (shifted(self.head, &edits), shifted(self.anchor, &edits));
+        self.edit_many(edits, head, Some(anchor))
+    }
+
+    /// `editor:delete-paragraph`: removes the block of lines around the
+    /// cursor, out to the blank line either side.
+    pub fn delete_paragraph(&mut self) -> bool {
+        let lines = self.selected_lines();
+        let span = format::paragraph_span(&self.text, &self.line_starts, lines);
+        if span.is_empty() {
+            return false;
+        }
+        let at = span.start;
+        self.edit_many(vec![(span, String::new())], at, None)
+    }
+
+    /// `editor:swap-line-up` and `-down`: moves the selected lines over
+    /// the line above or below, carrying the selection with them.
+    pub fn swap_lines(&mut self, up: bool) -> bool {
+        let lines = self.selected_lines();
+        let Some((edit, shift)) = format::swap_lines_plan(&self.text, &self.line_starts, lines, up)
+        else {
+            return false;
+        };
+        let moved = |at: usize| (at as isize + shift) as usize;
+        let (head, anchor) = (moved(self.head), moved(self.anchor));
+        self.edit_many(vec![edit], head, Some(anchor))
+    }
+
+    /// `editor:insert-link`, `-wikilink` and `-embed`: writes the link
+    /// shape around every selection, with the caret where the target is
+    /// typed so the autocompletion popup opens on it.
+    pub fn insert_link(&mut self, kind: format::LinkSyntax) -> bool {
+        let cursors = self.cursors();
+        let mut edits: Vec<(Range<usize>, String)> = Vec::new();
+        let mut after = Vec::with_capacity(cursors.sels.len());
+        let mut delta: isize = 0;
+        for sel in &cursors.sels {
+            let range = sel.range();
+            let (new, caret) = format::link_insertion(&self.text[range.clone()], kind);
+            let at = (range.start as isize + delta) as usize;
+            after.push(Sel::at(at + caret));
+            delta += new.len() as isize - range.len() as isize;
+            edits.push((range, new));
+        }
+        let after = Cursors {
+            sels: after,
+            primary: cursors.primary,
+        };
+        self.apply_edits(edits, after, EditKind::Other);
+        true
     }
 
     /// What each cursor copies: its selection, or its whole line when
@@ -1007,6 +1258,36 @@ impl TextBuffer {
             .collect();
         self.edit_all(edits, EditKind::Other)
     }
+}
+
+/// The start of the grapheme cluster before `at`, or `at` itself at the
+/// start of the text. Deletion and caret motion step by cluster because a
+/// combining accent, a regional-indicator flag pair and a zero-width-joiner
+/// emoji are each one character to whoever typed them: stepping by code
+/// point leaves a bare letter or half a flag in the note.
+pub fn prev_grapheme_boundary(text: &str, at: usize) -> usize {
+    let at = floor_char_boundary(text, at);
+    let mut cursor = GraphemeCursor::new(at, text.len(), true);
+    // The whole text is in hand, so the chunked-scan errors cannot happen
+    // and `None` only means there is nothing before `at`.
+    cursor.prev_boundary(text, 0).ok().flatten().unwrap_or(at)
+}
+
+/// The end of the grapheme cluster at `at`, or `at` itself at the end of
+/// the text.
+pub fn next_grapheme_boundary(text: &str, at: usize) -> usize {
+    let at = floor_char_boundary(text, at);
+    let mut cursor = GraphemeCursor::new(at, text.len(), true);
+    cursor.next_boundary(text, 0).ok().flatten().unwrap_or(at)
+}
+
+/// `at`, moved back to the character boundary at or before it.
+fn floor_char_boundary(text: &str, at: usize) -> usize {
+    let mut at = at.min(text.len());
+    while !text.is_char_boundary(at) {
+        at -= 1;
+    }
+    at
 }
 
 /// 0 for whitespace, 1 for word characters, 2 for punctuation.
@@ -1099,13 +1380,74 @@ mod tests {
         let raw = "- one\n- two\n";
         let mut buf = TextBuffer::from_file(raw);
         buf.set_cursor(5, None);
-        buf.newline(true);
+        buf.newline(4, true);
         buf.insert_all("three", EditKind::Typing);
         assert_eq!(buf.text(), "- one\n- three\n- two\n");
         while buf.can_undo() {
             buf.undo();
         }
         assert_eq!(buf.file_contents(), raw);
+    }
+
+    /// Two Tabs then two Shift+Tabs come back to where they started: the
+    /// outdent step is the vault's `tabSize`, not four spaces, so in a
+    /// two-space vault one Shift+Tab used to undo both Tabs.
+    #[test]
+    fn tab_and_shift_tab_round_trip_at_the_configured_width() {
+        let mut buf = TextBuffer::from_file("- a\n- b\n");
+        buf.set_cursor(7, None);
+        buf.indent(false, 2, true);
+        buf.indent(false, 2, true);
+        assert_eq!(buf.line_text(1), "    - b");
+        buf.outdent(2, true);
+        assert_eq!(buf.line_text(1), "  - b");
+        buf.outdent(2, true);
+        assert_eq!(buf.line_text(1), "- b");
+    }
+
+    /// Enter on an empty nested item outdents it by one step too.
+    #[test]
+    fn an_empty_nested_item_outdents_one_level() {
+        let mut buf = TextBuffer::from_file("- a\n    - \n");
+        buf.set_cursor(10, None);
+        buf.newline(2, true);
+        assert_eq!(buf.line_text(1), "  - ");
+    }
+
+    /// `editor:insert-table` has to leave a blank line above the table: a
+    /// table cannot interrupt a longer paragraph, so one glued to the line
+    /// above is not read as a table at all.
+    #[test]
+    fn an_inserted_table_is_a_block_of_its_own() {
+        const TABLE: &str = "|     |     |\n| --- | --- |\n|     |     |";
+
+        // Inside a paragraph, with a blank line and more text below.
+        let mut buf = TextBuffer::from_file("# H\n\nalpha\n\n- task\n");
+        buf.set_cursor(8, None);
+        assert!(buf.insert_table());
+        assert_eq!(buf.text(), format!("# H\n\nalpha\n\n{TABLE}\n\n- task\n"));
+        // The cursor lands in the first header cell, and the table commands
+        // find the table that was written.
+        assert_eq!(&buf.text()[buf.head..buf.head + 5], "     ");
+        assert!(buf.in_table());
+
+        // On a blank line: the line itself is the separation.
+        let mut buf = TextBuffer::from_file("# H\n\nalpha\n");
+        buf.set_cursor(4, None);
+        assert!(buf.insert_table());
+        assert_eq!(buf.text(), format!("# H\n\n{TABLE}\n\nalpha\n"));
+
+        // A non-blank line below keeps the newline that separates it.
+        let mut buf = TextBuffer::from_file("alpha\nbeta\n");
+        buf.set_cursor(2, None);
+        assert!(buf.insert_table());
+        assert_eq!(buf.text(), format!("alpha\n\n{TABLE}\n\nbeta\n"));
+
+        // The last line of a file that does not end in a newline.
+        let mut buf = TextBuffer::from_file("alpha");
+        buf.set_cursor(5, None);
+        assert!(buf.insert_table());
+        assert_eq!(buf.text(), format!("alpha\n\n{TABLE}\n"));
     }
 
     #[test]
@@ -1119,5 +1461,291 @@ mod tests {
         assert_eq!(buf.line_text(2), "yb");
         buf.undo();
         assert_eq!(buf.line_starts(), [0, 2, 4, 6]);
+    }
+
+    /// The opener and the closer are one typing step, so one undo takes
+    /// both; the skip over the closer adds no step of its own.
+    #[test]
+    fn a_typed_bracket_brings_its_closer_and_undoes_with_it() {
+        let mut buf = TextBuffer::from_file("seed\n");
+        buf.set_cursor(4, None);
+        assert!(buf.type_pair('(', autopair::Options::default()));
+        assert_eq!(buf.text(), "seed()\n");
+        assert_eq!(buf.head, 5);
+
+        assert!(buf.type_pair(')', autopair::Options::default()));
+        assert_eq!(buf.text(), "seed()\n");
+        assert_eq!(buf.head, 6);
+
+        assert!(buf.undo());
+        assert_eq!(buf.text(), "seed\n");
+        assert_eq!(buf.head, 4);
+    }
+
+    /// The data-losing half of the old behavior: a pair character typed
+    /// over a selection used to replace it.
+    #[test]
+    fn a_pair_character_wraps_a_selection_and_keeps_it() {
+        let mut buf = TextBuffer::from_file("alpha beta\n");
+        buf.set_cursor(5, Some(0));
+        assert!(buf.type_pair('*', autopair::Options::default()));
+        assert_eq!(buf.text(), "*alpha* beta\n");
+        // Still over `alpha`, still facing the way it was.
+        assert_eq!((buf.anchor, buf.head), (1, 6));
+
+        assert!(buf.undo());
+        assert_eq!(buf.text(), "alpha beta\n");
+    }
+
+    /// Wrapping is per range, and every selection survives it.
+    #[test]
+    fn two_selections_are_wrapped_one_each() {
+        let mut buf = TextBuffer::from_file("alpha beta\n");
+        buf.set_cursor(5, Some(0));
+        buf.extra = vec![Sel {
+            anchor: 6,
+            head: 10,
+            goal: None,
+        }];
+        assert!(buf.type_pair('(', autopair::Options::default()));
+        assert_eq!(buf.text(), "(alpha) (beta)\n");
+        let after = buf.cursors();
+        assert_eq!(after.sels[0].range(), 1..6);
+        assert_eq!(after.sels[1].range(), 9..13);
+    }
+
+    /// Two selections that touch: the first one's closer and the second
+    /// one's opener both land at the same offset, and the closer goes
+    /// first.
+    #[test]
+    fn touching_selections_are_wrapped_without_crossing() {
+        let mut buf = TextBuffer::from_file("alphabeta\n");
+        buf.set_cursor(5, Some(0));
+        buf.extra = vec![Sel {
+            anchor: 5,
+            head: 9,
+            goal: None,
+        }];
+        assert!(buf.type_pair('(', autopair::Options::default()));
+        assert_eq!(buf.text(), "(alpha)(beta)\n");
+        let after = buf.cursors();
+        assert_eq!(after.sels[0].range(), 1..6);
+        assert_eq!(after.sels[1].range(), 8..12);
+    }
+
+    /// A selection dragged backwards keeps its direction through the wrap.
+    #[test]
+    fn a_backwards_selection_keeps_its_direction() {
+        let mut buf = TextBuffer::from_file("alpha beta\n");
+        buf.set_cursor(0, Some(5));
+        assert!(buf.type_pair('_', autopair::Options::default()));
+        assert_eq!(buf.text(), "_alpha_ beta\n");
+        assert_eq!((buf.anchor, buf.head), (6, 1));
+    }
+
+    /// A word character ahead of the cursor suppresses the closer, so two
+    /// cursors in the same word get different treatment in one keystroke.
+    #[test]
+    fn each_cursor_decides_for_itself_whether_to_close() {
+        let mut buf = TextBuffer::from_file("ab\ncd\n");
+        buf.set_cursor(0, None);
+        buf.extra = vec![Sel::at(5)];
+        assert!(buf.type_pair('(', autopair::Options::default()));
+        // `|ab` has a word character ahead; `cd|` is at the end of a line.
+        assert_eq!(buf.text(), "(ab\ncd()\n");
+    }
+
+    /// With both toggles off nothing closes, wraps or skips, and the
+    /// caller is told to insert the character the ordinary way.
+    #[test]
+    fn nothing_pairs_when_both_settings_are_off() {
+        let off = autopair::Options {
+            brackets: false,
+            markdown: false,
+        };
+        let mut buf = TextBuffer::from_file("seed\n");
+        buf.set_cursor(4, None);
+        assert!(!buf.type_pair('(', off));
+        buf.set_cursor(4, Some(0));
+        assert!(!buf.type_pair('*', off));
+        assert_eq!(buf.text(), "seed\n");
+    }
+
+    #[test]
+    fn bold_wraps_a_selection_and_unwraps_it_again() {
+        let mut buf = TextBuffer::from_file("alpha beta\n");
+        buf.set_cursor(5, Some(0));
+        assert!(buf.toggle_wrap("**"));
+        assert_eq!(buf.text(), "**alpha** beta\n");
+        // The selection stayed on the word, so the toggle undoes itself.
+        assert_eq!(buf.selection(), 2..7);
+        assert!(buf.toggle_wrap("**"));
+        assert_eq!(buf.text(), "alpha beta\n");
+        assert_eq!(buf.selection(), 0..5);
+    }
+
+    #[test]
+    fn a_toggle_with_no_selection_leaves_the_caret_between_the_markers() {
+        let mut buf = TextBuffer::from_file("ab\n");
+        buf.set_cursor(1, None);
+        assert!(buf.toggle_wrap("=="));
+        assert_eq!(buf.text(), "a====b\n");
+        assert_eq!(buf.cursor().col, 3);
+        // And again, which takes the empty pair back out.
+        assert!(buf.toggle_wrap("=="));
+        assert_eq!(buf.text(), "ab\n");
+        assert_eq!(buf.cursor().col, 1);
+    }
+
+    #[test]
+    fn a_toggle_wraps_every_cursor_in_one_undo_step() {
+        let mut buf = TextBuffer::from_file("one two\n");
+        buf.set_cursor(3, Some(0));
+        buf.extra = vec![Sel {
+            anchor: 4,
+            head: 7,
+            goal: None,
+        }];
+        assert!(buf.toggle_wrap("*"));
+        assert_eq!(buf.text(), "*one* *two*\n");
+        assert!(buf.undo());
+        assert_eq!(buf.text(), "one two\n");
+    }
+
+    #[test]
+    fn the_checkbox_toggle_writes_the_bytes_the_click_writes() {
+        let mut buf = TextBuffer::from_file("- [ ] a\n- [x] b\n- [?] c\n");
+        buf.set_cursor(2, None);
+        assert!(buf.toggle_checklist());
+        assert_eq!(buf.text(), "- [x] a\n- [x] b\n- [?] c\n");
+        assert_eq!(buf.cursor(), Cursor { line: 0, col: 2 });
+        // A selection over the other two flips each of them.
+        buf.set_cursor(8, Some(23));
+        assert!(buf.toggle_checklist());
+        assert_eq!(buf.text(), "- [x] a\n- [ ] b\n- [ ] c\n");
+    }
+
+    #[test]
+    fn a_line_without_a_checkbox_is_left_alone() {
+        let mut buf = TextBuffer::from_file("plain\n");
+        buf.set_cursor(0, None);
+        assert!(!buf.toggle_checklist());
+        assert_eq!(buf.text(), "plain\n");
+    }
+
+    #[test]
+    fn heading_keeps_the_cursor_on_the_same_word() {
+        let mut buf = TextBuffer::from_file("alpha\n");
+        buf.set_cursor(5, None);
+        assert!(buf.set_heading(2));
+        assert_eq!(buf.text(), "## alpha\n");
+        assert_eq!(buf.cursor().col, 8);
+        assert!(buf.set_heading(0));
+        assert_eq!(buf.text(), "alpha\n");
+        assert_eq!(buf.cursor().col, 5);
+    }
+
+    #[test]
+    fn a_bullet_toggle_covers_the_selected_lines() {
+        let mut buf = TextBuffer::from_file("one\ntwo\n");
+        buf.set_cursor(0, Some(7));
+        assert!(buf.toggle_line_prefix(format::LinePrefix::Bullet));
+        assert_eq!(buf.text(), "- one\n- two\n");
+        assert!(buf.toggle_line_prefix(format::LinePrefix::Ordered));
+        assert_eq!(buf.text(), "1. one\n2. two\n");
+        assert!(buf.toggle_line_prefix(format::LinePrefix::Ordered));
+        assert_eq!(buf.text(), "one\ntwo\n");
+    }
+
+    #[test]
+    fn delete_paragraph_takes_the_block_around_the_cursor() {
+        let mut buf = TextBuffer::from_file("one\n\ntwo\nthree\n\nfour\n");
+        buf.set_cursor(7, None);
+        assert!(buf.delete_paragraph());
+        assert_eq!(buf.text(), "one\n\n\nfour\n");
+        assert_eq!(buf.head, 5);
+    }
+
+    #[test]
+    fn moving_a_line_carries_the_cursor_with_it() {
+        let mut buf = TextBuffer::from_file("a\nbb\nc\n");
+        buf.set_cursor(3, None);
+        assert!(buf.swap_lines(true));
+        assert_eq!(buf.text(), "bb\na\nc\n");
+        assert_eq!(buf.head, 1);
+        assert!(buf.swap_lines(false));
+        assert_eq!(buf.text(), "a\nbb\nc\n");
+        assert_eq!(buf.head, 3);
+        // The first line has nothing above it.
+        buf.set_cursor(0, None);
+        assert!(!buf.swap_lines(true));
+    }
+
+    #[test]
+    fn insert_link_puts_the_caret_where_the_target_goes() {
+        let mut buf = TextBuffer::from_file("see x\n");
+        buf.set_cursor(4, None);
+        assert!(buf.insert_link(format::LinkSyntax::Markdown));
+        assert_eq!(buf.text(), "see []()x\n");
+        assert_eq!(buf.head, 5);
+        assert!(buf.undo());
+        buf.set_cursor(4, Some(3));
+        assert!(buf.insert_link(format::LinkSyntax::Wikilink));
+        assert_eq!(buf.text(), "see[[ ]]x\n");
+        assert_eq!(buf.head, 6);
+    }
+
+    /// A combining accent, a regional-indicator flag pair and a
+    /// zero-width-joiner emoji are each one character to whoever typed
+    /// them. Stepping by code point left a bare `e`, half a flag or a
+    /// dangling joiner in the note.
+    #[test]
+    fn deletion_and_caret_motion_take_a_grapheme_cluster_whole() {
+        for cluster in [
+            "e\u{301}",
+            "\u{1f1eb}\u{1f1f7}",
+            "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}",
+            "x",
+        ] {
+            let text = format!("a{cluster}b\n");
+            let after = 1 + cluster.len();
+
+            let mut buf = TextBuffer::from_file(&text);
+            buf.set_cursor(after, None);
+            assert!(buf.backspace());
+            assert_eq!(buf.text(), "ab\n", "backspace over {cluster:?}");
+
+            let mut buf = TextBuffer::from_file(&text);
+            buf.set_cursor(1, None);
+            assert!(buf.delete_forward());
+            assert_eq!(buf.text(), "ab\n", "delete over {cluster:?}");
+
+            // The caret stops either side of the cluster, never inside it.
+            let buf = TextBuffer::from_file(&text);
+            assert_eq!(
+                buf.next_grapheme_boundary(1),
+                after,
+                "right over {cluster:?}"
+            );
+            assert_eq!(
+                buf.prev_grapheme_boundary(after),
+                1,
+                "left over {cluster:?}"
+            );
+            assert_eq!(buf.prev_grapheme_boundary(0), 0);
+            assert_eq!(buf.next_grapheme_boundary(buf.len()), buf.len());
+        }
+    }
+
+    /// Ctrl+arrow and double-click keep an accented letter in its word:
+    /// classifying a cluster by its last code point made the combining
+    /// mark punctuation and broke the word there.
+    #[test]
+    fn word_motion_keeps_an_accented_letter_in_its_word() {
+        let buf = TextBuffer::from_file("one cafe\u{301} two\n");
+        let end = "one cafe\u{301}".len();
+        assert_eq!(buf.word_left(end), 4);
+        assert_eq!(buf.word_right(4), end);
+        assert_eq!(buf.word_at(5), 4..end);
     }
 }

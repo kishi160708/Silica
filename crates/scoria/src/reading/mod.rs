@@ -3,5 +3,5 @@
 pub mod model;
 pub mod view;
 
-pub use model::{build_with, BuildOptions, EmbedSource, LinkTarget};
-pub use view::{ReadingEvent, ReadingView};
+pub use model::{build_with, BuildOptions, EmbedSource, LinkTarget, TaskMarker};
+pub use view::{ReadingEvent, ReadingView, TaskToggled};

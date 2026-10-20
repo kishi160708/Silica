@@ -35,10 +35,10 @@ use gpui::{
     actions, div, fill, point, prelude::*, px, relative, size, AnyElement, App, AvailableSpace,
     Bounds, ClipboardItem, Context, DispatchPhase, Element, ElementId, ElementInputHandler, Entity,
     EntityInputHandler, EventEmitter, FocusHandle, Focusable, Font, FontStyle, FontWeight,
-    GlobalElementId, Hsla, InspectorElementId, KeyBinding, LayoutId, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ScrollWheelEvent, SharedString,
-    StrikethroughStyle, Style, Subscription, Task, TextAlign, TextRun, TextStyle, UTF16Selection,
-    UnderlineStyle, Window, WrappedLine,
+    GlobalElementId, Hitbox, HitboxBehavior, Hsla, InspectorElementId, KeyBinding, LayoutId,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point,
+    ScrollWheelEvent, SharedString, StrikethroughStyle, Style, Subscription, Task, TextAlign,
+    TextRun, TextStyle, UTF16Selection, UnderlineStyle, Window, WrappedLine,
 };
 use _formats::config::PropertyTypes;
 use _formats::properties::{self as props, PropertiesInDocument};
@@ -46,7 +46,10 @@ use _markdown::highlight::{flatten, highlight_lines, HighlightKind, HighlightSpa
 use _suggest::blocks::{self, IdInsertion, Placement};
 use _suggest::{self as suggest, Accept, BlockId, Suggestion};
 use _text::table::{self, TableCommand};
-use _text::{find, shifted, Cursor, Cursors, EditKind, Sel, TextBuffer};
+use _text::{
+    autopair, find, shifted, wrap, Cursor, Cursors, EditKind, LinePrefix, LinkSyntax, Sel,
+    TextBuffer,
+};
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::rc::Rc;
@@ -100,6 +103,7 @@ actions!(
         CloseFind,
         AddCursorAbove,
         AddCursorBelow,
+        FocusOtherField,
     ]
 );
 
@@ -151,6 +155,12 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("shift-enter", FindPrevious, Some("FindPanel")),
         KeyBinding::new("alt-enter", FindAll, Some("FindPanel")),
         KeyBinding::new("escape", CloseFind, Some("FindPanel")),
+        KeyBinding::new("tab", FocusOtherField, Some("FindPanel")),
+        KeyBinding::new("shift-tab", FocusOtherField, Some("FindPanel")),
+        // The popup's own keys, in the context the editor only carries
+        // while it is open, so Ctrl+N still makes a new note otherwise.
+        KeyBinding::new("ctrl-n", MoveDown, Some("SuggestPopup")),
+        KeyBinding::new("ctrl-p", MoveUp, Some("SuggestPopup")),
     ]);
 }
 
@@ -336,12 +346,30 @@ impl Shaped {
         self.row_height * self.rows() as f32
     }
 
+    /// The display byte each wrapped row after the first begins at.
+    fn row_starts(&self) -> impl Iterator<Item = usize> + '_ {
+        let layout = &self.line.unwrapped_layout;
+        self.line
+            .wrap_boundaries()
+            .iter()
+            .map(move |b| layout.runs[b.run_ix].glyphs[b.glyph_ix].index)
+    }
+
     /// The wrapped row and x of source byte `col`.
     fn row_and_x(&self, col: usize) -> (usize, Pixels) {
+        if self.row_height <= px(0.) {
+            return (0, px(0.));
+        }
         let d = self.display.to_display(col);
+        if self.row_starts().any(|start| start == d) {
+            // gpui reports a byte that falls on a wrap point at the right
+            // edge of the row before, which strands the caret a row above
+            // the text it is in and leaves Home with nowhere for End to go.
+            return (wrap::row_of(self.row_starts(), d), px(0.));
+        }
         match self.line.position_for_index(d, self.row_height) {
-            Some(p) if self.row_height > px(0.) => ((p.y / self.row_height).round() as usize, p.x),
-            _ => (0, px(0.)),
+            Some(p) => ((p.y / self.row_height).round() as usize, p.x),
+            None => (0, px(0.)),
         }
     }
 
@@ -356,10 +384,69 @@ impl Shaped {
             .unwrap_or_else(|i| i)
     }
 
+    /// The display byte of the glyph `x` sits inside on `row`, or `None`
+    /// when the point is left of the text or past the end of the row.
+    ///
+    /// A click on a rendered construct asks this rather than
+    /// `display_index_at`, which clamps an out-of-range point onto the
+    /// nearest character and so would hand a click in the left margin, or
+    /// in the blank space after the last glyph, to whatever construct
+    /// happens to sit at that end of the line.
+    fn glyph_index_at(&self, x: Pixels, row: usize) -> Option<usize> {
+        if row >= self.rows() {
+            return None;
+        }
+        self.line
+            .index_for_position(point(x, self.row_height * row as f32), self.row_height)
+            .ok()
+    }
+
     /// The source byte nearest `x` on `row`.
     fn index_at(&self, x: Pixels, row: usize) -> usize {
-        self.display.to_source(self.display_index_at(x, row))
+        self.to_source(self.display_index_at(x, row))
     }
+
+    /// The source byte display byte `d` stands for.
+    fn to_source(&self, d: usize) -> usize {
+        source_index(&self.display, d)
+    }
+}
+
+/// The source byte display byte `d` stands for.
+///
+/// `DisplayLine::to_source` answers with the piece that spans `d`, and
+/// markup hidden at the end of a line is a substitution that displays
+/// nothing, so it spans nothing and the end of the display falls back
+/// into the copied piece before it — inside the construct that markup
+/// closes. The end of the display is the end of the source line instead,
+/// which is where a click past the last glyph of `see [[Welcome]]` should
+/// put the caret: after the `]]`, not between `Welcome` and it.
+fn source_index(display: &DisplayLine, d: usize) -> usize {
+    if d < display.text.len() {
+        return display.to_source(d);
+    }
+    display
+        .pieces
+        .iter()
+        .map(|p| match p {
+            Piece::Copy { source, len, .. } => source + len,
+            Piece::Sub { source, .. } => source.end,
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// Where a mouse point landed, resolved against the last frame's layout.
+struct Hit {
+    line: usize,
+    shaped: Shaped,
+    /// The display byte nearest the point: where a click puts the caret,
+    /// clamped onto the line however far outside the point was.
+    display: usize,
+    /// The display byte of the glyph under the point, when the point was
+    /// on one at all. `None` for the margins and for the blank space past
+    /// the end of a row, which no construct is drawn in.
+    glyph: Option<usize>,
 }
 
 /// A Live Preview widget as painted: the lines it stands for and where.
@@ -450,6 +537,10 @@ impl Scrollbar {
 
 pub struct Editor {
     focus_handle: FocusHandle,
+    /// The vault-relative path of the file in the buffer, empty when no
+    /// file is behind it. The shell reads it that way: an empty name is
+    /// what tells it to paint its empty state instead of this view, and to
+    /// save nothing.
     pub name: SharedString,
     /// The text, its line index, the selections and the undo history; the
     /// bytes this view writes back are all decided there.
@@ -484,6 +575,11 @@ pub struct Editor {
     property_field: Option<Field>,
     /// Whether the properties block is collapsed.
     properties_folded: bool,
+    /// Callouts whose fold state the reader flipped, by title id — the same
+    /// set the reading view keeps, and with the same caveat: the ids are the
+    /// model builder's counters, so they only mean anything for the note
+    /// that produced them.
+    callout_folds: HashSet<usize>,
     /// The property whose type menu is open.
     property_menu: Option<String>,
     /// The table cell being typed into. Like a properties field, the keys
@@ -557,7 +653,11 @@ impl Editor {
                 current: None,
             },
             _subscriptions: subscriptions,
-            name: "untitled".into(),
+            // A view that has not been given a file yet belongs to none,
+            // and a placeholder name here would read as one: the shell
+            // would mount this editor on launch over an empty vault and
+            // take a whole note's worth of typing that nothing saves.
+            name: SharedString::default(),
             buf: TextBuffer::new(),
             scroll_line: 0,
             scroll_px: px(0.),
@@ -573,6 +673,7 @@ impl Editor {
             properties_in_document: PropertiesInDocument::default(),
             property_field: None,
             properties_folded: false,
+            callout_folds: HashSet::new(),
             property_menu: None,
             table_field: None,
             suggest: None,
@@ -602,6 +703,9 @@ impl Editor {
         self.buf.load(&raw);
         self.suggest = None;
         self.table_field = None;
+        // Fold ids are per-note counters, so another note's would collapse
+        // whichever callout happened to land on the same number.
+        self.callout_folds.clear();
         self.buf.head = 0;
         self.buf.anchor = 0;
         self.widgets = Arc::new(Vec::new());
@@ -611,6 +715,11 @@ impl Editor {
         self.frame_samples = Sample::default();
         self.parse_samples = Sample::default();
         self.parse_latency = Sample::default();
+        // The matches point into the note that was open; drop them rather
+        // than let the panel count or step through another note's offsets.
+        self.find.matches.clear();
+        self.find.current = None;
+        self.refresh_matches(cx);
         self.request_parse(cx);
         cx.notify();
     }
@@ -642,6 +751,13 @@ impl Editor {
 
     pub fn is_dirty(&self) -> bool {
         self.buf.is_dirty()
+    }
+
+    /// The buffer's text, `\n`-ended and without the file's byte order
+    /// mark. The reading view is rebuilt from this when the workspace
+    /// edits the note while the reader, not the editor, is on screen.
+    pub fn text(&self) -> &str {
+        self.buf.text()
     }
 
     /// Whether `raw` (a file's bytes) is this buffer, ignoring the BOM and
@@ -732,6 +848,21 @@ impl Editor {
         self.tab_size = tab_size;
     }
 
+    /// `autoPairBrackets` and `autoPairMarkdown`, read from the vault's
+    /// `app.json` as each character is typed. The Settings modal writes
+    /// the config through the same lock, so a toggle takes effect on the
+    /// next keystroke without the note being reopened.
+    fn auto_pair(&self) -> autopair::Options {
+        let Some(state) = &self.suggest_vault else {
+            return autopair::Options::default();
+        };
+        let app = state.app();
+        autopair::Options {
+            brackets: app.auto_pair_brackets.unwrap_or(true),
+            markdown: app.auto_pair_markdown.unwrap_or(true),
+        }
+    }
+
     /// Whether the cursor is in a table: the table commands are offered
     /// only then, the way Obsidian's check callback hides them.
     pub fn in_table(&self) -> bool {
@@ -761,16 +892,110 @@ impl Editor {
         }
     }
 
+    /// One of Obsidian's formatting toggles: wraps each selection in
+    /// `marker`, or takes the marker off when it is already there.
+    pub fn toggle_wrap(&mut self, marker: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.buf.toggle_wrap(marker) {
+            self.after_edit(Some(window), cx);
+        }
+    }
+
+    /// `editor:toggle-checklist-status`: flips the checkbox on every
+    /// selected line that has one, writing the same bytes a click on the
+    /// rendered checkbox writes. False when no selected line has one.
+    pub fn toggle_checklist(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if !self.buf.toggle_checklist() {
+            return false;
+        }
+        self.after_edit(Some(window), cx);
+        true
+    }
+
+    /// `editor:set-heading-<n>`: rewrites the selected lines' `#`s.
+    pub fn set_heading(&mut self, level: u8, window: &mut Window, cx: &mut Context<Self>) {
+        if self.buf.set_heading(level) {
+            self.after_edit(Some(window), cx);
+        }
+    }
+
+    /// `editor:toggle-bullet-list`, `-numbered-list` and `-blockquote`.
+    pub fn toggle_line_prefix(
+        &mut self,
+        kind: LinePrefix,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.buf.toggle_line_prefix(kind) {
+            self.after_edit(Some(window), cx);
+        }
+    }
+
+    /// `editor:delete-paragraph`.
+    pub fn delete_paragraph(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.buf.delete_paragraph() {
+            self.after_edit(Some(window), cx);
+        }
+    }
+
+    /// `editor:swap-line-up` and `-down`.
+    pub fn swap_lines(&mut self, up: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.buf.swap_lines(up) {
+            self.after_edit(Some(window), cx);
+        }
+    }
+
+    /// `editor:insert-link`, `-wikilink` and `-embed`: the link shape
+    /// around the selection, with the caret where the target is typed —
+    /// which is where `after_edit` opens the autocompletion popup.
+    pub fn insert_link(&mut self, kind: LinkSyntax, window: &mut Window, cx: &mut Context<Self>) {
+        if self.buf.insert_link(kind) {
+            self.after_edit(Some(window), cx);
+        }
+    }
+
+    /// `editor:indent-list` and `-unindent-list`: the same step Tab and
+    /// Shift+Tab take.
+    pub fn indent_list(&mut self, indent: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let moved = if indent {
+            self.buf
+                .indent(self.use_tab, self.tab_size, self.smart_indent_list)
+        } else {
+            self.buf.outdent(self.tab_size, self.smart_indent_list)
+        };
+        if moved {
+            self.after_edit(Some(window), cx);
+        }
+    }
+
+    /// `editor:follow-link`: opens the link the cursor is in, the way
+    /// Ctrl+click opens the one under the pointer. False when the cursor
+    /// is not in a link.
+    pub fn follow_link_at_cursor(&mut self, cx: &mut Context<Self>) -> bool {
+        let cursor = self.cursor();
+        // Not `rendered_only`: a cursor inside a link is exactly what
+        // makes Live Preview reveal its source.
+        let Some(target) = self.link_at(cursor.line, cursor.col, false) else {
+            return false;
+        };
+        cx.emit(EditorEvent::OpenLink(target));
+        true
+    }
+
     /// Types `text` at the cursor the way a keystroke does, so the
     /// autocompletion popup opens for it. Used by `--type` to put the popup
-    /// on screen for a screenshot.
+    /// on screen for a screenshot, and by the control socket, which drives
+    /// the app in place of a keyboard: one character at a time through the
+    /// same insertion, so the two cannot disagree about auto-pairing.
     pub fn type_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(field) = self.active_field() {
             field.insert(text);
             cx.notify();
             return;
         }
-        self.insert_all(text, EditKind::Typing, window, cx);
+        let mut utf8 = [0u8; 4];
+        for ch in text.chars() {
+            self.type_char(ch.encode_utf8(&mut utf8), EditKind::Typing, window, cx);
+        }
     }
 
     /// Writes `text` at every cursor as one undo step, which is how a
@@ -1367,6 +1592,30 @@ impl Editor {
         }
     }
 
+    /// One typed character: the pair it opens, closes, skips or wraps the
+    /// selection in, or a plain insertion when it is none of those. Anything
+    /// longer is not a keystroke and is inserted as it stands. True when the
+    /// buffer changed.
+    fn type_char_in(
+        buf: &mut TextBuffer,
+        s: &str,
+        kind: EditKind,
+        opts: autopair::Options,
+    ) -> bool {
+        let mut chars = s.chars();
+        match (chars.next(), chars.next()) {
+            (Some(c), None) if buf.type_pair(c, opts) => true,
+            _ => buf.insert_all(s, kind),
+        }
+    }
+
+    fn type_char(&mut self, s: &str, kind: EditKind, window: &mut Window, cx: &mut Context<Self>) {
+        let opts = self.auto_pair();
+        if Self::type_char_in(&mut self.buf, s, kind, opts) {
+            self.after_edit(Some(window), cx);
+        }
+    }
+
     /// Deletes at every cursor: the selection, or what `range` gives for a
     /// collapsed one.
     fn delete_all(
@@ -1916,6 +2165,13 @@ impl Editor {
     }
 
     fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
+        // An open field takes the keys the way backspace and delete give
+        // them to it. It carries a caret and no selection, so there is
+        // nothing for Ctrl+A to take; what it must not do is select the
+        // document behind the field, which the next Ctrl+X would delete.
+        if self.active_field().is_some() {
+            return;
+        }
         self.buf.select_all();
         cx.notify();
     }
@@ -1933,7 +2189,14 @@ impl Editor {
         } else {
             EditKind::Other
         };
-        self.delete_all(|buf, at| buf.prev_char_boundary(at)..at, kind, window, cx);
+        // Backspace between an empty pair takes both characters.
+        let opts = self.auto_pair();
+        self.delete_all(
+            move |buf, at| autopair::backspace_range(buf.text(), at, opts),
+            kind,
+            window,
+            cx,
+        );
     }
 
     fn delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
@@ -1992,7 +2255,7 @@ impl Editor {
             }
             return;
         }
-        if self.buf.newline(self.smart_indent_list) {
+        if self.buf.newline(self.tab_size, self.smart_indent_list) {
             self.after_edit(Some(window), cx);
         }
     }
@@ -2049,7 +2312,7 @@ impl Editor {
         if self.table_field.is_some() && self.step_table_cell(-1, 0, window, cx) {
             return;
         }
-        if self.buf.outdent(self.smart_indent_list) {
+        if self.buf.outdent(self.tab_size, self.smart_indent_list) {
             self.after_edit(Some(window), cx);
         }
     }
@@ -2067,6 +2330,9 @@ impl Editor {
     }
 
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
+        if self.active_field().is_some() {
+            return;
+        }
         let ranges = self.buf.copy_ranges();
         if ranges.iter().any(|r| !r.is_empty()) {
             cx.write_to_clipboard(ClipboardItem::new_string(self.buf.clipboard_text(&ranges)));
@@ -2074,6 +2340,9 @@ impl Editor {
     }
 
     fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active_field().is_some() {
+            return;
+        }
         let ranges = self.buf.copy_ranges();
         if ranges.iter().any(|r| !r.is_empty()) {
             cx.write_to_clipboard(ClipboardItem::new_string(self.buf.clipboard_text(&ranges)));
@@ -2088,6 +2357,12 @@ impl Editor {
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return;
         };
+        // Into the open field, which drops the newlines a row cannot hold.
+        if let Some(field) = self.active_field() {
+            field.insert(&text);
+            cx.notify();
+            return;
+        }
         if self.buf.paste(&text) {
             self.after_edit(Some(window), cx);
         }
@@ -2121,11 +2396,37 @@ impl Editor {
             Some(t) => self.find.query.update(cx, |q, cx| q.set_text(t, cx)),
             None => self.refresh_matches(cx),
         }
-        let field = if replace {
+        // Obsidian's panel opens on the query whichever command opened
+        // it; `replace` only decides whether the replacement row shows.
+        // The whole query is selected the way a browser input's is, so the
+        // first keystroke replaces the last note's query instead of
+        // appending to it, and the old query is still there to keep.
+        self.find.query.update(cx, |q, cx| q.select_all(cx));
+        window.focus(&self.find.query.focus_handle(cx), cx);
+        cx.notify();
+    }
+
+    /// Tab and Shift+Tab in the find panel move between the query and the
+    /// replacement. With two fields each key does the same thing, and
+    /// without the replacement row there is nowhere else to go.
+    fn focus_other_field(
+        &mut self,
+        _: &FocusOtherField,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.find.replace_shown {
+            return;
+        }
+        let on_query = self.find.query.focus_handle(cx).is_focused(window);
+        let field = if on_query {
             &self.find.replacement
         } else {
             &self.find.query
         };
+        // Tabbing into a field selects what it holds, as it does between
+        // two HTML inputs.
+        field.update(cx, |f, cx| f.select_all(cx));
         window.focus(&field.focus_handle(cx), cx);
         cx.notify();
     }
@@ -2375,7 +2676,7 @@ impl Editor {
         )
     }
 
-    fn close_suggest(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn close_suggest(&mut self, cx: &mut Context<Self>) {
         if self.suggest.take().is_some() {
             cx.notify();
         }
@@ -2581,39 +2882,51 @@ impl Editor {
         })
     }
 
-    fn display_hit(
-        &self,
-        window: &mut Window,
-        position: Point<Pixels>,
-    ) -> Option<(usize, Shaped, usize)> {
+    /// Resolves a window point against the last frame's layout.
+    fn display_hit(&self, window: &mut Window, position: Point<Pixels>) -> Option<Hit> {
         let layout = &self.layout;
         if layout.line_height <= px(0.) || layout.visible.is_empty() {
             return None;
         }
         let y = position.y - layout.bounds.origin.y;
         let x = position.x - layout.content_x;
-        let (vl, row) = match layout
+        // A point above the first line or below the last still names a row,
+        // so the caret has somewhere to go, but it is on no line of text:
+        // `on_line` carries that down to the glyph.
+        let (vl, row, on_line) = match layout
             .visible
             .iter()
             .find(|v| y >= v.top && y < v.top + v.height())
         {
-            Some(v) => (*v, ((y - v.top) / v.row_height).floor() as usize),
-            None if y < layout.visible[0].top => (layout.visible[0], 0),
+            Some(v) => (*v, ((y - v.top) / v.row_height).floor() as usize, true),
+            None if y < layout.visible[0].top => (layout.visible[0], 0, false),
             None => {
                 let last = *layout.visible.last()?;
-                (last, last.rows - 1)
+                (last, last.rows - 1, false)
             }
         };
         let shaped = self.shape(window, vl.line)?;
-        let d = shaped.display_index_at(x, row);
-        Some((vl.line, shaped, d))
+        let display = shaped.display_index_at(x, row);
+        let glyph = if on_line {
+            shaped.glyph_index_at(x, row)
+        } else {
+            None
+        };
+        Some(Hit {
+            line: vl.line,
+            shaped,
+            display,
+            glyph,
+        })
     }
 
     /// The buffer offset under a window point, using the last frame's layout.
     fn offset_at_point(&self, window: &mut Window, position: Point<Pixels>) -> Option<usize> {
-        let (line, shaped, d) = self.display_hit(window, position)?;
-        let col = self.buf.clamp_col(line, shaped.display.to_source(d));
-        Some(self.buf.line_starts()[line] + col)
+        let hit = self.display_hit(window, position)?;
+        let col = self
+            .buf
+            .clamp_col(hit.line, hit.shaped.to_source(hit.display));
+        Some(self.buf.line_starts()[hit.line] + col)
     }
 
     /// The link under source byte `col` of `line`. With `rendered_only`,
@@ -2668,6 +2981,42 @@ impl Editor {
         None
     }
 
+    /// Flips the task marker whose `[` is the byte at `col` on `line`:
+    /// `[ ]` becomes `[x]` and anything else becomes `[ ]`, as one undo
+    /// step that leaves the selection where it was (the three bytes are
+    /// replaced by three, so no offset moves).
+    ///
+    /// Both rendered views toggle through here — Live Preview from its own
+    /// click, the reading view by way of the workspace — so a checkbox
+    /// writes the same bytes whichever one was clicked. Returns false, and
+    /// writes nothing, when those bytes are not a marker: a reading view
+    /// built before the note changed can name a position that has moved.
+    pub fn toggle_task_at(
+        &mut self,
+        line: usize,
+        col: usize,
+        window: Option<&mut Window>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(&start) = self.buf.line_starts().get(line) else {
+            return false;
+        };
+        let checked = match self.buf.line_text(line).as_bytes().get(col..col + 3) {
+            Some([b'[', status, b']']) => *status != b' ',
+            _ => return false,
+        };
+        let with = if checked { "[ ]" } else { "[x]" };
+        let (head, anchor) = (self.buf.head, self.buf.anchor);
+        if self.buf.edit_many(
+            vec![(start + col..start + col + 3, with.to_string())],
+            head,
+            Some(anchor),
+        ) {
+            self.after_edit(window, cx);
+        }
+        true
+    }
+
     /// Live Preview clicks on rendered constructs: a checkbox toggles, a
     /// link opens (Ctrl+click opens a link in Source mode too). Returns
     /// true when the click was consumed.
@@ -2680,27 +3029,25 @@ impl Editor {
         if event.click_count != 1 || event.modifiers.shift {
             return false;
         }
-        let Some((line, shaped, d)) = self.display_hit(window, event.position) else {
+        let Some(hit) = self.display_hit(window, event.position) else {
             return false;
         };
+        // The left margin, the blank space past the end of a row, and the
+        // area above and below the document are on no construct: the click
+        // places the caret and nothing more. Only what was drawn under the
+        // pointer can be worked.
+        let Some(d) = hit.glyph else {
+            return false;
+        };
+        let (line, shaped) = (hit.line, &hit.shaped);
         if self.live_preview {
             if let Some((src, HighlightKind::Task)) = shaped.display.sub_at(d) {
-                let start = self.buf.line_starts()[line];
-                let checked = self.buf.text().as_bytes().get(start + src.start + 1) != Some(&b' ');
-                let with = if checked { "[ ]" } else { "[x]" };
-                let (head, anchor) = (self.buf.head, self.buf.anchor);
-                self.edit_many(
-                    vec![(start + src.start..start + src.end, with.to_string())],
-                    head,
-                    Some(anchor),
-                    window,
-                    cx,
-                );
+                self.toggle_task_at(line, src.start, Some(window), cx);
                 return true;
             }
         }
         if self.live_preview || event.modifiers.control {
-            let col = shaped.display.to_source(d);
+            let col = shaped.to_source(d);
             if let Some(target) = self.link_at(line, col, !event.modifiers.control) {
                 cx.emit(EditorEvent::OpenLink(target));
                 return true;
@@ -2812,18 +3159,45 @@ impl Editor {
             PropertyAction::Edit { target, part } => {
                 self.property_menu = None;
                 self.commit_property_field(Some(window), cx);
-                let text = match (&target, part) {
-                    (Target::New, _) => String::new(),
-                    (Target::Existing(key), Part::Key) => key.clone(),
-                    (Target::Existing(key), Part::Value) => self
-                        .property_rows()
-                        .into_iter()
-                        .find(|r| &r.key == key)
-                        .map(|r| r.edit_text)
-                        .unwrap_or_default(),
+                // A value opens through `value_field`, which lands in the
+                // empty input after the pills when the row holds a list:
+                // opening a list whole would commit it back through the
+                // joined-string round trip and split an item at its comma.
+                let row = match (&target, part) {
+                    (Target::Existing(key), Part::Value) => {
+                        self.property_rows().into_iter().find(|r| &r.key == key)
+                    }
+                    _ => None,
                 };
-                self.property_field = Some(Field::new(target, part, text));
+                self.property_field = Some(match row {
+                    Some(row) => properties::value_field(&row),
+                    None => {
+                        let text = match (&target, part) {
+                            (Target::Existing(key), Part::Key) => key.clone(),
+                            _ => String::new(),
+                        };
+                        Field::new(target, part, text)
+                    }
+                });
                 cx.notify();
+            }
+            PropertyAction::EditItem { key, index } => {
+                self.property_menu = None;
+                self.commit_property_field(Some(window), cx);
+                // The commit above may have rewritten the block, so the row
+                // the field is built from is read after it, not before.
+                if let Some(row) = self.property_rows().into_iter().find(|r| r.key == key) {
+                    self.property_field = Some(row.item_field(index.min(row.items.len())));
+                }
+                cx.notify();
+            }
+            PropertyAction::RemoveItem { key, index } => {
+                self.property_field = None;
+                if let Some(row) = self.property_rows().into_iter().find(|r| r.key == key) {
+                    if let Some(change) = properties::remove_item(&row, index) {
+                        self.apply_property_changes(&[change], Some(window), cx);
+                    }
+                }
             }
             PropertyAction::Toggle { key } => {
                 let on = self
@@ -3304,7 +3678,9 @@ impl EntityInputHandler for Editor {
         match range {
             // A ranged replacement (IME) addresses the primary cursor's line.
             Some(range) => self.edit(range, new_text, kind, Some(window), cx),
-            None => self.insert_all(new_text, kind, window, cx),
+            // Auto-pairing is a typed character only: a paste has its own
+            // path and an IME commit arrives as a range above.
+            None => self.type_char(new_text, kind, window, cx),
         }
     }
 
@@ -3378,7 +3754,13 @@ impl Render for Editor {
             element
         });
         let editor = div()
-            .key_context("Editor")
+            // A second identifier while the popup is up: its own bindings
+            // match deeper than the workspace's and so shadow them.
+            .key_context(if self.suggest.is_some() {
+                "Editor SuggestPopup"
+            } else {
+                "Editor"
+            })
             .track_focus(&self.focus_handle)
             .size_full()
             .font_family(theme.text_font.clone())
@@ -3564,6 +3946,7 @@ impl Editor {
             .on_action(cx.listener(Self::find_next))
             .on_action(cx.listener(Self::find_all))
             .on_action(cx.listener(Self::close_find))
+            .on_action(cx.listener(Self::focus_other_field))
             .child(find_row)
             .children(replace_row)
     }
@@ -3745,6 +4128,9 @@ struct WidgetPaint {
 
 struct Prepaint {
     lines: Vec<(VisibleLine, Shaped)>,
+    /// What the mouse listeners ask whether the pointer is really on the
+    /// text and not on something painted over it.
+    hitbox: Hitbox,
     widgets: Vec<WidgetPaint>,
     /// Quote bars, code block bands and rules, behind the text.
     decor: Vec<PaintQuad>,
@@ -3807,6 +4193,11 @@ impl Element for EditorElement {
         cx: &mut App,
     ) -> Self::PrepaintState {
         let started = Instant::now();
+        // The listeners this element registers are raw window listeners,
+        // which fire for any point inside its bounds; a panel over the text
+        // — the find panel, a modal — owns its own clicks, and this hitbox
+        // is how a listener asks whether one of those took the point first.
+        let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
         let text_style = window.text_style();
         let font_size = text_style.font_size.to_pixels(window.rem_size());
         let lh = window.line_height();
@@ -3851,17 +4242,19 @@ impl Element for EditorElement {
             let on_toggle: ToggleHandler = Rc::new({
                 let entity = entity.clone();
                 move |id, cx| {
-                    if id == crate::properties::PROPERTIES_FOLD_ID {
-                        entity.update(cx, |e, cx| {
+                    entity.update(cx, |e, cx| {
+                        if id == crate::properties::PROPERTIES_FOLD_ID {
                             e.properties_folded = !e.properties_folded;
-                            cx.notify();
-                        });
-                    }
+                        } else if !e.callout_folds.remove(&id) {
+                            e.callout_folds.insert(id);
+                        }
+                        cx.notify();
+                    });
                 }
             });
             // The properties block's fold state travels in the toggled set,
             // the same place the reading view keeps callout folds.
-            let mut no_toggles = HashSet::new();
+            let mut no_toggles = editor.callout_folds.clone();
             if editor.properties_folded {
                 no_toggles.insert(crate::properties::PROPERTIES_FOLD_ID);
             }
@@ -4131,6 +4524,7 @@ impl Element for EditorElement {
             let scrollbar = Scrollbar::layout(track, count, scroll_line, visible_lines, fits);
             Prepaint {
                 lines,
+                hitbox,
                 widgets,
                 decor: decor_quads,
                 line_height: lh,
@@ -4209,10 +4603,11 @@ impl Element for EditorElement {
         });
 
         let editor = self.editor.clone();
+        let hitbox = prepaint.hitbox.clone();
         window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
             if phase == DispatchPhase::Bubble
                 && event.button == MouseButton::Left
-                && bounds.contains(&event.position)
+                && hitbox.is_hovered(window)
             {
                 editor.update(cx, |editor, cx| editor.mouse_down(event, window, cx));
             }
@@ -4237,8 +4632,11 @@ impl Element for EditorElement {
             }
         });
         let editor = self.editor.clone();
+        let hitbox = prepaint.hitbox.clone();
         window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
-            if phase == DispatchPhase::Bubble && bounds.contains(&event.position) {
+            // `should_handle_scroll` rather than `is_hovered`: a wheel event
+            // is not an interaction with what is directly under the pointer.
+            if phase == DispatchPhase::Bubble && hitbox.should_handle_scroll(window) {
                 let delta = event.delta.pixel_delta(line_height).y;
                 editor.update(cx, |editor, cx| editor.scroll_by(-delta, window, cx));
             }
@@ -4286,5 +4684,82 @@ impl Element for EditorElement {
                 window.on_next_frame(move |_, cx| cx.notify(id));
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The display line for the first line of `src`, nothing touched.
+    fn display(src: &str) -> DisplayLine {
+        let doc = _markdown::parse(src);
+        let lines = highlight_lines(&doc);
+        preview::display_line(src.lines().next().unwrap_or(""), &lines[0], &[])
+    }
+
+    #[test]
+    fn end_of_display_is_the_end_of_the_source_line() {
+        // Trailing markup displays nothing, so `to_source` has no piece to
+        // match at the end and walks back into the link text; the click
+        // path must land after the `]]` instead.
+        let d = display("see [[Welcome]]");
+        assert_eq!(d.text, "see Welcome");
+        assert_eq!(d.to_source(d.text.len()), 13);
+        assert_eq!(source_index(&d, d.text.len()), 15);
+
+        let d = display("ab `cd`");
+        assert_eq!(d.text, "ab cd");
+        assert_eq!(source_index(&d, d.text.len()), 7);
+
+        let d = display("- [ ] task");
+        assert_eq!(d.text, "☐ task");
+        assert_eq!(source_index(&d, d.text.len()), 10);
+    }
+
+    /// The control socket's `type` writes through the same insertion a
+    /// keystroke takes, so a string typed one character at a time must
+    /// leave what pressing those keys leaves: `*` over a selection wraps
+    /// the word rather than replacing it, and the `]]` the editor itself
+    /// closed is stepped over rather than doubled.
+    #[test]
+    fn a_typed_character_pairs_whether_it_arrives_as_a_key_or_in_a_string() {
+        let opts = autopair::Options::default();
+        let mut buf = TextBuffer::new();
+        buf.load("alpha beta gamma");
+        buf.anchor = 0;
+        buf.head = 5;
+        assert!(Editor::type_char_in(&mut buf, "*", EditKind::Typing, opts));
+        assert_eq!(buf.text(), "*alpha* beta gamma");
+        assert_eq!((buf.anchor, buf.head), (1, 6));
+
+        let mut buf = TextBuffer::new();
+        let mut utf8 = [0u8; 4];
+        for ch in "[[Welcome]]".chars() {
+            Editor::type_char_in(&mut buf, ch.encode_utf8(&mut utf8), EditKind::Typing, opts);
+        }
+        assert_eq!(buf.text(), "[[Welcome]]");
+        assert_eq!(buf.head, 11);
+
+        // A string that is not one character is not a keystroke: it goes
+        // in as it stands, the way a paste does.
+        let mut buf = TextBuffer::new();
+        assert!(Editor::type_char_in(&mut buf, "((", EditKind::Typing, opts));
+        assert_eq!(buf.text(), "((");
+    }
+
+    #[test]
+    fn inside_the_display_still_maps_through_the_pieces() {
+        let d = display("see [[Welcome]]");
+        for i in 0..d.text.len() {
+            assert_eq!(source_index(&d, i), d.to_source(i), "display byte {i}");
+        }
+        // The last glyph of the link text is still inside the link's span,
+        // which is what makes a click on it follow the link.
+        assert!(source_index(&d, 10) < 15);
+
+        let d = display("plain line");
+        assert_eq!(source_index(&d, 4), 4);
+        assert_eq!(source_index(&d, d.text.len()), 10);
     }
 }

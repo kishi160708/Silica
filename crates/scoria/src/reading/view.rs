@@ -6,16 +6,16 @@
 //! ranges for links, tags and footnote references.
 
 use super::model::{
-    Embed, EmbedKind, InlineStyle, LinkTarget, Model, RBlock, RItem, RichText, Segment,
+    Embed, EmbedKind, InlineStyle, LinkTarget, Model, RBlock, RItem, RichText, Segment, TaskMarker,
 };
 use crate::properties::{Field, Part, Target};
 use crate::properties::{PROPERTIES_FOLD_ID, PROPERTY_ID_BASE};
 use crate::theme::Theme;
 use gpui::{
-    canvas, div, img, list, prelude::*, px, AnyElement, App, Context, EventEmitter, FocusHandle,
-    Focusable, Font, FontStyle, FontWeight, HighlightStyle, Hsla, InteractiveText, ListAlignment,
-    ListOffset, ListState, MouseButton, ObjectFit, Pixels, SharedString, StrikethroughStyle,
-    StyledText, TextRun, UnderlineStyle, Window, WindowTextSystem,
+    canvas, div, img, list, prelude::*, px, AnyElement, App, ClipboardItem, Context, EventEmitter,
+    FocusHandle, Focusable, Font, FontStyle, FontWeight, HighlightStyle, Hsla, InteractiveText,
+    ListAlignment, ListOffset, ListState, MouseButton, ObjectFit, Pixels, SharedString,
+    StrikethroughStyle, StyledText, Task, TextRun, UnderlineStyle, Window, WindowTextSystem,
 };
 use _formats::config::PropertyTypes;
 use _formats::properties::{PropertiesInDocument, Property, PropertyType};
@@ -25,6 +25,7 @@ use std::collections::HashSet;
 use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Something the reader did to a property row. The reading view raises none
 /// of these; Live Preview turns each into a document edit.
@@ -34,6 +35,18 @@ pub enum PropertyAction {
     Edit {
         target: Target,
         part: Part,
+    },
+    /// Start typing in one item of a list-shaped value. `index` past the
+    /// last item is the empty input Obsidian keeps after the pills, where
+    /// a new item is written.
+    EditItem {
+        key: String,
+        index: usize,
+    },
+    /// A pill's own remove control: drop that item and leave the rest.
+    RemoveItem {
+        key: String,
+        index: usize,
     },
     /// Flip a checkbox row.
     Toggle {
@@ -95,9 +108,36 @@ pub(crate) struct TableHost {
 pub type LinkHandler = Rc<dyn Fn(LinkTarget, &mut Window, &mut App)>;
 /// What a foldable callout's title does when clicked, by title id.
 pub type ToggleHandler = Rc<dyn Fn(usize, &mut App)>;
+/// What a task checkbox does when clicked.
+pub type TaskHandler = Rc<dyn Fn(TaskMarker, &mut App)>;
+/// Told which code block's copy button was pressed, so its check can show.
+pub type CopyHandler = Rc<dyn Fn(usize, &mut App)>;
+
+/// The settings and affordances only the reading view has. Live Preview
+/// passes `None` and keeps the click handling it already does on the
+/// source line behind a widget.
+pub(crate) struct ReadingHost {
+    /// `propertiesInDocument`: `Hidden` draws no properties block.
+    pub properties: PropertiesInDocument,
+    /// The code block whose copy button is showing its check.
+    pub copied: Option<usize>,
+    pub on_copy: CopyHandler,
+    pub on_task: TaskHandler,
+}
 
 pub enum ReadingEvent {
     OpenLink(LinkTarget),
+}
+
+/// A reader clicked a task checkbox. The reading view does not write the
+/// note itself: the workspace turns this into the same edit Live Preview
+/// makes when the same box is clicked there.
+pub struct TaskToggled {
+    /// The note the reading view was showing, so an event that outlived
+    /// its note writes nothing.
+    pub path: String,
+    /// Where the three bytes `[`, status, `]` are in it.
+    pub marker: TaskMarker,
 }
 
 pub struct ReadingView {
@@ -108,13 +148,19 @@ pub struct ReadingView {
     /// Callouts whose fold state the reader flipped, by title id.
     toggled: HashSet<usize>,
     readable_line_length: bool,
+    properties_in_document: PropertiesInDocument,
     /// The vault's `types.json`, for the type each property row shows.
     property_types: PropertyTypes,
+    /// The code block whose copy button is showing its check, and the
+    /// timer that takes it away again.
+    copied: Option<usize>,
+    flash: Option<Task<()>>,
     /// Width of the view as last painted; tables lay their columns out for it.
     width: Pixels,
 }
 
 impl EventEmitter<ReadingEvent> for ReadingView {}
+impl EventEmitter<TaskToggled> for ReadingView {}
 
 impl Focusable for ReadingView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
@@ -131,13 +177,20 @@ impl ReadingView {
             list: ListState::new(0, ListAlignment::Top, px(1200.)),
             toggled: HashSet::new(),
             readable_line_length: true,
+            properties_in_document: PropertiesInDocument::default(),
             property_types: PropertyTypes::default(),
+            copied: None,
+            flash: None,
             width: px(900.),
         }
     }
 
     pub fn set_readable_line_length(&mut self, on: bool) {
         self.readable_line_length = on;
+    }
+
+    pub fn set_properties_in_document(&mut self, mode: PropertiesInDocument) {
+        self.properties_in_document = mode;
     }
 
     pub fn set_property_types(&mut self, types: PropertyTypes) {
@@ -155,6 +208,7 @@ impl ReadingView {
         }
         self.model = Arc::new(model);
         self.toggled.clear();
+        self.copied = None;
         cx.notify();
     }
 
@@ -195,6 +249,24 @@ impl ReadingView {
         })
     }
 
+    /// Shows the check on a code block's copy button for as long as
+    /// Obsidian shows its own: back to the copy icon somewhere between 400
+    /// and 900 ms after the click.
+    fn flash_copied(&mut self, id: usize, cx: &mut Context<Self>) {
+        self.copied = Some(id);
+        self.flash = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(700))
+                .await;
+            this.update(cx, |view, cx| {
+                view.copied = None;
+                cx.notify();
+            })
+            .ok();
+        }));
+        cx.notify();
+    }
+
     fn toggle_callout(&mut self, id: usize, cx: &mut Context<Self>) {
         if !self.toggled.remove(&id) {
             self.toggled.insert(id);
@@ -226,9 +298,31 @@ impl ReadingView {
                 view.update(cx, |_, cx| cx.emit(ReadingEvent::OpenLink(target)));
             }
         });
-        let on_toggle: ToggleHandler = Rc::new(move |id, cx| {
-            view.update(cx, |v, cx| v.toggle_callout(id, cx));
+        let on_toggle: ToggleHandler = Rc::new({
+            let view = view.clone();
+            move |id, cx| {
+                view.update(cx, |v, cx| v.toggle_callout(id, cx));
+            }
         });
+        let on_copy: CopyHandler = Rc::new({
+            let view = view.clone();
+            move |id, cx| {
+                view.update(cx, |v, cx| v.flash_copied(id, cx));
+            }
+        });
+        let on_task: TaskHandler = Rc::new(move |marker, cx| {
+            view.update(cx, |v, cx| {
+                if let Some(path) = v.path.clone() {
+                    cx.emit(TaskToggled { path, marker });
+                }
+            });
+        });
+        let host = ReadingHost {
+            properties: self.properties_in_document,
+            copied: self.copied,
+            on_copy,
+            on_task,
+        };
         let r = Renderer::new(
             &theme,
             _window.text_system().clone(),
@@ -241,7 +335,8 @@ impl ReadingView {
             None,
             on_link,
             on_toggle,
-        );
+        )
+        .with_reading_host(&host);
         let inner = r.block(block, false);
         let last = ix + 1 == model.blocks.len();
         div()
@@ -317,6 +412,8 @@ pub(crate) struct Renderer<'a> {
     properties_host: Option<&'a PropertiesHost>,
     /// Set by Live Preview to make a table's cells editable.
     table_host: Option<&'a TableHost>,
+    /// Set by the reading view for the affordances only it draws.
+    reading_host: Option<&'a ReadingHost>,
     on_link: LinkHandler,
     on_toggle: ToggleHandler,
     text_system: Arc<WindowTextSystem>,
@@ -343,11 +440,19 @@ impl<'a> Renderer<'a> {
             property_types,
             properties_host,
             table_host,
+            reading_host: None,
             on_link,
             on_toggle,
             text_system,
             available: available.max(100.),
         }
+    }
+
+    /// The reading view's own settings and handlers. Live Preview leaves
+    /// them unset, so its widgets keep the one click path they have.
+    pub(crate) fn with_reading_host(mut self, host: &'a ReadingHost) -> Renderer<'a> {
+        self.reading_host = Some(host);
+        self
     }
 
     /// Width of `text` set in the note's font, in pixels.
@@ -495,33 +600,59 @@ impl<'a> Renderer<'a> {
                 .w_full()
                 .bg(t.border)
                 .into_any_element(),
-            RBlock::Code { id, language, text } => div()
-                .mb(gap)
-                .relative()
-                .bg(t.bg_alt)
-                .rounded_md()
-                .py_2()
-                .font_family(t.mono_font.clone())
-                .text_size(px(base * 0.875))
-                .line_height(px(base * 0.875 * 1.5))
-                .child(
-                    // Code keeps its columns: long lines scroll sideways.
-                    div().id(("code", *id)).overflow_x_scroll().px_3().child(
+            RBlock::Code { id, text, copy, .. } => {
+                let id = *id;
+                let payload = copy.clone();
+                let on_copy = self.reading_host.map(|h| h.on_copy.clone());
+                let copied = self.reading_host.is_some_and(|h| h.copied == Some(id));
+                div()
+                    .mb(gap)
+                    .relative()
+                    .group("code-block")
+                    .bg(t.bg_alt)
+                    .rounded_md()
+                    .py_2()
+                    .font_family(t.mono_font.clone())
+                    .text_size(px(base * 0.875))
+                    .line_height(px(base * 0.875 * 1.5))
+                    .child(
+                        // Code keeps its columns: long lines scroll sideways.
+                        div().id(("code", id)).overflow_x_scroll().px_3().child(
+                            div()
+                                .whitespace_nowrap()
+                                .child(SharedString::from(text.clone())),
+                        ),
+                    )
+                    .child(
+                        // Obsidian draws no language name on a rendered
+                        // block; the only thing on it is a copy button,
+                        // and only while the block is hovered.
                         div()
-                            .whitespace_nowrap()
-                            .child(SharedString::from(text.clone())),
-                    ),
-                )
-                .children(language.as_ref().map(|lang| {
-                    div()
-                        .absolute()
-                        .top_1()
-                        .right_2()
-                        .text_size(px(base * 0.7))
-                        .text_color(t.text_faint)
-                        .child(SharedString::from(lang.clone()))
-                }))
-                .into_any_element(),
+                            .id(("copy-code", id))
+                            .absolute()
+                            .top_0()
+                            .right_0()
+                            .m(px(6.))
+                            .px_2()
+                            .py_1()
+                            .rounded_sm()
+                            .invisible()
+                            .group_hover("code-block", |s| s.visible())
+                            .cursor_pointer()
+                            .font_family(t.text_font.clone())
+                            .text_size(px(base * 0.8))
+                            .text_color(t.text_muted)
+                            .hover(|s| s.bg(t.bg_secondary))
+                            .child(if copied { "\u{2713}" } else { "\u{2750}" })
+                            .on_click(move |_, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(payload.clone()));
+                                if let Some(on_copy) = &on_copy {
+                                    on_copy(id, cx);
+                                }
+                            }),
+                    )
+                    .into_any_element()
+            }
             RBlock::Html(text) => div()
                 .mb(gap)
                 .font_family(t.mono_font.clone())
@@ -571,11 +702,39 @@ impl<'a> Renderer<'a> {
                             .gap_2()
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(color)
+                            // Mouse-down rather than click, and blocking the
+                            // mouse rather than letting it through: in Live
+                            // Preview the editor's own window listener runs
+                            // ahead of this element and would put the caret
+                            // on the title line, which reveals the source
+                            // and takes the widget — chevron and all — away
+                            // before the button-up that a click needs. Scroll
+                            // still falls through to the editor behind.
                             .when(foldable, |d| {
                                 d.cursor_pointer()
-                                    .on_click(move |_, _, cx| on_toggle(id, cx))
+                                    .block_mouse_except_scroll()
+                                    .on_mouse_down(gpui::MouseButton::Left, move |_, _, cx| {
+                                        on_toggle(id, cx)
+                                    })
                             })
-                            .child(div().flex_1().child(self.rich(title)))
+                            .child(
+                                div().flex_1().child(
+                                    // Where the title holds a link the link
+                                    // wins: Obsidian navigates and leaves the
+                                    // fold alone, so the text keeps the
+                                    // mouse-down to itself. The chevron and the
+                                    // rest of the row still fold.
+                                    match foldable && !title.links.is_empty() {
+                                        true => div()
+                                            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
+                                                cx.stop_propagation()
+                                            })
+                                            .child(self.rich(title))
+                                            .into_any_element(),
+                                        false => self.rich(title).into_any_element(),
+                                    },
+                                ),
+                            )
                             .when(foldable, |d| {
                                 d.child(div().text_color(t.text_muted).child(if collapsed {
                                     "▸"
@@ -753,7 +912,7 @@ impl<'a> Renderer<'a> {
         let marker: AnyElement = match (item.task, item.number) {
             (Some(c), _) => {
                 let checked = c != ' ';
-                div()
+                let check = div()
                     .w(px(16.))
                     .h(px(16.))
                     .mt(px(base * 0.3))
@@ -766,8 +925,21 @@ impl<'a> Renderer<'a> {
                     .justify_center()
                     .text_size(px(11.))
                     .text_color(t.bg)
-                    .when(checked, |d| d.child("✓"))
-                    .into_any_element()
+                    .when(checked, |d| d.child("✓"));
+                // Clicking the box rewrites its line, the way it does in
+                // Live Preview. An item that came out of an embed has no
+                // marker and stays inert: those bytes are another file's.
+                match (self.reading_host, item.marker) {
+                    (Some(host), Some(marker)) => {
+                        let on_task = host.on_task.clone();
+                        check
+                            .id(("task", marker.line))
+                            .cursor_pointer()
+                            .on_click(move |_, _, cx| on_task(marker, cx))
+                            .into_any_element()
+                    }
+                    _ => check.into_any_element(),
+                }
             }
             (None, Some(n)) => div()
                 .text_color(t.text_muted)
@@ -795,7 +967,9 @@ impl<'a> Renderer<'a> {
                     .min_w_0()
                     .flex()
                     .flex_col()
-                    .when(done, |d| d.text_color(t.text_muted))
+                    // Obsidian's default theme dims a done task and
+                    // strikes it through (`--checklist-done-decoration`).
+                    .when(done, |d| d.text_color(t.text_muted).line_through())
                     .children(self.blocks(&item.children, tight)),
             )
             .into_any_element()
@@ -898,9 +1072,13 @@ impl<'a> Renderer<'a> {
         let t = self.theme;
         let base = t.base_font_size;
         let host = self.properties_host;
-        if host.is_some_and(|h| h.mode == PropertiesInDocument::Hidden) {
+        let hidden = host.is_some_and(|h| h.mode == PropertiesInDocument::Hidden)
+            || self
+                .reading_host
+                .is_some_and(|h| h.properties == PropertiesInDocument::Hidden);
+        if hidden {
             // "Hide" in `propertiesInDocument`: the YAML stays in the file,
-            // the editor simply does not show it.
+            // and neither the editor nor the rendered text shows it.
             return div().into_any_element();
         }
         let folded = self.toggled.contains(&PROPERTIES_FOLD_ID);
@@ -1201,10 +1379,23 @@ impl<'a> Renderer<'a> {
             .into_any_element()
     }
 
-    /// The open field when it belongs to this row and part.
+    /// The open field when it belongs to this row and part. A field holding
+    /// one item of a list is not one of these: the value cell draws it among
+    /// the pills, in the place of the item it stands for.
     fn open_field(&self, row: &crate::properties::Row, part: Part) -> Option<&Field> {
         let field = self.properties_host?.field.as_ref()?;
-        (field.part == part && field.key() == Some(row.key.as_str())).then_some(field)
+        (field.part == part
+            && field.key() == Some(row.key.as_str())
+            && field.item_index().is_none())
+        .then_some(field)
+    }
+
+    /// Which item of this row's list the open field holds, if it holds one.
+    /// An index past the last item is the empty input Obsidian keeps after
+    /// the pills, where a new item is typed.
+    fn open_item(&self, row: &crate::properties::Row) -> Option<(usize, &Field)> {
+        let field = self.properties_host?.field.as_ref()?;
+        Some((field.item_of(row)?, field))
     }
 
     /// The value cell when no field is open: read-only in the reading view,
@@ -1234,6 +1425,11 @@ impl<'a> Renderer<'a> {
                 .into_any_element();
         }
         let key = row.key.clone();
+        // A list value is never opened whole: a click in the cell lands in
+        // the empty input after the pills, so what is typed becomes one
+        // more item however many commas it holds. Only a scalar opens on
+        // its whole text.
+        let append = row.is_list_valued().then_some(row.items.len());
         div()
             .id(("property-value", row.id))
             .flex_1()
@@ -1241,41 +1437,40 @@ impl<'a> Renderer<'a> {
             .cursor_text()
             .child(self.property_value(row))
             .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
-                on_action(
-                    PropertyAction::Edit {
+                let action = match append {
+                    Some(index) => PropertyAction::EditItem {
+                        key: key.clone(),
+                        index,
+                    },
+                    None => PropertyAction::Edit {
                         target: Target::Existing(key.clone()),
                         part: Part::Value,
                     },
-                    window,
-                    cx,
-                );
+                };
+                on_action(action, window, cx);
             })
             .into_any_element()
     }
 
     fn property_value(&self, row: &crate::properties::Row) -> AnyElement {
         let t = self.theme;
+        let open = self.open_item(row);
         match &row.value {
             crate::properties::Display::Scalar(text) => div()
                 .flex_1()
                 .min_w_0()
                 .child(self.rich(text))
                 .into_any_element(),
-            crate::properties::Display::Pills(items) => div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .flex_row()
-                .flex_wrap()
-                .gap_1()
-                .children(items.iter().map(|item| {
-                    div()
-                        .px_1p5()
-                        .rounded_sm()
-                        .bg(t.bg_alt)
-                        .child(self.rich(item))
-                }))
-                .into_any_element(),
+            crate::properties::Display::Pills(items) if !row.is_blank() => {
+                self.property_pills(row, items, open)
+            }
+            // A value with no items still takes a new one, and then the
+            // field for it is the only thing the cell has to draw.
+            crate::properties::Display::Empty | crate::properties::Display::Pills(_)
+                if open.is_some() =>
+            {
+                self.property_pills(row, &[], open)
+            }
             // The box keeps its own size; the cell around it takes the width,
             // so the row's affordances still sit at the right edge.
             crate::properties::Display::Checkbox(checked) => div()
@@ -1301,11 +1496,116 @@ impl<'a> Renderer<'a> {
                         }),
                 )
                 .into_any_element(),
-            crate::properties::Display::Empty => div()
+            // `aliases: []` lands here along with a key that has no value:
+            // both are blank, and a blank cell that drew nothing would have
+            // no height and so take no click at all.
+            crate::properties::Display::Empty | crate::properties::Display::Pills(_) => div()
                 .text_color(t.text_faint)
                 .child(SharedString::from("Empty"))
                 .into_any_element(),
         }
+    }
+
+    /// A list value: one pill per item, with the open field standing in for
+    /// the item it holds, so editing one item never touches the others. A
+    /// field past the last item draws last, as the empty input Obsidian
+    /// keeps after the pills.
+    ///
+    /// In Live Preview each pill is its own affordance — clicking it opens
+    /// that item alone, and its `×` drops that item — which is the markup
+    /// a real Obsidian was observed to draw (`div.multi-select-pill` with
+    /// its own `div.multi-select-pill-remove-button`). The reading view
+    /// passes no host and draws the same pills read-only.
+    fn property_pills(
+        &self,
+        row: &crate::properties::Row,
+        items: &[RichText],
+        open: Option<(usize, &Field)>,
+    ) -> AnyElement {
+        let t = self.theme;
+        let on_action = self.properties_host.map(|h| h.on_action.clone());
+        // A click inside the open field is not a click on the cell behind
+        // it, which would commit this item and open a fresh one.
+        let item_field = |field: &Field| {
+            div()
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(self.property_field(field, false))
+                .into_any_element()
+        };
+        let mut cells: Vec<AnyElement> = Vec::new();
+        for (ix, item) in items.iter().enumerate() {
+            if let Some((at, field)) = open {
+                if at == ix {
+                    cells.push(item_field(field));
+                    continue;
+                }
+            }
+            cells.push(
+                div()
+                    .id(("property-pill", item.id))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_1()
+                    .px_1p5()
+                    .rounded_sm()
+                    .bg(t.bg_alt)
+                    .child(self.rich(item))
+                    .when_some(on_action.clone(), |d, on_action| {
+                        let key = row.key.clone();
+                        let remove = on_action.clone();
+                        let remove_key = row.key.clone();
+                        d.cursor_text()
+                            .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
+                                // The cell behind opens the append input;
+                                // this pill opens itself instead.
+                                cx.stop_propagation();
+                                on_action(
+                                    PropertyAction::EditItem {
+                                        key: key.clone(),
+                                        index: ix,
+                                    },
+                                    window,
+                                    cx,
+                                );
+                            })
+                            .child(
+                                div()
+                                    .id(("property-pill-remove", item.id))
+                                    .cursor_pointer()
+                                    .text_color(t.text_faint)
+                                    .child(SharedString::from("\u{00d7}"))
+                                    .on_mouse_down(
+                                        gpui::MouseButton::Left,
+                                        move |_, window, cx| {
+                                            cx.stop_propagation();
+                                            remove(
+                                                PropertyAction::RemoveItem {
+                                                    key: remove_key.clone(),
+                                                    index: ix,
+                                                },
+                                                window,
+                                                cx,
+                                            );
+                                        },
+                                    ),
+                            )
+                    })
+                    .into_any_element(),
+            );
+        }
+        if let Some((_, field)) = open.filter(|(at, _)| *at >= items.len()) {
+            cells.push(item_field(field));
+        }
+        div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .gap_1()
+            .children(cells)
+            .into_any_element()
     }
 
     fn rich(&self, text: &RichText) -> InteractiveText {

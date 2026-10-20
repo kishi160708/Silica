@@ -15,7 +15,7 @@ use crate::graph::{GraphEvent, GraphView};
 use crate::mentions::{Finder, Name};
 use crate::palette::{CommandPalette, PaletteCommand, PaletteEvent};
 use crate::prompt::{Prompt, PromptEvent, PromptSpec};
-use crate::reading::{self, LinkTarget, ReadingEvent, ReadingView};
+use crate::reading::{self, LinkTarget, ReadingEvent, ReadingView, TaskMarker, TaskToggled};
 use crate::search::{SearchEvent, SearchPane};
 use crate::settings::{self, SettingChange, SettingsEvent, SettingsView};
 use crate::switcher::{QuickSwitcher, SwitcherEvent};
@@ -28,7 +28,8 @@ use gpui::{
 };
 use rayon::prelude::*;
 use _cache::{
-    basename, frontmatter_aliases, index_markdown, CachedMetadata, LinkFormat, MetadataCache,
+    basename, frontmatter_aliases, index_markdown, Backlink, CachedMetadata, LinkFormat,
+    MetadataCache,
 };
 use _commands::{keystroke, CommandRegistry};
 use _formats::config::{
@@ -40,6 +41,7 @@ use _formats::FileKind;
 use _markdown::Subpath;
 use _templates as templates;
 use _text::table::TableCommand;
+use _text::{LinePrefix, LinkSyntax};
 use _vault::{FileChange, TrashOption, Vault};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
@@ -93,6 +95,33 @@ pub const RUNNABLE: &[&str] = &[
     "editor:open-search-replace",
     "editor:add-cursor-above",
     "editor:add-cursor-below",
+    "editor:toggle-bold",
+    "editor:toggle-italics",
+    "editor:toggle-strikethrough",
+    "editor:toggle-highlight",
+    "editor:toggle-code",
+    "editor:toggle-inline-math",
+    "editor:toggle-comments",
+    "editor:toggle-blockquote",
+    "editor:toggle-bullet-list",
+    "editor:toggle-numbered-list",
+    "editor:toggle-checklist-status",
+    "editor:set-heading-0",
+    "editor:set-heading-1",
+    "editor:set-heading-2",
+    "editor:set-heading-3",
+    "editor:set-heading-4",
+    "editor:set-heading-5",
+    "editor:set-heading-6",
+    "editor:indent-list",
+    "editor:unindent-list",
+    "editor:delete-paragraph",
+    "editor:swap-line-up",
+    "editor:swap-line-down",
+    "editor:insert-link",
+    "editor:insert-wikilink",
+    "editor:insert-embed",
+    "editor:follow-link",
     "switcher:open",
     "global-search:open",
     "graph:open",
@@ -764,6 +793,29 @@ impl ViewMode {
     }
 }
 
+/// What the main area paints. The mode asks for a view; the open file
+/// decides whether that view has anything to show, and `Empty` is the
+/// placeholder for when it does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MainView {
+    Reading,
+    Editor,
+    Graph,
+    Empty,
+}
+
+impl MainView {
+    /// The name the socket's `focus` and `state` use for this view.
+    fn as_str(self) -> &'static str {
+        match self {
+            MainView::Reading => "reading",
+            MainView::Editor => "editor",
+            MainView::Graph => "graph",
+            MainView::Empty => "nothing",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LeftTab {
     Files,
@@ -799,6 +851,75 @@ enum PaneRow {
     },
 }
 
+/// The Outline pane's rows for one note's metadata, whether that metadata
+/// came from the index or from the buffer being typed into.
+fn outline_rows(meta: &CachedMetadata) -> Vec<OutlineRow> {
+    meta.headings
+        .iter()
+        .map(|h| OutlineRow {
+            level: h.level,
+            text: Workspace::heading_text(&h.heading).into(),
+            offset: h.position.start.offset,
+        })
+        .collect()
+}
+
+/// The context a Linked mentions row shows: the property a link was written
+/// in, which is what Obsidian names for one, or else its line in the source.
+fn backlink_detail(b: &Backlink<'_>, source_text: Option<&str>) -> String {
+    match b.key {
+        Some(key) => key.to_string(),
+        None => {
+            let line = b.link.position.start.line;
+            let context = source_text
+                .and_then(|t| t.lines().nth(line as usize))
+                .map(str::trim)
+                .unwrap_or_default();
+            format!("{}: {}", line + 1, context)
+        }
+    }
+}
+
+/// Rows for the Outgoing links pane: every link, embed and property link of
+/// `path`. A link written in a property is a link like any other, so it is
+/// listed too, first and in file order, with its property as the context.
+fn outgoing_link_rows(cache: &MetadataCache, path: &str) -> Vec<PaneRow> {
+    let Some(meta) = cache.file(path) else {
+        return Vec::new();
+    };
+    let properties = meta
+        .frontmatter_links
+        .iter()
+        .map(|l| (l.link.as_str(), Some(l.key.as_str())));
+    let body = meta
+        .links
+        .iter()
+        .chain(meta.embeds.iter())
+        .map(|l| (l.link.as_str(), None));
+    properties
+        .chain(body)
+        .map(|(link, key)| match cache.resolve(link, path) {
+            Some(target) => PaneRow::Item {
+                path: Some(target.to_string()),
+                label: display_name(target.rsplit('/').next().unwrap_or(target))
+                    .to_string()
+                    .into(),
+                detail: key.unwrap_or(target).to_string().into(),
+                offset: None,
+            },
+            None => PaneRow::Item {
+                path: None,
+                label: _markdown::parse_linktext(link)
+                    .path
+                    .to_string()
+                    .into(),
+                detail: "Not created yet".into(),
+                offset: None,
+            },
+        })
+        .collect()
+}
+
 #[derive(Clone)]
 struct TagRow {
     name: SharedString,
@@ -810,6 +931,59 @@ struct MentionRows {
     path: String,
     incoming: Vec<PaneRow>,
     outgoing: Vec<PaneRow>,
+}
+
+/// How long a transient message stays on screen. Obsidian reports what a
+/// command did with a Notice that fades on its own after a few seconds;
+/// the exact duration there has not been probed.
+const NOTICE_LIFETIME: Duration = Duration::from_secs(5);
+
+/// A message on screen, with the id its expiry timer names it by.
+struct Notice {
+    id: u64,
+    text: SharedString,
+}
+
+/// The transient messages, oldest first. The status bar is for what stays
+/// true — the open file, the index summary — so everything a command has
+/// to say goes here instead and leaves again on its own.
+#[derive(Default)]
+struct Notices {
+    live: Vec<Notice>,
+    last_id: u64,
+}
+
+impl Notices {
+    /// Shows `text` and returns the id to expire it by. A message already
+    /// on screen is renewed rather than stacked: the autosave retries on a
+    /// timer, so the same refusal arrives over and over.
+    fn push(&mut self, text: SharedString) -> u64 {
+        self.live.retain(|n| n.text != text);
+        self.last_id += 1;
+        self.live.push(Notice {
+            id: self.last_id,
+            text,
+        });
+        self.last_id
+    }
+
+    /// Drops the message with this id, if it is still the one on screen.
+    fn expire(&mut self, id: u64) {
+        self.live.retain(|n| n.id != id);
+    }
+
+    fn clear(&mut self) {
+        self.live.clear();
+    }
+
+    /// The newest message, which is what the last command said.
+    fn latest(&self) -> Option<&SharedString> {
+        self.live.last().map(|n| &n.text)
+    }
+
+    fn texts(&self) -> Vec<String> {
+        self.live.iter().map(|n| n.text.to_string()).collect()
+    }
 }
 
 /// Which overlay is up, if any.
@@ -842,6 +1016,9 @@ enum PendingOp {
 
 pub struct Workspace {
     focus_handle: FocusHandle,
+    /// Set when something changed what the main area shows and the keyboard
+    /// has to follow it; [`Workspace::render`] is where it is honoured.
+    refocus_main: bool,
     state: Option<Arc<VaultState>>,
     vault_name: SharedString,
     loading: Option<SharedString>,
@@ -866,6 +1043,11 @@ pub struct Workspace {
     mode_before_graph: ViewMode,
     mode: ViewMode,
     current: Option<String>,
+    /// The note whose file went away while its buffer was still on screen.
+    /// The text stays — it may hold edits that exist nowhere else — but it
+    /// is no longer backed by a file, so the main area says so and nothing
+    /// writes it back.
+    detached: Option<SharedString>,
     history: Vec<String>,
     history_ix: usize,
     right_tab: RightTab,
@@ -880,7 +1062,10 @@ pub struct Workspace {
     /// Matcher over every note name and alias, rebuilt when files change.
     name_finder: Option<Arc<Finder>>,
     mention_generation: u64,
+    /// What the status bar says about the vault and the open file: it is
+    /// true until something makes it untrue, so nothing expires it.
     status: SharedString,
+    notices: Notices,
     words: usize,
     chars: usize,
     _watcher: Option<watch::Watcher>,
@@ -998,6 +1183,9 @@ impl Workspace {
             cx.subscribe(&reading, |this, _, event: &ReadingEvent, cx| match event {
                 ReadingEvent::OpenLink(target) => this.follow_link(target.clone(), cx),
             }),
+            cx.subscribe(&reading, |this, _, event: &TaskToggled, cx| {
+                this.toggle_task(&event.path, event.marker, cx)
+            }),
             cx.subscribe_in(
                 &chooser,
                 window,
@@ -1005,13 +1193,19 @@ impl Workspace {
                     ChooserEvent::Chosen(path) => this.insert_template(path.clone(), window, cx),
                     ChooserEvent::Close => {
                         this.modal = Modal::None;
-                        window.focus(&this.editor.focus_handle(cx), cx);
+                        // Whatever the main area paints, not the editor:
+                        // its handle is outside the dispatch tree in
+                        // reading view and would swallow every key.
+                        this.focus_main(window, cx);
                         cx.notify();
                     }
                 },
             ),
             cx.subscribe(&editor, |this, _, event: &EditorEvent, cx| match event {
-                EditorEvent::Edited => this.schedule_save(cx),
+                EditorEvent::Edited => {
+                    this.schedule_save(cx);
+                    this.refresh_outline_from_buffer(cx);
+                }
                 EditorEvent::OpenLink(target) => this.follow_link(target.clone(), cx),
                 EditorEvent::PropertyTypeAssigned { key, ty } => {
                     this.assign_property_type(key.clone(), *ty, cx)
@@ -1029,6 +1223,7 @@ impl Workspace {
         });
         let mut ws = Workspace {
             focus_handle: cx.focus_handle(),
+            refocus_main: false,
             state: None,
             vault_name: "No vault".into(),
             loading: None,
@@ -1051,6 +1246,7 @@ impl Workspace {
             mode_before_graph: ViewMode::Reading,
             mode: ViewMode::Reading,
             current: None,
+            detached: None,
             history: Vec::new(),
             history_ix: 0,
             right_tab: RightTab::Backlinks,
@@ -1064,6 +1260,7 @@ impl Workspace {
             name_finder: None,
             mention_generation: 0,
             status: "Pass a vault folder as the first argument".into(),
+            notices: Notices::default(),
             words: 0,
             chars: 0,
             _watcher: None,
@@ -1122,8 +1319,7 @@ impl Workspace {
                 cx.notify();
             }
             Err(err) => {
-                self.status = format!("types.json could not be written: {err}").into();
-                cx.notify();
+                self.report(format!("types.json could not be written: {err}"), cx);
             }
         }
     }
@@ -1134,9 +1330,12 @@ impl Workspace {
     /// writes.
     fn apply_app_config(&mut self, state: &VaultState, cx: &mut Context<Self>) {
         let readable = state.app().readable_line_length.unwrap_or(true);
+        let properties =
+            PropertiesInDocument::from_config(state.app().properties_in_document.as_deref());
         self.reading.update(cx, |r, cx| {
             r.set_readable_line_length(readable);
             r.set_property_types(state.property_types().clone());
+            r.set_properties_in_document(properties);
             cx.notify();
         });
         let (smart, use_tab, tab_size) = (
@@ -1144,8 +1343,6 @@ impl Workspace {
             state.app().use_tab.unwrap_or(true),
             state.app().tab_size.unwrap_or(4),
         );
-        let properties =
-            PropertiesInDocument::from_config(state.app().properties_in_document.as_deref());
         let build_options = state.build_options();
         let link_options = _suggest::Options {
             format: state.link_format(),
@@ -1169,8 +1366,7 @@ impl Workspace {
             return;
         };
         if let Err(err) = state.apply_setting(&change) {
-            self.status = format!("{} could not be written: {err}", change.file()).into();
-            cx.notify();
+            self.report(format!("{} could not be written: {err}", change.file()), cx);
             return;
         }
         self.apply_app_config(&state, cx);
@@ -1352,6 +1548,7 @@ impl Workspace {
             }
         }
         rows.sort_by(|a, b| a.label.cmp(&b.label));
+        self.close_editor_suggest(cx);
         self.modal = Modal::Chooser;
         self.chooser.update(cx, |c, cx| {
             c.open(rows, "Type name of a template...", empty, window, cx)
@@ -1472,7 +1669,7 @@ impl Workspace {
         let (watcher, rx) = match watch::start(&state.root) {
             Ok(w) => w,
             Err(err) => {
-                self.status = format!("File watching unavailable: {err}").into();
+                self.report(format!("File watching unavailable: {err}"), cx);
                 return;
             }
         };
@@ -1544,18 +1741,46 @@ impl Workspace {
         } else {
             format!("{n} files changed").into()
         };
+        // Back and forward must never land on a file the vault no longer
+        // has, whoever removed it; an atomic external save arrives as a
+        // removal too, so only a path that is really gone is forgotten.
+        for change in &changes.files {
+            if let FileChange::Removed(path) = change {
+                if !state.vault().absolute(path).exists() {
+                    self.forget_history(path);
+                }
+            }
+        }
         if let Some(current) = self.current.clone() {
             let removed = changes
                 .files
                 .iter()
                 .any(|c| matches!(c, FileChange::Removed(p) if *p == current));
-            if removed {
-                self.status = format!("{current} was deleted").into();
-                self.refresh_panes(&state, cx);
+            if removed && !state.vault().absolute(&current).exists() {
+                // The open note is gone from the vault. The buffer stays on
+                // screen because it may hold edits that exist nowhere else,
+                // but it is no longer a file: the autosave is disarmed and
+                // the panes stop describing it.
+                self.detach_current(true, &state, cx);
+                self.status =
+                    format!("{current} was deleted; this buffer is no longer saved anywhere")
+                        .into();
             } else if changes.files.iter().any(|c| c.path() == current) {
                 self.show_file(&current, &state, cx);
             } else {
                 self.refresh_panes(&state, cx);
+            }
+        } else if let Some(detached) = self.detached.clone() {
+            // The file the detached buffer came from is back: a slow external
+            // unlink-then-rewrite (git checkout, a sync client) lands as two
+            // changes either side of the watcher's debounce. Reattach rather
+            // than leave the pane showing a note the vault has again under a
+            // banner saying it does not; `show_file` keeps unsaved edits and
+            // reports that the file changed underneath them.
+            if changes.files.iter().any(|c| c.path() == detached.as_ref())
+                && state.vault().absolute(&detached).exists()
+            {
+                self.show_file(&detached, &state, cx);
             }
         }
         cx.notify();
@@ -1578,12 +1803,20 @@ impl Workspace {
 
     /// Selects a right-dock tab by name (`--pane` on the command line).
     pub fn show_right_tab(&mut self, name: &str, cx: &mut Context<Self>) {
-        self.right_tab = match name.to_lowercase().as_str() {
+        let which = match name.to_lowercase().as_str() {
             "outgoing" => RightTab::Outgoing,
             "outline" => RightTab::Outline,
             "tags" => RightTab::Tags,
             _ => RightTab::Backlinks,
         };
+        self.select_right_tab(which, cx);
+    }
+
+    /// Shows a right-dock tab, bringing what it shows up to date first: the
+    /// Outline is kept current only while it is the pane on screen.
+    fn select_right_tab(&mut self, which: RightTab, cx: &mut Context<Self>) {
+        self.right_tab = which;
+        self.refresh_outline_from_buffer(cx);
         cx.notify();
     }
 
@@ -1601,12 +1834,15 @@ impl Workspace {
     }
 
     /// Shows the Search tab with `query`; focuses the field when a window is at hand.
+    /// The dock comes back first: a focus handle on a pane that is not painted
+    /// is outside the dispatch tree, so it would take every key and handle none.
     pub fn show_search(
         &mut self,
         query: &str,
         window: Option<&mut Window>,
         cx: &mut Context<Self>,
     ) {
+        self.left_visible = true;
         self.left_tab = LeftTab::Search;
         self.search.update(cx, |s, cx| s.set_query(query, cx));
         if let Some(window) = window {
@@ -1623,6 +1859,7 @@ impl Workspace {
                 recent.push(path.clone());
             }
         }
+        self.close_editor_suggest(cx);
         self.modal = Modal::Switcher;
         self.switcher
             .update(cx, |s, cx| s.open(recent, query, window, cx));
@@ -1647,6 +1884,7 @@ impl Workspace {
             .map(|c| PaletteCommand::from_command(c, pinned.contains(&c.id)))
             .collect();
         let recent = self.recent_commands.clone();
+        self.close_editor_suggest(cx);
         self.modal = Modal::Palette;
         self.palette
             .update(cx, |p, cx| p.open(commands, recent, query, window, cx));
@@ -1665,9 +1903,17 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.close_editor_suggest(cx);
         self.modal = Modal::Settings;
         self.settings.update(cx, |s, cx| s.open(tab, window, cx));
         cx.notify();
+    }
+
+    /// A modal going up takes the autocompletion popup down with it: the
+    /// popup would otherwise stay painted under the modal, still holding
+    /// the keys it binds.
+    fn close_editor_suggest(&mut self, cx: &mut Context<Self>) {
+        self.editor.update(cx, |e, cx| e.close_suggest(cx));
     }
 
     fn close_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1702,7 +1948,7 @@ impl Workspace {
             "editor:open-search" => self.open_find("", false, window, cx),
             "editor:open-search-replace" => self.open_find("", true, window, cx),
             "editor:add-cursor-above" | "editor:add-cursor-below" => {
-                if self.mode.is_editing() {
+                if self.editing_or_report(id, window, cx) {
                     let above = id == "editor:add-cursor-above";
                     self.editor
                         .update(cx, |e, cx| e.add_cursor(above, window, cx));
@@ -1720,47 +1966,156 @@ impl Workspace {
             "graph:open" => self.open_graph_action(&OpenGraph, window, cx),
             "graph:open-local" => self.show_graph(true, window, cx),
             "markdown:toggle-preview" => self.toggle_mode(&ToggleMode, window, cx),
+            // The properties block is the same editable widget in reading
+            // view, and `editor:toggle-fold-properties` was observed running
+            // there with the preview leaf active (Specification.md, "Folding"),
+            // so these three ask only that the note hold the keyboard.
+            //
             // Obsidian opens an unnamed property row and writes nothing until
             // it is named, which is what `add_property_row` does.
             "markdown:add-metadata-property" => {
-                if self.mode.is_editing() {
+                if self.note_has_keys(window, cx) {
                     self.editor
                         .update(cx, |e, cx| e.add_property_row(window, cx));
                 }
             }
             "markdown:clear-metadata-properties" => {
-                if self.mode.is_editing() {
+                if self.note_has_keys(window, cx) {
                     self.editor
                         .update(cx, |e, cx| e.clear_properties(window, cx));
                 }
             }
             "editor:toggle-fold-properties" => {
-                if self.mode.is_editing() {
+                if self.note_has_keys(window, cx) {
                     self.editor.update(cx, |e, cx| e.toggle_properties_fold(cx));
                 }
             }
             "editor:insert-table" => {
-                if self.mode.is_editing() {
+                if self.editing_or_report(id, window, cx) {
                     self.editor.update(cx, |e, cx| e.insert_table(window, cx));
                 }
             }
-            "insert-current-date" | "insert-current-time" => {
-                let date = id == "insert-current-date";
-                self.insert_stamp(date, window, cx);
+            // The wrapping toggles: each writes the pair Obsidian's
+            // markup uses around the selection, or takes it off again.
+            "editor:toggle-bold"
+            | "editor:toggle-italics"
+            | "editor:toggle-strikethrough"
+            | "editor:toggle-highlight"
+            | "editor:toggle-code"
+            | "editor:toggle-inline-math"
+            | "editor:toggle-comments" => {
+                if self.editing_or_report(id, window, cx) {
+                    let marker = match id {
+                        "editor:toggle-bold" => "**",
+                        "editor:toggle-italics" => "*",
+                        "editor:toggle-strikethrough" => "~~",
+                        "editor:toggle-highlight" => "==",
+                        "editor:toggle-code" => "`",
+                        "editor:toggle-inline-math" => "$",
+                        _ => "%%",
+                    };
+                    self.editor
+                        .update(cx, |e, cx| e.toggle_wrap(marker, window, cx));
+                }
             }
-            "insert-template" => self.open_template_chooser(window, cx),
+            "editor:toggle-bullet-list"
+            | "editor:toggle-numbered-list"
+            | "editor:toggle-blockquote" => {
+                if self.editing_or_report(id, window, cx) {
+                    let kind = match id {
+                        "editor:toggle-bullet-list" => LinePrefix::Bullet,
+                        "editor:toggle-numbered-list" => LinePrefix::Ordered,
+                        _ => LinePrefix::Quote,
+                    };
+                    self.editor
+                        .update(cx, |e, cx| e.toggle_line_prefix(kind, window, cx));
+                }
+            }
+            "editor:toggle-checklist-status" => {
+                if self.editing_or_report(id, window, cx) {
+                    let flipped = self
+                        .editor
+                        .update(cx, |e, cx| e.toggle_checklist(window, cx));
+                    if !flipped {
+                        self.report("There is no checkbox to toggle", cx);
+                    }
+                }
+            }
+            "editor:set-heading-0"
+            | "editor:set-heading-1"
+            | "editor:set-heading-2"
+            | "editor:set-heading-3"
+            | "editor:set-heading-4"
+            | "editor:set-heading-5"
+            | "editor:set-heading-6" => {
+                if self.editing_or_report(id, window, cx) {
+                    let level = id
+                        .rsplit('-')
+                        .next()
+                        .and_then(|n| n.parse::<u8>().ok())
+                        .unwrap_or(0);
+                    self.editor
+                        .update(cx, |e, cx| e.set_heading(level, window, cx));
+                }
+            }
+            "editor:indent-list" | "editor:unindent-list" => {
+                if self.editing_or_report(id, window, cx) {
+                    let indent = id == "editor:indent-list";
+                    self.editor
+                        .update(cx, |e, cx| e.indent_list(indent, window, cx));
+                }
+            }
+            "editor:delete-paragraph" => {
+                if self.editing_or_report(id, window, cx) {
+                    self.editor
+                        .update(cx, |e, cx| e.delete_paragraph(window, cx));
+                }
+            }
+            "editor:swap-line-up" | "editor:swap-line-down" => {
+                if self.editing_or_report(id, window, cx) {
+                    let up = id == "editor:swap-line-up";
+                    self.editor.update(cx, |e, cx| e.swap_lines(up, window, cx));
+                }
+            }
+            "editor:insert-link" | "editor:insert-wikilink" | "editor:insert-embed" => {
+                if self.editing_or_report(id, window, cx) {
+                    let kind = match id {
+                        "editor:insert-link" => LinkSyntax::Markdown,
+                        "editor:insert-wikilink" => LinkSyntax::Wikilink,
+                        _ => LinkSyntax::Embed,
+                    };
+                    self.editor
+                        .update(cx, |e, cx| e.insert_link(kind, window, cx));
+                }
+            }
+            "editor:follow-link" => {
+                if self.editing_or_report(id, window, cx) {
+                    self.editor.update(cx, |e, cx| e.follow_link_at_cursor(cx));
+                }
+            }
+            "insert-current-date" | "insert-current-time" => {
+                if self.editing_or_report(id, window, cx) {
+                    let date = id == "insert-current-date";
+                    self.insert_stamp(date, window, cx);
+                }
+            }
+            "insert-template" => {
+                if self.editing_or_report(id, window, cx) {
+                    self.open_template_chooser(window, cx);
+                }
+            }
             "daily-notes" => self.open_daily(None, window, cx),
             "daily-notes:goto-prev" => self.open_daily(Some(false), window, cx),
             "daily-notes:goto-next" => self.open_daily(Some(true), window, cx),
             _ if TableCommand::from_id(id).is_some() => {
                 let cmd = TableCommand::from_id(id).expect("checked above");
-                let ran = self.mode.is_editing()
-                    && self
+                if self.editing_or_report(id, window, cx) {
+                    let ran = self
                         .editor
                         .update(cx, |e, cx| e.table_command(cmd, window, cx));
-                if !ran {
-                    self.status = "The cursor is not in a table".into();
-                    cx.notify();
+                    if !ran {
+                        self.report("The cursor is not in a table", cx);
+                    }
                 }
             }
             "app:go-back" => self.go_back(&GoBack, window, cx),
@@ -1768,18 +2123,24 @@ impl Workspace {
             "app:open-settings" => self.open_settings(None, window, cx),
             "app:toggle-left-sidebar" => {
                 self.left_visible = !self.left_visible;
+                if !self.left_visible {
+                    self.leave_search_field(window, cx);
+                }
                 cx.notify();
             }
             "app:toggle-right-sidebar" => {
                 self.right_visible = !self.right_visible;
+                self.refresh_outline_from_buffer(cx);
                 cx.notify();
             }
             "file-explorer:open" => {
+                self.leave_search_field(window, cx);
                 self.left_visible = true;
                 self.left_tab = LeftTab::Files;
                 cx.notify();
             }
             "file-explorer:reveal-active-file" => {
+                self.leave_search_field(window, cx);
                 self.left_visible = true;
                 self.left_tab = LeftTab::Files;
                 if let Some(current) = self.current.clone() {
@@ -1841,16 +2202,50 @@ impl Workspace {
                 self.show_right_tab("tags", cx);
             }
             _ => {
-                let name = cx
-                    .global::<Commands>()
-                    .0
-                    .get(id)
-                    .map(|c| c.name.clone())
-                    .unwrap_or_else(|| id.to_string());
-                self.status = format!("{name}: not available in  yet").into();
-                cx.notify();
+                let name = self.command_name(id, cx);
+                self.report(format!("{name}: not available in  yet"), cx);
             }
         }
+    }
+
+    /// The command's name as the palette shows it, for a message about it.
+    fn command_name(&self, id: &str, cx: &App) -> String {
+        cx.global::<Commands>()
+            .0
+            .get(id)
+            .map(|c| c.name.clone())
+            .unwrap_or_else(|| id.to_string())
+    }
+
+    /// True when the note itself holds the keyboard: no modal is up and the
+    /// focus is on the pane that shows it. A hotkey is bound in the
+    /// workspace's key context and so fires wherever the keyboard is, while
+    /// Obsidian scopes an editor command to the active editor; without this
+    /// a Ctrl+B typed into the search field writes bold markers into the
+    /// note behind it.
+    fn note_has_keys(&self, window: &Window, cx: &App) -> bool {
+        self.modal == Modal::None
+            && (self.editor.read(cx).focus_handle_ref().is_focused(window)
+                || self.reading.focus_handle(cx).is_focused(window))
+    }
+
+    /// True when an editor command can run. Obsidian hides a command whose
+    /// check callback fails; 's palette cannot tell yet, so the
+    /// command says why it did nothing rather than silently doing nothing —
+    /// but only when the note is what the keys were meant for. A command
+    /// that arrives while a dock field or a modal has the keyboard is
+    /// addressed to that field, and saying anything about the note would be
+    /// an answer to a question nobody asked.
+    fn editing_or_report(&mut self, id: &str, window: &Window, cx: &mut Context<Self>) -> bool {
+        if !self.note_has_keys(window, cx) {
+            return false;
+        }
+        if self.mode.is_editing() {
+            return true;
+        }
+        let name = self.command_name(id, cx);
+        self.report(format!("{name}: only available while editing"), cx);
+        false
     }
 
     fn open_search_action(&mut self, _: &OpenSearch, window: &mut Window, cx: &mut Context<Self>) {
@@ -1893,14 +2288,66 @@ impl Workspace {
                 e.set_live_preview(mode == ViewMode::LivePreview, cx)
             });
         }
-        match mode {
-            ViewMode::Reading => window.focus(&self.reading.focus_handle(cx), cx),
-            ViewMode::LivePreview | ViewMode::Source => {
-                window.focus(&self.editor.focus_handle(cx), cx)
-            }
-            ViewMode::Graph => window.focus(&self.graph.focus_handle(cx), cx),
-        }
+        self.focus_main(window, cx);
         cx.notify();
+    }
+
+    /// Asks for the keyboard to be put back on the main area at the next
+    /// paint.
+    ///
+    /// Where focus belongs when the main area changes is one rule — on
+    /// whatever that area paints — but most of what changes it cannot
+    /// enforce the rule itself: a dock row's click and the socket's `open`
+    /// reach the workspace through a subscription or a handler that has no
+    /// `Window`. They record the request instead, and [`Workspace::render`],
+    /// which has the window and is building the very tree the focus has to
+    /// land in, carries it out.
+    fn request_focus_main(&mut self, cx: &mut Context<Self>) {
+        self.refocus_main = true;
+        cx.notify();
+    }
+
+    /// Whether the keyboard is somewhere nothing can use it: on the
+    /// workspace root, which is where a click in a dock leaves it, on no
+    /// element at all, or on a main view the main area is not painting.
+    ///
+    /// Anything else holds it on purpose — the find panel, the search box,
+    /// a property row, a modal's input — and a note opening behind one of
+    /// those must not take it away.
+    fn keyboard_is_parked(&self, window: &Window, cx: &App) -> bool {
+        if window.focused(cx).is_none() || self.focus_handle.is_focused(window) {
+            return true;
+        }
+        let painted = self.main_view(cx);
+        let unpainted =
+            |view: MainView, handle: &FocusHandle| painted != view && handle.is_focused(window);
+        unpainted(MainView::Editor, self.editor.read(cx).focus_handle_ref())
+            || unpainted(MainView::Reading, &self.reading.focus_handle(cx))
+            || unpainted(MainView::Graph, &self.graph.focus_handle(cx))
+    }
+
+    /// Puts the keyboard on whatever the main area actually paints: a handle
+    /// on a view that is not there is outside the dispatch tree, and the keys
+    /// meant for it reach nothing.
+    fn focus_main(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.refocus_main = false;
+        match self.main_view(cx) {
+            MainView::Reading => window.focus(&self.reading.focus_handle(cx), cx),
+            MainView::Editor => window.focus(&self.editor.focus_handle(cx), cx),
+            MainView::Graph => window.focus(&self.graph.focus_handle(cx), cx),
+            MainView::Empty => window.focus(&self.focus_handle, cx),
+        }
+    }
+
+    /// Hands the keyboard back to the main area before the left dock
+    /// stops painting the search field. Hiding the dock or switching it to
+    /// the Files tab unmounts that input, and focus left on an unmounted
+    /// element is outside the dispatch tree: every key in the app, the
+    /// hotkey that would undo this included, then reaches nothing.
+    fn leave_search_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.search.focus_handle(cx).is_focused(window) {
+            self.focus_main(window, cx);
+        }
     }
 
     /// Opens the editor's find panel (with the replace row when asked),
@@ -2009,13 +2456,42 @@ impl Workspace {
             self.history_ix = self.history.len();
         }
         self.show_file(&path, &state, cx);
+        // Opening a note is a move into the main area, wherever it was asked
+        // for: an explorer row, a search hit, the switcher, a link, the
+        // socket. Obsidian hands the keyboard to the note it just opened, and
+        // without this the click that opened it leaves focus on the
+        // workspace root, where typing and the arrow keys reach nothing.
+        self.request_focus_main(cx);
+        if self.current.as_deref() != Some(path.as_str()) {
+            // It did not open, so it is not somewhere to go back to either.
+            self.forget_history(&path);
+            return;
+        }
         if let Some(sub) = subpath {
             self.scroll_to_subpath(&path, &sub, &state, cx);
         }
     }
 
     fn show_file(&mut self, path: &str, state: &Arc<VaultState>, cx: &mut Context<Self>) {
-        self.current = Some(path.to_string());
+        let previous = self.current.replace(path.to_string());
+        if let Some(gone) = self.detached.take() {
+            // The buffer was kept because its edits exist nowhere else. There
+            // is no file to save them to, and resurrecting one the user
+            // deleted would be worse, so the least this can do on the way out
+            // is name what it is dropping rather than drop it in silence.
+            let lost = {
+                let e = self.editor.read(cx);
+                e.is_dirty() && e.name.as_ref() != path
+            };
+            if lost {
+                self.report(
+                    format!(
+                        "Discarded the unsaved edits in {gone}; nothing was saving that buffer"
+                    ),
+                    cx,
+                );
+            }
+        }
         self.explorer.update(cx, |e, cx| e.reveal(path, cx));
         self.graph
             .update(cx, |g, cx| g.set_current(Some(path.to_string()), cx));
@@ -2041,7 +2517,7 @@ impl Workspace {
                     if same && matches {
                         // Own write or an unrelated event.
                     } else if same && dirty {
-                        self.status = format!("{path} changed on disk; unsaved edits kept").into();
+                        self.report(format!("{path} changed on disk; unsaved edits kept"), cx);
                         self.refresh_panes(state, cx);
                         cx.notify();
                         return;
@@ -2055,7 +2531,21 @@ impl Workspace {
                         format!("{path}  ·  reading view built in {build_ms:.1} ms").into();
                 }
                 Err(err) => {
-                    self.status = format!("Could not read {path}: {err}").into();
+                    // `current` may not name a file the app could not read:
+                    // the panes, the explorer row and the autosave all key
+                    // off it while the editor still holds another note, and
+                    // that mismatch is what silently drops the edits typed
+                    // into it. The view goes back to the note it is really
+                    // showing, or lets go of the buffer when there is none.
+                    self.report(format!("Could not read {path}: {err}"), cx);
+                    self.current = previous.filter(|p| p.as_str() != path);
+                    match self.current.clone() {
+                        Some(back) => {
+                            self.explorer.update(cx, |e, cx| e.reveal(&back, cx));
+                            self.graph.update(cx, |g, cx| g.set_current(Some(back), cx));
+                        }
+                        None => self.detach_current(true, state, cx),
+                    }
                 }
             },
             FileKind::Image => {
@@ -2065,13 +2555,25 @@ impl Workspace {
                     state.as_ref(),
                     state.build_options(),
                 );
-                self.words = 0;
-                self.chars = 0;
                 self.reading
                     .update(cx, |r, cx| r.set_note(Some(path.to_string()), model, cx));
+                self.release_buffer(cx);
                 self.status = path.to_string().into();
             }
             other => {
+                // Nothing of the note that was open may survive into a file
+                // no view can draw: its text is not this file's and its links
+                // would still be clickable underneath the placeholder. The
+                // file's own bytes must not reach the editor either — that
+                // buffer saves through the markdown writer.
+                self.reading.update(cx, |r, cx| {
+                    r.set_note(
+                        None,
+                        reading::build_with("", "", state.as_ref(), state.build_options()),
+                        cx,
+                    )
+                });
+                self.release_buffer(cx);
                 self.status = format!("{path}: {other:?} files are not supported yet").into();
             }
         }
@@ -2092,40 +2594,102 @@ impl Workspace {
         .to_string()
     }
 
+    /// Lets go of the buffer on the way into a file the editor cannot save:
+    /// a canvas, an image, a PDF. Unsaved edits are not thrown away — they
+    /// would exist nowhere else — so a dirty buffer stays on screen, marked
+    /// as belonging to no file; a clean one goes.
+    fn release_buffer(&mut self, cx: &mut Context<Self>) {
+        let (dirty, name) = {
+            let editor = self.editor.read(cx);
+            (editor.is_dirty(), editor.name.clone())
+        };
+        if dirty && !name.is_empty() {
+            self.save_task = None;
+            self.detached = Some(name);
+            return;
+        }
+        self.clear_buffer(cx);
+    }
+
+    /// Empties the editor and forgets what it was showing. Keeping the bytes
+    /// of a canvas or a PDF in the editor would let the autosave write them
+    /// back through the markdown writer.
+    fn clear_buffer(&mut self, cx: &mut Context<Self>) {
+        self.save_task = None;
+        self.detached = None;
+        self.editor
+            .update(cx, |e, cx| e.set_text("", String::new(), cx));
+        self.words = 0;
+        self.chars = 0;
+    }
+
+    /// Lets go of the open note: nothing may write the buffer back, and no
+    /// pane, graph or history entry may keep describing a file that is not
+    /// there. `keep_buffer` is for a file that went away underneath the app,
+    /// where the text on screen may hold edits that exist nowhere else; it
+    /// stays, marked as saved nowhere, rather than being thrown away.
+    fn detach_current(
+        &mut self,
+        keep_buffer: bool,
+        state: &Arc<VaultState>,
+        cx: &mut Context<Self>,
+    ) {
+        self.save_task = None;
+        if keep_buffer {
+            let name = self.editor.read(cx).name.clone();
+            self.detached = (!name.is_empty()).then_some(name);
+        } else {
+            self.clear_buffer(cx);
+        }
+        self.reading.update(cx, |r, cx| {
+            r.set_note(
+                None,
+                reading::build_with("", "", state.as_ref(), state.build_options()),
+                cx,
+            )
+        });
+        self.current = None;
+        self.graph.update(cx, |g, cx| g.set_current(None, cx));
+        self.clear_panes(cx);
+    }
+
+    /// Drops every row that describes the open note. The panes are not
+    /// refreshed on the way out of a file, so without this the outline,
+    /// backlinks and outgoing links of a note that is gone stay on screen
+    /// and stay clickable.
+    fn clear_panes(&mut self, cx: &mut Context<Self>) {
+        self.outline.clear();
+        self.linked.clear();
+        self.outgoing_links.clear();
+        self.backlink_rows.clear();
+        self.outgoing_rows.clear();
+        cx.notify();
+    }
+
+    /// Forgets `path`, and anything under it when it is a folder, so back
+    /// and forward can never navigate to a file the vault no longer has.
+    fn forget_history(&mut self, path: &str) {
+        self.history_ix = prune_history(&mut self.history, self.history_ix, path);
+    }
+
     fn refresh_panes(&mut self, state: &Arc<VaultState>, cx: &mut Context<Self>) {
         let Some(path) = self.current.clone() else {
+            self.clear_panes(cx);
             return;
         };
         let cache = state.cache();
         let texts = state.texts();
-        self.outline = cache
-            .file(&path)
-            .map(|meta| {
-                meta.headings
-                    .iter()
-                    .map(|h| OutlineRow {
-                        level: h.level,
-                        text: Self::heading_text(&h.heading).into(),
-                        offset: h.position.start.offset,
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        self.outline = cache.file(&path).map(outline_rows).unwrap_or_default();
 
         // Linked mentions: every link into this file, with its line as context.
         let mut linked = Vec::new();
         for b in cache.backlinks(&path) {
-            let context = texts
-                .get(b.source)
-                .and_then(|t| t.lines().nth(b.link.position.start.line as usize))
-                .map(|l| l.trim().to_string())
-                .unwrap_or_default();
             linked.push(PaneRow::Item {
                 path: Some(b.source.to_string()),
                 label: display_name(b.source.rsplit('/').next().unwrap_or(b.source))
                     .to_string()
                     .into(),
-                detail: format!("{}: {}", b.link.position.start.line + 1, context).into(),
+                detail: backlink_detail(&b, texts.get(b.source).map(|t| t.as_str())).into(),
                 offset: Some(b.link.position.start.offset),
             });
         }
@@ -2133,31 +2697,8 @@ impl Workspace {
         linked.insert(0, PaneRow::Header(format!("Linked mentions ({n})").into()));
         self.linked = linked;
 
-        // Outgoing: resolved then unresolved links from this file.
-        let mut out = Vec::new();
-        if let Some(meta) = cache.file(&path) {
-            for link in meta.links.iter().chain(meta.embeds.iter()) {
-                match cache.resolve(&link.link, &path) {
-                    Some(target) => out.push(PaneRow::Item {
-                        path: Some(target.to_string()),
-                        label: display_name(target.rsplit('/').next().unwrap_or(target))
-                            .to_string()
-                            .into(),
-                        detail: target.to_string().into(),
-                        offset: None,
-                    }),
-                    None => out.push(PaneRow::Item {
-                        path: None,
-                        label: _markdown::parse_linktext(&link.link)
-                            .path
-                            .to_string()
-                            .into(),
-                        detail: "Not created yet".into(),
-                        offset: None,
-                    }),
-                }
-            }
-        }
+        // Outgoing: the links this file writes, properties included.
+        let mut out = outgoing_link_rows(&cache, &path);
         let n = out.len();
         out.insert(0, PaneRow::Header(format!("Links ({n})").into()));
         self.outgoing_links = out;
@@ -2167,6 +2708,36 @@ impl Workspace {
         self.backlink_rows = self.linked.clone();
         self.outgoing_rows = self.outgoing_links.clone();
         self.compute_mentions(&path, state, cx);
+        cx.notify();
+    }
+
+    /// Rebuilds the Outline from the editor's buffer instead of from the
+    /// index.
+    ///
+    /// The index is a save behind while a note is being typed, so the rows
+    /// name headings the file no longer has — and, worse, carry byte offsets
+    /// into a version of the note that is not on screen, which is what makes
+    /// clicking one land the caret in the wrong place. Only the Outline is
+    /// rebuilt: backlinks and tags are about other files and cannot go stale
+    /// from typing in this one. It costs a parse of the buffer, so it is
+    /// paid only while the pane showing those offsets is up.
+    fn refresh_outline_from_buffer(&mut self, cx: &mut Context<Self>) {
+        if !self.right_visible || self.right_tab != RightTab::Outline {
+            return;
+        }
+        let Some(path) = self.current.clone() else {
+            return;
+        };
+        let rows = {
+            let editor = self.editor.read(cx);
+            // A clean buffer is the file the index read, and a buffer
+            // holding another note says nothing about this one.
+            if editor.name.as_ref() != path.as_str() || !editor.is_dirty() {
+                return;
+            }
+            outline_rows(&index_markdown(editor.text()))
+        };
+        self.outline = rows;
         cx.notify();
     }
 
@@ -2221,6 +2792,9 @@ impl Workspace {
         self.reading
             .update(cx, |r, cx| r.scroll_to_offset(offset, cx));
         self.editor.update(cx, |e, cx| e.reveal_offset(offset, cx));
+        // An outline row or a backlink moved the caret; the keyboard goes
+        // where the caret went, not to the dock row that was clicked.
+        self.request_focus_main(cx);
     }
 
     fn scroll_to_subpath(
@@ -2319,6 +2893,36 @@ impl Workspace {
         };
         self.flush_save(cx);
         self.show_file(&path, &state, cx);
+        self.request_focus_main(cx);
+    }
+
+    /// A task checkbox a reader clicked in the reading view. The editor
+    /// still holds the open note's buffer while the reader is the view on
+    /// screen, so the edit takes exactly the path a Live Preview click
+    /// takes: one undo step, and the autosave writes it back. The reader
+    /// is then rebuilt from that buffer rather than from the file, which
+    /// the save has not reached yet.
+    fn toggle_task(&mut self, path: &str, marker: TaskMarker, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        // A click that outlived the note it was made in must write nothing:
+        // the marker's line and column belong to that note's bytes.
+        if self.current.as_deref() != Some(path) || self.editor.read(cx).name.as_ref() != path {
+            return;
+        }
+        if !self.editor.update(cx, |e, cx| {
+            e.toggle_task_at(marker.line, marker.col, None, cx)
+        }) {
+            return;
+        }
+        let text = self.editor.read(cx).text().to_string();
+        self.words = text.split_whitespace().count();
+        self.chars = text.chars().count();
+        let model = reading::build_with(path, &text, state.as_ref(), state.build_options());
+        self.reading
+            .update(cx, |r, cx| r.set_note(Some(path.to_string()), model, cx));
+        cx.notify();
     }
 
     /// Writes the editor's buffer back after an edit settles (two seconds,
@@ -2352,24 +2956,41 @@ impl Workspace {
         // The vault is the source of truth. If the file is not the bytes
         // this note was loaded from or last saved as, something else wrote
         // it — Obsidian, in the mixed use the phase 3 gate is about — and
-        // overwriting it would throw that away. The buffer keeps its edits
-        // and says so instead.
-        if let Ok(on_disk) = std::fs::read_to_string(&absolute) {
-            if !self.editor.read(cx).disk_unchanged(&on_disk) {
-                self.status =
-                    format!("{name} changed on disk; not overwritten, your edits are still here")
-                        .into();
-                cx.notify();
+        // overwriting it would throw that away. A file that cannot be read
+        // at all is the same answer only more so: a note deleted underneath
+        // the app must not be recreated here from the buffer it left behind.
+        // The buffer keeps its edits and says so instead.
+        match std::fs::read_to_string(&absolute) {
+            Ok(on_disk) if self.editor.read(cx).disk_unchanged(&on_disk) => {}
+            Ok(_) => {
+                self.report(
+                    format!("{name} changed on disk; not overwritten, your edits are still here"),
+                    cx,
+                );
+                return;
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                self.report(
+                    format!("{name} was deleted; not recreated, your edits are still here"),
+                    cx,
+                );
+                return;
+            }
+            Err(err) => {
+                self.report(
+                    format!("Could not read {name}: {err}; not overwritten, your edits are kept"),
+                    cx,
+                );
                 return;
             }
         }
         match std::fs::write(&absolute, &contents) {
             Ok(()) => {
                 self.editor.update(cx, |e, _| e.mark_saved(&contents));
-                self.status = format!("{name} saved").into();
+                self.report(format!("{name} saved"), cx);
             }
             Err(err) => {
-                self.status = format!("Could not save {name}: {err}").into();
+                self.report(format!("Could not save {name}: {err}"), cx);
             }
         }
         cx.notify();
@@ -2385,13 +3006,26 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.pending = Some(op);
+        self.close_editor_suggest(cx);
         self.modal = Modal::Prompt;
         self.prompt.update(cx, |p, cx| p.open(spec, window, cx));
         cx.notify();
     }
 
+    /// Shows a message that goes away on its own, the way Obsidian's
+    /// Notice does. Everything a command has to say comes through here;
+    /// the status bar keeps only what stays true.
     fn report(&mut self, message: impl Into<SharedString>, cx: &mut Context<Self>) {
-        self.status = message.into();
+        let id = self.notices.push(message.into());
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(NOTICE_LIFETIME).await;
+            this.update(cx, |ws, cx| {
+                ws.notices.expire(id);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
         cx.notify();
     }
 
@@ -2537,7 +3171,7 @@ impl Workspace {
             return;
         };
         if !state.confirm_delete() {
-            self.delete_now(path, cx);
+            self.delete_now(path, window, cx);
             return;
         }
         let where_to = match state.trash_option() {
@@ -2560,7 +3194,7 @@ impl Workspace {
         );
     }
 
-    fn delete_now(&mut self, path: &str, cx: &mut Context<Self>) {
+    fn delete_now(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Some(state) = self.state.clone() else {
             return;
         };
@@ -2570,21 +3204,17 @@ impl Workspace {
                 .as_deref()
                 .is_some_and(|c| c.starts_with(&format!("{path}/")));
         if was_current {
-            // Nothing may write the buffer back into a file that is gone.
-            self.save_task = None;
-            self.editor
-                .update(cx, |e, cx| e.set_text("", String::new(), cx));
-            self.reading.update(cx, |r, cx| {
-                r.set_note(
-                    None,
-                    reading::build_with("", "", state.as_ref(), state.build_options()),
-                    cx,
-                )
-            });
-            self.current = None;
-            self.words = 0;
-            self.chars = 0;
+            // Nothing may write the buffer back into a file that is gone,
+            // and no pane may go on describing it.
+            self.detach_current(false, &state, cx);
+            // The main area may stop painting the view that was showing the
+            // note, and a focus left on it would sit outside the dispatch
+            // tree and swallow every key. The same rule as everywhere else
+            // decides where it goes instead: the workspace root when nothing
+            // is painted, the detached buffer when one stayed behind.
+            self.focus_main(window, cx);
         }
+        self.forget_history(path);
         match state.trash(path) {
             Ok(changes) => {
                 self.after_changes(changes, cx);
@@ -2655,7 +3285,7 @@ impl Workspace {
             PendingOp::Delete(path) => {
                 self.pending = None;
                 self.close_modal(window, cx);
-                self.delete_now(&path, cx);
+                self.delete_now(&path, window, cx);
             }
             PendingOp::NewFolder { parent } => {
                 let path = if parent.is_empty() {
@@ -2865,6 +3495,101 @@ impl Workspace {
         }
     }
 
+    /// Which view the main area paints for the mode and the open file. A
+    /// view only gets the main area when it has this file to show: an
+    /// editor with no file behind it — one left over from a note that is
+    /// gone, or one never given a note, as on launch over a vault with
+    /// nothing to open — takes edits nobody saves, and a reading view left
+    /// behind keeps a deleted note's links on screen and clickable.
+    fn main_view(&self, cx: &App) -> MainView {
+        let has_note = self.reading.read(cx).path.is_some();
+        let image = self
+            .current
+            .as_deref()
+            .is_some_and(|p| FileKind::from_path(p) == FileKind::Image);
+        let has_buffer = !self.editor.read(cx).name.is_empty();
+        Self::main_view_for(self.mode, has_note, image, has_buffer)
+    }
+
+    /// The rule itself, over what the three views have to show: `has_note`
+    /// is the reading view's built note, `image` whether the open file is
+    /// one, and `has_buffer` whether the editor's buffer names a file.
+    fn main_view_for(mode: ViewMode, has_note: bool, image: bool, has_buffer: bool) -> MainView {
+        match mode {
+            ViewMode::Graph => MainView::Graph,
+            ViewMode::Reading if has_note => MainView::Reading,
+            // An image has no source to edit, so it reads the same in the
+            // editing modes as it does in the reading view.
+            ViewMode::LivePreview | ViewMode::Source if image && has_note => MainView::Reading,
+            ViewMode::LivePreview | ViewMode::Source if has_buffer => MainView::Editor,
+            _ => MainView::Empty,
+        }
+    }
+
+    fn render_main(&self, theme: &Theme, cx: &App) -> gpui::AnyElement {
+        match self.main_view(cx) {
+            MainView::Graph => self.graph.clone().into_any_element(),
+            MainView::Reading => self.reading.clone().into_any_element(),
+            MainView::Editor => self.render_editor(theme),
+            MainView::Empty => self.render_no_file(theme),
+        }
+    }
+
+    /// The editor, under a line naming the file it lost if its buffer is no
+    /// longer backed by one. The user has to be told; the alternative is
+    /// typing into a buffer that is never written and never mentioned.
+    fn render_editor(&self, theme: &Theme) -> gpui::AnyElement {
+        let Some(name) = self.detached.clone() else {
+            return self.editor.clone().into_any_element();
+        };
+        div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .child(
+                div()
+                    .px_3()
+                    .py_1()
+                    .text_size(px(12.))
+                    .bg(theme.bg_alt)
+                    .text_color(theme.text_muted)
+                    .border_b_1()
+                    .border_color(theme.border)
+                    .child(format!(
+                        "{name} — this buffer no longer belongs to a file in the vault, \
+                         and nothing saves it"
+                    )),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .overflow_hidden()
+                    .child(self.editor.clone().into_any_element()),
+            )
+            .into_any_element()
+    }
+
+    /// Shown in place of a view that has nothing to show: no open file, or
+    /// one whose kind no view can draw.
+    fn render_no_file(&self, theme: &Theme) -> gpui::AnyElement {
+        let message: SharedString = match self.current.as_deref() {
+            Some(path) => format!(
+                "{:?} files are not supported yet",
+                FileKind::from_path(path)
+            )
+            .into(),
+            None => "No file is open".into(),
+        };
+        div()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_color(theme.text_muted)
+            .child(message)
+            .into_any_element()
+    }
+
     // ----- the control socket ----------------------------------------------------
 
     /// The whole shell as JSON, for the control socket's `state` method: a
@@ -2887,6 +3612,10 @@ impl Workspace {
 
         let mut file = Map::new();
         file.insert("path".into(), json!(self.current));
+        file.insert(
+            "detached".into(),
+            json!(self.detached.as_ref().map(|n| n.to_string())),
+        );
         file.insert("mode".into(), json!(self.mode.as_str()));
         file.insert("dirty".into(), json!(self.editor.read(cx).is_dirty()));
         put_capped(
@@ -2960,7 +3689,8 @@ impl Workspace {
             "editor": self.editor.read(cx).describe(text, cx),
             "reading": self.reading.read(cx).describe(),
             "graph": graph,
-            "status": self.status.to_string(),
+            "status": self.status_text(),
+            "notices": self.notices.texts(),
             "focus": {
                 "name": self.focus_name(window, cx),
                 "context_stack": context_names(window),
@@ -3037,9 +3767,24 @@ impl Workspace {
     /// with this workspace borrowed: delivering a keystroke to a focused
     /// input re-enters the focused view, and that view can be this one.
     pub fn type_target(&self, window: &Window, cx: &App) -> &'static str {
-        match self.focus_name(window, cx) {
+        Self::typed_text_target(self.focus_name(window, cx), self.main_view(cx))
+    }
+
+    /// Which of the two routes `text` takes, for the focus the shell
+    /// reports and the view the main area is painting.
+    ///
+    /// The editor is answered only while it is on screen. Its handle can
+    /// keep the focus after the main area has stopped painting it — the
+    /// keyboard reaches nothing from there, but this route does not go
+    /// through the dispatch tree, and would otherwise fill a buffer that
+    /// belongs to no file with text nothing ever saves.
+    fn typed_text_target(focus: &str, painted: MainView) -> &'static str {
+        match focus {
             // A property row or a table cell is the editor's own field.
-            "editor" | "property-field" | "cell-field" => "editor",
+            "editor" | "property-field" | "cell-field" => match painted {
+                MainView::Editor => "editor",
+                _ => "none",
+            },
             "workspace" | "reading" | "graph" | "none" => "none",
             _ => "input",
         }
@@ -3137,28 +3882,56 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        let handle = match name {
-            "workspace" => self.focus_handle.clone(),
-            "editor" => self.editor.focus_handle(cx),
-            "reading" => self.reading.focus_handle(cx),
-            "graph" => self.graph.focus_handle(cx),
-            other => return Err(format!("unknown view: {other}")),
-        };
-        window.focus(&handle, cx);
+        match Self::focus_target(name, self.main_view(cx))? {
+            // The root div paints in every frame, so its handle is always
+            // somewhere the keyboard can sit.
+            None => window.focus(&self.focus_handle, cx),
+            Some(_) => self.focus_main(window, cx),
+        }
         cx.notify();
         Ok(())
     }
 
-    /// Empties the status bar, so a caller can tell the next notice from
-    /// the one already there.
+    /// Which view the socket's `focus` names: `None` for the workspace
+    /// root, or the main view asked for once it is the one being painted.
+    ///
+    /// A view the main area is not painting is refused rather than focused.
+    /// Its handle is in no frame's dispatch tree, so the keyboard parked on
+    /// it reaches nothing at all — not even the hotkey that would undo it,
+    /// which is the dead state the mode switches were hardened against.
+    fn focus_target(name: &str, painted: MainView) -> Result<Option<MainView>, String> {
+        let wanted = match name {
+            "workspace" => return Ok(None),
+            "editor" => MainView::Editor,
+            "reading" => MainView::Reading,
+            "graph" => MainView::Graph,
+            other => return Err(format!("unknown view: {other}")),
+        };
+        if wanted != painted {
+            return Err(format!(
+                "the main area is painting {}, not {name}: \
+                 switch the mode first, or focus the view that is on screen",
+                painted.as_str()
+            ));
+        }
+        Ok(Some(wanted))
+    }
+
+    /// Empties the status bar and takes down every notice, so a caller
+    /// can tell the next notice from the one already there.
     pub fn clear_status(&mut self, cx: &mut Context<Self>) {
+        self.notices.clear();
         self.status = "".into();
         cx.notify();
     }
 
-    /// What the status bar says, which is how every command reports.
+    /// What the last command said, which is how every command reports:
+    /// the newest notice while one is up, the status bar otherwise.
     pub fn status_text(&self) -> String {
-        self.status.to_string()
+        match self.notices.latest() {
+            Some(text) => text.to_string(),
+            None => self.status.to_string(),
+        }
     }
 
     /// The open vault's folder, if one is open.
@@ -3500,10 +4273,7 @@ impl Workspace {
                     label,
                     tab == which,
                     theme,
-                    move |this, _, cx| {
-                        this.right_tab = which;
-                        cx.notify();
-                    },
+                    move |this, _, cx| this.select_right_tab(which, cx),
                     cx,
                 )
             };
@@ -3748,6 +4518,25 @@ pub(crate) fn context_names(window: &Window) -> Vec<String> {
         .collect()
 }
 
+/// Removes `path`, and anything beneath it when it is a folder, from a
+/// navigation history, answering where the one-based cursor lands. Entries
+/// before the cursor carry it back with them, so back and forward still
+/// reach the same notes they did.
+fn prune_history(history: &mut Vec<String>, ix: usize, path: &str) -> usize {
+    let prefix = format!("{path}/");
+    let mut cursor = ix;
+    let mut seen = 0;
+    history.retain(|entry| {
+        let keep = entry.as_str() != path && !entry.starts_with(&prefix);
+        if !keep && seen < ix {
+            cursor -= 1;
+        }
+        seen += 1;
+        keep
+    });
+    cursor.min(history.len())
+}
+
 fn empty_pane(text: &'static str, theme: &Theme) -> gpui::AnyElement {
     div()
         .p_3()
@@ -3758,7 +4547,18 @@ fn empty_pane(text: &'static str, theme: &Theme) -> gpui::AnyElement {
 }
 
 impl Render for Workspace {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // A view's focus handle only joins the dispatch tree when the frame
+        // that paints it is prepainted, so this — the start of that frame —
+        // is the first moment a focus asked for elsewhere can land. A modal
+        // owns the keyboard while it is up, and closing one focuses the main
+        // area anyway, so the request is dropped rather than queued.
+        if std::mem::take(&mut self.refocus_main)
+            && self.modal == Modal::None
+            && self.keyboard_is_parked(window, cx)
+        {
+            self.focus_main(window, cx);
+        }
         let theme = cx.global::<Theme>().clone();
         let title: SharedString = match &self.current {
             Some(p) => display_name(p.rsplit('/').next().unwrap_or(p))
@@ -3881,11 +4681,7 @@ impl Render for Workspace {
                 .child(loading.clone())
                 .into_any_element()
         } else {
-            match self.mode {
-                ViewMode::Reading => self.reading.clone().into_any_element(),
-                ViewMode::LivePreview | ViewMode::Source => self.editor.clone().into_any_element(),
-                ViewMode::Graph => self.graph.clone().into_any_element(),
-            }
+            self.render_main(&theme, cx)
         };
 
         let main = div()
@@ -3925,7 +4721,8 @@ impl Render for Workspace {
                         "Files",
                         left_tab == LeftTab::Files,
                         &theme,
-                        |this, _, cx| {
+                        |this, window, cx| {
+                            this.leave_search_field(window, cx);
                             this.left_tab = LeftTab::Files;
                             cx.notify();
                         },
@@ -4020,6 +4817,14 @@ impl Render for Workspace {
                 "{editor_status}{words} words, {chars} characters"
             )));
 
+        // Every overlay occludes: a modal in Obsidian owns the pointer as
+        // well as the keyboard, and without this the editor's raw window
+        // listeners take the mouse-down that landed on the modal and focus
+        // the note behind it, leaving the modal visible but keyboard-dead.
+        // Occluding costs nothing a modal wants — a click outside still
+        // reaches each list modal's `on_mouse_down_out`, which is bounds
+        // based rather than hitbox based, and Settings closes on its own
+        // backdrop click.
         let overlay: Option<gpui::AnyElement> = match self.modal {
             Modal::None => None,
             Modal::Switcher | Modal::Palette | Modal::Prompt | Modal::Chooser => {
@@ -4031,6 +4836,7 @@ impl Render for Workspace {
                 };
                 Some(
                     div()
+                        .occlude()
                         .absolute()
                         .inset_0()
                         .flex()
@@ -4045,6 +4851,7 @@ impl Render for Workspace {
             Modal::Settings => Some(
                 div()
                     .id("settings-backdrop")
+                    .occlude()
                     .absolute()
                     .inset_0()
                     .bg(rgba(0x00000080))
@@ -4066,18 +4873,53 @@ impl Render for Workspace {
                     .into_any_element(),
             ),
         };
+        // Obsidian reports an outcome with a Notice in the corner rather
+        // than in the status bar, and the probe notes put it bottom right.
+        let notices = (!self.notices.live.is_empty()).then(|| {
+            div()
+                .absolute()
+                .bottom(px(30.))
+                .right(px(16.))
+                .flex()
+                .flex_col()
+                .items_end()
+                .gap_1()
+                .children(self.notices.live.iter().map(|notice| {
+                    div()
+                        .max_w(px(360.))
+                        .px_3()
+                        .py_1()
+                        .rounded_md()
+                        .bg(theme.bg_secondary)
+                        .border_1()
+                        .border_color(theme.border)
+                        .text_size(px(12.))
+                        .text_color(theme.text)
+                        .child(notice.text.clone())
+                }))
+        });
+
         let left_visible = self.left_visible;
         let right_visible = self.right_visible;
+        // A modal owns the keyboard while it is up, the way an Obsidian
+        // modal's own keymap scope keeps app hotkeys from firing behind it.
+        // gpui's key contexts nest rather than replace — the overlay is a
+        // child of this div — so the workspace stands its handlers down
+        // instead: without them a hotkey can no longer focus a pane behind
+        // the modal, or swap the modal out from under its own Escape.
+        let hotkeys_live = self.modal == Modal::None;
 
         div()
             .key_context("Workspace")
             .track_focus(&self.focus_handle)
-            .on_action(cx.listener(Self::toggle_mode))
-            .on_action(cx.listener(Self::go_back))
-            .on_action(cx.listener(Self::go_forward))
-            .on_action(cx.listener(Self::open_search_action))
-            .on_action(cx.listener(Self::open_graph_action))
-            .on_action(cx.listener(Self::run_command_action))
+            .when(hotkeys_live, |d| {
+                d.on_action(cx.listener(Self::toggle_mode))
+                    .on_action(cx.listener(Self::go_back))
+                    .on_action(cx.listener(Self::go_forward))
+                    .on_action(cx.listener(Self::open_search_action))
+                    .on_action(cx.listener(Self::open_graph_action))
+                    .on_action(cx.listener(Self::run_command_action))
+            })
             .relative()
             .flex()
             .flex_col()
@@ -4099,6 +4941,7 @@ impl Render for Workspace {
             )
             .child(status_bar)
             .children(overlay)
+            .children(notices)
     }
 }
 
@@ -4123,6 +4966,109 @@ mod tests {
         fs::write(r.join("Sub/S.md"), "[A](../A.md) [[B]]\n").unwrap();
         let state = VaultState::load(&r.to_path_buf()).unwrap();
         (dir, state)
+    }
+
+    /// A pane row flattened to the three things a test cares about.
+    fn flat(r: &PaneRow) -> (Option<&str>, &str, &str) {
+        match r {
+            PaneRow::Header(h) => (None, h.as_ref(), ""),
+            PaneRow::Item {
+                path,
+                label,
+                detail,
+                ..
+            } => (path.as_deref(), label.as_ref(), detail.as_ref()),
+        }
+    }
+
+    /// A link written in a property is an outgoing link like any other, and
+    /// Obsidian gives it the property as its context. The properties come
+    /// first, which is the order the file writes them in.
+    #[test]
+    fn outgoing_links_list_a_property_link_too() {
+        let (_dir, state) = vault();
+        let cache = state.cache();
+        let rows = outgoing_link_rows(&cache, "B.md");
+        assert_eq!(
+            rows.iter().map(flat).collect::<Vec<_>>(),
+            vec![
+                (Some("A.md"), "A", "related"),
+                (Some("A.md"), "A", "A.md"),
+                (Some("A.md"), "A", "A.md"),
+            ],
+            "the frontmatter link, then the two body links"
+        );
+    }
+
+    /// The Linked mentions row for a property link is named by its property;
+    /// a body link keeps its line and the line's text.
+    #[test]
+    fn a_backlink_row_names_the_property_it_was_written_in() {
+        let (_dir, state) = vault();
+        let cache = state.cache();
+        let texts = state.texts();
+        let details: Vec<String> = cache
+            .backlinks("A.md")
+            .iter()
+            .map(|b| backlink_detail(b, texts.get(b.source).map(|t| t.as_str())))
+            .collect();
+        assert_eq!(
+            details,
+            vec![
+                "related",
+                "4: [[A]] and [[A#A|the a]] and `[[A]]`",
+                "4: [[A]] and [[A#A|the a]] and `[[A]]`",
+                "1: [A](../A.md) [[B]]",
+            ]
+        );
+    }
+
+    fn history(entries: &[&str]) -> Vec<String> {
+        entries.iter().map(|e| e.to_string()).collect()
+    }
+
+    /// A deleted note leaves the history, so back and forward cannot land
+    /// on a file the vault no longer has. Entries before the cursor take it
+    /// back with them; the notes it can still reach do not change.
+    #[test]
+    fn prune_history_forgets_a_deleted_note() {
+        let mut h = history(&["A.md", "B.md", "C.md"]);
+        assert_eq!(prune_history(&mut h, 2, "B.md"), 1);
+        assert_eq!(h, history(&["A.md", "C.md"]));
+
+        let mut h = history(&["A.md", "B.md", "C.md"]);
+        assert_eq!(prune_history(&mut h, 3, "A.md"), 2, "still at C.md");
+        assert_eq!(h, history(&["B.md", "C.md"]));
+
+        let mut h = history(&["A.md", "B.md"]);
+        assert_eq!(prune_history(&mut h, 1, "B.md"), 1, "after the cursor");
+        assert_eq!(h, history(&["A.md"]));
+    }
+
+    /// Deleting a folder deletes every note under it, and a repeat visit is
+    /// a repeat entry, so more than one entry can go at once.
+    #[test]
+    fn prune_history_forgets_a_whole_folder() {
+        let mut h = history(&["Sub/S.md", "A.md", "Sub/T.md", "A.md"]);
+        assert_eq!(prune_history(&mut h, 4, "Sub"), 2);
+        assert_eq!(h, history(&["A.md", "A.md"]));
+
+        let mut h = history(&["A.md", "A.md", "B.md"]);
+        assert_eq!(prune_history(&mut h, 3, "A.md"), 1);
+        assert_eq!(h, history(&["B.md"]));
+    }
+
+    /// A path the history never held, and a prefix that is not a folder
+    /// boundary, leave it alone.
+    #[test]
+    fn prune_history_keeps_what_it_does_not_name() {
+        let mut h = history(&["A.md", "Subtotal/S.md"]);
+        assert_eq!(prune_history(&mut h, 2, "Sub"), 2);
+        assert_eq!(h, history(&["A.md", "Subtotal/S.md"]));
+
+        let mut h = history(&["A.md"]);
+        assert_eq!(prune_history(&mut h, 0, "A.md"), 0, "nothing open");
+        assert!(h.is_empty());
     }
 
     /// The path a toggle takes: the flipped config reaches `app.json` and
@@ -4330,7 +5276,8 @@ mod tests {
             let cache = state.cache();
             assert!(cache.file("A.md").is_none());
             assert!(cache.file("Renamed A.md").is_some());
-            assert_eq!(cache.backlinks("Renamed A.md").len(), 3);
+            // B's `related` property, its two body links, and S's markdown link.
+            assert_eq!(cache.backlinks("Renamed A.md").len(), 4);
             assert!(cache.unresolved_links("B.md").is_none());
             assert_eq!(state.texts()["B.md"].as_str(), b);
         }
@@ -4345,7 +5292,7 @@ mod tests {
             .files
             .iter()
             .all(|c| matches!(c, FileChange::Modified(_))));
-        assert_eq!(state.cache().backlinks("Renamed A.md").len(), 3);
+        assert_eq!(state.cache().backlinks("Renamed A.md").len(), 4);
     }
 
     #[test]
@@ -4464,5 +5411,190 @@ mod tests {
         assert!(state.cache().file("Sub/S.md").is_none());
         assert_eq!(state.cache().backlinks("B.md").len(), 2, "A and its copy");
         assert!(state.vault().folders().iter().all(|f| f != "Sub"));
+    }
+
+    /// The socket's `focus` may not park the keyboard on a view the main
+    /// area is not painting: that handle is in no frame's dispatch tree, and
+    /// from there the app answers no key at all, the one that would undo it
+    /// included.
+    #[test]
+    fn focus_refuses_a_view_the_main_area_is_not_painting() {
+        assert_eq!(
+            Workspace::focus_target("editor", MainView::Editor),
+            Ok(Some(MainView::Editor))
+        );
+        assert_eq!(
+            Workspace::focus_target("workspace", MainView::Empty),
+            Ok(None),
+            "the root div paints in every frame"
+        );
+        let err = Workspace::focus_target("reading", MainView::Editor).unwrap_err();
+        assert!(err.contains("painting editor, not reading"), "{err}");
+        let err = Workspace::focus_target("graph", MainView::Empty).unwrap_err();
+        assert!(err.contains("painting nothing, not graph"), "{err}");
+        assert_eq!(
+            Workspace::focus_target("pane", MainView::Editor),
+            Err("unknown view: pane".to_string())
+        );
+    }
+
+    /// An editor whose buffer names no file never gets the main area: on
+    /// launch over a vault with nothing to open the buffer belongs to
+    /// nothing, and anything typed into it would be saved nowhere.
+    #[test]
+    fn the_main_area_paints_no_editor_without_a_file_behind_it() {
+        for mode in [ViewMode::LivePreview, ViewMode::Source] {
+            assert_eq!(
+                Workspace::main_view_for(mode, false, false, false),
+                MainView::Empty,
+                "{mode:?} with nothing open"
+            );
+            assert_eq!(
+                Workspace::main_view_for(mode, true, false, true),
+                MainView::Editor,
+                "{mode:?} with a note open"
+            );
+            // The `--synthetic` spike hands the editor a note that is in no
+            // vault: the buffer names a file, and that is what mounts it.
+            assert_eq!(
+                Workspace::main_view_for(mode, false, false, true),
+                MainView::Editor,
+                "{mode:?} with a buffer that belongs to no vault"
+            );
+            assert_eq!(
+                Workspace::main_view_for(mode, true, true, true),
+                MainView::Reading,
+                "{mode:?} over an image"
+            );
+        }
+        assert_eq!(
+            Workspace::main_view_for(ViewMode::Reading, false, false, true),
+            MainView::Empty,
+            "a buffer is not a built note"
+        );
+        assert_eq!(
+            Workspace::main_view_for(ViewMode::Graph, false, false, false),
+            MainView::Graph,
+            "the graph needs no file"
+        );
+    }
+
+    /// The socket's `type` reaches the editor only while the main area is
+    /// painting it. The editor's handle can still hold the focus under the
+    /// empty state, and this route does not go through the dispatch tree
+    /// that would otherwise refuse it.
+    #[test]
+    fn typing_reaches_no_editor_the_main_area_is_not_painting() {
+        for focus in ["editor", "property-field", "cell-field"] {
+            assert_eq!(
+                Workspace::typed_text_target(focus, MainView::Editor),
+                "editor"
+            );
+            assert_eq!(Workspace::typed_text_target(focus, MainView::Empty), "none");
+            assert_eq!(
+                Workspace::typed_text_target(focus, MainView::Reading),
+                "none"
+            );
+        }
+        assert_eq!(
+            Workspace::typed_text_target("prompt-input", MainView::Empty),
+            "input",
+            "a modal's field is on screen whatever the main area paints"
+        );
+        assert_eq!(
+            Workspace::typed_text_target("workspace", MainView::Editor),
+            "none"
+        );
+    }
+
+    /// Outline rows carry the byte offsets of the text they were built from.
+    /// The index is a save behind while a note is being typed, so rows built
+    /// from it point into a version that is not on screen — typing a heading
+    /// above another moves every offset below it, and a row clicked with the
+    /// old offset lands somewhere else in the note.
+    #[test]
+    fn outline_rows_carry_the_offsets_of_the_text_they_were_built_from() {
+        let saved = "# A\n\n### B\n\n## C\n";
+        let typed = "## Typed heading\n\n# A\n\n### B\n\n## C\n";
+        let flat = |rows: &[OutlineRow]| -> Vec<(u8, String, usize)> {
+            rows.iter()
+                .map(|r| (r.level, r.text.to_string(), r.offset))
+                .collect()
+        };
+        assert_eq!(
+            flat(&outline_rows(&index_markdown(saved))),
+            vec![
+                (1, "A".to_string(), saved.find("# A").unwrap()),
+                (3, "B".to_string(), saved.find("### B").unwrap()),
+                (2, "C".to_string(), saved.find("## C").unwrap()),
+            ]
+        );
+        let buffer = outline_rows(&index_markdown(typed));
+        assert_eq!(
+            flat(&buffer),
+            vec![
+                (2, "Typed heading".to_string(), 0),
+                (1, "A".to_string(), typed.find("# A").unwrap()),
+                (3, "B".to_string(), typed.find("### B").unwrap()),
+                (2, "C".to_string(), typed.find("## C").unwrap()),
+            ]
+        );
+        for row in &buffer {
+            assert!(
+                typed[row.offset..].starts_with('#'),
+                "row {:?} points at {:?}",
+                row.text,
+                &typed[row.offset..]
+            );
+        }
+    }
+
+    /// A notice leaves on its own timer, and only the one that timer named:
+    /// a message put up later stays until its own turn comes.
+    #[test]
+    fn a_notice_expires_by_id_and_leaves_the_newer_one() {
+        let mut n = Notices::default();
+        let first = n.push("The cursor is not in a table".into());
+        let second = n.push("A.md saved".into());
+        assert_eq!(n.latest().map(|t| t.as_ref()), Some("A.md saved"));
+
+        n.expire(first);
+        assert_eq!(n.texts(), vec!["A.md saved".to_string()]);
+        n.expire(second);
+        assert!(n.texts().is_empty());
+        assert!(n.latest().is_none(), "nothing is left to misread");
+    }
+
+    /// The autosave retries on a timer, so the same refusal arrives again
+    /// and again: it renews the message on screen instead of stacking
+    /// copies of it, and the renewed one outlives the first one's timer.
+    #[test]
+    fn a_repeated_notice_is_renewed_rather_than_stacked() {
+        let mut n = Notices::default();
+        let first = n.push("A.md changed on disk".into());
+        let again = n.push("A.md changed on disk".into());
+        assert_ne!(first, again);
+        assert_eq!(n.texts(), vec!["A.md changed on disk".to_string()]);
+
+        n.expire(first);
+        assert_eq!(
+            n.texts(),
+            vec!["A.md changed on disk".to_string()],
+            "the first timer must not take the renewed message down"
+        );
+        n.expire(again);
+        assert!(n.texts().is_empty());
+    }
+
+    /// Clearing takes down everything, which is what the control socket's
+    /// `notice_clear` is for.
+    #[test]
+    fn clearing_takes_every_notice_down() {
+        let mut n = Notices::default();
+        n.push("one".into());
+        n.push("two".into());
+        n.clear();
+        assert!(n.latest().is_none());
+        assert_eq!(n.push("three".into()), 3, "ids keep counting up");
     }
 }

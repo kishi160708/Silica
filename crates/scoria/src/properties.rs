@@ -48,8 +48,14 @@ pub struct Row {
     pub key: String,
     pub ty: PropertyType,
     pub value: Display,
-    /// The value as editable text, which is what a field shows and commits.
+    /// The value as editable text, which is what a scalar field shows and
+    /// commits. A list joins with `, ` here only to be *shown*; a list is
+    /// edited through [`Row::item_field`], one item at a time.
     pub edit_text: String,
+    /// The items behind [`Display::Pills`], as they are stored and in the
+    /// same order. A pill may show something else — a wikilink shows its
+    /// label — so the raw item is what an item field edits.
+    pub items: Vec<String>,
     /// The value does not fit its type (a `number` holding `abc`): Obsidian
     /// keeps what was typed and marks the row.
     pub mismatched: bool,
@@ -84,18 +90,25 @@ pub fn rows(
 fn row(id: usize, key: &str, value: &Value, ty: PropertyType, next_id: &mut usize) -> Row {
     let edit_text = value.display();
     let mismatched = is_mismatched(value, ty);
+    let mut items = Vec::new();
     let display = match (ty, value) {
         (_, Value::Empty) => Display::Empty,
         (PropertyType::Checkbox, Value::Checkbox(b)) => Display::Checkbox(*b),
-        (ty, Value::List(items)) if ty.is_list() || !items.is_empty() => Display::Pills(
-            items
-                .iter()
-                .map(|item| value_text(item, ty, next_id))
-                .collect(),
-        ),
+        (ty, Value::List(stored)) if ty.is_list() || !stored.is_empty() => {
+            items = stored.clone();
+            Display::Pills(
+                items
+                    .iter()
+                    .map(|item| value_text(item, ty, next_id))
+                    .collect(),
+            )
+        }
         // A list type holding a scalar shows the scalar as one pill, which is
         // how `tags: a` reads.
-        (ty, Value::Text(s)) if ty.is_list() => Display::Pills(vec![value_text(s, ty, next_id)]),
+        (ty, Value::Text(s)) if ty.is_list() => {
+            items = vec![s.clone()];
+            Display::Pills(vec![value_text(s, ty, next_id)])
+        }
         (ty, value) => Display::Scalar(value_text(&value.display(), ty, next_id)),
     };
     Row {
@@ -104,6 +117,7 @@ fn row(id: usize, key: &str, value: &Value, ty: PropertyType, next_id: &mut usiz
         ty,
         value: display,
         edit_text,
+        items,
         mismatched,
     }
 }
@@ -235,6 +249,43 @@ pub enum Target {
     New,
 }
 
+/// The list a value field is editing one item of.
+///
+/// Obsidian edits a list property as pills, one editable item each, so a
+/// field holds a single item and the rest of the list rides along with it. A
+/// commit then puts the typed text back in its place instead of re-splitting
+/// a joined string, which is the only way an item that contains a comma
+/// survives the round trip.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListEdit {
+    /// The list as stored, before this edit.
+    pub items: Vec<String>,
+    /// Which item the field holds. `items.len()` is a fresh item being
+    /// appended, which is what a click past the last pill opens.
+    pub index: usize,
+}
+
+impl ListEdit {
+    /// The list with `text` back in the place of the item being edited. An
+    /// item typed empty is dropped, the way a pill's remove control drops it;
+    /// a list emptied that way stays a list, since `k: []` is the form
+    /// Obsidian writes for a property with no items.
+    fn value(&self, text: &str) -> Value {
+        let mut items = self.items.clone();
+        let typed = text.trim();
+        if typed.is_empty() {
+            if self.index < items.len() {
+                items.remove(self.index);
+            }
+        } else if let Some(slot) = items.get_mut(self.index) {
+            *slot = typed.to_string();
+        } else {
+            items.push(typed.to_string());
+        }
+        Value::List(items)
+    }
+}
+
 /// One properties field being typed into. The editor owns the text while a
 /// field is open and turns it into a [`Change`] on commit, so the document
 /// only changes once per field rather than on every keystroke.
@@ -245,6 +296,13 @@ pub struct Field {
     pub text: String,
     /// Byte offset of the caret in `text`.
     pub cursor: usize,
+    /// The text the field opened with. A value nobody typed into writes
+    /// nothing: re-reading it would serialize the value again, and
+    /// `aliases: [One, "Two, with comma"]` does not survive that round trip.
+    was: String,
+    /// Set when the field holds one item of a list-shaped value: `text` is
+    /// then that item alone, never the whole value.
+    pub list: Option<ListEdit>,
 }
 
 impl Field {
@@ -254,8 +312,10 @@ impl Field {
         Field {
             target,
             part,
+            was: text.clone(),
             text,
             cursor,
+            list: None,
         }
     }
 
@@ -331,6 +391,112 @@ impl Field {
     }
 }
 
+// ------------------------------------------------------------ list items
+//
+// Obsidian edits a list property one pill at a time, which is the only way an
+// item containing a comma survives: a value click lands in the empty input
+// after the pills ([`value_field`]) and what is typed there becomes one more
+// item, while a click on a pill opens that item alone and its own remove
+// control ([`remove_item`]) drops it.
+
+impl Field {
+    /// A field on one item of a list-shaped value. An `index` past the last
+    /// item opens an empty field that appends.
+    pub fn item(key: impl Into<String>, items: Vec<String>, index: usize) -> Field {
+        let text = items.get(index).cloned().unwrap_or_default();
+        let cursor = text.len();
+        Field {
+            target: Target::Existing(key.into()),
+            part: Part::Value,
+            was: text.clone(),
+            text,
+            cursor,
+            list: Some(ListEdit { items, index }),
+        }
+    }
+
+    /// Which item of a list-shaped value this field holds, if it holds one.
+    pub fn item_index(&self) -> Option<usize> {
+        self.list.as_ref().map(|list| list.index)
+    }
+}
+
+impl Field {
+    /// The item of `row`'s list this field is typing into, if it is typing
+    /// into one of them. The value cell draws the field in that item's
+    /// place, so a field on another row, on a key, or on a whole value
+    /// belongs nowhere among these pills.
+    pub fn item_of(&self, row: &Row) -> Option<usize> {
+        if self.part != Part::Value || self.key() != Some(row.key.as_str()) {
+            return None;
+        }
+        self.item_index()
+    }
+}
+
+impl Row {
+    /// Whether the value is edited one item at a time: a list type, or any
+    /// type whose stored value is a sequence.
+    pub fn is_list_valued(&self) -> bool {
+        self.ty.is_list() || matches!(self.value, Display::Pills(_))
+    }
+
+    /// Whether the value cell has nothing of its own to draw. An explicitly
+    /// empty list (`aliases: []`) is the same state as a key with no value
+    /// at all, and the cell draws the one placeholder for both: a cell
+    /// holding nothing is a cell with no height, and a cell with no height
+    /// takes no click, so the first item could never be typed.
+    pub fn is_blank(&self) -> bool {
+        match &self.value {
+            Display::Empty => true,
+            Display::Pills(items) => items.is_empty(),
+            _ => false,
+        }
+    }
+
+    /// A field on the item at `index`, or on a fresh item at the end when
+    /// `index` is past the last one.
+    pub fn item_field(&self, index: usize) -> Field {
+        Field::item(self.key.clone(), self.items.clone(), index)
+    }
+
+    /// A field on a fresh item at the end, which is where a click on the
+    /// value of a list row lands: Obsidian keeps an empty input after the
+    /// pills and focuses that one.
+    pub fn append_field(&self) -> Field {
+        self.item_field(self.items.len())
+    }
+}
+
+/// The field a click on a row's value opens: the empty input after the pills
+/// for a list-shaped row, the whole value for a scalar. Obsidian puts the
+/// caret in that input, and what is typed there is one item however many
+/// commas it holds.
+pub fn value_field(row: &Row) -> Field {
+    if row.is_list_valued() {
+        row.append_field()
+    } else {
+        Field::new(
+            Target::Existing(row.key.clone()),
+            Part::Value,
+            row.edit_text.clone(),
+        )
+    }
+}
+
+/// The change a pill's remove control makes: the row's list without the item
+/// at `index`. `None` when the row has no such item.
+pub fn remove_item(row: &Row, index: usize) -> Option<Change> {
+    (index < row.items.len()).then(|| Change::Set {
+        key: row.key.clone(),
+        value: ListEdit {
+            items: row.items.clone(),
+            index,
+        }
+        .value(""),
+    })
+}
+
 /// The change a committed field makes, or `None` when it makes none.
 ///
 /// An existing key typed empty removes the property, which is how Obsidian's
@@ -358,10 +524,27 @@ pub fn commit(field: &Field, ty: PropertyType) -> Option<Change> {
                 })
             }
         }
-        (Target::Existing(key), Part::Value) => Some(Change::Set {
-            key: key.clone(),
-            value: Value::parse_as(&field.text, ty),
-        }),
+        // Opening a value and leaving it is not an edit. The round trip
+        // through `display`/`parse_as` is lossy for a list -- it splits an
+        // item that contains a comma in two -- so an untouched field must not
+        // take it.
+        (Target::Existing(_), Part::Value) if field.text == field.was => None,
+        (Target::Existing(key), Part::Value) => match &field.list {
+            // A fresh item left untyped writes nothing, so that opening the
+            // value of `tags: a` and clicking away does not rewrite it as a
+            // sequence.
+            Some(list) if list.index >= list.items.len() && field.text.trim().is_empty() => None,
+            // The text is one item, so it goes back whole. Reading it as `ty`
+            // would split an item that contains a comma in two.
+            Some(list) => Some(Change::Set {
+                key: key.clone(),
+                value: list.value(&field.text),
+            }),
+            None => Some(Change::Set {
+                key: key.clone(),
+                value: Value::parse_as(&field.text, ty),
+            }),
+        },
     }
 }
 
@@ -369,9 +552,16 @@ pub fn commit(field: &Field, ty: PropertyType) -> Option<Change> {
 /// as the new type, so `3` typed as text becomes the number 3 and a list
 /// becomes `a, b` as text.
 pub fn retype(row: &Row, ty: PropertyType) -> Change {
+    // Between two list types the items carry over as they are; reading the
+    // joined text back would split an item that contains a comma.
+    let value = if ty.is_list() && !row.items.is_empty() {
+        Value::List(row.items.clone())
+    } else {
+        Value::parse_as(&row.edit_text, ty)
+    };
     Change::Set {
         key: row.key.clone(),
-        value: Value::parse_as(&row.edit_text, ty),
+        value,
     }
 }
 
@@ -388,7 +578,8 @@ pub fn clear_all(entries: &[_formats::properties::Property]) -> Vec<Change> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use _formats::properties::Property;
+    use _formats::config::PropertyTypes;
+    use _formats::properties::{type_of, Property};
 
     fn prop(key: &str, value: Value) -> Property {
         Property {
@@ -428,6 +619,8 @@ mod tests {
         assert_eq!(pills[0].text, "one");
         // Every tag item is clickable even written without `#`.
         assert_eq!(pills[0].links[0].1, LinkTarget::Tag("one".into()));
+        // The items ride along as stored, which is what an item field edits.
+        assert_eq!(rows[0].items, ["one", "two"]);
         // The edit field joins them the way a field shows a list.
         assert_eq!(rows[0].edit_text, "one, two");
     }
@@ -606,7 +799,9 @@ mod tests {
 
     #[test]
     fn committing_a_value_reads_it_as_the_rows_type() {
-        let f = Field::new(Target::Existing("n".into()), Part::Value, "42");
+        // Each field is typed into: a value nobody changed commits nothing.
+        let mut f = Field::new(Target::Existing("n".into()), Part::Value, "4");
+        f.insert("2");
         assert_eq!(
             commit(&f, PropertyType::Number),
             Some(Change::Set {
@@ -621,7 +816,8 @@ mod tests {
                 value: Value::Text("42".into())
             })
         );
-        let list = Field::new(Target::Existing("tags".into()), Part::Value, "a, b");
+        let mut list = Field::new(Target::Existing("tags".into()), Part::Value, "a,");
+        list.insert(" b");
         assert_eq!(
             commit(&list, PropertyType::Tags),
             Some(Change::Set {
@@ -706,6 +902,324 @@ mod tests {
                 Change::Remove { key: "a".into() },
                 Change::Remove { key: "b".into() }
             ]
+        );
+    }
+
+    // -------------------------------------------------------- list items
+
+    /// The ranges `_markdown::extract_frontmatter` would report for a
+    /// note that starts with a properties block.
+    fn block_ranges(text: &str) -> (std::ops::Range<usize>, std::ops::Range<usize>) {
+        let close = text.find("\n---\n").expect("closing fence");
+        (4..close + 1, 0..close + 5)
+    }
+
+    fn parse_block(text: &str) -> _formats::properties::Properties {
+        let (yaml, block) = block_ranges(text);
+        _formats::properties::parse(text, yaml, block)
+    }
+
+    fn list_row(text: &str, ty: PropertyType) -> Row {
+        let mut id = 0;
+        rows(&parse_block(text).entries, |_| ty, &mut id)
+            .pop()
+            .expect("one row")
+    }
+
+    #[test]
+    fn an_item_field_holds_one_item_and_puts_it_back_whole() {
+        let row = list_row(
+            "---\naliases:\n  - One\n  - Smith, John\n---\n\nbody\n",
+            PropertyType::Aliases,
+        );
+        assert!(row.is_list_valued());
+        let mut f = row.item_field(1);
+        assert_eq!(f.text, "Smith, John", "the field holds the item alone");
+        assert_eq!(f.item_index(), Some(1));
+        f.insert(" Jr.");
+        assert_eq!(
+            commit(&f, PropertyType::Aliases),
+            Some(Change::Set {
+                key: "aliases".into(),
+                // The comma stays inside the item instead of splitting it.
+                value: Value::List(vec!["One".into(), "Smith, John Jr.".into()])
+            })
+        );
+    }
+
+    #[test]
+    fn an_item_field_belongs_to_the_value_cell_of_its_own_row() {
+        let row = list_row(
+            "---\naliases:\n  - One\n  - Two\ntags:\n  - a\n---\n\nbody\n",
+            PropertyType::Aliases,
+        );
+        assert_eq!(row.key, "tags", "the last row of the block");
+        // The pill the field stands in for, and the empty input after the
+        // last pill, are the two places the value cell draws it.
+        assert_eq!(row.item_field(0).item_of(&row), Some(0));
+        assert_eq!(row.append_field().item_of(&row), Some(1));
+        // A field on another row, on a key, or on the whole value belongs
+        // nowhere among these pills.
+        let other = Field::item("aliases", vec!["One".into()], 0);
+        assert_eq!(other.item_of(&row), None);
+        let key = Field::new(Target::Existing("tags".into()), Part::Key, "tags");
+        assert_eq!(key.item_of(&row), None);
+        let whole = Field::new(Target::Existing("tags".into()), Part::Value, "a");
+        assert_eq!(whole.item_of(&row), None);
+        assert_eq!(Field::new(Target::New, Part::Key, "").item_of(&row), None);
+    }
+
+    #[test]
+    fn a_typed_comma_survives_the_write_and_reads_back_as_one_item() {
+        let text = "---\naliases:\n  - One\n---\n\nbody\n";
+        let props = parse_block(text);
+        let mut id = 0;
+        let row = rows(&props.entries, |_| PropertyType::Aliases, &mut id)
+            .pop()
+            .unwrap();
+        let mut f = row.append_field();
+        f.insert("Smith, John");
+        let change = commit(&f, PropertyType::Aliases).expect("a change");
+        let edits = _formats::properties::plan(text, &props, &[change]).expect("edits");
+        let out = _formats::properties::apply(text, &edits);
+        assert_eq!(
+            out,
+            "---\naliases:\n  - One\n  - Smith, John\n---\n\nbody\n"
+        );
+        // What the writer wrote reads back as the one item that was typed.
+        assert_eq!(
+            parse_block(&out).entries[0].value,
+            Value::List(vec!["One".into(), "Smith, John".into()])
+        );
+    }
+
+    #[test]
+    fn an_item_typed_empty_is_dropped_and_an_untyped_one_writes_nothing() {
+        let row = list_row(
+            "---\ntags:\n  - one\n  - two\n---\n\nbody\n",
+            PropertyType::Tags,
+        );
+        let mut f = row.item_field(0);
+        f.home();
+        for _ in 0..3 {
+            f.delete();
+        }
+        assert_eq!(
+            commit(&f, PropertyType::Tags),
+            Some(Change::Set {
+                key: "tags".into(),
+                value: Value::List(vec!["two".into()])
+            })
+        );
+        // Opening the empty input after the pills and leaving it is not an
+        // edit, so a scalar `tags: a` is not rewritten as a sequence.
+        let scalar = list_row("---\ntags: a\n---\n\nbody\n", PropertyType::Tags);
+        assert_eq!(scalar.items, ["a"]);
+        assert_eq!(commit(&scalar.append_field(), PropertyType::Tags), None);
+    }
+
+    #[test]
+    fn a_pills_remove_control_drops_that_item_only() {
+        let row = list_row(
+            "---\ntags:\n  - one\n  - Smith, John\n  - three\n---\n\nbody\n",
+            PropertyType::Tags,
+        );
+        assert_eq!(
+            remove_item(&row, 1),
+            Some(Change::Set {
+                key: "tags".into(),
+                value: Value::List(vec!["one".into(), "three".into()])
+            })
+        );
+        // The last item removed leaves the empty list Obsidian writes.
+        let single = list_row("---\ntags:\n  - one\n---\n\nbody\n", PropertyType::Tags);
+        assert_eq!(
+            remove_item(&single, 0),
+            Some(Change::Set {
+                key: "tags".into(),
+                value: Value::List(Vec::new())
+            })
+        );
+        assert_eq!(remove_item(&single, 1), None);
+    }
+
+    #[test]
+    fn a_whole_value_field_still_reads_a_list_as_typed() {
+        // Without an item, a value field is the scalar path it always was.
+        let mut f = Field::new(Target::Existing("tags".into()), Part::Value, "a");
+        assert_eq!(f.item_index(), None);
+        f.insert(", b");
+        assert_eq!(
+            commit(&f, PropertyType::Tags),
+            Some(Change::Set {
+                key: "tags".into(),
+                value: Value::List(vec!["a".into(), "b".into()])
+            })
+        );
+    }
+
+    #[test]
+    fn a_value_click_on_a_list_opens_the_input_after_the_pills() {
+        let row = list_row(
+            "---\naliases:\n  - One\n  - Two\n---\n\nbody\n",
+            PropertyType::Aliases,
+        );
+        let mut f = value_field(&row);
+        assert_eq!(
+            f.text, "",
+            "the caret lands in the empty input, not in the pills"
+        );
+        assert_eq!(f.item_index(), Some(2));
+        f.insert("Smith, John");
+        assert_eq!(
+            commit(&f, PropertyType::Aliases),
+            Some(Change::Set {
+                key: "aliases".into(),
+                value: Value::List(vec!["One".into(), "Two".into(), "Smith, John".into()])
+            })
+        );
+        // A scalar row opens on its whole value, as it always did.
+        let scalar = list_row("---\ntitle: Hi\n---\n\nbody\n", PropertyType::Text);
+        let s = value_field(&scalar);
+        assert_eq!(s.text, "Hi");
+        assert_eq!(s.item_index(), None);
+    }
+
+    /// A list row with nothing in it yet is still edited one item at a
+    /// time: the cell has no pills to click, so Live Preview opens the
+    /// input that follows them and the first thing typed becomes item 0,
+    /// commas and all.
+    #[test]
+    fn an_empty_list_row_opens_an_item_field_not_a_whole_value() {
+        let row = list_row("---\ntags:\n---\n\nbody\n", PropertyType::Tags);
+        assert!(row.items.is_empty());
+        assert!(matches!(row.value, Display::Empty));
+        assert!(
+            row.is_list_valued(),
+            "a list type with no items is still edited as a list"
+        );
+        let mut f = value_field(&row);
+        assert_eq!(f.item_index(), Some(0));
+        f.insert("Smith, John");
+        assert_eq!(
+            commit(&f, PropertyType::Tags),
+            Some(Change::Set {
+                key: "tags".into(),
+                value: Value::List(vec!["Smith, John".into()])
+            })
+        );
+    }
+
+    /// `k: []` is the form Obsidian writes for a list with no items, and it
+    /// reads as blank: the cell draws the placeholder a missing value draws,
+    /// which is what gives it the height a click needs, and the click opens
+    /// the field for item 0.
+    #[test]
+    fn an_explicitly_empty_list_is_blank_and_takes_a_first_item() {
+        for text in [
+            "---\naliases: []\n---\n\nbody\n",
+            "---\naliases:\n---\n\nbody\n",
+        ] {
+            let row = list_row(text, PropertyType::Aliases);
+            assert!(row.items.is_empty());
+            assert!(row.is_blank(), "{text:?} draws no value of its own");
+            assert!(row.is_list_valued());
+            let mut f = value_field(&row);
+            assert_eq!(f.item_index(), Some(0));
+            f.insert("Zed");
+            assert_eq!(
+                commit(&f, PropertyType::Aliases),
+                Some(Change::Set {
+                    key: "aliases".into(),
+                    value: Value::List(vec!["Zed".into()])
+                })
+            );
+        }
+        // A key with no type of its own infers `MultiText` from `[]`, so it
+        // is the same blank list rather than an empty scalar.
+        let mut id = 0;
+        let entries = parse_block("---\nstuff: []\n---\n\nbody\n").entries;
+        let row = rows(
+            &entries,
+            |k| type_of(k, &entries, &PropertyTypes::default()),
+            &mut id,
+        )
+        .pop()
+        .expect("one row");
+        assert_eq!(row.ty, PropertyType::MultiText);
+        assert!(row.is_blank());
+    }
+
+    /// A list that does hold something is not blank, however little that is:
+    /// its pills are the click targets, and the cell draws them.
+    #[test]
+    fn a_list_holding_an_empty_item_is_not_blank() {
+        for text in [
+            "---\naliases: [\"\"]\n---\n\nbody\n",
+            "---\naliases:\n  - One\n---\n\nbody\n",
+        ] {
+            let row = list_row(text, PropertyType::Aliases);
+            assert_eq!(row.items.len(), 1, "{text:?}");
+            assert!(!row.is_blank(), "{text:?} has a pill to draw");
+        }
+        let scalar = list_row("---\ntitle: Hi\n---\n\nbody\n", PropertyType::Text);
+        assert!(!scalar.is_blank());
+    }
+
+    #[test]
+    fn a_value_field_nobody_typed_into_writes_nothing() {
+        // Opening this value and closing it used to rewrite the file as
+        // `- One` / `- Two` / `- with comma`.
+        let row = list_row(
+            "---\naliases:\n  - One\n  - \"Two, with comma\"\n---\n\nbody\n",
+            PropertyType::Aliases,
+        );
+        assert_eq!(row.items, ["One", "Two, with comma"]);
+        assert_eq!(row.edit_text, "One, Two, with comma");
+        let whole = Field::new(
+            Target::Existing(row.key.clone()),
+            Part::Value,
+            row.edit_text.clone(),
+        );
+        assert_eq!(commit(&whole, PropertyType::Aliases), None);
+        // Nor does opening one pill, or the input after them, and leaving.
+        assert_eq!(commit(&row.item_field(1), PropertyType::Aliases), None);
+        assert_eq!(commit(&value_field(&row), PropertyType::Aliases), None);
+        // A scalar whose stored form is not its display form is just as
+        // untouchable: the vault is the source of truth.
+        let nested = {
+            let mut id = 0;
+            rows(
+                &[prop("nested", Value::Other("nested:\n  k: v".into()))],
+                |_| PropertyType::Text,
+                &mut id,
+            )
+            .pop()
+            .unwrap()
+        };
+        assert_eq!(commit(&value_field(&nested), PropertyType::Text), None);
+    }
+
+    #[test]
+    fn retyping_between_two_list_types_keeps_an_item_whole() {
+        let row = list_row(
+            "---\ntags:\n  - Smith, John\n---\n\nbody\n",
+            PropertyType::Tags,
+        );
+        assert_eq!(
+            retype(&row, PropertyType::MultiText),
+            Change::Set {
+                key: "tags".into(),
+                value: Value::List(vec!["Smith, John".into()])
+            }
+        );
+        // To a scalar it is still the joined text the row shows.
+        assert_eq!(
+            retype(&row, PropertyType::Text),
+            Change::Set {
+                key: "tags".into(),
+                value: Value::Text("Smith, John".into())
+            }
         );
     }
 

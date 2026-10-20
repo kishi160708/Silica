@@ -173,9 +173,27 @@ impl Query {
         }
     }
 
-    /// True for a query with nothing to match (empty input).
+    /// True for a query that holds no term able to match anything: empty
+    /// input, but also the half-typed `(`, `"`, `OR` or `file:` that the
+    /// parser reads as far as it goes. Obsidian's `startSearch` empties the
+    /// result list and returns when its compile yields no matcher, so a
+    /// caller showing results should do nothing for such a query rather than
+    /// list the whole vault.
     pub fn is_empty(&self) -> bool {
-        matches!(self, Query::All(c) if c.is_empty())
+        match self {
+            Query::All(c) | Query::Any(c) => c.iter().all(Query::is_empty),
+            Query::Not(c)
+            | Query::CaseSensitive(c)
+            | Query::CaseInsensitive(c)
+            | Query::Field(_, c)
+            | Query::PropertyMatch(_, c) => c.is_empty(),
+            Query::Text(t) | Query::Exact(t) => t.is_empty(),
+            Query::Regex { pattern, .. } => pattern.is_empty(),
+            Query::HasProperty(n) | Query::PropertyEmpty(n) | Query::PropertyBool(n, _) => {
+                n.is_empty()
+            }
+            Query::PropertyCompare(n, _, v) => n.is_empty() || v.is_empty(),
+        }
     }
 }
 
@@ -630,5 +648,27 @@ mod tests {
         assert_eq!(parse("[prop"), Query::HasProperty("prop".into()));
         assert!(parse("   ").is_empty());
         assert_eq!(parse("-"), text("-"));
+    }
+
+    #[test]
+    fn half_typed_input_holds_no_matcher() {
+        for q in [
+            "",
+            "   ",
+            "(",
+            ")",
+            "()",
+            "\"",
+            "OR",
+            "file:",
+            "path:",
+            "section:()",
+            "[]",
+        ] {
+            assert!(parse(q).is_empty(), "{q:?} should hold no matcher");
+        }
+        for q in ["a", "(a", "file:x", "OR a", "-a", "[p]", "/x/"] {
+            assert!(!parse(q).is_empty(), "{q:?} holds a matcher");
+        }
     }
 }

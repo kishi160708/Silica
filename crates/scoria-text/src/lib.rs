@@ -13,11 +13,18 @@
 //! [`TextBuffer::file_contents`], so a save changes nothing but the edited
 //! bytes.
 
+pub mod autopair;
 mod buffer;
 pub mod find;
+pub mod format;
 pub mod lists;
 mod plan;
 pub mod table;
+pub mod wrap;
 
-pub use buffer::{char_class, Cursor, Cursors, EditKind, FileText, Sel, TextBuffer};
+pub use buffer::{
+    char_class, next_grapheme_boundary, prev_grapheme_boundary, Cursor, Cursors, EditKind,
+    FileText, Sel, TextBuffer,
+};
+pub use format::{LinePrefix, LinkSyntax};
 pub use plan::{indent_plan, newline_plan, shifted};

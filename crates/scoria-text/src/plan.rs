@@ -8,12 +8,14 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 /// The edits Enter makes at `head` with smart lists on: the newline and
-/// continued prefix (or the clearing of an empty item), plus the renumbering
-/// of the ordered items that follow. Returns them with the cursor's new offset.
+/// continued prefix (or the clearing of an empty item, which outdents by one
+/// `tab_size` step), plus the renumbering of the ordered items that follow.
+/// Returns them with the cursor's new offset.
 pub fn newline_plan(
     text: &str,
     line_starts: &[usize],
     head: usize,
+    tab_size: u8,
 ) -> (Vec<(Range<usize>, String)>, usize) {
     let line_ix = match line_starts.binary_search(&head) {
         Ok(i) => i,
@@ -26,7 +28,7 @@ pub fn newline_plan(
         .unwrap_or(text.len());
     let line = &text[line_start..line_end];
     let col = head - line_start;
-    match lists::continuation(line, col) {
+    match lists::continuation(line, col, tab_size) {
         Continuation::Insert(prefix) => {
             let mut edits = vec![(head..head, format!("\n{prefix}"))];
             let cursor = head + 1 + prefix.len();
@@ -60,14 +62,15 @@ pub fn newline_plan(
 }
 
 /// The edits Tab (`indent`) or Shift+Tab make on `lines`: one indentation
-/// step of `unit` added after each line's quote markers, or one removed,
-/// plus (with `renumber`) the new numbers of the ordered items the change
-/// unsettled, all in pre-edit coordinates for one undo step.
+/// step of `unit` added after each line's quote markers, or one `tab_size`
+/// step removed, plus (with `renumber`) the new numbers of the ordered items
+/// the change unsettled, all in pre-edit coordinates for one undo step.
 pub fn indent_plan(
     text: &str,
     line_starts: &[usize],
     lines: Range<usize>,
     unit: &str,
+    tab_size: u8,
     indent: bool,
     renumber: bool,
 ) -> Vec<(Range<usize>, String)> {
@@ -85,7 +88,7 @@ pub fn indent_plan(
             let at = line_starts[l] + lists::indent_point(lt);
             edits.push((at..at, unit.to_string()));
             deltas.insert(l, unit.len() as isize);
-        } else if let Some(r) = lists::outdent_range(lt) {
+        } else if let Some(r) = lists::outdent_range(lt, tab_size) {
             let start = line_starts[l];
             edits.push((start + r.start..start + r.end, String::new()));
             deltas.insert(l, -(r.len() as isize));
@@ -114,7 +117,7 @@ pub fn indent_plan(
                 }
                 Some(d) => {
                     let n = (-*d) as usize;
-                    let r = lists::outdent_range(lt).unwrap_or(0..0);
+                    let r = lists::outdent_range(lt, tab_size).unwrap_or(0..0);
                     format!("{}{}", &lt[..r.start], &lt[r.start + n..])
                 }
                 None => lt.to_string(),
@@ -162,7 +165,7 @@ mod tests {
     }
 
     fn apply(text: &str, head: usize) -> (String, usize) {
-        let (mut edits, cursor) = newline_plan(text, &line_starts(text), head);
+        let (mut edits, cursor) = newline_plan(text, &line_starts(text), head, 4);
         edits.sort_by_key(|e| std::cmp::Reverse(e.0.start));
         let mut out = text.to_string();
         for (r, s) in edits {
@@ -199,18 +202,18 @@ mod tests {
     #[test]
     fn tab_and_shift_tab_renumber_ordered_lists() {
         let text = "1. a\n2. b\n3. c\n";
-        let edits = indent_plan(text, &line_starts(text), 1..2, "\t", true, true);
+        let edits = indent_plan(text, &line_starts(text), 1..2, "\t", 4, true, true);
         assert_eq!(apply_many(text, edits), "1. a\n\t1. b\n2. c\n");
         let text = "1. a\n\t1. b\n2. c\n";
-        let edits = indent_plan(text, &line_starts(text), 1..2, "", false, true);
+        let edits = indent_plan(text, &line_starts(text), 1..2, "", 4, false, true);
         assert_eq!(apply_many(text, edits), "1. a\n2. b\n3. c\n");
         // Without smart lists only the indentation changes.
         let text = "1. a\n2. b\n3. c\n";
-        let edits = indent_plan(text, &line_starts(text), 1..2, "  ", true, false);
+        let edits = indent_plan(text, &line_starts(text), 1..2, "  ", 4, true, false);
         assert_eq!(apply_many(text, edits), "1. a\n  2. b\n3. c\n");
         // A selection over two items indents both; numbers follow.
         let text = "1. a\n2. b\n3. c\n4. d\n";
-        let edits = indent_plan(text, &line_starts(text), 1..3, "\t", true, true);
+        let edits = indent_plan(text, &line_starts(text), 1..3, "\t", 4, true, true);
         assert_eq!(apply_many(text, edits), "1. a\n\t1. b\n\t2. c\n2. d\n");
     }
 

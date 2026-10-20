@@ -172,8 +172,8 @@ pub enum Continuation {
 }
 
 /// Smart-list behaviour for Enter at `col`: continues the marker, numbering
-/// and checkbox, and clears or outdents an empty item.
-pub fn continuation(line: &str, col: usize) -> Continuation {
+/// and checkbox, and clears or outdents an empty item by one `tab_size` step.
+pub fn continuation(line: &str, col: usize, tab_size: u8) -> Continuation {
     let p = parse_prefix(line);
     if col < p.content {
         // Before the marker: only the leading whitespace carries over.
@@ -199,7 +199,7 @@ pub fn continuation(line: &str, col: usize) -> Continuation {
     if line[p.content..].trim().is_empty() {
         // Empty item: a nested one outdents, a top-level one loses its marker.
         if !p.list_indent.is_empty() {
-            let unit = outdent_width(&line[p.list_indent.clone()]);
+            let unit = outdent_width(&line[p.list_indent.clone()], tab_size);
             let cut = p.list_indent.start..p.list_indent.start + unit;
             return Continuation::Clear {
                 range: cut,
@@ -232,13 +232,18 @@ pub fn continuation(line: &str, col: usize) -> Continuation {
 }
 
 /// Bytes of one indentation step to remove from the start of `ws`: a tab,
-/// or up to four spaces.
-pub fn outdent_width(ws: &str) -> usize {
+/// or up to `tab_size` spaces, so that Shift+Tab undoes exactly what Tab
+/// did. Ragged indentation gives up only the spaces it has rather than
+/// snapping back to the previous multiple of the step.
+pub fn outdent_width(ws: &str, tab_size: u8) -> usize {
     let b = ws.as_bytes();
     if b.first() == Some(&b'\t') {
         return 1;
     }
-    b.iter().take(4).take_while(|&&c| c == b' ').count()
+    b.iter()
+        .take(tab_size.max(1) as usize)
+        .take_while(|&&c| c == b' ')
+        .count()
 }
 
 /// The indentation unit for Tab (`useTab`, `tabSize`).
@@ -262,14 +267,14 @@ pub fn indent_point(line: &str) -> usize {
 }
 
 /// The range an outdent removes from this line, if there is anything to remove.
-pub fn outdent_range(line: &str) -> Option<Range<usize>> {
+pub fn outdent_range(line: &str, tab_size: u8) -> Option<Range<usize>> {
     let p = parse_prefix(line);
     let ws = if p.marker.is_some() {
         p.list_indent.clone()
     } else {
         p.indent.clone()
     };
-    let n = outdent_width(&line[ws.clone()]);
+    let n = outdent_width(&line[ws.clone()], tab_size);
     (n > 0).then(|| ws.start..ws.start + n)
 }
 
@@ -425,7 +430,7 @@ mod tests {
     use super::*;
 
     fn cont(line: &str) -> Continuation {
-        continuation(line, line.len())
+        continuation(line, line.len(), 4)
     }
 
     #[test]
@@ -504,15 +509,18 @@ mod tests {
     #[test]
     fn enter_before_the_marker_does_not_continue() {
         assert_eq!(
-            continuation("- item", 0),
+            continuation("- item", 0, 4),
             Continuation::Insert(String::new())
         );
         assert_eq!(
-            continuation("  - item", 1),
+            continuation("  - item", 1, 4),
             Continuation::Insert("  ".into())
         );
         // Right after the marker's space the item counts as continued.
-        assert_eq!(continuation("- item", 2), Continuation::Insert("- ".into()));
+        assert_eq!(
+            continuation("- item", 2, 4),
+            Continuation::Insert("- ".into())
+        );
     }
 
     #[test]
@@ -520,13 +528,34 @@ mod tests {
         assert_eq!(indent_point("- a"), 0);
         assert_eq!(indent_point("> - a"), 2);
         assert_eq!(indent_point("text"), 0);
-        assert_eq!(outdent_range("    - a"), Some(0..4));
-        assert_eq!(outdent_range("\t\t- a"), Some(0..1));
-        assert_eq!(outdent_range("> \t- a"), Some(2..3));
-        assert_eq!(outdent_range("- a"), None);
-        assert_eq!(outdent_range("  text"), Some(0..2));
+        assert_eq!(outdent_range("    - a", 4), Some(0..4));
+        assert_eq!(outdent_range("\t\t- a", 4), Some(0..1));
+        assert_eq!(outdent_range("> \t- a", 4), Some(2..3));
+        assert_eq!(outdent_range("- a", 4), None);
+        assert_eq!(outdent_range("  text", 4), Some(0..2));
         assert_eq!(indent_unit(true, 4), "\t");
         assert_eq!(indent_unit(false, 2), "  ");
+    }
+
+    /// Shift+Tab, and Enter on an empty nested item, give back exactly what
+    /// Tab put there: one `tabSize` step, not the fixed four spaces that
+    /// outdented two levels at a time in a two-space vault.
+    #[test]
+    fn an_outdent_step_is_the_configured_width() {
+        assert_eq!(outdent_range("    - a", 2), Some(0..2));
+        assert_eq!(outdent_range("  - a", 2), Some(0..2));
+        assert_eq!(outdent_range("        - a", 8), Some(0..8));
+        // A tab is one level whatever the width is.
+        assert_eq!(outdent_range("\t\t- a", 2), Some(0..1));
+        // Indentation shallower than a step gives up what it has.
+        assert_eq!(outdent_range(" - a", 2), Some(0..1));
+        assert_eq!(
+            continuation("    - ", 6, 2),
+            Continuation::Clear {
+                range: 0..2,
+                with: String::new()
+            }
+        );
     }
 
     #[test]

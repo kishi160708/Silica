@@ -14,28 +14,28 @@ use gpui::{
 };
 use rayon::prelude::*;
 use _cache::{all_tags, CachedMetadata};
-use _search::{Search, SearchFile, TaskLine};
+use _search::{match_lines, natural_cmp, MatchLine, Search, SearchFile, TaskLine};
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::ops::Range;
 use std::sync::Arc;
 
-/// One match line shown under a file.
-#[derive(Debug, Clone)]
-pub struct MatchLine {
-    /// Byte offset of the line in the note, for scrolling.
-    pub offset: usize,
-    /// The line trimmed and windowed around the first hit.
-    pub snippet: String,
-    /// Hit ranges inside `snippet`.
-    pub ranges: Vec<Range<usize>>,
-}
-
 #[derive(Debug, Clone)]
 pub struct FileResult {
     pub path: String,
     pub name: String,
+    /// Hit ranges inside `name`, when the query matched the file name.
+    pub name_ranges: Vec<Range<usize>>,
     pub matches: Vec<MatchLine>,
+}
+
+impl FileResult {
+    /// What this file contributes to the result count: one per match line,
+    /// plus one for a name hit, which Obsidian counts but leaves out of the
+    /// number beside the file name.
+    fn results(&self) -> usize {
+        self.matches.len() + usize::from(!self.name_ranges.is_empty())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -53,7 +53,9 @@ pub struct SearchPane {
     input: Entity<TextInput>,
     state: Option<Arc<VaultState>>,
     results: Vec<FileResult>,
-    collapsed: HashSet<usize>,
+    /// Paths of the files whose match lines are hidden. Keyed by path so a
+    /// re-run over a changed vault leaves the user's collapses alone.
+    collapsed: HashSet<String>,
     rows: Vec<Row>,
     error: Option<SharedString>,
     generation: u64,
@@ -73,6 +75,10 @@ impl SearchPane {
         let input = cx.new(|cx| TextInput::new("Search…", cx));
         let subscriptions = vec![cx.subscribe(&input, |this, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Changed) {
+                // A new query builds a new result list, the way Obsidian's
+                // startSearch empties its own; only a re-run over the same
+                // query keeps the collapsed rows.
+                this.collapsed.clear();
                 this.run(cx);
             }
         })];
@@ -106,12 +112,12 @@ impl SearchPane {
         self.run(cx);
     }
 
-    /// What the pane is showing, for the control socket's state dump: the two
-    /// counts of the summary line, the message a bad query produced, and the
-    /// result rows themselves. A collapsed file still reports its matches,
-    /// since the count beside its name does too.
+    /// What the pane is showing, for the control socket's state dump: the
+    /// count of the summary line and the files behind it, the message a bad
+    /// query produced, and the result rows themselves. A collapsed file still
+    /// reports its matches, since the count beside its name does too.
     pub fn describe(&self, rows: usize, cx: &App) -> Value {
-        let total: usize = self.results.iter().map(|f| f.matches.len()).sum();
+        let total: usize = self.results.iter().map(FileResult::results).sum();
         // The note text turns a match's byte offset into a line number; it is
         // absent for a file the vault dropped since the search ran.
         let texts = self.state.as_ref().map(|state| state.texts());
@@ -140,6 +146,8 @@ impl SearchPane {
                 json!({
                     "path": file.path,
                     "name": file.name,
+                    "name_match": !file.name_ranges.is_empty(),
+                    "collapsed": self.collapsed.contains(&file.path),
                     "matches": matches,
                     "matches_total": if hits > shown { Some(hits) } else { None },
                 })
@@ -178,6 +186,16 @@ impl SearchPane {
                 return;
             }
         };
+        if search.is_empty() {
+            // `(`, `"`, a bare `OR`: the parser read what it could and found
+            // no term. Obsidian's startSearch returns before adding a result
+            // rather than listing the vault.
+            self.results.clear();
+            self.error = None;
+            self.rebuild_rows();
+            cx.notify();
+            return;
+        }
         self.error = None;
         cx.spawn(async move |this, cx| {
             let results = cx
@@ -189,7 +207,6 @@ impl SearchPane {
                     return;
                 }
                 pane.results = results;
-                pane.collapsed.clear();
                 pane.rebuild_rows();
                 cx.notify();
             })
@@ -199,10 +216,15 @@ impl SearchPane {
     }
 
     fn rebuild_rows(&mut self) {
+        // A file the new results dropped forgets it was collapsed.
+        let live: HashSet<&str> = self.results.iter().map(|f| f.path.as_str()).collect();
+        let mut collapsed = std::mem::take(&mut self.collapsed);
+        collapsed.retain(|p| live.contains(p.as_str()));
+        self.collapsed = collapsed;
         self.rows.clear();
         for (ix, file) in self.results.iter().enumerate() {
             self.rows.push(Row::File { ix });
-            if !self.collapsed.contains(&ix) {
+            if !self.collapsed.contains(&file.path) {
                 for m in 0..file.matches.len() {
                     self.rows.push(Row::Match { ix, m });
                 }
@@ -210,9 +232,9 @@ impl SearchPane {
         }
     }
 
-    fn toggle(&mut self, ix: usize, cx: &mut Context<Self>) {
-        if !self.collapsed.remove(&ix) {
-            self.collapsed.insert(ix);
+    fn toggle(&mut self, path: String, cx: &mut Context<Self>) {
+        if !self.collapsed.remove(&path) {
+            self.collapsed.insert(path);
         }
         self.rebuild_rows();
         cx.notify();
@@ -231,8 +253,10 @@ impl SearchPane {
                 Some(match row {
                     Row::File { ix } => {
                         let file = &self.results[ix];
-                        let collapsed = self.collapsed.contains(&ix);
-                        let name: SharedString = file.name.clone().into();
+                        let collapsed = self.collapsed.contains(&file.path);
+                        let path = file.path.clone();
+                        let name = StyledText::new(SharedString::from(file.name.clone()))
+                            .with_highlights(highlights(&file.name_ranges, &theme));
                         let count: SharedString = file.matches.len().to_string().into();
                         div()
                             .id(("search-file", row_ix))
@@ -246,7 +270,9 @@ impl SearchPane {
                             .rounded_sm()
                             .cursor_pointer()
                             .hover(|s| s.bg(theme.bg_alt))
-                            .on_click(cx.listener(move |this, _, _, cx| this.toggle(ix, cx)))
+                            .on_click(
+                                cx.listener(move |this, _, _, cx| this.toggle(path.clone(), cx)),
+                            )
                             .child(
                                 div()
                                     .w(px(12.))
@@ -279,22 +305,8 @@ impl SearchPane {
                         let line = &file.matches[m];
                         let path = file.path.clone();
                         let offset = line.offset;
-                        let highlights: Vec<_> = line
-                            .ranges
-                            .iter()
-                            .map(|r| {
-                                (
-                                    r.clone(),
-                                    HighlightStyle {
-                                        background_color: Some(theme.highlight_bg),
-                                        font_weight: Some(FontWeight::SEMIBOLD),
-                                        ..HighlightStyle::default()
-                                    },
-                                )
-                            })
-                            .collect();
                         let text = StyledText::new(SharedString::from(line.snippet.clone()))
-                            .with_highlights(highlights);
+                            .with_highlights(highlights(&line.ranges, &theme));
                         div()
                             .id(("search-match", row_ix))
                             .w_full()
@@ -325,13 +337,15 @@ impl SearchPane {
 impl Render for SearchPane {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.global::<Theme>().clone();
-        let total: usize = self.results.iter().map(|f| f.matches.len()).sum();
+        let total: usize = self.results.iter().map(FileResult::results).sum();
         let summary: SharedString = if let Some(err) = &self.error {
             err.clone()
         } else if self.input.read(cx).text().trim().is_empty() {
             String::new().into()
         } else {
-            format!("{total} results in {} files", self.results.len()).into()
+            // Obsidian's count element reads "7 results" and names no file
+            // count; a file name hit counts as one of them.
+            format!("{total} results").into()
         };
         div()
             .flex()
@@ -425,26 +439,55 @@ pub fn run_search(search: &Search, state: &VaultState) -> Vec<FileResult> {
                 sections: &sections,
                 tasks: &tasks,
             };
-            let ranges = search.matches(&file)?;
+            let hits = search.matches(&file)?;
+            let name = path
+                .rsplit('/')
+                .next()
+                .unwrap_or(path)
+                .trim_end_matches(".md");
             Some(FileResult {
                 path: path.to_string(),
-                name: path
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or(path)
-                    .trim_end_matches(".md")
-                    .to_string(),
-                matches: match_lines(text, &ranges),
+                name: name.to_string(),
+                name_ranges: clamp(&hits.name, name.len()),
+                matches: match_lines(text, &hits.content),
             })
         })
         .collect();
-    results.sort_by(|a, b| {
-        a.name
-            .to_lowercase()
-            .cmp(&b.name.to_lowercase())
-            .then_with(|| a.path.cmp(&b.path))
-    });
+    sort_results(&mut results);
     results
+}
+
+/// Orders results the way Obsidian's alphabetical sort does: a numeric,
+/// locale-aware collation of the name, the path breaking a tie.
+fn sort_results(results: &mut [FileResult]) {
+    results.sort_by(|a, b| natural_cmp(&a.name, &b.name).then_with(|| a.path.cmp(&b.path)));
+}
+
+/// The matcher reports name hits against the base name with its extension;
+/// the row shows the name without it, so a hit reaching into `.md` is cut
+/// there and one that lies entirely inside it is dropped.
+fn clamp(ranges: &[Range<usize>], len: usize) -> Vec<Range<usize>> {
+    ranges
+        .iter()
+        .filter(|r| r.start < len)
+        .map(|r| r.start..r.end.min(len))
+        .collect()
+}
+
+fn highlights(ranges: &[Range<usize>], theme: &Theme) -> Vec<(Range<usize>, HighlightStyle)> {
+    ranges
+        .iter()
+        .map(|r| {
+            (
+                r.clone(),
+                HighlightStyle {
+                    background_color: Some(theme.highlight_bg),
+                    font_weight: Some(FontWeight::SEMIBOLD),
+                    ..HighlightStyle::default()
+                },
+            )
+        })
+        .collect()
 }
 
 /// Zero-based line of a byte offset, like Obsidian's `Pos`. `None` when the
@@ -455,100 +498,58 @@ fn line_number(text: &str, offset: usize) -> Option<usize> {
         .map(|before| before.matches('\n').count())
 }
 
-/// Groups hit ranges by line and windows each line around its first hit.
-fn match_lines(text: &str, ranges: &[Range<usize>]) -> Vec<MatchLine> {
-    const BEFORE: usize = 40;
-    const WIDTH: usize = 160;
-    let mut out: Vec<MatchLine> = Vec::new();
-    let mut line_start = 0;
-    let mut rix = 0;
-    for line in text.split_inclusive('\n') {
-        let line_end = line_start + line.len();
-        let body = line.trim_end_matches(['\n', '\r']);
-        let mut hits: Vec<Range<usize>> = Vec::new();
-        while rix < ranges.len() && ranges[rix].start < line_end {
-            let r = &ranges[rix];
-            let s = r.start.max(line_start) - line_start;
-            let e = r.end.min(line_start + body.len()).max(line_start) - line_start;
-            if e > s {
-                hits.push(s..e);
-            }
-            if r.end <= line_end {
-                rix += 1;
-            } else {
-                break;
-            }
-        }
-        if !hits.is_empty() {
-            // Window: a few words before the first hit, then up to WIDTH bytes.
-            let first = hits[0].start;
-            let mut start = first.saturating_sub(BEFORE);
-            while !body.is_char_boundary(start) {
-                start -= 1;
-            }
-            if let Some(sp) = body[start..first].find(char::is_whitespace) {
-                if start > 0 {
-                    start += sp + 1;
-                }
-            }
-            let mut end = (start + WIDTH).min(body.len());
-            while !body.is_char_boundary(end) {
-                end += 1;
-            }
-            let snippet = body[start..end].trim_start().to_string();
-            let trimmed = body[start..end].len() - body[start..end].trim_start().len();
-            let base = start + trimmed;
-            let snippet_ranges: Vec<Range<usize>> = hits
-                .iter()
-                .filter(|h| h.start >= base && h.end <= end)
-                .map(|h| h.start - base..h.end - base)
-                .collect();
-            out.push(MatchLine {
-                offset: line_start,
-                snippet: if start > 0 {
-                    format!("…{snippet}")
-                } else {
-                    snippet
-                },
-                ranges: if start > 0 {
-                    snippet_ranges
-                        .into_iter()
-                        .map(|r| r.start + 3..r.end + 3)
-                        .collect()
-                } else {
-                    snippet_ranges
-                },
-            });
-        }
-        line_start = line_end;
-        if rix >= ranges.len() {
-            break;
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 #[allow(clippy::single_range_in_vec_init)]
 mod tests {
     use super::*;
 
+    fn result(path: &str) -> FileResult {
+        let name = path
+            .rsplit('/')
+            .next()
+            .unwrap_or(path)
+            .trim_end_matches(".md");
+        FileResult {
+            path: path.to_string(),
+            name: name.to_string(),
+            name_ranges: Vec::new(),
+            matches: Vec::new(),
+        }
+    }
+
     #[test]
-    fn lines_window_around_the_first_hit() {
-        let text = "alpha beta\ngamma delta epsilon\nzeta";
-        let g = text.find("delta").unwrap();
-        let z = text.find("zeta").unwrap();
-        let lines = match_lines(text, &[g..g + 5, g + 6..g + 7, z..z + 4]);
-        assert_eq!(lines.len(), 2);
-        assert_eq!(lines[0].offset, 11);
-        assert_eq!(lines[0].snippet, "gamma delta epsilon");
-        assert_eq!(lines[0].ranges, vec![6..11, 12..13]);
-        assert_eq!(lines[1].snippet, "zeta");
-        let long = format!("{} needle {}", "x".repeat(100), "y".repeat(300));
-        let n = long.find("needle").unwrap();
-        let lines = match_lines(&long, &[n..n + 6]);
-        assert!(lines[0].snippet.starts_with('…'));
-        assert_eq!(&lines[0].snippet[lines[0].ranges[0].clone()], "needle");
-        assert!(lines[0].snippet.len() < 200);
+    fn results_sort_the_way_obsidian_collates() {
+        let mut results: Vec<FileResult> = ["Note 10.md", "9 needle.md", "Note 2.md", "_needle.md"]
+            .iter()
+            .map(|p| result(p))
+            .collect();
+        sort_results(&mut results);
+        let names: Vec<&str> = results.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["_needle", "9 needle", "Note 2", "Note 10"]);
+        // Same name in two folders: the path decides.
+        let mut same: Vec<FileResult> = ["notes/a.md", "a.md"].iter().map(|p| result(p)).collect();
+        sort_results(&mut same);
+        assert_eq!(same[0].path, "a.md");
+    }
+
+    #[test]
+    fn name_hits_are_cut_at_the_extension_and_counted_once() {
+        // Ranges are against "Needle.md", the row shows "Needle".
+        assert_eq!(clamp(&[0..6], 6), vec![0..6]);
+        assert_eq!(clamp(&[4..9], 6), vec![4..6], "a hit over `.md` is cut");
+        assert!(
+            clamp(&[6..9], 6).is_empty(),
+            "a hit inside `.md` is dropped"
+        );
+        let mut file = result("Needle.md");
+        assert_eq!(file.results(), 0);
+        file.name_ranges = vec![0..6];
+        assert_eq!(file.results(), 1, "a name hit counts as one result");
+        file.matches = vec![MatchLine {
+            offset: 0,
+            snippet: "needle".into(),
+            ranges: vec![0..6],
+        }];
+        assert_eq!(file.results(), 2);
     }
 }

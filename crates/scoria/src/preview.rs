@@ -5,6 +5,7 @@
 //! maps clicks back through the same pieces.
 
 use _markdown::highlight::{HighlightKind, HighlightSpan};
+use std::borrow::Cow;
 use std::ops::Range;
 
 /// One run of the display text: copied from the source, or substituted
@@ -164,13 +165,35 @@ pub fn heading_scale(level: u8) -> f32 {
     }
 }
 
+/// Offset inside an ATX heading's text where its closing `#` sequence
+/// begins, whitespace included, when it has one. The parser drops the same
+/// run when it takes the heading's text, so Live Preview hides it.
+fn atx_closing(text: &str) -> Option<usize> {
+    let kept = text.trim_end_matches([' ', '\t']);
+    let stripped = kept.trim_end_matches('#');
+    if stripped.len() == kept.len() {
+        return None;
+    }
+    if stripped.is_empty() {
+        Some(0)
+    } else if stripped.ends_with([' ', '\t']) {
+        Some(stripped.trim_end_matches([' ', '\t']).len())
+    } else {
+        None
+    }
+}
+
 /// Block decorations and font scale of a line, from its spans.
 pub fn line_block(spans: &[HighlightSpan]) -> (f32, Decor) {
     let mut scale = 1.0;
     let mut decor = Decor::default();
     for s in spans {
         match s.kind {
-            HighlightKind::Heading(level) => scale = heading_scale(level),
+            // A setext underline is the heading's markup, so the row it
+            // sits on keeps the body size.
+            HighlightKind::Heading(h) if !h.underline => {
+                scale = heading_scale(h.level);
+            }
             HighlightKind::QuoteMarker => decor.quote_depth += 1,
             HighlightKind::ThematicBreak => decor.rule = true,
             HighlightKind::CodeBlock => decor.code_block = true,
@@ -194,7 +217,7 @@ pub fn touches(touch: &[Range<usize>], range: &Range<usize>) -> bool {
 /// any construct one of them touches keeps its source.
 pub fn display_line(line: &str, spans: &[HighlightSpan], touch: &[Range<usize>]) -> DisplayLine {
     let (scale, decor) = line_block(spans);
-    let mut hides: Vec<(Range<usize>, &str, HighlightKind)> = Vec::new();
+    let mut hides: Vec<(Range<usize>, Cow<'static, str>, HighlightKind)> = Vec::new();
     for (ix, span) in spans.iter().enumerate() {
         let revealed = touches(touch, &span.range);
         if revealed {
@@ -206,14 +229,19 @@ pub fn display_line(line: &str, spans: &[HighlightSpan], touch: &[Range<usize>])
         };
         let k = span.kind;
         let both_ends =
-            |n: usize, open: &[&str], hides: &mut Vec<(Range<usize>, &str, HighlightKind)>| {
+            |n: usize,
+             open: &[&str],
+             hides: &mut Vec<(Range<usize>, Cow<'static, str>, HighlightKind)>| {
                 if t.len() >= 2 * n && open.iter().any(|o| t.starts_with(o)) && t.ends_with(&t[..n])
                 {
-                    hides.push((r.start..r.start + n, "", k));
-                    hides.push((r.end - n..r.end, "", k));
+                    hides.push((r.start..r.start + n, "".into(), k));
+                    hides.push((r.end - n..r.end, "".into(), k));
                 }
             };
         match k {
+            HighlightKind::Heading(h) if h.underline => {
+                hides.push((r.clone(), "".into(), k));
+            }
             HighlightKind::Heading(_) => {
                 let hashes = t.bytes().take_while(|&b| b == b'#').count();
                 let ws = t[hashes..]
@@ -221,7 +249,11 @@ pub fn display_line(line: &str, spans: &[HighlightSpan], touch: &[Range<usize>])
                     .take_while(|&b| b == b' ' || b == b'\t')
                     .count();
                 if hashes > 0 && ws > 0 {
-                    hides.push((r.start..r.start + hashes + ws, "", k));
+                    hides.push((r.start..r.start + hashes + ws, "".into(), k));
+                    let after = r.start + hashes + ws;
+                    if let Some(close) = atx_closing(&t[hashes + ws..]) {
+                        hides.push((after + close..r.end, "".into(), k));
+                    }
                 }
             }
             HighlightKind::Strong => both_ends(2, &["**", "__"], &mut hides),
@@ -231,8 +263,8 @@ pub fn display_line(line: &str, spans: &[HighlightSpan], touch: &[Range<usize>])
             HighlightKind::Code => {
                 let n = t.bytes().take_while(|&b| b == b'`').count();
                 if n > 0 && t.len() >= 2 * n && t.ends_with(&t[..n]) {
-                    hides.push((r.start..r.start + n, "", k));
-                    hides.push((r.end - n..r.end, "", k));
+                    hides.push((r.start..r.start + n, "".into(), k));
+                    hides.push((r.end - n..r.end, "".into(), k));
                 }
             }
             HighlightKind::Wikilink | HighlightKind::Embed => {
@@ -248,11 +280,21 @@ pub fn display_line(line: &str, spans: &[HighlightSpan], touch: &[Range<usize>])
                     match inner.find('|') {
                         // `[[target|alias]]` shows the alias.
                         Some(p) if p + 1 < inner.len() => {
-                            hides.push((r.start..r.start + open + p + 1, "", k));
+                            hides.push((r.start..r.start + open + p + 1, "".into(), k));
                         }
-                        _ => hides.push((r.start..r.start + open, "", k)),
+                        _ => {
+                            hides.push((r.start..r.start + open, "".into(), k));
+                            // A subpath reads `Note > Heading`, the label the
+                            // reading view already gives it; a link into this
+                            // note has no path, so its leading `#` just goes.
+                            for (i, _) in inner.match_indices('#') {
+                                let at = r.start + open + i;
+                                let with = if i == 0 { "" } else { " > " };
+                                hides.push((at..at + 1, with.into(), k));
+                            }
+                        }
                     }
-                    hides.push((r.end - 2..r.end, "", k));
+                    hides.push((r.end - 2..r.end, "".into(), k));
                 }
             }
             HighlightKind::Link => {
@@ -279,19 +321,19 @@ pub fn display_line(line: &str, spans: &[HighlightSpan], touch: &[Range<usize>])
                         }
                     }
                     if let Some(close) = close {
-                        hides.push((r.start..r.start + open, "", k));
-                        hides.push((r.start + close..r.end, "", k));
+                        hides.push((r.start..r.start + open, "".into(), k));
+                        hides.push((r.start + close..r.end, "".into(), k));
                     }
                 }
             }
             HighlightKind::Url => {
                 if t.starts_with('<') && t.ends_with('>') && t.len() >= 2 {
-                    hides.push((r.start..r.start + 1, "", k));
-                    hides.push((r.end - 1..r.end, "", k));
+                    hides.push((r.start..r.start + 1, "".into(), k));
+                    hides.push((r.end - 1..r.end, "".into(), k));
                 }
             }
             HighlightKind::Comment | HighlightKind::QuoteMarker | HighlightKind::ThematicBreak => {
-                hides.push((r.clone(), "", k));
+                hides.push((r.clone(), "".into(), k));
             }
             HighlightKind::BlockId => {
                 // Take the space before the id along with it.
@@ -300,18 +342,23 @@ pub fn display_line(line: &str, spans: &[HighlightSpan], touch: &[Range<usize>])
                 } else {
                     r.start
                 };
-                hides.push((start..r.end, "", k));
+                hides.push((start..r.end, "".into(), k));
             }
             HighlightKind::ListMarker => {
-                let task_after = spans
-                    .iter()
-                    .skip(ix + 1)
-                    .find(|s| s.kind == HighlightKind::Task && s.range.start == r.end + 1);
+                // The parser accepts one to four spaces or a tab between
+                // the marker and the checkbox, and all of it is markup.
+                let task_after = spans.iter().skip(ix + 1).find(|s| {
+                    s.kind == HighlightKind::Task
+                        && s.range.start >= r.end
+                        && line
+                            .get(r.end..s.range.start)
+                            .is_some_and(|gap| gap.bytes().all(|b| b == b' ' || b == b'\t'))
+                });
                 match task_after {
                     // A task shows its checkbox in place of the bullet.
-                    Some(task) => hides.push((r.start..task.range.start, "", k)),
+                    Some(task) => hides.push((r.start..task.range.start, "".into(), k)),
                     None if t.len() == 1 && matches!(t, "-" | "*" | "+") => {
-                        hides.push((r.clone(), "•", k));
+                        hides.push((r.clone(), "•".into(), k));
                     }
                     None => {}
                 }
@@ -322,7 +369,7 @@ pub fn display_line(line: &str, spans: &[HighlightSpan], touch: &[Range<usize>])
                 } else {
                     "☑"
                 };
-                hides.push((r.clone(), glyph, k));
+                hides.push((r.clone(), glyph.into(), k));
             }
             HighlightKind::Callout => {
                 // `> [!type]- Title`: the type block goes, an empty title
@@ -339,11 +386,10 @@ pub fn display_line(line: &str, spans: &[HighlightSpan], touch: &[Range<usize>])
                             let mut name: String =
                                 ty.chars().take(1).flat_map(char::to_uppercase).collect();
                             name.push_str(ty.get(1..).unwrap_or(""));
-                            let name: &'static str = Box::leak(name.into_boxed_str());
-                            hides.push((r.start + open..r.start + end, name, k));
+                            hides.push((r.start + open..r.start + end, name.into(), k));
                         } else {
                             let ws = t[end..].bytes().take_while(|&b| b == b' ').count();
-                            hides.push((r.start + open..r.start + end + ws, "", k));
+                            hides.push((r.start + open..r.start + end + ws, "".into(), k));
                         }
                     }
                 }
@@ -352,8 +398,8 @@ pub fn display_line(line: &str, spans: &[HighlightSpan], touch: &[Range<usize>])
                 // `[^ref]` and inline `^[text]` both lose their brackets.
                 if (t.starts_with("[^") || t.starts_with("^[")) && t.ends_with(']') && t.len() >= 3
                 {
-                    hides.push((r.start..r.start + 2, "", k));
-                    hides.push((r.end - 1..r.end, "", k));
+                    hides.push((r.start..r.start + 2, "".into(), k));
+                    hides.push((r.end - 1..r.end, "".into(), k));
                 }
             }
             HighlightKind::Math => {
@@ -362,8 +408,8 @@ pub fn display_line(line: &str, spans: &[HighlightSpan], touch: &[Range<usize>])
                 // delimiters on this line go.
                 let n = t.bytes().take_while(|&b| b == b'$').count().min(2);
                 if n > 0 && t.len() >= 2 * n && t.ends_with(&t[..n]) {
-                    hides.push((r.start..r.start + n, "", k));
-                    hides.push((r.end - n..r.end, "", k));
+                    hides.push((r.start..r.start + n, "".into(), k));
+                    hides.push((r.end - n..r.end, "".into(), k));
                 }
             }
             HighlightKind::CodeBlock
@@ -402,7 +448,7 @@ pub fn display_line(line: &str, spans: &[HighlightSpan], touch: &[Range<usize>])
             len: with.len(),
             kind,
         });
-        text.push_str(with);
+        text.push_str(&with);
         at = range.end;
     }
     if at < line.len() {
@@ -427,11 +473,15 @@ mod tests {
     use _markdown::highlight::highlight_lines;
 
     fn render(src: &str, touch: Option<Range<usize>>) -> DisplayLine {
+        render_at(src, 0, touch)
+    }
+
+    fn render_at(src: &str, at: usize, touch: Option<Range<usize>>) -> DisplayLine {
         let doc = _markdown::parse(src);
         let lines = highlight_lines(&doc);
-        let line = src.lines().next().unwrap_or("");
+        let line = src.lines().nth(at).unwrap_or("");
         let touch: Vec<Range<usize>> = touch.into_iter().collect();
-        display_line(line, &lines[0], &touch)
+        display_line(line, &lines[at], &touch)
     }
 
     #[test]
@@ -453,9 +503,17 @@ mod tests {
     fn links_show_their_text() {
         assert_eq!(
             render("[[Note]] [[Note|alias]] [[Note#H]]", None).text,
-            "Note alias Note#H"
+            "Note alias Note > H"
         );
         assert_eq!(render("![[pic.png]]", None).text, "pic.png");
+        assert_eq!(render("![[Note#H]]", None).text, "Note > H");
+        // A block id keeps its caret, and a link into this note has no
+        // path to separate from.
+        assert_eq!(
+            render("[[Note#A#B]] [[Note#^id]] [[#Local]]", None).text,
+            "Note > A > B Note > ^id Local"
+        );
+        assert_eq!(render("[[Note#H]]", Some(0..0)).text, "[[Note#H]]");
         assert_eq!(
             render("[text](https://x.y) ![alt](a.png)", None).text,
             "text alt"
@@ -479,11 +537,19 @@ mod tests {
         assert_eq!(render("1. item", None).text, "1. item");
         assert_eq!(render("- [ ] open", None).text, "☐ open");
         assert_eq!(render("- [x] done", None).text, "☑ done");
+        // Every padding the parser accepts between bullet and checkbox.
+        assert_eq!(render("-  [x] padded", None).text, "☑ padded");
+        assert_eq!(render("-    [ ] four", None).text, "☐ four");
+        assert_eq!(render("-\t[x] tabbed", None).text, "☑ tabbed");
+        assert_eq!(render("> -  [ ] quoted", None).text, "☐ quoted");
         let q = render("> > deep", None);
         assert_eq!(q.text, "deep");
         assert_eq!(q.decor.quote_depth, 2);
         assert_eq!(render("> [!note] Title", None).text, "Title");
+        // An empty title shows the capitalised type, foldable or not.
         assert_eq!(render("> [!tip]", None).text, "Tip");
+        assert_eq!(render("> [!warning]-", None).text, "Warning");
+        assert_eq!(render("> [!tip]", Some(0..0)).text, "> [!tip]");
         let hr = render("---\n", None);
         assert_eq!(hr.text, "");
         assert!(hr.decor.rule);
@@ -491,6 +557,50 @@ mod tests {
             render("text %%hidden **x**%% end ^id", None).text,
             "text  end"
         );
+    }
+
+    #[test]
+    fn closed_atx_headings_drop_their_trailing_hashes() {
+        assert_eq!(render("## Title ##", None).text, "Title");
+        assert_eq!(render("## Title ##   ", None).text, "Title");
+        assert_eq!(
+            render("## Closing ## sequence ##", None).text,
+            "Closing ## sequence"
+        );
+        assert_eq!(render("## ##", None).text, "");
+        // Not a closing sequence: no space before the run.
+        assert_eq!(render("## Title#", None).text, "Title#");
+        assert_eq!(render("## Title ##", Some(0..0)).text, "## Title ##");
+    }
+
+    #[test]
+    fn a_setext_underline_is_markup() {
+        let src = "Setext title\n============\n";
+        let title = render_at(src, 0, None);
+        assert_eq!(title.text, "Setext title");
+        assert_eq!(title.scale, heading_scale(1));
+        let underline = render_at(src, 1, None);
+        assert_eq!(underline.text, "");
+        assert_eq!(underline.scale, 1.0);
+        // The cursor on the underline brings it back.
+        assert_eq!(render_at(src, 1, Some(0..0)).text, "============");
+        let h2 = render_at("Setext two\n---\n", 1, None);
+        assert_eq!(h2.text, "");
+        assert_eq!(h2.scale, 1.0);
+        // A title that is itself a run of the underline character: the
+        // parser marks which row is the markup, so the title row is still
+        // a heading and only the row below it goes.
+        let title = render_at("==\n==\n", 0, None);
+        assert_eq!(title.text, "==");
+        assert_eq!(title.scale, heading_scale(1));
+        let underline = render_at("==\n==\n", 1, None);
+        assert_eq!(underline.text, "");
+        assert_eq!(underline.scale, 1.0);
+        // The same for the level 2 shape, whose title reads as a break.
+        let title = render_at("--\n--\n", 0, None);
+        assert_eq!(title.text, "--");
+        assert_eq!(title.scale, heading_scale(2));
+        assert_eq!(render_at("--\n--\n", 1, None).text, "");
     }
 
     #[test]
