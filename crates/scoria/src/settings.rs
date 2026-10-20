@@ -600,6 +600,15 @@ impl Flag {
     }
 }
 
+/// Whether the core plugin `id` is enabled in this vault: the file's word,
+/// or the fresh-vault default when the file does not mention it.
+pub fn plugin_enabled(state: &VaultState, id: &str) -> bool {
+    CORE_PLUGINS
+        .iter()
+        .find(|p| p.id == id)
+        .is_some_and(|p| CorePlugins::is_enabled_or_default(state.core_plugins().as_ref(), p))
+}
+
 /// Whether `id` is on, with `default_on` for a vault that has no
 /// `core-plugins.json` and for an id the file does not list.
 fn core_plugin_enabled(config: Option<&CorePlugins>, id: &str, default_on: bool) -> bool {
@@ -1179,7 +1188,7 @@ impl SettingsView {
                 "Display vertical toolbar on the side of the window.",
                 a,
                 SHOW_RIBBON,
-            ).not_yet(),
+            ),
             heading("Advanced"),
             appearance_toggle(
                 "Native menus",
@@ -2584,6 +2593,7 @@ mod tests {
         assert_eq!(
             live,
             [
+                "Show ribbon",
                 "Readable line length",
                 "Strict line breaks",
                 "Auto-pair brackets",

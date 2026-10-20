@@ -3943,9 +3943,126 @@ impl Workspace {
         self.load_tab(cx);
     }
 
+    /// A sidebar's collapse toggle: it stays on screen when the sidebar is
+    /// collapsed, which is what brings the sidebar back.
+    fn sidebar_toggle(
+        &self,
+        left: bool,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let visible = if left {
+            self.left_visible
+        } else {
+            self.right_visible
+        };
+        let command = if left {
+            "app:toggle-left-sidebar"
+        } else {
+            "app:toggle-right-sidebar"
+        };
+        let glyph = if left == visible { "⇤" } else { "⇥" };
+        div()
+            .id(if left { "toggle-left" } else { "toggle-right" })
+            .flex_shrink_0()
+            .w(px(26.))
+            .h(px(26.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_md()
+            .cursor_pointer()
+            .text_size(px(14.))
+            .text_color(theme.text_muted)
+            .hover(|s| s.bg(theme.bg_alt).text_color(theme.text))
+            .on_click(cx.listener(move |this, _, window, cx| this.run_command(command, window, cx)))
+            .child(glyph)
+    }
+
+    /// The ribbon down the left edge: the quick switcher, the graph, today's
+    /// daily note, a template and the palette at the top, Settings at the
+    /// bottom. `workspace.json`'s `left-ribbon.hiddenItems` hides an entry
+    /// by the plugin id its key starts with.
+    fn render_ribbon(&self, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
+        let hidden = |plugin: &str| -> bool {
+            self.layout
+                .as_ref()
+                .and_then(|l| l.get("left-ribbon")?.get("hiddenItems")?.as_object())
+                .is_some_and(|items| {
+                    items.iter().any(|(key, hidden)| {
+                        key.split(':').next() == Some(plugin) && hidden.as_bool() == Some(true)
+                    })
+                })
+        };
+        let enabled = |plugin: &str| -> bool {
+            self.state
+                .as_ref()
+                .is_some_and(|s| settings::plugin_enabled(s, plugin))
+        };
+        let toggle = self.sidebar_toggle(true, theme, cx);
+        let button = |id: &'static str, glyph: &'static str, command: &'static str| {
+            div()
+                .id(id)
+                .w(px(28.))
+                .h(px(28.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_md()
+                .cursor_pointer()
+                .text_size(px(16.))
+                .text_color(theme.text_muted)
+                .hover(|s| s.bg(theme.bg_alt).text_color(theme.text))
+                .on_click(
+                    cx.listener(move |this, _, window, cx| this.run_command(command, window, cx)),
+                )
+                .child(glyph)
+        };
+        let items: [(&'static str, &'static str, &'static str, &'static str); 5] = [
+            ("ribbon-switcher", "⚲", "switcher:open", "switcher"),
+            ("ribbon-graph", "◎", "graph:open", "graph"),
+            ("ribbon-daily", "▦", "daily-notes", "daily-notes"),
+            ("ribbon-template", "≡", "insert-template", "templates"),
+            (
+                "ribbon-palette",
+                "⌨",
+                "command-palette:open",
+                "command-palette",
+            ),
+        ];
+        let buttons: Vec<_> = items
+            .into_iter()
+            .filter(|(_, _, _, plugin)| enabled(plugin) && !hidden(plugin))
+            .map(|(id, glyph, command, _)| button(id, glyph, command))
+            .collect();
+        let settings = button("ribbon-settings", "⚙", "app:open-settings");
+        div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .flex_shrink_0()
+            .w(px(44.))
+            .h_full()
+            .py_1()
+            .gap_1()
+            .bg(theme.bg_secondary)
+            .border_r_1()
+            .border_color(theme.border)
+            .child(toggle)
+            .child(div().h(px(6.)))
+            .children(buttons)
+            .child(div().flex_1())
+            .child(settings)
+    }
+
     fn render_tab_strip(&self, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
         let tabs = self.tab_snapshots();
         let active_ix = self.active_tab;
+        let show_ribbon = self
+            .state
+            .as_ref()
+            .map(|s| s.appearance().show_ribbon.unwrap_or(true))
+            .unwrap_or(true);
         div()
             .flex()
             .flex_row()
@@ -3958,6 +4075,11 @@ impl Workspace {
             .border_b_1()
             .border_color(theme.border)
             .overflow_hidden()
+            // Without the ribbon a collapsed left sidebar would have no
+            // way back from the window.
+            .when(!show_ribbon && !self.left_visible, |d| {
+                d.child(self.sidebar_toggle(true, theme, cx).mb(px(2.)))
+            })
             .children(tabs.iter().enumerate().map(|(ix, tab)| {
                 let active = ix == active_ix;
                 let title = tab.title();
@@ -4024,6 +4146,8 @@ impl Workspace {
                     .on_click(cx.listener(|this, _, _, cx| this.new_tab(cx)))
                     .child("+"),
             )
+            .child(div().flex_1())
+            .child(self.sidebar_toggle(false, theme, cx).mb(px(2.)))
     }
 
     // ----- workspace.json --------------------------------------------------------
@@ -5503,6 +5627,12 @@ impl Render for Workspace {
             .child(header)
             .child(div().flex_1().overflow_hidden().child(main_body));
 
+        let show_ribbon = self
+            .state
+            .as_ref()
+            .map(|s| s.appearance().show_ribbon.unwrap_or(true))
+            .unwrap_or(true);
+        let ribbon = show_ribbon.then(|| self.render_ribbon(&theme, cx));
         let left_tab = self.left_tab;
         let left_body: gpui::AnyElement = match left_tab {
             LeftTab::Files => self.explorer.clone().into_any_element(),
@@ -5560,31 +5690,35 @@ impl Render for Workspace {
                     ),
             )
             .child(div().flex_1().overflow_hidden().child(left_body))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .px_2()
-                    .py_1()
-                    .border_t_1()
-                    .border_color(theme.border)
-                    .child(
-                        div()
-                            .id("open-settings")
-                            .px_2()
-                            .py_px()
-                            .rounded_sm()
-                            .cursor_pointer()
-                            .text_size(px(11.))
-                            .text_color(theme.text_muted)
-                            .hover(|s| s.bg(theme.bg_alt))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.open_settings(None, window, cx)
-                            }))
-                            .child("Settings"),
-                    ),
-            );
+            // Obsidian keeps Settings in the ribbon; the footer button is
+            // the way in only while the ribbon is hidden.
+            .when(!show_ribbon, |d| {
+                d.child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .px_2()
+                        .py_1()
+                        .border_t_1()
+                        .border_color(theme.border)
+                        .child(
+                            div()
+                                .id("open-settings")
+                                .px_2()
+                                .py_px()
+                                .rounded_sm()
+                                .cursor_pointer()
+                                .text_size(px(11.))
+                                .text_color(theme.text_muted)
+                                .hover(|s| s.bg(theme.bg_alt))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.open_settings(None, window, cx)
+                                }))
+                                .child("Settings"),
+                        ),
+                )
+            });
 
         let (editor_status, words, chars) = if self.mode.is_editing() {
             let editor = self.editor.read(cx);
@@ -5742,6 +5876,7 @@ impl Render for Workspace {
                     .flex_row()
                     .flex_1()
                     .overflow_hidden()
+                    .children(ribbon)
                     .when(left_visible, |d| d.child(left))
                     .child(main)
                     .when(right_visible, |d| {
