@@ -65,7 +65,8 @@ Plus one the triage found that neither audit had: a panic that killed the app, f
 Most of the 50 are the same large gaps the first pass had already filed — no tabs, no ribbon, the
 Hotkeys tab, the graph controls panel — and they are not duplicated below. What the triage added is
 twenty entries nobody had filed before and fresh evidence on a dozen more; both are folded into the
-sections that follow, so the sections hold **61 open entries** in total.
+sections that follow, so the sections held **61 open entries** in total; the five large builds of 2026-10-20 and the
+four small entries they carried closed nine of them, so **52 remain**.
 
 ## Files view and file operations
 
@@ -313,21 +314,6 @@ remains in the header (Specification.md's properties-mode table).
 `PropertiesInDocument::Hidden` — the reading view's guard is in `Renderer::properties`, which both
 views share, so the leftover height is in the editor's own widget accounting
 (`widget_heights`/`height_of`) rather than in the renderer.
-
-### Ctrl+click on a link opens it in the current pane
-
-*low, parity-gap, small*
-
-**.** `click {"x":420,"y":48,"mods":["ctrl"]}` on a rendered `[[Welcome#Hello]]` replaces the
-note in place and advances history exactly as a plain click does. There is no tab strip anywhere in
-the state dump, so there is nothing for a modifier to target.
-
-**Obsidian.** A real 1.14.4 distinguishes follow / new-leaf / new-split for the same link and binds
-them Alt+Enter, Mod+Enter and Mod+Alt+Enter (`crates/-commands/data/commands.txt:81-83`), and
-Specification.md:2030-2032 records Ctrl+click on explorer rows taking markdown leaves from 0 to 2.
-
-**Fix.** Blocked on tabs, so do the cheap half now: carry `new_tab: bool` on `EditorEvent::OpenLink`
-taken from the event's modifiers, inert until tabs exist.
 
 ## Reading view
 
@@ -737,23 +723,6 @@ than a set, walk out to `local_jumps`, follow an edge only in the directions the
 needs the directed edge list the build already has), and drop same-depth edges in `finish` when
 interlinks are off.
 
-### No graph controls panel
-
-*medium, missing-feature, large*
-
-**.** The entire graph UI is four chips and a "N nodes, M links" label. `hideUnresolved`,
-`search`, `colorGroups` and the seven display and force values are read from `graph.json` and
-applied but cannot be changed from inside the app, and `showArrow` is parsed with no reader at all.
-
-**Obsidian.** `div.graph-controls[data-ignore-swipe="true"]` with four collapsible sections —
-Filters, Groups, Display, Forces — plus Close, Open graph settings, Start timelapse animation and
-Restore default settings.
-
-**Fix.** Replace the chip row with a `graph-controls` overlay whose sections bind to the matching
-`collapse-*` keys, each row writing into `self.config` and calling `rebuild()` plus the debounced
-save above. Draw arrowheads in the edge path when `show_arrow` is true; the stroke loop already has
-both endpoints and the scale.
-
 ### Backlinks and Outgoing are flat per-occurrence lists
 
 *medium, parity-gap, large*
@@ -919,26 +888,6 @@ settings file yet." The configs are already there: `DailyNotesConfig` and `Templ
 those config types, plus the matching `SettingChange` variants. While there, expose the rendered row
 names in `state.modal.rows` — see [[#Blocked by the harness, not by the code]].
 
-### Hotkeys tab can change nothing
-
-*medium, missing-feature, large*
-
-**.** The only working controls are the filter field and the four chips. Clicking a command
-row or its key chip leaves `state` unchanged and nothing enters a capture state; after a whole
-session of driving the tab, `.obsidian/` still holds only appearance.json, app.json,
-core-plugins.json and graph.json. The filter text also survives closing the modal, so the next thing
-typed appends to the old filter.
-
-**Obsidian.** Click ⊕ beside a command, press a chord to assign it, click × on a chip to remove it,
-a restore icon to go back to the default; duplicates are marked; `.obsidian/hotkeys.json` is a map
-of command id to a list of `{modifiers, key}`, where an entry replaces the defaults and an empty
-list unbinds.
-
-**Fix.** A `capturing: Option<String>` on `SettingsView`, an `on_key_down` on the settings root
-converting the gpui `Keystroke` into a `config::Hotkey`, and a `SettingChange::Hotkeys` that
-`apply_setting` writes in insertion order and re-applies to the `Commands` global and the bound
-actions. Cheap sub-fix meanwhile: clear the filter in `open()`.
-
 ### An unparseable `.obsidian` json is replaced wholesale on the first write
 
 *low, bug, medium*
@@ -974,25 +923,6 @@ unregistered, so neither the palette nor the Hotkeys tab lists them.
 **Fix.** Reuse the filter `render_nav` already has: a `plugin_enabled(state, id)` applied in
 `load_commands` and in the palette's list, both rebuilt after a `SettingChange::CorePlugins`. Hiding
 the Files/Graph/Backlinks panes is the larger half and can follow.
-
-### "Default view for new tabs" is untagged but only read at startup
-
-*low, bug, small*
-
-**.** The row carries none of the "on restart" tags five of its siblings carry, so by the
-modal's own convention it claims  honours it live. Picking Reading view writes
-`{"defaultViewMode":"preview"}` and opening three notes afterwards gives `mode: "live"` every time —
-`default_mode()` still has exactly one caller, at startup.
-
-**Obsidian.** The row's own description, which  copies verbatim, is "The default view that a
-new Markdown tab gets opened in".  has no tabs at all, and the triage's reading is that the
-parity claim behind making it live is unbacked — so the honest fix here is the tag, not the
-behaviour.
-
-**Fix.** Append `.on_restart()` to the row, and extend the honesty ratchet
-(`only_the_toggles__reads_are_untagged`) to cover Typed and Number rows, not only toggles. The
-behaviour change — calling `default_mode()` in `open_file` when the note differs from the one shown
-— is a separate decision that waits on tabs.
 
 ### "Default location for new attachments" is inert
 
@@ -1051,63 +981,6 @@ overlay list dispatching command ids, which the explorer's menu could be general
 
 ## Workspace shell
 
-### Graph mode is sticky: opening a note leaves the graph on screen
-
-*medium, bug, small*
-
-**.** From the graph, `open {"name":"Welcome"}` gives `{path: "Welcome.md", mode: "graph"}` —
-the file changed, the view did not. Same from `app:go-back` and from the quick switcher. `open_file`
-and `navigate_history` both call `show_file` without touching `self.mode`, and `render_main`
-dispatches `ViewMode::Graph` first. (It looks fixed if tested carelessly: `graph:open` is a toggle,
-so a second one in a repro script leaves graph mode and makes the next open look right.)
-
-**Obsidian.** The graph is its own leaf; opening a note from anywhere shows the note.
-
-**Fix.** `if self.mode == ViewMode::Graph { self.mode = self.mode_before_graph; }` at the top of
-`open_file` and again in `navigate_history` before `show_file` — a plain field assignment, no
-`&mut Window` needed, and `show_file`'s `cx.notify()` already repaints. Leave `graph:open` a toggle.
-
-### `workspace.json` is neither read at startup nor written on quit
-
-*high, parity-gap, large*
-
-**.** A hand-written `workspace.json` naming an active file, its mode and both sidebars
-collapsed is ignored entirely:  opens the alphabetically first markdown file in Live Preview
-with both docks shown. Quitting after changing all three writes nothing — `.obsidian/` still holds
-only the four config files. `Vault::workspace_json()` still has no caller in the app.
-
-**Obsidian.** Obsidian restores `workspace.json` on launch — open tabs, the active file, its mode,
-sidebar collapse state, the active sidebar leaf — and writes it back on quit; with nothing recorded
-it shows the "No file is open" empty state rather than picking a note.
-
-**Fix.** Before `open_first`, read `workspace_json()`, walk `main` depth-first for the leaf whose id
-equals the top-level `active` (falling back to the first `state.type == "markdown"` leaf), open its
-`state.file` with the mode mapped (`preview` → Reading, `source` plus `source: true` → Source, else
-Live Preview), and apply `left.collapsed`/`right.collapsed` before the first paint. When there is no
-markdown leaf, leave `current` None rather than falling through to `open_first`. Writing it back on
-quit is a separate decision under the vault-is-truth rule.
-
-### No tabs
-
-*high, missing-feature, large*
-
-**.** `keys` reports `handled: false` for ctrl-t, ctrl-w, ctrl-tab, ctrl-shift-tab, ctrl-1 and
-ctrl-9; `state` has no `tabs` key; and `workspace:new-tab`, `close`, `next-tab`, `previous-tab`,
-`goto-tab-1..8`, `goto-last-tab`, `undo-close-pane`, `split-vertical`, `split-horizontal` and
-`close-others` are all `runnable: false`. The campaign made 27 more commands runnable and not one of
-them is a tab id.
-
-**Obsidian.** Each pane has a tab header row; Ctrl+T opens an empty tab, Ctrl+W closes the active
-one (the last close leaving the "No file is open" tab), Ctrl+Tab and Ctrl+Shift+Tab cycle, Ctrl+1..8
-and Ctrl+9 jump.
-
-**Fix.** A `Tab { path, mode, history, history_ix }` with `tabs: Vec<Tab>` and an active index, and
-`current`/`mode`/`history` as accessors over the active tab so `show_file` and `navigate_history`
-keep working unchanged; a tab strip as a new first child of `main` above the header; and the ids in
-RUNNABLE so `bind_keys` picks up the registry defaults. A worthwhile smaller first step is
-`workspace:new-tab` and `workspace:close` over a one-element vector, so the ids stop lying. Several
-other entries wait on this one: Ctrl+click to a new tab, and the three `open-link-in-new-*` ids.
-
 ### History back and forward restore the file but not the mode or the scroll
 
 *medium, parity-gap, medium*
@@ -1145,26 +1018,6 @@ of the word count, and drop the "· reading view built in N ms" suffix from the 
 writes, so the left half carries notices only. The word count should also be skipped when no file is
 open.
 
-### No ribbon, and a collapsed sidebar cannot be brought back from the window
-
-*medium, missing-feature, medium*
-
-**.** `render` composes the left dock, the main area and the right dock and nothing else, with
-no chevron or edge handle around either dock, so a hidden dock has no on-screen affordance at all
-and the Settings entry point is a text button pinned inside the left dock. Settings → Appearance
-offers a "Show ribbon" toggle, honestly tagged "not in  yet", backed by a key nothing reads.
-Its severity dropped during the campaign: with the focus traps fixed, hiding a dock now falls back
-to the editor and Ctrl+P still opens the palette, so this is a parity gap rather than a trap.
-
-**Obsidian.** A 44 px ribbon on the far left (quick switcher, graph, new canvas, daily note,
-template, command palette; vault switcher, help and settings at the bottom), and each sidebar has a
-collapse toggle that stays visible when the sidebar is collapsed.
-
-**Fix.** The two expand chevrons first — `.when(!left_visible, |d| d.child(chevron))` either side of
-`main`, each calling the same listener as the toggle command. The ribbon column goes in front of the
-left dock at the same site, gated on `show_ribbon != Some(false)`, after which the `.not_yet()` tag
-comes off.
-
 ### Renaming with an empty name reports "File name must not start with a dot."
 
 *low, bug, small*
@@ -1181,24 +1034,6 @@ returns the right string. The empty value never reaches it, because `prompt_subm
 dot-prefixed. Guard the stem in the `PendingOp::Rename` arm before the extension is appended — the
 same guard the `/`-accepting entry under Files needs — and add it to the `PendingOp::Move` arm too,
 where an empty value silently renames the file to itself.
-
-### The window title is a static ""
-
-*low, parity-gap, small*
-
-**.** `TitlebarOptions { title: Some("") }` is set once at window creation and
-`set_window_title` appears nowhere in the app, so the title never names the note or the vault. Not
-observable over the socket — the `window` method answers width, height, scale and active with no
-title field, and the machine has no `wmctrl`, `xdotool` or `xprop` — so the source settles it.
-
-**Obsidian.** The window title is "<Note name> - <Vault name> - Obsidian v1.14.4" and changes with
-the active file.
-
-**Fix.** `show_file` has no `&mut Window`, so set a `pending_title: Option<SharedString>` there and
-flush it in `render`, which already has one:
-`window.set_window_title(&format!("{name} - {vault} - "))`, falling back to
-"{vault} - " with no file open. Add `title` to the `window` method's output while there, so
-the socket can verify it.
 
 ## What the campaign fixed
 
@@ -1231,6 +1066,29 @@ deleted on disk no longer stays rendered, and an unsupported file type no longer
 note live underneath the placeholder. The code block's permanent language label is gone and a hover
 copy button took its place — see [[#Blocked by the harness, not by the code]]. A completed task is
 struck through as well as muted.
+
+**The five large builds, 2026-10-20.** Written up in
+[[Development#Tabs, the layout file, the ribbon, the Hotkeys tab and the graph panel, 2026-10-20]];
+each was driven over the socket on a scratch copy of the docs vault before it was committed. The
+main area has tabs: a strip above the view header, `workspace:new-tab`, `close`, `close-others`,
+`next-tab`, `previous-tab`, `goto-tab-1..8`, `goto-last-tab` and `undo-close-pane` runnable with
+their registry hotkeys, Ctrl+click on an explorer row, a reading-view link or an editor link opening
+a new tab, `editor:open-link-in-new-leaf` doing the same from the cursor, "Create new note" going to
+a new tab unless the active one is empty, and "Default view for new tabs" honoured by every new tab,
+which closes that entry on the behaviour rather than the tag. `workspace.json` is read at launch —
+the leaves under `main` become tabs in their recorded modes, the `active` id picks the tab, each
+sidebar's `collapsed` and `currentTab` are honoured, and with a layout read the startup flags no
+longer pick a first note — and written on quit only when the session changed it, keeping every key
+Obsidian gave a restored leaf; a main area with more than one tab group is left alone rather than
+flattened on disk. A ribbon runs down the left edge with the switcher, graph, daily note, template,
+palette and Settings, honouring `left-ribbon.hiddenItems`, and each sidebar has a toggle that
+outlives its collapse. The Hotkeys tab binds a chord from a key capture, removes a chip, restores a
+default and marks duplicates; `hotkeys.json` is written whole in Obsidian's `{modifiers, key}`
+shape, and the registry and every key binding are rebuilt live. The graph has Obsidian's four-section
+controls panel with timelapse, restore and close, writing `graph.json` a third of a second after a
+change — the twenty-key document when the vault has none, the changed keys merged in when it does —
+and draws arrowheads when `showArrow` is on. Along the way: the window title names the note and the
+vault, and opening a note from the graph shows the note.
 
 **Right dock panes and graph.** The layout simulation no longer dies when a rebuild lands while it
 is running. Deleting the open note clears the Outline, Backlinks and Outgoing rows and re-centres
@@ -1409,7 +1267,8 @@ One group is declined for a different reason and needs no probe: `editor:undo`, 
 Obsidian does not register them on desktop. Both triage passes checked and agreed. Adding them to
 RUNNABLE would create palette rows Obsidian has no command for, shown as raw ids, and would desync
 the Hotkeys tab — which is also why fifteen ids still report a name equal to their id. The same
-holds for `open-link-in-new-leaf`, `-split` and `-window` until tabs exist.
+held for `open-link-in-new-leaf`, `-split` and `-window` until tabs existed; `-leaf` is runnable now
+that they do, while `-split` and `-window` still wait on splits and windows.
 
 ## Blocked by the harness, not by the code
 

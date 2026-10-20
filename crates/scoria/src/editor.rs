@@ -186,8 +186,11 @@ const SCROLLBAR_MIN_THUMB: f32 = 24.0;
 pub enum EditorEvent {
     /// The buffer changed; the owner schedules a save.
     Edited,
-    /// A rendered link was clicked in Live Preview (or Ctrl+clicked).
+    /// A rendered link was clicked in Live Preview.
     OpenLink(LinkTarget),
+    /// A link was Ctrl+clicked, in either editing mode: it opens in a new
+    /// tab, as Obsidian's Mod+click does.
+    OpenLinkInNewTab(LinkTarget),
     /// Something the editor could not do, for the status bar.
     Reported(SharedString),
     /// A property's type was chosen from its menu; the workspace records it
@@ -3049,7 +3052,11 @@ impl Editor {
         if self.live_preview || event.modifiers.control {
             let col = shaped.to_source(d);
             if let Some(target) = self.link_at(line, col, !event.modifiers.control) {
-                cx.emit(EditorEvent::OpenLink(target));
+                cx.emit(if event.modifiers.control {
+                    EditorEvent::OpenLinkInNewTab(target)
+                } else {
+                    EditorEvent::OpenLink(target)
+                });
                 return true;
             }
         }

@@ -153,6 +153,57 @@ of mixed use in both apps. The gate run opened on 2026-10-18, see
 | Canvas writer | done: the bytes Obsidian writes on an edited save, see [[#Canvas writer, 2026-10-19]]; nothing in the app calls it yet |
 | The gate itself | open: the harness passes on the real vault, the week of mixed use has not run, see [[#The gate run opens, 2026-10-18]] |
 
+### Tabs, the layout file, the ribbon, the Hotkeys tab and the graph panel, 2026-10-20
+
+The five largest entries left in [[UI parity backlog]] after the campaign were builds rather than
+fixes, and they went in one after another, each driven over the control socket on a scratch copy of
+this vault before it was committed.
+
+**Tabs.** A `Tab` is a path, a mode and its own history. The active tab's fields are the ones the
+workspace always had — `current`, `mode`, `history`, `history_ix` — so every route that opens a
+note is unchanged, and `tabs[active_tab]` is a snapshot refreshed before anything reads it. That
+shape was chosen over accessors because seventy call sites read those fields and none of them
+needed to know. The editor still holds one buffer: switching tabs saves and reloads, the way opening
+a note does, which is also why a tab switch loses the scroll position the way history navigation
+does (the open entry on history covers both). The last close leaves Obsidian's empty "New tab", and
+a closed tab remembers its index so `undo-close-pane` puts it back where it was.
+
+**workspace.json.** Reading it is a walk of the leaves under `main`, depth first across groups —
+ has one strip, so a split layout is flattened to show it. Writing it back is the decision
+the backlog had left open under the vault-is-truth rule; the answer is to write only what the
+session changed and only what  models: a restored leaf keeps its id and every key Obsidian
+gave it, a new tab gets a sixteen-hex-digit id, `lastOpenFiles` is brought up to date, the dock
+`collapsed` keys follow the toggles, and a main area with more than one tab group is left exactly
+as it was, because flattening it on disk would lose the user's layout the next time Obsidian
+opened the vault. The quit write goes through the merging config writer, so an unchanged layout is
+byte-identical. The diff of the scratch vault's file after a session that closed every tab was
+one leaf, `active`, and the order of `lastOpenFiles`.
+
+**The ribbon** is five command buttons and Settings; `left-ribbon.hiddenItems` hides by the plugin
+id its key starts with, and a disabled core plugin's entry is not drawn. The sidebar toggles were
+the real gap: with the ribbon hidden, a collapsed left dock had no way back from the window.
+
+**The Hotkeys tab** turned up a writer bug worth remembering. The merging `write_config` keeps a
+key the new value lacks — right for every config file that is a struct, wrong for `hotkeys.json`,
+which *is* a map of entries, where dropping a command's entry is what restores its defaults. The
+first live run showed the tab on defaults while the file still held the custom chord. The fix is a
+second writer, `Vault::replace_config`, that writes the value whole, used for that file alone. The
+chord itself is a gpui `Keystroke` turned into Obsidian's spelling: `KeyboardEvent.key`
+(`ArrowLeft`, `F5`, ` ` for space, letters upper-cased), modifiers alphabetical, Ctrl as `Mod`,
+Super as `Meta`. Rebinding is a clear of every key binding and all of them again from the rebuilt
+registry; one false alarm during the run was pressing Escape and the new chord in the same socket
+request, before the frame that restores the workspace's handlers after a modal closes had painted.
+
+**The graph panel** replaces the chip row. Its sliders are canvases with their own hitbox, and the
+panel occludes, which is what keeps a slider drag from also panning the graph: the graph's canvas
+used to accept any mouse-down inside its bounds and now asks its hitbox. `graph.json` is written a
+third of a second after a change. A vault without the file gets the twenty keys in Obsidian's
+order — the test pins it at the 494 bytes Obsidian's own creation write measured — and a vault
+with it gets the changed keys merged in so `0.518713248970312` keeps its digits; whole numbers are
+written without a decimal point the way JavaScript prints them, and the last group removed is
+written as `[]`, both of which the merge would otherwise have got wrong. Force changes reach the
+running layout's `forces` and reheat it; filter and group changes rebuild; display changes repaint.
+
 ### The parity campaign, 2026-10-20
 
 [[#Control socket and MCP server, 2026-10-19]] ends with the first thing the socket caught: three

@@ -1301,6 +1301,10 @@ impl Workspace {
                     this.refresh_outline_from_buffer(cx);
                 }
                 EditorEvent::OpenLink(target) => this.follow_link(target.clone(), cx),
+                EditorEvent::OpenLinkInNewTab(target) => {
+                    this.link_in_new_tab = true;
+                    this.follow_link(target.clone(), cx);
+                }
                 EditorEvent::PropertyTypeAssigned { key, ty } => {
                     this.assign_property_type(key.clone(), *ty, cx)
                 }
@@ -2609,6 +2613,11 @@ impl Workspace {
             self.current = Some(path);
             return;
         };
+        // The graph is a toggle, not a place a note can open in: a note
+        // asked for from anywhere shows the note.
+        if self.mode == ViewMode::Graph {
+            self.mode = self.mode_before_graph;
+        }
         if self.current.as_deref() != Some(path.as_str()) {
             self.flush_save(cx);
             self.history.truncate(self.history_ix);
@@ -3065,6 +3074,9 @@ impl Workspace {
         ) else {
             return;
         };
+        if self.mode == ViewMode::Graph {
+            self.mode = self.mode_before_graph;
+        }
         self.flush_save(cx);
         self.show_file(&path, &state, cx);
         self.request_focus_main(cx);
