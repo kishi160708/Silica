@@ -396,9 +396,15 @@ fn handle(
             let button = button(request.opt_str("button"))?;
             let modifiers = modifiers(request)?;
             let event = match action {
+                // A move with a `button` named is a drag in progress: gpui
+                // starts an element's drag only from a move that says which
+                // button is held.
                 "move" => PlatformInput::MouseMove(MouseMoveEvent {
                     position,
-                    pressed_button: None,
+                    pressed_button: request
+                        .opt_str("button")
+                        .map(|_| button)
+                        .filter(|_| request.opt_str("button").is_some()),
                     modifiers,
                 }),
                 "down" => PlatformInput::MouseDown(MouseDownEvent {

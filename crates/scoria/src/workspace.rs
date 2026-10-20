@@ -8,6 +8,7 @@
 //! then kept current by a filesystem watcher: changed paths are re-read and
 //! re-indexed in place, link edges re-resolved, and every pane refreshed.
 
+use crate::bookmarks::{BookmarkEvent, BookmarksPane};
 use crate::chooser::{Chooser, ChooserEvent, Row as ChooserRow};
 use crate::editor::{Editor, EditorEvent};
 use crate::explorer::{display_name, kind_name, ExplorerEvent, FileExplorer, FileTree};
@@ -22,9 +23,9 @@ use crate::switcher::{QuickSwitcher, SwitcherEvent};
 use crate::theme::Theme;
 use crate::watch;
 use gpui::{
-    actions, div, prelude::*, px, rgba, uniform_list, Action, App, Context, Entity, FocusHandle,
-    Focusable, Global, KeyBinding, SharedString, Subscription, Task, UniformListScrollHandle,
-    Window,
+    actions, div, prelude::*, px, rgba, uniform_list, Action, App, Context, DragMoveEvent, Entity,
+    FocusHandle, Focusable, Global, KeyBinding, SharedString, Subscription, Task,
+    UniformListScrollHandle, Window,
 };
 use rayon::prelude::*;
 use _cache::{
@@ -32,6 +33,7 @@ use _cache::{
     MetadataCache,
 };
 use _commands::{keystroke, CommandRegistry};
+use _formats::bookmarks::{Bookmark, Bookmarks};
 use _formats::config::{
     self as config, AppConfig, AppearanceConfig, CommandPaletteConfig, CorePlugins,
     DailyNotesConfig, PluginManifest, PropertyTypes, SwitcherConfig, TemplatesConfig,
@@ -68,6 +70,11 @@ pub struct Commands(pub Arc<CommandRegistry>);
 impl Global for Commands {}
 
 /// The local civil time, which is what Obsidian's dates are in.
+/// The clock as Obsidian stamps a bookmark: Unix milliseconds.
+fn now_millis() -> i64 {
+    chrono::Utc::now().timestamp_millis()
+}
+
 fn now() -> templates::Stamp {
     let local = chrono::Local::now();
     let naive = local.naive_local();
@@ -182,6 +189,15 @@ pub const RUNNABLE: &[&str] = &[
     "workspace:goto-tab-8",
     "workspace:goto-last-tab",
     "workspace:undo-close-pane",
+    "workspace:split-vertical",
+    "workspace:split-horizontal",
+    "workspace:close-tab-group",
+    "workspace:close-others-tab-group",
+    "editor:focus-left",
+    "editor:focus-right",
+    "editor:focus-top",
+    "editor:focus-bottom",
+    "editor:open-link-in-new-split",
     "app:delete-file",
     "backlink:open",
     "backlink:open-backlinks",
@@ -190,6 +206,13 @@ pub const RUNNABLE: &[&str] = &[
     "outline:open",
     "outline:open-for-current",
     "tag-pane:open",
+    "bookmarks:open",
+    "bookmarks:bookmark-current-view",
+    "bookmarks:bookmark-current-search",
+    "bookmarks:unbookmark-current-view",
+    "bookmarks:bookmark-current-section",
+    "bookmarks:bookmark-current-heading",
+    "bookmarks:bookmark-all-tabs",
 ];
 
 /// Binds every runnable command's hotkeys in the Workspace context; call
@@ -233,6 +256,8 @@ pub struct VaultState {
     pub palette: CommandPaletteConfig,
     /// `types.json`: the type assigned to each property name.
     property_types: RwLock<PropertyTypes>,
+    /// `bookmarks.json`, the Bookmarks plugin's items.
+    bookmarks: RwLock<Bookmarks>,
     pub index_ms: f64,
 }
 
@@ -284,6 +309,7 @@ impl VaultState {
         let templates = vault.templates_config().unwrap_or_default();
         let daily_notes = vault.daily_notes_config().unwrap_or_default();
         let property_types = vault.property_types().unwrap_or_default();
+        let bookmarks = vault.bookmarks().unwrap_or_default();
         let notes: Vec<String> = vault.markdown_files().map(|f| f.path.clone()).collect();
         let loaded: Vec<(String, CachedMetadata, Arc<String>)> = notes
             .par_iter()
@@ -317,6 +343,7 @@ impl VaultState {
             plugin_manifests,
             palette,
             property_types: RwLock::new(property_types),
+            bookmarks: RwLock::new(bookmarks),
             index_ms: started.elapsed().as_secs_f64() * 1000.0,
         })
     }
@@ -324,6 +351,31 @@ impl VaultState {
     /// The vault's property type assignments.
     pub fn property_types(&self) -> RwLockReadGuard<'_, PropertyTypes> {
         self.property_types.read().expect("property types lock")
+    }
+
+    pub fn bookmarks(&self) -> RwLockReadGuard<'_, Bookmarks> {
+        self.bookmarks.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Changes the bookmarks and writes `bookmarks.json` whole; the change
+    /// is kept only once the file took it.
+    pub fn update_bookmarks(&self, change: impl FnOnce(&mut Bookmarks)) -> Result<(), String> {
+        let mut fresh = self.bookmarks().clone();
+        change(&mut fresh);
+        self.vault()
+            .write_bookmarks(&fresh)
+            .map_err(|e| e.to_string())?;
+        *self.bookmarks.write().unwrap_or_else(|e| e.into_inner()) = fresh;
+        Ok(())
+    }
+
+    /// Whether the Bookmarks core plugin is on: it is by default, and
+    /// `core-plugins.json` can turn it off.
+    pub fn bookmarks_enabled(&self) -> bool {
+        self.core_plugins()
+            .as_ref()
+            .map(|c| c.is_enabled("bookmarks"))
+            .unwrap_or(true)
     }
 
     pub fn app(&self) -> RwLockReadGuard<'_, AppConfig> {
@@ -843,6 +895,38 @@ impl MainView {
 enum LeftTab {
     Files,
     Search,
+    Bookmarks,
+}
+
+/// A bookmark being made: what it will point at, before the title prompt
+/// has been answered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BookmarkDraft {
+    File {
+        path: String,
+        subpath: Option<String>,
+    },
+    Folder(String),
+    Search(String),
+    Graph,
+    /// "Bookmark all tabs": a group of these notes.
+    Tabs(Vec<String>),
+}
+
+impl BookmarkDraft {
+    /// The text the prompt's Title field shows as its placeholder, which is
+    /// also what the pane shows when no title is typed.
+    fn placeholder(&self) -> String {
+        match self {
+            BookmarkDraft::File { path, subpath } => {
+                Bookmark::file(path, subpath.as_deref(), None, 0).display_title()
+            }
+            BookmarkDraft::Folder(path) => path.clone(),
+            BookmarkDraft::Search(query) => query.clone(),
+            BookmarkDraft::Graph => "Untitled Graph".to_string(),
+            BookmarkDraft::Tabs(_) => templates::format("MMMM D, YYYY h:mm A", &now()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1035,6 +1119,11 @@ enum PendingOp {
         from: String,
         to: String,
     },
+    /// "Add bookmark": the title for this draft.
+    AddBookmark(BookmarkDraft),
+    /// "Edit bookmark" on a note that already has one: Save keeps it,
+    /// Remove takes it out.
+    EditBookmark(String),
 }
 
 /// One tab of the main area: what it shows and where it has been. The
@@ -1077,6 +1166,295 @@ impl Tab {
     }
 }
 
+/// How Obsidian names a split's axis: a `vertical` split lays its children
+/// out side by side, a `horizontal` one stacks them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SplitDirection {
+    Vertical,
+    Horizontal,
+}
+
+impl SplitDirection {
+    fn as_str(self) -> &'static str {
+        match self {
+            SplitDirection::Vertical => "vertical",
+            SplitDirection::Horizontal => "horizontal",
+        }
+    }
+
+    fn parse(name: Option<&str>) -> SplitDirection {
+        match name {
+            Some("horizontal") => SplitDirection::Horizontal,
+            _ => SplitDirection::Vertical,
+        }
+    }
+}
+
+/// The main area's shape: a tree of splits over the tab groups, the way
+/// `workspace.json`'s `main` records it. The root is always a split, as
+/// Obsidian's is, even around a single group.
+#[derive(Debug, Clone, PartialEq)]
+enum Layout {
+    Group(u64),
+    Split {
+        direction: SplitDirection,
+        children: Vec<Layout>,
+        /// The split's own keys from `workspace.json` (`id`, `dimension`,
+        /// anything unknown), kept so the node is written back as read.
+        node: Map<String, Value>,
+    },
+}
+
+impl Layout {
+    fn split(direction: SplitDirection, children: Vec<Layout>) -> Layout {
+        let mut node = Map::new();
+        node.insert("id".into(), json!(leaf_id()));
+        node.insert("type".into(), json!("split"));
+        Layout::Split {
+            direction,
+            children,
+            node,
+        }
+    }
+
+    /// Every group, depth first, in the order Obsidian lays them out.
+    fn groups(&self, out: &mut Vec<u64>) {
+        match self {
+            Layout::Group(id) => out.push(*id),
+            Layout::Split { children, .. } => children.iter().for_each(|c| c.groups(out)),
+        }
+    }
+
+    fn contains(&self, id: u64) -> bool {
+        match self {
+            Layout::Group(g) => *g == id,
+            Layout::Split { children, .. } => children.iter().any(|c| c.contains(id)),
+        }
+    }
+
+    /// The child indexes from the root down to group `id`.
+    fn path_to(&self, id: u64) -> Option<Vec<usize>> {
+        match self {
+            Layout::Group(g) => (*g == id).then(Vec::new),
+            Layout::Split { children, .. } => children.iter().enumerate().find_map(|(ix, c)| {
+                let mut path = c.path_to(id)?;
+                path.insert(0, ix);
+                Some(path)
+            }),
+        }
+    }
+
+    fn node_at(&self, path: &[usize]) -> Option<&Layout> {
+        match path.split_first() {
+            None => Some(self),
+            Some((ix, rest)) => match self {
+                Layout::Split { children, .. } => children.get(*ix)?.node_at(rest),
+                Layout::Group(_) => None,
+            },
+        }
+    }
+
+    fn node_at_mut(&mut self, path: &[usize]) -> Option<&mut Layout> {
+        match path.split_first() {
+            None => Some(self),
+            Some((ix, rest)) => match self {
+                Layout::Split { children, .. } => children.get_mut(*ix)?.node_at_mut(rest),
+                Layout::Group(_) => None,
+            },
+        }
+    }
+
+    /// Puts `new` beside group `id` along `direction`, the way "Split right"
+    /// and "Split down" do: a sibling when the enclosing split already runs
+    /// that way, otherwise the group is wrapped in a new split holding the
+    /// two of them. Says which it was (`Some(true)` for wrapped), so the
+    /// caller can hand the group's `dimension` on.
+    fn insert_beside(&mut self, id: u64, new: u64, direction: SplitDirection) -> Option<bool> {
+        let Layout::Split {
+            direction: own,
+            children,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        let ix = children.iter().position(|c| c.contains(id))?;
+        if matches!(children[ix], Layout::Group(g) if g == id) {
+            if *own == direction {
+                children.insert(ix + 1, Layout::Group(new));
+                return Some(false);
+            }
+            children[ix] = Layout::split(direction, vec![Layout::Group(id), Layout::Group(new)]);
+            return Some(true);
+        }
+        children[ix].insert_beside(id, new, direction)
+    }
+
+    /// Takes group `id` out. A split left with one child keeps it (Obsidian
+    /// does not collapse the nesting), one left with none goes with it.
+    fn remove(&mut self, id: u64) -> bool {
+        let Layout::Split { children, .. } = self else {
+            return false;
+        };
+        let Some(ix) = children.iter().position(|c| c.contains(id)) else {
+            return false;
+        };
+        if matches!(children[ix], Layout::Group(g) if g == id) {
+            children.remove(ix);
+            return true;
+        }
+        let removed = children[ix].remove(id);
+        if removed && matches!(&children[ix], Layout::Split { children, .. } if children.is_empty())
+        {
+            children.remove(ix);
+        }
+        removed
+    }
+
+    /// The groups to step to from `id` along `direction`: the next (or
+    /// previous) sibling of the nearest enclosing split that runs that way,
+    /// as a set the caller picks the most recently used member of.
+    fn neighbors(&self, id: u64, direction: SplitDirection, forward: bool) -> Vec<u64> {
+        let Some(path) = self.path_to(id) else {
+            return Vec::new();
+        };
+        for depth in (0..path.len()).rev() {
+            let Some(Layout::Split {
+                direction: own,
+                children,
+                ..
+            }) = self.node_at(&path[..depth])
+            else {
+                continue;
+            };
+            if *own != direction {
+                continue;
+            }
+            let ix = path[depth];
+            let sibling = if forward {
+                children.get(ix + 1)
+            } else {
+                ix.checked_sub(1).and_then(|i| children.get(i))
+            };
+            if let Some(sibling) = sibling {
+                let mut out = Vec::new();
+                sibling.groups(&mut out);
+                return out;
+            }
+        }
+        Vec::new()
+    }
+}
+
+/// One tab group: a strip of tabs with its own editor and reading view, so
+/// two groups can show two notes at once. The active group's tabs and the
+/// note on screen live in the workspace's own fields; a group that is not
+/// active keeps its own here, put there by [`Workspace::stash_active_group`]
+/// when another group took over.
+struct TabGroup {
+    id: u64,
+    tabs: Vec<Tab>,
+    active_tab: usize,
+    mode_before_graph: ViewMode,
+    detached: Option<SharedString>,
+    words: usize,
+    chars: usize,
+    editor: Entity<Editor>,
+    reading: Entity<ReadingView>,
+    /// The `tabs` node this group was restored from, less its children:
+    /// `id`, a `dimension` from a dragged divider, and anything unknown.
+    node: Map<String, Value>,
+}
+
+impl TabGroup {
+    fn new(
+        id: u64,
+        editor: Entity<Editor>,
+        reading: Entity<ReadingView>,
+        mode: ViewMode,
+    ) -> TabGroup {
+        let mut node = Map::new();
+        node.insert("id".into(), json!(leaf_id()));
+        node.insert("type".into(), json!("tabs"));
+        TabGroup {
+            id,
+            tabs: vec![Tab::empty(mode)],
+            active_tab: 0,
+            mode_before_graph: ViewMode::Reading,
+            detached: None,
+            words: 0,
+            chars: 0,
+            editor,
+            reading,
+            node,
+        }
+    }
+
+    /// The group's share of its split, Obsidian's `dimension` (a percentage).
+    fn dimension(&self) -> Option<f64> {
+        self.node.get("dimension").and_then(Value::as_f64)
+    }
+
+    fn set_dimension(&mut self, dimension: Option<f64>) {
+        set_dimension(&mut self.node, dimension);
+    }
+}
+
+/// Writes or drops a node's `dimension`, in the slot Obsidian gives it:
+/// after `type`, before `children`.
+fn set_dimension(node: &mut Map<String, Value>, dimension: Option<f64>) {
+    match dimension {
+        Some(d) => {
+            if node.contains_key("dimension") {
+                node["dimension"] = json!(d);
+            } else {
+                let at = node
+                    .keys()
+                    .position(|k| k == "type")
+                    .map(|i| i + 1)
+                    .unwrap_or(node.len());
+                node.shift_insert(at, "dimension".into(), json!(d));
+            }
+        }
+        None => {
+            node.shift_remove("dimension");
+        }
+    }
+}
+
+/// What one group's rendering reads, whichever group it is: the live
+/// fields for the active group, the stashed ones for the others.
+struct GroupView {
+    id: u64,
+    active: bool,
+    tabs: Vec<Tab>,
+    active_tab: usize,
+    current: Option<String>,
+    mode: ViewMode,
+    history_len: usize,
+    history_ix: usize,
+    detached: Option<SharedString>,
+    editor: Entity<Editor>,
+    reading: Entity<ReadingView>,
+}
+
+/// The payload of a divider drag: which split, and the boundary between
+/// which two of its children.
+#[derive(Debug, Clone)]
+struct DividerDrag {
+    path: Vec<usize>,
+    before: usize,
+}
+
+/// The drag's on-screen stand-in: nothing, the divider moves in place.
+struct NoDragPreview;
+
+impl Render for NoDragPreview {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+    }
+}
+
 /// How many closed tabs `workspace:undo-close-pane` can bring back.
 const CLOSED_TABS_KEPT: usize = 20;
 
@@ -1093,6 +1471,7 @@ pub struct Workspace {
     loading: Option<SharedString>,
     explorer: Entity<FileExplorer>,
     search: Entity<SearchPane>,
+    bookmarks: Entity<BookmarksPane>,
     switcher: Entity<QuickSwitcher>,
     chooser: Entity<Chooser>,
     palette: Entity<CommandPalette>,
@@ -1124,6 +1503,15 @@ pub struct Workspace {
     active_tab: usize,
     /// Tabs closed this session with the index they had, oldest first.
     closed_tabs: Vec<(usize, Tab)>,
+    /// Every tab group, the active one's slot holding what it last stashed.
+    groups: Vec<TabGroup>,
+    active_group: usize,
+    /// How the groups are split, as `workspace.json`'s `main` records it.
+    layout_tree: Layout,
+    next_group_id: u64,
+    /// Group ids, most recently active first: where focus goes when a group
+    /// closes, and which group a focus command lands in.
+    group_mru: Vec<u64>,
     /// `workspace.json` as it was read at load, `None` when the vault has
     /// none; what the quit write is merged into.
     layout: Option<Value>,
@@ -1171,10 +1559,49 @@ impl Focusable for Workspace {
     }
 }
 
+/// What the workspace listens to on a group's editor and reading view. A
+/// click in a group makes it the active one before the view handles the
+/// click, so by the time one of these arrives the views that sent it are
+/// the live ones.
+fn view_subscriptions(
+    editor: &Entity<Editor>,
+    reading: &Entity<ReadingView>,
+    cx: &mut Context<Workspace>,
+) -> Vec<Subscription> {
+    vec![
+        cx.subscribe(reading, |this, _, event: &ReadingEvent, cx| match event {
+            ReadingEvent::OpenLink(target) => this.follow_link(target.clone(), cx),
+            ReadingEvent::OpenLinkInNewTab(target) => {
+                this.link_in_new_tab = true;
+                this.follow_link(target.clone(), cx);
+            }
+        }),
+        cx.subscribe(reading, |this, _, event: &TaskToggled, cx| {
+            this.toggle_task(&event.path, event.marker, cx)
+        }),
+        cx.subscribe(editor, |this, _, event: &EditorEvent, cx| match event {
+            EditorEvent::Edited => {
+                this.schedule_save(cx);
+                this.refresh_outline_from_buffer(cx);
+            }
+            EditorEvent::OpenLink(target) => this.follow_link(target.clone(), cx),
+            EditorEvent::OpenLinkInNewTab(target) => {
+                this.link_in_new_tab = true;
+                this.follow_link(target.clone(), cx);
+            }
+            EditorEvent::PropertyTypeAssigned { key, ty } => {
+                this.assign_property_type(key.clone(), *ty, cx)
+            }
+            EditorEvent::Reported(message) => this.report(message.clone(), cx),
+        }),
+    ]
+}
+
 impl Workspace {
     pub fn new(root: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Workspace {
         let explorer = cx.new(FileExplorer::new);
         let search = cx.new(SearchPane::new);
+        let bookmarks = cx.new(BookmarksPane::new);
         let switcher = cx.new(QuickSwitcher::new);
         let chooser = cx.new(Chooser::new);
         let palette = cx.new(CommandPalette::new);
@@ -1211,6 +1638,35 @@ impl Workspace {
                     ExplorerEvent::Move(path) => this.start_move(path, window, cx),
                     ExplorerEvent::Duplicate(path) => this.duplicate(path, cx),
                     ExplorerEvent::Delete(path) => this.start_delete(path, window, cx),
+                    ExplorerEvent::Bookmark(path) => this.start_bookmark_path(path, window, cx),
+                },
+            ),
+            cx.subscribe_in(
+                &bookmarks,
+                window,
+                |this, _, event: &BookmarkEvent, window, cx| match event {
+                    BookmarkEvent::Open { path, subpath } => {
+                        let link = format!("{path}{}", subpath.as_deref().unwrap_or(""));
+                        let parsed = _markdown::parse_linktext(&link);
+                        this.open_file(path.clone(), parsed.subpath, cx);
+                    }
+                    BookmarkEvent::Search(query) => this.show_search(query, Some(window), cx),
+                    BookmarkEvent::Graph => this.show_graph(false, window, cx),
+                    BookmarkEvent::Folder(path) => {
+                        this.left_tab = LeftTab::Files;
+                        let path = path.clone();
+                        this.explorer.update(cx, |e, cx| e.reveal(&path, cx));
+                        cx.notify();
+                    }
+                    BookmarkEvent::Url(url) => cx.open_url(url),
+                    BookmarkEvent::AddCurrent => this.start_bookmark_current_view(window, cx),
+                    BookmarkEvent::NewGroup => this.start_new_bookmark_group(window, cx),
+                    BookmarkEvent::Remove(at) => {
+                        let at = at.clone();
+                        this.change_bookmarks(cx, move |b| {
+                            b.remove_at(&at);
+                        });
+                    }
                 },
             ),
             cx.subscribe_in(
@@ -1270,16 +1726,6 @@ impl Workspace {
                     }
                 },
             ),
-            cx.subscribe(&reading, |this, _, event: &ReadingEvent, cx| match event {
-                ReadingEvent::OpenLink(target) => this.follow_link(target.clone(), cx),
-                ReadingEvent::OpenLinkInNewTab(target) => {
-                    this.link_in_new_tab = true;
-                    this.follow_link(target.clone(), cx);
-                }
-            }),
-            cx.subscribe(&reading, |this, _, event: &TaskToggled, cx| {
-                this.toggle_task(&event.path, event.marker, cx)
-            }),
             cx.subscribe_in(
                 &chooser,
                 window,
@@ -1295,22 +1741,15 @@ impl Workspace {
                     }
                 },
             ),
-            cx.subscribe(&editor, |this, _, event: &EditorEvent, cx| match event {
-                EditorEvent::Edited => {
-                    this.schedule_save(cx);
-                    this.refresh_outline_from_buffer(cx);
-                }
-                EditorEvent::OpenLink(target) => this.follow_link(target.clone(), cx),
-                EditorEvent::OpenLinkInNewTab(target) => {
-                    this.link_in_new_tab = true;
-                    this.follow_link(target.clone(), cx);
-                }
-                EditorEvent::PropertyTypeAssigned { key, ty } => {
-                    this.assign_property_type(key.clone(), *ty, cx)
-                }
-                EditorEvent::Reported(message) => this.report(message.clone(), cx),
-            }),
         ];
+        let mut subscriptions = subscriptions;
+        subscriptions.extend(view_subscriptions(&editor, &reading, cx));
+        let groups = vec![TabGroup::new(
+            0,
+            editor.clone(),
+            reading.clone(),
+            ViewMode::Reading,
+        )];
         // Closing the window must not lose edits waiting for the autosave.
         let this = cx.entity().downgrade();
         window.on_window_should_close(cx, move |_, cx| {
@@ -1327,6 +1766,7 @@ impl Workspace {
             loading: None,
             explorer,
             search,
+            bookmarks,
             switcher,
             chooser,
             palette,
@@ -1350,6 +1790,11 @@ impl Workspace {
             tabs: vec![Tab::empty(ViewMode::Reading)],
             active_tab: 0,
             closed_tabs: Vec::new(),
+            groups,
+            active_group: 0,
+            layout_tree: Layout::split(SplitDirection::Vertical, vec![Layout::Group(0)]),
+            next_group_id: 1,
+            group_mru: vec![0],
             layout: None,
             layout_restored: false,
             last_open_files: Vec::new(),
@@ -1375,12 +1820,12 @@ impl Workspace {
             _subscriptions: subscriptions,
         };
         if let Some(root) = root {
-            ws.load_vault(root, cx);
+            ws.load_vault(root, window, cx);
         }
         ws
     }
 
-    fn load_vault(&mut self, root: PathBuf, cx: &mut Context<Self>) {
+    fn load_vault(&mut self, root: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         self.vault_name = root
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -1388,13 +1833,15 @@ impl Workspace {
             .into();
         self.loading = Some(format!("Indexing {}…", root.display()).into());
         self.status = "Indexing vault".into();
-        cx.spawn(async move |this, cx| {
+        // Restoring the layout may have to make tab groups, and a group's
+        // editor is made with the window, so the vault comes back in it.
+        cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move { VaultState::load(&root) })
                 .await;
-            this.update(cx, |ws, cx| match result {
-                Ok(state) => ws.set_state(state, cx),
+            this.update_in(cx, |ws, window, cx| match result {
+                Ok(state) => ws.set_state(state, window, cx),
                 Err(err) => {
                     ws.loading = None;
                     ws.status = format!("Vault failed to open: {err}").into();
@@ -1438,12 +1885,6 @@ impl Workspace {
         let readable = state.app().readable_line_length.unwrap_or(true);
         let properties =
             PropertiesInDocument::from_config(state.app().properties_in_document.as_deref());
-        self.reading.update(cx, |r, cx| {
-            r.set_readable_line_length(readable);
-            r.set_property_types(state.property_types().clone());
-            r.set_properties_in_document(properties);
-            cx.notify();
-        });
         let (smart, use_tab, tab_size) = (
             state.app().smart_indent_list.unwrap_or(true),
             state.app().use_tab.unwrap_or(true),
@@ -1454,14 +1895,23 @@ impl Workspace {
             format: state.link_format(),
             markdown_links: state.app().use_markdown_links.unwrap_or(false),
         };
-        self.editor.update(cx, |e, cx| {
-            e.set_link_options(link_options);
-            e.set_readable_line_length(readable);
-            e.set_indent_options(smart, use_tab, tab_size);
-            e.set_property_types(state.property_types().clone());
-            e.set_properties_in_document(properties);
-            e.set_build_options(build_options, cx);
-        });
+        // Every group's views, the active one's among them.
+        for group in &self.groups {
+            group.reading.update(cx, |r, cx| {
+                r.set_readable_line_length(readable);
+                r.set_property_types(state.property_types().clone());
+                r.set_properties_in_document(properties);
+                cx.notify();
+            });
+            group.editor.update(cx, |e, cx| {
+                e.set_link_options(link_options);
+                e.set_readable_line_length(readable);
+                e.set_indent_options(smart, use_tab, tab_size);
+                e.set_property_types(state.property_types().clone());
+                e.set_properties_in_document(properties);
+                e.set_build_options(build_options, cx);
+            });
+        }
     }
 
     /// Writes a setting the Settings modal changed, then applies it. The
@@ -1490,7 +1940,7 @@ impl Workspace {
         cx.notify();
     }
 
-    fn set_state(&mut self, state: VaultState, cx: &mut Context<Self>) {
+    fn set_state(&mut self, state: VaultState, window: &mut Window, cx: &mut Context<Self>) {
         self.loading = None;
         self.status = format!(
             "{} files, {} notes indexed in {:.0} ms",
@@ -1501,21 +1951,30 @@ impl Workspace {
         .into();
         let state = Arc::new(state);
         self.state = Some(state.clone());
-        let embed_source: Arc<dyn reading::EmbedSource + Send + Sync> = state.clone();
-        let build_options = state.build_options();
-        self.editor.update(cx, |e, cx| {
-            e.set_vault(Some(embed_source), build_options, cx);
-            e.set_suggest_vault(state.clone());
-        });
+        for group in &self.groups {
+            Self::give_editor_the_vault(&group.editor, &state, cx);
+        }
         self.apply_app_config(&state, cx);
         self.refresh_vault_views(cx);
         self.start_watching(&state, cx);
         if let Some(current) = self.current.clone() {
             self.open_file(current, None, cx);
         } else {
-            self.restore_layout(&state, cx);
+            self.restore_layout(&state, window, cx);
         }
         cx.notify();
+    }
+
+    /// Points an editor at the vault: what its embeds render from and what
+    /// its autocompletion offers. Every group's editor gets this, the first
+    /// when the vault opens and the rest as they are made.
+    fn give_editor_the_vault(editor: &Entity<Editor>, state: &Arc<VaultState>, cx: &mut App) {
+        let embed_source: Arc<dyn reading::EmbedSource + Send + Sync> = state.clone();
+        let build_options = state.build_options();
+        editor.update(cx, |e, cx| {
+            e.set_vault(Some(embed_source), build_options, cx);
+            e.set_suggest_vault(state.clone());
+        });
     }
 
     /// Opens today's daily note, creating it if it is not there, or steps
@@ -1780,6 +2239,7 @@ impl Workspace {
         self.settings
             .update(cx, |s, cx| s.set_state(state.clone(), cx));
         self.name_finder = None;
+        self.refresh_bookmarks_pane(cx);
         cx.notify();
     }
 
@@ -1866,9 +2326,8 @@ impl Workspace {
             if let FileChange::Removed(path) = change {
                 if !state.vault().absolute(path).exists() {
                     self.forget_history(path);
-                    let active = self.active_tab;
-                    for (ix, tab) in self.tabs.iter_mut().enumerate() {
-                        if ix != active && tab.path.as_deref() == Some(path.as_str()) {
+                    for tab in self.stashed_tabs_mut() {
+                        if tab.path.as_deref() == Some(path.as_str()) {
                             tab.path = None;
                         }
                     }
@@ -2330,6 +2789,29 @@ impl Workspace {
             "workspace:new-tab" => self.new_tab(cx),
             "workspace:close" => self.close_tab(self.active_tab, cx),
             "workspace:close-others" => self.close_other_tabs(cx),
+            "workspace:split-vertical" => self.split(SplitDirection::Vertical, window, cx),
+            "workspace:split-horizontal" => self.split(SplitDirection::Horizontal, window, cx),
+            "workspace:close-tab-group" => {
+                let id = self.active_group_id();
+                self.close_group(id, true, cx);
+            }
+            // Obsidian's "Close others in tab group" closes the group's
+            // other tabs, which is what `close-others` does too.
+            "workspace:close-others-tab-group" => self.close_other_tabs(cx),
+            "editor:focus-left" => self.focus_neighbor(SplitDirection::Vertical, false, cx),
+            "editor:focus-right" => self.focus_neighbor(SplitDirection::Vertical, true, cx),
+            "editor:focus-top" => self.focus_neighbor(SplitDirection::Horizontal, false, cx),
+            "editor:focus-bottom" => self.focus_neighbor(SplitDirection::Horizontal, true, cx),
+            // "Open link under cursor to the right": a split right, then the
+            // link followed in the new group.
+            "editor:open-link-in-new-split" => {
+                if self.editing_or_report(id, window, cx) {
+                    if let Some(target) = self.editor.read(cx).link_target_at_cursor() {
+                        self.split(SplitDirection::Vertical, window, cx);
+                        self.follow_link(target, cx);
+                    }
+                }
+            }
             "workspace:next-tab" => self.cycle_tab(1, cx),
             "workspace:previous-tab" => self.cycle_tab(self.tabs.len().saturating_sub(1), cx),
             "workspace:goto-last-tab" => self.activate_tab(self.tabs.len().saturating_sub(1), cx),
@@ -2360,6 +2842,95 @@ impl Workspace {
             "outline:open" | "outline:open-for-current" => {
                 self.right_visible = true;
                 self.show_right_tab("outline", cx);
+            }
+            "bookmarks:open" => {
+                self.left_visible = true;
+                self.left_tab = LeftTab::Bookmarks;
+                cx.notify();
+            }
+            "bookmarks:bookmark-current-view" => self.start_bookmark_current_view(window, cx),
+            "bookmarks:bookmark-current-search" => {
+                let query = self.search.read(cx).query(cx);
+                if query.trim().is_empty() {
+                    self.report("No search to bookmark: the Search pane has no query", cx);
+                } else {
+                    self.start_bookmark(BookmarkDraft::Search(query), window, cx);
+                }
+            }
+            "bookmarks:unbookmark-current-view" => {
+                let Some(current) = self.current.clone() else {
+                    self.report("No file is open", cx);
+                    return;
+                };
+                let had = self
+                    .state
+                    .as_ref()
+                    .is_some_and(|s| s.bookmarks().has_file(&current));
+                if had {
+                    self.change_bookmarks(cx, move |b| {
+                        b.remove_last_file(&current);
+                    });
+                } else {
+                    self.report(format!("{current} is not bookmarked"), cx);
+                }
+            }
+            "bookmarks:bookmark-current-heading" => {
+                if self.editing_or_report(id, window, cx) {
+                    match (
+                        self.current.clone(),
+                        self.editor.read(cx).heading_subpath_at_cursor(),
+                    ) {
+                        (Some(path), Some(subpath)) => self.start_bookmark(
+                            BookmarkDraft::File {
+                                path,
+                                subpath: Some(subpath),
+                            },
+                            window,
+                            cx,
+                        ),
+                        _ => self.report("The cursor is not on a heading", cx),
+                    }
+                }
+            }
+            "bookmarks:bookmark-current-section" => {
+                if self.editing_or_report(id, window, cx) {
+                    let Some(path) = self.current.clone() else {
+                        return;
+                    };
+                    if let Some(block_id) = self
+                        .editor
+                        .update(cx, |e, cx| e.block_id_at_cursor(window, cx))
+                    {
+                        self.start_bookmark(
+                            BookmarkDraft::File {
+                                path,
+                                subpath: Some(format!("#^{block_id}")),
+                            },
+                            window,
+                            cx,
+                        );
+                    }
+                }
+            }
+            "bookmarks:bookmark-all-tabs" => {
+                let mut order = Vec::new();
+                self.layout_tree.groups(&mut order);
+                let mut paths = Vec::new();
+                for id in order {
+                    if let Some(ix) = self.group_ix(id) {
+                        let tabs = if ix == self.active_group {
+                            self.tab_snapshots()
+                        } else {
+                            self.groups[ix].tabs.clone()
+                        };
+                        paths.extend(tabs.into_iter().filter_map(|t| t.path));
+                    }
+                }
+                if paths.is_empty() {
+                    self.report("No open notes to bookmark", cx);
+                } else {
+                    self.start_bookmark(BookmarkDraft::Tabs(paths), window, cx);
+                }
             }
             "tag-pane:open" => {
                 self.right_visible = true;
@@ -2485,9 +3056,21 @@ impl Workspace {
         let painted = self.main_view(cx);
         let unpainted =
             |view: MainView, handle: &FocusHandle| painted != view && handle.is_focused(window);
-        unpainted(MainView::Editor, self.editor.read(cx).focus_handle_ref())
+        if unpainted(MainView::Editor, self.editor.read(cx).focus_handle_ref())
             || unpainted(MainView::Reading, &self.reading.focus_handle(cx))
             || unpainted(MainView::Graph, &self.graph.focus_handle(cx))
+        {
+            return true;
+        }
+        // A view of a group that is no longer the active one is painted, but
+        // the keyboard belongs with the active group's note: a split, a
+        // focus command or a close moved the active group and the view it
+        // left behind still holds the focus.
+        self.groups.iter().enumerate().any(|(ix, g)| {
+            ix != self.active_group
+                && (g.editor.read(cx).focus_handle_ref().is_focused(window)
+                    || g.reading.focus_handle(cx).is_focused(window))
+        })
     }
 
     /// Puts the keyboard on whatever the main area actually paints: a handle
@@ -2835,6 +3418,8 @@ impl Workspace {
         self.outgoing_links.clear();
         self.backlink_rows.clear();
         self.outgoing_rows.clear();
+        let current = self.current.clone();
+        self.bookmarks.update(cx, |b, cx| b.set_active(current, cx));
         cx.notify();
     }
 
@@ -2842,11 +3427,8 @@ impl Workspace {
     /// and forward can never navigate to a file the vault no longer has.
     fn forget_history(&mut self, path: &str) {
         self.history_ix = prune_history(&mut self.history, self.history_ix, path);
-        let active = self.active_tab;
-        for (ix, tab) in self.tabs.iter_mut().enumerate() {
-            if ix != active {
-                tab.history_ix = prune_history(&mut tab.history, tab.history_ix, path);
-            }
+        for tab in self.stashed_tabs_mut() {
+            tab.history_ix = prune_history(&mut tab.history, tab.history_ix, path);
         }
     }
 
@@ -2855,6 +3437,8 @@ impl Workspace {
             self.clear_panes(cx);
             return;
         };
+        self.bookmarks
+            .update(cx, |b, cx| b.set_active(Some(path.clone()), cx));
         let cache = state.cache();
         let texts = state.texts();
         self.outline = cache.file(&path).map(outline_rows).unwrap_or_default();
@@ -3496,14 +4080,197 @@ impl Workspace {
                 }
             }
             PendingOp::UpdateLinks { from, to } => self.finish_rename(&from, &to, true, window, cx),
+            PendingOp::AddBookmark(draft) => {
+                self.pending = None;
+                self.close_modal(window, cx);
+                self.finish_bookmark(draft, value, cx);
+            }
+            // Save on "Edit bookmark" changes nothing, as Obsidian's did.
+            PendingOp::EditBookmark(_) => {
+                self.pending = None;
+                self.close_modal(window, cx);
+            }
         }
     }
 
     /// The prompt's secondary button: "Don't update" the links.
     fn prompt_secondary(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(PendingOp::UpdateLinks { from, to }) = self.pending.clone() {
-            self.finish_rename(&from, &to, false, window, cx);
+        match self.pending.clone() {
+            Some(PendingOp::UpdateLinks { from, to }) => {
+                self.finish_rename(&from, &to, false, window, cx);
+            }
+            Some(PendingOp::EditBookmark(path)) => {
+                self.pending = None;
+                self.close_modal(window, cx);
+                self.change_bookmarks(cx, move |b| {
+                    b.remove_last_file(&path);
+                });
+            }
+            _ => {}
         }
+    }
+
+    // ----- bookmarks ---------------------------------------------------------------
+
+    /// Opens "Add bookmark" for a draft: the Title field, empty, with the
+    /// name the bookmark gets without one as its placeholder.
+    fn start_bookmark(
+        &mut self,
+        draft: BookmarkDraft,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let placeholder = draft.placeholder();
+        let (title, detail) = match &draft {
+            BookmarkDraft::Tabs(paths) => (
+                format!("Add {} bookmarks", paths.len()),
+                Some("Title".to_string()),
+            ),
+            BookmarkDraft::Graph => ("Add bookmark".to_string(), Some("Title".to_string())),
+            BookmarkDraft::Search(query) => {
+                ("Add bookmark".to_string(), Some(format!("Query: {query}")))
+            }
+            BookmarkDraft::File { .. } | BookmarkDraft::Folder(_) => (
+                "Add bookmark".to_string(),
+                Some(format!("Path: {placeholder}")),
+            ),
+        };
+        let initial = match &draft {
+            BookmarkDraft::Graph => placeholder.clone(),
+            _ => String::new(),
+        };
+        self.open_prompt(
+            PendingOp::AddBookmark(draft),
+            PromptSpec {
+                title: title.into(),
+                detail: detail.map(Into::into),
+                input: Some(initial),
+                placeholder: placeholder.into(),
+                confirm: "Save".into(),
+                ..PromptSpec::default()
+            },
+            window,
+            cx,
+        );
+    }
+
+    /// `bookmarks:bookmark-current-view` and the pane's first button: the
+    /// open note, or the graph while it is up. A note already bookmarked
+    /// opens "Edit bookmark", where Remove is the only change offered.
+    fn start_bookmark_current_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mode == ViewMode::Graph {
+            self.start_bookmark(BookmarkDraft::Graph, window, cx);
+            return;
+        }
+        let Some(path) = self.current.clone() else {
+            self.report("No file is open", cx);
+            return;
+        };
+        self.start_bookmark_path(&path, window, cx);
+    }
+
+    /// "Bookmark..." for a file or folder, from the explorer's menu or the
+    /// open note.
+    fn start_bookmark_path(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        if state.vault().absolute(path).is_dir() {
+            self.start_bookmark(BookmarkDraft::Folder(path.to_string()), window, cx);
+            return;
+        }
+        if state.bookmarks().has_file(path) {
+            let placeholder = Bookmark::file(path, None, None, 0).display_title();
+            self.open_prompt(
+                PendingOp::EditBookmark(path.to_string()),
+                PromptSpec {
+                    title: "Edit bookmark".into(),
+                    detail: Some(format!("Path: {placeholder}").into()),
+                    input: Some(String::new()),
+                    placeholder: placeholder.into(),
+                    confirm: "Save".into(),
+                    secondary: Some("Remove".into()),
+                    ..PromptSpec::default()
+                },
+                window,
+                cx,
+            );
+            return;
+        }
+        self.start_bookmark(
+            BookmarkDraft::File {
+                path: path.to_string(),
+                subpath: None,
+            },
+            window,
+            cx,
+        );
+    }
+
+    /// "New group": an empty group with the name typed.
+    fn start_new_bookmark_group(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.start_bookmark(BookmarkDraft::Tabs(Vec::new()), window, cx);
+    }
+
+    /// The prompt answered: the item for the draft, with the typed title if
+    /// any, appended and written.
+    fn finish_bookmark(&mut self, draft: BookmarkDraft, title: &str, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let title = (!title.trim().is_empty()).then(|| title.trim().to_string());
+        let ctime = now_millis();
+        let item = match draft {
+            BookmarkDraft::File { path, subpath } => {
+                Bookmark::file(&path, subpath.as_deref(), title.as_deref(), ctime)
+            }
+            BookmarkDraft::Folder(path) => Bookmark::folder(&path, title.as_deref(), ctime),
+            BookmarkDraft::Search(query) => Bookmark::search(&query, title.as_deref(), ctime),
+            BookmarkDraft::Graph => {
+                let config = state.vault().graph_config().unwrap_or_default();
+                Bookmark::graph(
+                    title.as_deref().unwrap_or("Untitled Graph"),
+                    crate::graph::full_document(&config),
+                    ctime,
+                )
+            }
+            BookmarkDraft::Tabs(paths) => {
+                // Every member shares one time, the group's is its own, as
+                // "Bookmark all tabs" writes them.
+                let members: Vec<Bookmark> = paths
+                    .iter()
+                    .map(|p| Bookmark::file(p, None, None, ctime))
+                    .collect();
+                let name = title.unwrap_or_else(|| BookmarkDraft::Tabs(Vec::new()).placeholder());
+                Bookmark::group(Some(&name), members, now_millis())
+            }
+        };
+        self.change_bookmarks(cx, move |b| b.push(item));
+    }
+
+    /// Applies a change to the bookmarks, writes the file and redraws the
+    /// pane; a write that fails leaves both as they were and says so.
+    fn change_bookmarks(&mut self, cx: &mut Context<Self>, change: impl FnOnce(&mut Bookmarks)) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        if let Err(err) = state.update_bookmarks(change) {
+            self.report(format!("bookmarks.json could not be written: {err}"), cx);
+            return;
+        }
+        self.refresh_bookmarks_pane(cx);
+    }
+
+    fn refresh_bookmarks_pane(&mut self, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let items = state.bookmarks().items.clone();
+        let current = self.current.clone();
+        self.bookmarks.update(cx, |b, cx| {
+            b.set_items(items, cx);
+            b.set_active(current, cx);
+        });
     }
 
     /// Renames, rewriting links right away or asking first when
@@ -3595,31 +4362,29 @@ impl Workspace {
                 *entry = new.to_string();
             }
         }
-        let active = self.active_tab;
-        for (ix, tab) in self.tabs.iter_mut().enumerate() {
-            if ix == active {
-                continue;
-            }
+        for tab in self.stashed_tabs_mut() {
             for entry in tab.history.iter_mut().chain(tab.path.iter_mut()) {
                 if let Some(new) = renamed.get(entry.as_str()) {
                     *entry = new.to_string();
                 }
             }
         }
+        // Every group's views follow the rename, the active one's included.
+        for group in &self.groups {
+            group.editor.update(cx, |e, _| {
+                if let Some(new) = renamed.get(e.name.as_ref()) {
+                    e.set_name(new.to_string());
+                }
+            });
+            group.reading.update(cx, |r, _| {
+                if let Some(new) = r.path.as_deref().and_then(|p| renamed.get(p)) {
+                    r.path = Some(new.to_string());
+                }
+            });
+        }
         if let Some(current) = self.current.clone() {
             if let Some(new) = renamed.get(current.as_str()) {
-                let new = new.to_string();
-                self.current = Some(new.clone());
-                self.editor.update(cx, |e, _| {
-                    if e.name.as_ref() == current {
-                        e.set_name(new.clone());
-                    }
-                });
-                self.reading.update(cx, |r, _| {
-                    if r.path.as_deref() == Some(current.as_str()) {
-                        r.path = Some(new.clone());
-                    }
-                });
+                self.current = Some(new.to_string());
             }
         }
         let summary = match outcome.renamed.as_slice() {
@@ -3723,21 +4488,338 @@ impl Workspace {
         }
     }
 
-    fn render_main(&self, theme: &Theme, cx: &App) -> gpui::AnyElement {
-        match self.main_view(cx) {
-            MainView::Graph => self.graph.clone().into_any_element(),
-            MainView::Reading => self.reading.clone().into_any_element(),
-            MainView::Editor => self.render_editor(theme),
-            MainView::Empty => self.render_no_file(theme),
+    /// What one group's rendering reads: the live fields for the active
+    /// group, the stashed ones for the others.
+    fn group_view(&self, ix: usize) -> GroupView {
+        let g = &self.groups[ix];
+        if ix == self.active_group {
+            return GroupView {
+                id: g.id,
+                active: true,
+                tabs: self.tab_snapshots(),
+                active_tab: self.active_tab,
+                current: self.current.clone(),
+                mode: self.mode,
+                history_len: self.history.len(),
+                history_ix: self.history_ix,
+                detached: self.detached.clone(),
+                editor: self.editor.clone(),
+                reading: self.reading.clone(),
+            };
+        }
+        let tab = g.tabs.get(g.active_tab);
+        GroupView {
+            id: g.id,
+            active: false,
+            tabs: g.tabs.clone(),
+            active_tab: g.active_tab,
+            current: tab.and_then(|t| t.path.clone()),
+            mode: tab.map(|t| t.mode).unwrap_or(ViewMode::Reading),
+            history_len: tab.map(|t| t.history.len()).unwrap_or(0),
+            history_ix: tab.map(|t| t.history_ix).unwrap_or(0),
+            detached: g.detached.clone(),
+            editor: g.editor.clone(),
+            reading: g.reading.clone(),
+        }
+    }
+
+    /// The main area: the layout tree drawn as nested rows and columns of
+    /// groups, a draggable divider between each pair of children.
+    fn render_layout(
+        &self,
+        node: &Layout,
+        path: &mut Vec<usize>,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        match node {
+            Layout::Group(id) => match self.group_ix(*id) {
+                Some(ix) => self.render_group(ix, theme, cx),
+                None => div().into_any_element(),
+            },
+            Layout::Split {
+                direction,
+                children,
+                ..
+            } => {
+                let row = *direction == SplitDirection::Vertical;
+                // A split whose children do not all carry a `dimension`
+                // shares its room equally, as Obsidian draws one that was
+                // never resized.
+                let dims: Option<Vec<f64>> =
+                    children.iter().map(|c| self.dimension_of(c)).collect();
+                let split_path = path.clone();
+                let drag_path = split_path.clone();
+                let mut container = div()
+                    .id(SharedString::from(format!("split-{split_path:?}")))
+                    .flex()
+                    .size_full()
+                    .min_w_0()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .when(row, |d| d.flex_row())
+                    .when(!row, |d| d.flex_col())
+                    .on_drag_move(cx.listener(
+                        move |this, e: &DragMoveEvent<DividerDrag>, _, cx| {
+                            let drag = e.drag(cx).clone();
+                            if drag.path == drag_path {
+                                this.drag_divider(&drag, e.bounds, e.event.position, cx);
+                            }
+                        },
+                    ));
+                for (ix, child) in children.iter().enumerate() {
+                    path.push(ix);
+                    let body = self.render_layout(child, path, theme, cx);
+                    path.pop();
+                    let grow = dims.as_ref().map(|d| d[ix] as f32).unwrap_or(1.0);
+                    let mut cell = div()
+                        .relative()
+                        .min_w_0()
+                        .min_h_0()
+                        .overflow_hidden()
+                        .flex_basis(px(0.))
+                        .child(body);
+                    cell.style().flex_grow = Some(grow.max(0.01));
+                    if ix > 0 {
+                        let drag = DividerDrag {
+                            path: split_path.clone(),
+                            before: ix - 1,
+                        };
+                        let handle = div()
+                            .id(("divider", ix as u64))
+                            .absolute()
+                            .when(row, |d| {
+                                d.left(px(0.))
+                                    .top_0()
+                                    .h_full()
+                                    .w(px(6.))
+                                    .cursor_col_resize()
+                            })
+                            .when(!row, |d| {
+                                d.top(px(0.))
+                                    .left_0()
+                                    .w_full()
+                                    .h(px(6.))
+                                    .cursor_row_resize()
+                            })
+                            .occlude()
+                            .on_drag(drag, |_, _, _, cx| cx.new(|_| NoDragPreview));
+                        cell = cell
+                            .when(row, |d| d.border_l_1())
+                            .when(!row, |d| d.border_t_1())
+                            .border_color(theme.border)
+                            .child(handle);
+                    }
+                    container = container.child(cell);
+                }
+                container.into_any_element()
+            }
+        }
+    }
+
+    /// One group: its tab strip, view header and the view itself. A mouse
+    /// down anywhere in a group that is not the active one makes it so
+    /// before the view underneath handles the click.
+    fn render_group(&self, ix: usize, theme: &Theme, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let view = self.group_view(ix);
+        let id = view.id;
+        let mut order = Vec::new();
+        self.layout_tree.groups(&mut order);
+        let first = order.first() == Some(&id);
+        let last = order.last() == Some(&id);
+        div()
+            .id(("group", id))
+            .flex()
+            .flex_col()
+            .size_full()
+            .min_w_0()
+            .min_h_0()
+            .overflow_hidden()
+            .when(!view.active, |d| {
+                d.capture_any_mouse_down(
+                    cx.listener(move |this, _, _, cx| this.activate_group(id, cx)),
+                )
+            })
+            .child(self.render_tab_strip(&view, first, last, theme, cx))
+            .child(self.render_header(&view, theme, cx))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .child(self.render_group_main(&view, theme, cx)),
+            )
+            .into_any_element()
+    }
+
+    /// The view header: back and forward, the note's folder and name, the
+    /// graph toggle and the mode toggle. The buttons act on their own
+    /// group, which they make active first.
+    fn render_header(&self, view: &GroupView, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
+        let id = view.id;
+        let title: SharedString = match &view.current {
+            Some(p) => display_name(p.rsplit('/').next().unwrap_or(p))
+                .to_string()
+                .into(),
+            None => "No file is open".into(),
+        };
+        let crumbs: SharedString = view
+            .current
+            .as_deref()
+            .and_then(|p| p.rsplit_once('/').map(|(dir, _)| dir.replace('/', " / ")))
+            .unwrap_or_default()
+            .into();
+        let mode_label = match view.mode {
+            ViewMode::Reading => "Reading",
+            ViewMode::LivePreview => "Live Preview",
+            ViewMode::Source => "Source",
+            ViewMode::Graph => "Graph",
+        };
+        let can_back = view.history_ix > 1;
+        let can_forward = view.history_ix < view.history_len;
+        let title_color = if view.active {
+            theme.text
+        } else {
+            theme.text_muted
+        };
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .h(px(36.))
+            .px_3()
+            .gap_2()
+            .border_b_1()
+            .border_color(theme.border)
+            .text_size(px(12.))
+            .child(
+                div()
+                    .id("back")
+                    .px_1()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .text_color(if can_back {
+                        theme.text
+                    } else {
+                        theme.text_faint
+                    })
+                    .hover(|s| s.bg(theme.bg_alt))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.activate_group(id, cx);
+                        this.go_back(&GoBack, window, cx)
+                    }))
+                    .child("←"),
+            )
+            .child(
+                div()
+                    .id("forward")
+                    .px_1()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .text_color(if can_forward {
+                        theme.text
+                    } else {
+                        theme.text_faint
+                    })
+                    .hover(|s| s.bg(theme.bg_alt))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.activate_group(id, cx);
+                        this.go_forward(&GoForward, window, cx)
+                    }))
+                    .child("→"),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_row()
+                    .gap_1()
+                    .whitespace_nowrap()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .when(!crumbs.is_empty(), |d| {
+                        d.child(div().text_color(theme.text_muted).child(crumbs.clone()))
+                            .child(div().text_color(theme.text_muted).child("/"))
+                    })
+                    .child(div().text_color(title_color).child(title.clone())),
+            )
+            .child(
+                div()
+                    .id("graph")
+                    .px_2()
+                    .py_px()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .text_color(if view.mode == ViewMode::Graph {
+                        theme.text
+                    } else {
+                        theme.text_muted
+                    })
+                    .hover(|s| s.bg(theme.bg_alt))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.activate_group(id, cx);
+                        this.open_graph_action(&OpenGraph, window, cx)
+                    }))
+                    .child("Graph"),
+            )
+            .when(view.mode != ViewMode::Graph, |d| {
+                d.child(
+                    div()
+                        .id("mode")
+                        .px_2()
+                        .py_px()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .text_color(theme.text_muted)
+                        .hover(|s| s.bg(theme.bg_alt))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.activate_group(id, cx);
+                            this.toggle_mode(&ToggleMode, window, cx)
+                        }))
+                        .child(mode_label),
+                )
+            })
+    }
+
+    /// What a group's area paints, by the same rule as [`Workspace::main_view`]
+    /// over that group's own views. There is one graph view; a second group
+    /// showing the graph says where it is instead.
+    fn render_group_main(&self, view: &GroupView, theme: &Theme, cx: &App) -> gpui::AnyElement {
+        let has_note = view.reading.read(cx).path.is_some();
+        let image = view
+            .current
+            .as_deref()
+            .is_some_and(|p| FileKind::from_path(p) == FileKind::Image);
+        let has_buffer = !view.editor.read(cx).name.is_empty();
+        match Self::main_view_for(view.mode, has_note, image, has_buffer) {
+            MainView::Graph if self.graph_group() == Some(view.id) => {
+                self.graph.clone().into_any_element()
+            }
+            MainView::Graph => div()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_color(theme.text_muted)
+                .child("The graph is open in another pane")
+                .into_any_element(),
+            MainView::Reading => view.reading.clone().into_any_element(),
+            MainView::Editor => Self::render_editor(&view.editor, view.detached.clone(), theme),
+            MainView::Empty => Self::render_no_file(view.current.as_deref(), theme),
         }
     }
 
     /// The editor, under a line naming the file it lost if its buffer is no
     /// longer backed by one. The user has to be told; the alternative is
     /// typing into a buffer that is never written and never mentioned.
-    fn render_editor(&self, theme: &Theme) -> gpui::AnyElement {
-        let Some(name) = self.detached.clone() else {
-            return self.editor.clone().into_any_element();
+    fn render_editor(
+        editor: &Entity<Editor>,
+        detached: Option<SharedString>,
+        theme: &Theme,
+    ) -> gpui::AnyElement {
+        let Some(name) = detached else {
+            return editor.clone().into_any_element();
         };
         div()
             .flex()
@@ -3761,15 +4843,15 @@ impl Workspace {
                 div()
                     .flex_1()
                     .overflow_hidden()
-                    .child(self.editor.clone().into_any_element()),
+                    .child(editor.clone().into_any_element()),
             )
             .into_any_element()
     }
 
     /// Shown in place of a view that has nothing to show: no open file, or
     /// one whose kind no view can draw.
-    fn render_no_file(&self, theme: &Theme) -> gpui::AnyElement {
-        let message: SharedString = match self.current.as_deref() {
+    fn render_no_file(current: Option<&str>, theme: &Theme) -> gpui::AnyElement {
+        let message: SharedString = match current {
             Some(path) => format!(
                 "{:?} files are not supported yet",
                 FileKind::from_path(path)
@@ -3921,6 +5003,15 @@ impl Workspace {
         let tab = self.tabs.remove(ix);
         self.remember_closed(ix, tab);
         if self.tabs.is_empty() {
+            // A group whose last tab closes goes with it, as Obsidian's
+            // does, unless it is the only one.
+            if self.groups.len() > 1 {
+                self.tabs.push(Tab::empty(self.default_mode()));
+                self.active_tab = 0;
+                let id = self.active_group_id();
+                self.close_group(id, false, cx);
+                return;
+            }
             self.tabs.push(Tab::empty(self.default_mode()));
             self.active_tab = 0;
             self.load_tab(cx);
@@ -3970,6 +5061,401 @@ impl Workspace {
         self.tabs.insert(at, tab);
         self.active_tab = at;
         self.load_tab(cx);
+    }
+
+    // ----- tab groups --------------------------------------------------------------
+
+    fn active_group_id(&self) -> u64 {
+        self.groups[self.active_group].id
+    }
+
+    fn group_ix(&self, id: u64) -> Option<usize> {
+        self.groups.iter().position(|g| g.id == id)
+    }
+
+    /// Copies the active group's live fields into its slot.
+    fn stash_active_group(&mut self) {
+        self.stash_active_tab();
+        let ix = self.active_group;
+        let group = &mut self.groups[ix];
+        group.tabs = self.tabs.clone();
+        group.active_tab = self.active_tab;
+        group.mode_before_graph = self.mode_before_graph;
+        group.detached = self.detached.clone();
+        group.words = self.words;
+        group.chars = self.chars;
+    }
+
+    /// Makes group `ix` the live one. Nothing is reloaded — its views still
+    /// show its note — but everything that follows the active note (the
+    /// explorer's highlight, the graph's centre, the right dock, the status
+    /// bar) is pointed at it, and a note that went away while the group was
+    /// off screen is let go of the way the watcher would have.
+    fn load_group(&mut self, ix: usize, cx: &mut Context<Self>) {
+        self.active_group = ix;
+        let group = &self.groups[ix];
+        let id = group.id;
+        self.tabs = group.tabs.clone();
+        self.active_tab = group.active_tab.min(self.tabs.len().saturating_sub(1));
+        self.mode_before_graph = group.mode_before_graph;
+        self.detached = group.detached.clone();
+        self.words = group.words;
+        self.chars = group.chars;
+        self.editor = group.editor.clone();
+        self.reading = group.reading.clone();
+        let tab = self
+            .tabs
+            .get(self.active_tab)
+            .cloned()
+            .unwrap_or_else(|| Tab::empty(self.default_mode()));
+        self.current = tab.path;
+        self.mode = tab.mode;
+        self.history = tab.history;
+        self.history_ix = tab.history_ix;
+        self.group_mru.retain(|g| *g != id);
+        self.group_mru.insert(0, id);
+        self.save_task = None;
+        match (self.current.clone(), self.state.clone()) {
+            (Some(path), Some(state)) => {
+                if state.vault().absolute(&path).is_file() {
+                    self.explorer.update(cx, |e, cx| e.reveal(&path, cx));
+                    self.graph
+                        .update(cx, |g, cx| g.set_current(Some(path.clone()), cx));
+                    self.refresh_panes(&state, cx);
+                    self.status = path.into();
+                } else {
+                    self.detach_current(true, &state, cx);
+                }
+            }
+            (None, Some(state)) => self.show_empty(&state, cx),
+            (_, None) => {}
+        }
+        self.request_focus_main(cx);
+        cx.notify();
+    }
+
+    /// Hands the keyboard and the live fields to group `id`: a click in its
+    /// area, a focus command, or the group that takes over when one closes.
+    pub fn activate_group(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some(ix) = self.group_ix(id) else {
+            return;
+        };
+        if ix == self.active_group {
+            return;
+        }
+        self.flush_save(cx);
+        self.stash_active_group();
+        self.load_group(ix, cx);
+    }
+
+    /// A group of its own, with an editor and a reading view set up like the
+    /// others', not yet in the layout.
+    fn new_group(&mut self, mode: ViewMode, window: &mut Window, cx: &mut Context<Self>) -> u64 {
+        let editor = cx.new(|cx| Editor::new(window, cx));
+        let reading = cx.new(ReadingView::new);
+        self._subscriptions
+            .extend(view_subscriptions(&editor, &reading, cx));
+        let id = self.next_group_id;
+        self.next_group_id += 1;
+        if let Some(state) = self.state.clone() {
+            Self::give_editor_the_vault(&editor, &state, cx);
+        }
+        self.groups.push(TabGroup::new(id, editor, reading, mode));
+        if let Some(state) = self.state.clone() {
+            self.apply_app_config(&state, cx);
+        }
+        id
+    }
+
+    /// `workspace:split-vertical` ("Split right") and `split-horizontal`
+    /// ("Split down"): a new group beside the active one, showing the same
+    /// note in the same mode, and it takes the focus. A `dimension` the group
+    /// had is halved between the two, or moves to the split that now wraps
+    /// them (see [[Specification#Observed tab group behavior]]).
+    fn split(&mut self, direction: SplitDirection, window: &mut Window, cx: &mut Context<Self>) {
+        self.flush_save(cx);
+        self.stash_active_group();
+        let from = self.active_group_id();
+        let tab = Tab {
+            path: self.current.clone(),
+            mode: self.mode,
+            history: self.history.clone(),
+            history_ix: self.history_ix,
+            leaf: None,
+        };
+        let mode_before_graph = self.mode_before_graph;
+        let id = self.new_group(tab.mode, window, cx);
+        let dimension = self.groups[self.active_group].dimension();
+        match self.layout_tree.insert_beside(from, id, direction) {
+            Some(false) => {
+                if let Some(d) = dimension {
+                    let from_ix = self.active_group;
+                    self.groups[from_ix].set_dimension(Some(d / 2.0));
+                    let new_ix = self.group_ix(id).unwrap_or(from_ix);
+                    self.groups[new_ix].set_dimension(Some(d / 2.0));
+                }
+            }
+            Some(true) => {
+                let from_ix = self.active_group;
+                self.groups[from_ix].set_dimension(None);
+                if let Some(mut path) = self.layout_tree.path_to(from) {
+                    path.pop();
+                    if let Some(Layout::Split { node, .. }) = self.layout_tree.node_at_mut(&path) {
+                        set_dimension(node, dimension);
+                    }
+                }
+            }
+            None => {}
+        }
+        let Some(ix) = self.group_ix(id) else {
+            return;
+        };
+        self.groups[ix].tabs = vec![tab];
+        self.groups[ix].active_tab = 0;
+        self.groups[ix].mode_before_graph = mode_before_graph;
+        self.load_group(ix, cx);
+        // The new group's views are empty: put the note in them.
+        if let (Some(path), Some(state)) = (self.current.clone(), self.state.clone()) {
+            if self.mode.is_editing() {
+                let live = self.mode == ViewMode::LivePreview;
+                self.editor.update(cx, |e, cx| e.set_live_preview(live, cx));
+            }
+            self.show_file(&path, &state, cx);
+        }
+    }
+
+    /// `workspace:close-tab-group`, and what closing a group's last tab
+    /// does: the group goes, its siblings take the room, and the keyboard
+    /// goes to the group used most recently before it. The last group
+    /// cannot go; it is left with an empty tab instead. `remember` puts the
+    /// group's tabs where `workspace:undo-close-pane` finds them.
+    fn close_group(&mut self, id: u64, remember: bool, cx: &mut Context<Self>) {
+        let Some(ix) = self.group_ix(id) else {
+            return;
+        };
+        if self.groups.len() == 1 {
+            self.flush_save(cx);
+            self.stash_active_tab();
+            let tabs = std::mem::take(&mut self.tabs);
+            if remember {
+                for (i, tab) in tabs.into_iter().enumerate() {
+                    self.remember_closed(i, tab);
+                }
+            }
+            self.tabs.push(Tab::empty(self.default_mode()));
+            self.active_tab = 0;
+            self.load_tab(cx);
+            return;
+        }
+        let was_active = ix == self.active_group;
+        let active_id = self.active_group_id();
+        if was_active {
+            self.flush_save(cx);
+            self.stash_active_group();
+        }
+        if remember {
+            let tabs = self.groups[ix].tabs.clone();
+            for (i, tab) in tabs.into_iter().enumerate() {
+                self.remember_closed(i, tab);
+            }
+        }
+        let mut parent = self.layout_tree.path_to(id).unwrap_or_default();
+        parent.pop();
+        self.layout_tree.remove(id);
+        self.groups.remove(ix);
+        self.group_mru.retain(|g| *g != id);
+        // The split the group left, or the nearest one still standing when
+        // it was the split's last child and went with it.
+        loop {
+            if matches!(
+                self.layout_tree.node_at(&parent),
+                Some(Layout::Split { .. })
+            ) {
+                self.renormalise_dimensions(&parent);
+                break;
+            }
+            if parent.pop().is_none() {
+                break;
+            }
+        }
+        if was_active {
+            let next = self
+                .group_mru
+                .first()
+                .copied()
+                .and_then(|g| self.group_ix(g))
+                .unwrap_or(0);
+            self.load_group(next, cx);
+        } else {
+            self.active_group = self.group_ix(active_id).unwrap_or(0);
+            cx.notify();
+        }
+    }
+
+    /// The `dimension` of a node of the layout: a group's lives on the
+    /// group, a split's on the split.
+    fn dimension_of(&self, node: &Layout) -> Option<f64> {
+        match node {
+            Layout::Group(id) => self.groups[self.group_ix(*id)?].dimension(),
+            Layout::Split { node, .. } => node.get("dimension").and_then(Value::as_f64),
+        }
+    }
+
+    fn set_dimension_at(&mut self, path: &[usize], dimension: Option<f64>) {
+        match self.layout_tree.node_at_mut(path) {
+            Some(Layout::Group(id)) => {
+                let id = *id;
+                if let Some(ix) = self.group_ix(id) {
+                    self.groups[ix].set_dimension(dimension);
+                }
+            }
+            Some(Layout::Split { node, .. }) => set_dimension(node, dimension),
+            None => {}
+        }
+    }
+
+    /// After a child left the split at `path`, the rest share its room: their
+    /// `dimension`s scaled back to a hundred, or dropped when one is left,
+    /// which is what Obsidian wrote in both cases.
+    fn renormalise_dimensions(&mut self, path: &[usize]) {
+        let Some(Layout::Split { children, .. }) = self.layout_tree.node_at(path) else {
+            return;
+        };
+        let dims: Vec<Option<f64>> = children.iter().map(|c| self.dimension_of(c)).collect();
+        let n = dims.len();
+        let scaled: Vec<Option<f64>> = if n <= 1 {
+            vec![None; n]
+        } else if dims.iter().all(Option::is_some) {
+            let sum: f64 = dims.iter().flatten().sum();
+            if sum <= 0.0 {
+                return;
+            }
+            dims.iter().map(|d| d.map(|d| d * 100.0 / sum)).collect()
+        } else {
+            return;
+        };
+        for (ix, d) in scaled.into_iter().enumerate() {
+            let mut child = path.to_vec();
+            child.push(ix);
+            self.set_dimension_at(&child, d);
+        }
+    }
+
+    /// A divider between two children of a split, dragged to `position`
+    /// inside the split's `bounds`: the pair's room is redistributed and
+    /// every child's share written as a `dimension`, as Obsidian does once
+    /// a divider has moved.
+    fn drag_divider(
+        &mut self,
+        drag: &DividerDrag,
+        bounds: gpui::Bounds<gpui::Pixels>,
+        position: gpui::Point<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(Layout::Split {
+            direction,
+            children,
+            ..
+        }) = self.layout_tree.node_at(&drag.path)
+        else {
+            return;
+        };
+        let n = children.len();
+        if drag.before + 1 >= n {
+            return;
+        }
+        let row = *direction == SplitDirection::Vertical;
+        let (origin, size) = if row {
+            (bounds.origin.x, bounds.size.width)
+        } else {
+            (bounds.origin.y, bounds.size.height)
+        };
+        let along = if row { position.x } else { position.y };
+        let size = f32::from(size);
+        if size <= 0.0 {
+            return;
+        }
+        let at = (f32::from(along - origin) / size).clamp(0.0, 1.0) as f64 * 100.0;
+        let mut dims: Vec<f64> = match children
+            .iter()
+            .map(|c| self.dimension_of(c))
+            .collect::<Option<Vec<f64>>>()
+        {
+            Some(dims) => dims,
+            None => vec![100.0 / n as f64; n],
+        };
+        let before: f64 = dims[..drag.before].iter().sum();
+        let pair = dims[drag.before] + dims[drag.before + 1];
+        const MIN: f64 = 5.0;
+        if pair <= 2.0 * MIN {
+            return;
+        }
+        let a = (at - before).clamp(MIN, pair - MIN);
+        dims[drag.before] = a;
+        dims[drag.before + 1] = pair - a;
+        for (ix, d) in dims.into_iter().enumerate() {
+            let mut child = drag.path.clone();
+            child.push(ix);
+            self.set_dimension_at(&child, Some(d));
+        }
+        cx.notify();
+    }
+
+    /// `editor:focus-left` and its three siblings: the keyboard moves to the
+    /// group on that side — of the groups there, the one used most recently,
+    /// which is where Obsidian's went.
+    fn focus_neighbor(&mut self, direction: SplitDirection, forward: bool, cx: &mut Context<Self>) {
+        let candidates = self
+            .layout_tree
+            .neighbors(self.active_group_id(), direction, forward);
+        let target = self
+            .group_mru
+            .iter()
+            .find(|g| candidates.contains(g))
+            .copied()
+            .or_else(|| candidates.first().copied());
+        if let Some(target) = target {
+            self.activate_group(target, cx);
+        }
+    }
+
+    /// Every tab but the live one: the active group's other tabs and all of
+    /// the other groups'. What the live one needs is done on the workspace's
+    /// own fields.
+    fn stashed_tabs_mut(&mut self) -> impl Iterator<Item = &mut Tab> {
+        let active_tab = self.active_tab;
+        let active_group = self.active_group;
+        let own = self
+            .tabs
+            .iter_mut()
+            .enumerate()
+            .filter(move |(ix, _)| *ix != active_tab)
+            .map(|(_, t)| t);
+        let others = self
+            .groups
+            .iter_mut()
+            .enumerate()
+            .filter(move |(gx, _)| *gx != active_group)
+            .flat_map(|(_, g)| g.tabs.iter_mut());
+        own.chain(others)
+    }
+
+    /// The group whose area the one graph view paints in: the active group
+    /// while it shows the graph, else the first group that does.
+    fn graph_group(&self) -> Option<u64> {
+        if self.mode == ViewMode::Graph {
+            return Some(self.active_group_id());
+        }
+        let mut order = Vec::new();
+        self.layout_tree.groups(&mut order);
+        order.into_iter().find(|id| {
+            self.group_ix(*id).is_some_and(|ix| {
+                let g = &self.groups[ix];
+                g.tabs
+                    .get(g.active_tab)
+                    .is_some_and(|t| t.mode == ViewMode::Graph)
+            })
+        })
     }
 
     /// A sidebar's collapse toggle: it stays on screen when the sidebar is
@@ -4084,9 +5570,20 @@ impl Workspace {
             .child(settings)
     }
 
-    fn render_tab_strip(&self, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
-        let tabs = self.tab_snapshots();
-        let active_ix = self.active_tab;
+    /// A group's tab strip. The sidebar toggles sit at the window's edges:
+    /// the left one in the first group's strip, the right one in the last's.
+    fn render_tab_strip(
+        &self,
+        view: &GroupView,
+        first: bool,
+        last: bool,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let tabs = &view.tabs;
+        let active_ix = view.active_tab;
+        let group = view.id;
+        let group_active = view.active;
         let show_ribbon = self
             .state
             .as_ref()
@@ -4106,7 +5603,7 @@ impl Workspace {
             .overflow_hidden()
             // Without the ribbon a collapsed left sidebar would have no
             // way back from the window.
-            .when(!show_ribbon && !self.left_visible, |d| {
+            .when(first && !show_ribbon && !self.left_visible, |d| {
                 d.child(self.sidebar_toggle(true, theme, cx).mb(px(2.)))
             })
             .children(tabs.iter().enumerate().map(|(ix, tab)| {
@@ -4128,12 +5625,22 @@ impl Workspace {
                     .cursor_pointer()
                     .text_size(px(12.))
                     .bg(if active { theme.bg } else { theme.bg_secondary })
-                    .text_color(if active { theme.text } else { theme.text_muted })
+                    .text_color(if active && group_active {
+                        theme.text
+                    } else {
+                        theme.text_muted
+                    })
                     .when(!active, |d| d.hover(|s| s.bg(theme.bg_alt)))
-                    .on_click(cx.listener(move |this, _, _, cx| this.activate_tab(ix, cx)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.activate_group(group, cx);
+                        this.activate_tab(ix, cx)
+                    }))
                     .on_mouse_down(
                         gpui::MouseButton::Middle,
-                        cx.listener(move |this, _, _, cx| this.close_tab(ix, cx)),
+                        cx.listener(move |this, _, _, cx| {
+                            this.activate_group(group, cx);
+                            this.close_tab(ix, cx)
+                        }),
                     )
                     .child(
                         div()
@@ -4156,6 +5663,7 @@ impl Workspace {
                             .hover(|s| s.bg(theme.bg_active).text_color(theme.text))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 cx.stop_propagation();
+                                this.activate_group(group, cx);
                                 this.close_tab(ix, cx);
                             }))
                             .child("×"),
@@ -4172,11 +5680,16 @@ impl Workspace {
                     .text_size(px(14.))
                     .text_color(theme.text_muted)
                     .hover(|s| s.bg(theme.bg_alt).text_color(theme.text))
-                    .on_click(cx.listener(|this, _, _, cx| this.new_tab(cx)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.activate_group(group, cx);
+                        this.new_tab(cx)
+                    }))
                     .child("+"),
             )
             .child(div().flex_1())
-            .child(self.sidebar_toggle(false, theme, cx).mb(px(2.)))
+            .when(last, |d| {
+                d.child(self.sidebar_toggle(false, theme, cx).mb(px(2.)))
+            })
     }
 
     // ----- workspace.json --------------------------------------------------------
@@ -4188,10 +5701,15 @@ impl Workspace {
         self.layout_restored
     }
 
-    /// Restores the layout `workspace.json` records: the main area's tabs
-    /// and the active one, each sidebar's collapse state and its tab.
-    /// Tab groups are flattened into the one strip  has.
-    fn restore_layout(&mut self, state: &Arc<VaultState>, cx: &mut Context<Self>) {
+    /// Restores the layout `workspace.json` records: the main area's tab
+    /// groups and how they are split, the active leaf, each sidebar's
+    /// collapse state and its tab.
+    fn restore_layout(
+        &mut self,
+        state: &Arc<VaultState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let layout = match state.vault().workspace_json() {
             Ok(Some(layout)) => layout,
             Ok(None) => return,
@@ -4211,73 +5729,66 @@ impl Workspace {
                     .collect()
             })
             .unwrap_or_default();
-        if let Some(main) = layout.get("main") {
-            let default_mode = self.default_mode();
-            let mut leaves = Vec::new();
-            collect_leaves(main, &mut leaves);
-            let mut tabs: Vec<(String, Tab)> = Vec::new();
-            for leaf in leaves {
-                let Some(id) = leaf.get("id").and_then(Value::as_str) else {
-                    continue;
-                };
-                let view = leaf
-                    .get("state")
-                    .and_then(|s| s.get("type"))
-                    .and_then(Value::as_str);
-                let inner = leaf.get("state").and_then(|s| s.get("state"));
-                let file = inner.and_then(|s| s.get("file")).and_then(Value::as_str);
-                let tab = match (view, file) {
-                    (_, Some(file)) => {
-                        // A leaf naming a file the vault no longer has is
-                        // dropped, the way Obsidian drops one it cannot open.
-                        let known = state.vault().absolute(file).is_file();
-                        if !known {
-                            continue;
-                        }
-                        let mode = match inner.and_then(|s| s.get("mode")).and_then(Value::as_str) {
-                            Some("preview") => ViewMode::Reading,
-                            Some("source")
-                                if inner
-                                    .and_then(|s| s.get("source"))
-                                    .and_then(Value::as_bool)
-                                    .unwrap_or(false) =>
-                            {
-                                ViewMode::Source
-                            }
-                            Some("source") => ViewMode::LivePreview,
-                            _ => default_mode,
-                        };
-                        Tab {
-                            path: Some(file.to_string()),
-                            mode,
-                            history: vec![file.to_string()],
-                            history_ix: 1,
-                            leaf: Some(leaf.clone()),
-                        }
-                    }
-                    (Some("empty"), None) => Tab {
-                        leaf: Some(leaf.clone()),
-                        ..Tab::empty(default_mode)
-                    },
-                    (Some("graph"), None) => Tab {
-                        leaf: Some(leaf.clone()),
-                        ..Tab::empty(ViewMode::Graph)
-                    },
-                    _ => continue,
-                };
-                tabs.push((id.to_string(), tab));
+        let default_mode = self.default_mode();
+        let spec = layout.get("main").and_then(|main| {
+            // A leaf naming a file the vault no longer has is dropped, the
+            // way Obsidian drops one it cannot open.
+            read_main(main, default_mode, &|file| {
+                state.vault().absolute(file).is_file()
+            })
+        });
+        if let Some(spec) = spec {
+            // The groups the file describes replace the one the window
+            // opened with; its views were empty.
+            let placeholder = self.active_group_id();
+            let mut leaf_ids: Vec<(String, u64, usize)> = Vec::new();
+            let tree = self.materialize(spec, &mut leaf_ids, window, cx);
+            self.layout_tree = tree;
+            if let Some(ix) = self.group_ix(placeholder) {
+                self.groups.remove(ix);
+                self.group_mru.retain(|g| *g != placeholder);
             }
-            if !tabs.is_empty() {
-                let active_id = layout.get("active").and_then(Value::as_str);
-                let active = tabs
-                    .iter()
-                    .position(|(id, _)| Some(id.as_str()) == active_id)
-                    .or_else(|| tabs.iter().position(|(_, t)| t.path.is_some()))
-                    .unwrap_or(0);
-                self.tabs = tabs.into_iter().map(|(_, t)| t).collect();
-                self.active_tab = active;
-                self.load_tab(cx);
+            let active_id = layout.get("active").and_then(Value::as_str);
+            let (group, tab) = leaf_ids
+                .iter()
+                .find(|(id, _, _)| Some(id.as_str()) == active_id)
+                .map(|(_, g, t)| (*g, Some(*t)))
+                .or_else(|| {
+                    // No active leaf on record: the first with a file.
+                    leaf_ids
+                        .iter()
+                        .find(|(_, g, t)| {
+                            self.group_ix(*g)
+                                .is_some_and(|ix| self.groups[ix].tabs[*t].path.is_some())
+                        })
+                        .map(|(_, g, t)| (*g, Some(*t)))
+                })
+                .or_else(|| leaf_ids.first().map(|(_, g, _)| (*g, None)))
+                .unwrap_or((self.groups[0].id, None));
+            if let (Some(ix), Some(tab)) = (self.group_ix(group), tab) {
+                self.groups[ix].active_tab = tab;
             }
+            // Fill every group's views, the active one last so its note is
+            // the one the explorer, graph and right dock follow.
+            let mut order = Vec::new();
+            self.layout_tree.groups(&mut order);
+            for id in order.into_iter().filter(|id| *id != group).chain([group]) {
+                if let Some(ix) = self.group_ix(id) {
+                    self.active_group = ix;
+                    self.load_group(ix, cx);
+                    self.load_tab(cx);
+                    self.stash_active_group();
+                }
+            }
+            // The most recently used order Obsidian would have: the active
+            // group first, the rest in layout order.
+            self.group_mru = {
+                let mut mru = vec![group];
+                let mut order = Vec::new();
+                self.layout_tree.groups(&mut order);
+                mru.extend(order.into_iter().filter(|g| *g != group));
+                mru
+            };
         }
         let collapsed = |dock: &str| {
             layout
@@ -4290,6 +5801,7 @@ impl Workspace {
         self.right_visible = !collapsed("right");
         match dock_current_view(&layout, "left").as_deref() {
             Some("search") => self.left_tab = LeftTab::Search,
+            Some("bookmarks") => self.left_tab = LeftTab::Bookmarks,
             Some(_) => self.left_tab = LeftTab::Files,
             None => {}
         }
@@ -4303,43 +5815,68 @@ impl Workspace {
         self.layout = Some(layout);
     }
 
+    /// Makes the groups a `main` node describes: each with its own views,
+    /// its tabs in place, not yet shown. `leaf_ids` collects every restored
+    /// leaf's id with the group and tab it became, for `active`.
+    fn materialize(
+        &mut self,
+        spec: LayoutSpec,
+        leaf_ids: &mut Vec<(String, u64, usize)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Layout {
+        match spec {
+            LayoutSpec::Group(group) => {
+                let mode = group
+                    .tabs
+                    .first()
+                    .map(|(_, t)| t.mode)
+                    .unwrap_or(ViewMode::Reading);
+                let id = self.new_group(mode, window, cx);
+                let ix = self.group_ix(id).expect("the group was just made");
+                for (tab_ix, (leaf, _)) in group.tabs.iter().enumerate() {
+                    leaf_ids.push((leaf.clone(), id, tab_ix));
+                }
+                let g = &mut self.groups[ix];
+                g.tabs = group.tabs.into_iter().map(|(_, t)| t).collect();
+                g.active_tab = group.active_tab.min(g.tabs.len().saturating_sub(1));
+                g.node = group.node;
+                Layout::Group(id)
+            }
+            LayoutSpec::Split {
+                direction,
+                children,
+                node,
+            } => Layout::Split {
+                direction,
+                children: children
+                    .into_iter()
+                    .map(|c| self.materialize(c, leaf_ids, window, cx))
+                    .collect(),
+                node,
+            },
+        }
+    }
+
     /// `workspace.json` as this session would leave it: the file that was
-    /// read with the tabs, the active leaf, the sidebars' collapse state
-    /// and `lastOpenFiles` brought up to date, and every other key as it
-    /// was. A main area with more than one tab group is left alone — 
-    /// flattened it to show it, and writing that back would be a loss.
+    /// read with the tab groups, the active leaf, the sidebars' collapse
+    /// state and `lastOpenFiles` brought up to date, and every other key as
+    /// it was.
     fn layout_json(&self) -> Value {
         let mut layout = self.layout.clone().unwrap_or_else(|| json!({}));
         let Some(object) = layout.as_object_mut() else {
             return layout;
         };
-        let tabs = self.tab_snapshots();
-        let leaves: Vec<Value> = tabs.iter().map(leaf_json).collect();
-        let active_id = leaves
-            .get(self.active_tab)
-            .and_then(|l| l.get("id"))
-            .cloned()
-            .unwrap_or(Value::Null);
-        let groups = object.get("main").map(count_tab_groups).unwrap_or(0);
-        if groups <= 1 {
-            let main = object.entry("main").or_insert_with(|| {
-                json!({
-                    "id": leaf_id(),
-                    "type": "split",
-                    "children": [{"id": leaf_id(), "type": "tabs", "children": []}],
-                    "direction": "vertical",
-                })
-            });
-            if let Some(group) = find_tab_group(main) {
-                group.insert("children".into(), Value::Array(leaves));
-                if self.active_tab > 0 {
-                    group.insert("currentTab".into(), json!(self.active_tab));
-                } else {
-                    group.shift_remove("currentTab");
-                }
+        let mut active_id = Value::Null;
+        let main = self.layout_node_json(&self.layout_tree, &mut active_id);
+        // `main` keeps its place in a file that had one.
+        match object.get_mut("main") {
+            Some(slot) => *slot = main,
+            None => {
+                object.insert("main".into(), main);
             }
-            object.insert("active".into(), active_id);
         }
+        object.insert("active".into(), active_id);
         for (dock, visible) in [("left", self.left_visible), ("right", self.right_visible)] {
             if let Some(d) = object.get_mut(dock).and_then(Value::as_object_mut) {
                 if visible {
@@ -4351,6 +5888,87 @@ impl Workspace {
         }
         object.insert("lastOpenFiles".into(), json!(self.last_open_files));
         layout
+    }
+
+    /// The layout tree for the socket's state dump: group ids at the leaves.
+    fn layout_tree_json(&self, node: &Layout) -> Value {
+        match node {
+            Layout::Group(id) => json!({"group": id, "dimension": self.dimension_of(node)}),
+            Layout::Split {
+                direction,
+                children,
+                ..
+            } => json!({
+                "direction": direction.as_str(),
+                "dimension": self.dimension_of(node),
+                "children": children.iter().map(|c| self.layout_tree_json(c)).collect::<Vec<Value>>(),
+            }),
+        }
+    }
+
+    /// One node of `main`: a group as a `tabs` node with its leaves and
+    /// `currentTab`, a split with its children and `direction`, each over
+    /// the keys it was read with. The active group's active leaf id lands in
+    /// `active_id` on the way, since a new tab's id exists only in the leaf
+    /// written here.
+    fn layout_node_json(&self, node: &Layout, active_id: &mut Value) -> Value {
+        match node {
+            Layout::Group(id) => {
+                let Some(ix) = self.group_ix(*id) else {
+                    return Value::Null;
+                };
+                let active = ix == self.active_group;
+                let (tabs, active_tab) = if active {
+                    (self.tab_snapshots(), self.active_tab)
+                } else {
+                    (self.groups[ix].tabs.clone(), self.groups[ix].active_tab)
+                };
+                let mut map = self.groups[ix].node.clone();
+                if !map.contains_key("id") {
+                    map.shift_insert(0, "id".into(), json!(leaf_id()));
+                }
+                map.insert("type".into(), json!("tabs"));
+                let leaves: Vec<Value> = tabs.iter().map(leaf_json).collect();
+                if active {
+                    *active_id = leaves
+                        .get(active_tab)
+                        .and_then(|l| l.get("id"))
+                        .cloned()
+                        .unwrap_or(Value::Null);
+                }
+                map.shift_remove("children");
+                map.shift_remove("currentTab");
+                map.insert("children".into(), Value::Array(leaves));
+                if active_tab > 0 {
+                    map.insert("currentTab".into(), json!(active_tab));
+                }
+                Value::Object(map)
+            }
+            Layout::Split {
+                direction,
+                children,
+                node,
+            } => {
+                let mut map = node.clone();
+                if !map.contains_key("id") {
+                    map.shift_insert(0, "id".into(), json!(leaf_id()));
+                }
+                map.insert("type".into(), json!("split"));
+                map.shift_remove("children");
+                map.shift_remove("direction");
+                map.insert(
+                    "children".into(),
+                    Value::Array(
+                        children
+                            .iter()
+                            .map(|c| self.layout_node_json(c, active_id))
+                            .collect(),
+                    ),
+                );
+                map.insert("direction".into(), json!(direction.as_str()));
+                Value::Object(map)
+            }
+        }
     }
 
     /// Writes `workspace.json` back if the session changed the layout.
@@ -4413,12 +6031,30 @@ impl Workspace {
         );
         file.insert("history_ix".into(), json!(self.history_ix));
 
+        let tab_json =
+            |t: &Tab| json!({"path": t.path, "mode": t.mode.as_str(), "title": t.title()});
         let tabs = json!({
             "active": self.active_tab,
+            "items": self.tab_snapshots().iter().map(tab_json).collect::<Vec<Value>>(),
+        });
+        // The tab groups and how they are split; `tabs` above is the active
+        // group's, as it was before there could be more than one.
+        let groups = json!({
+            "active": self.active_group_id(),
+            "layout": self.layout_tree_json(&self.layout_tree),
             "items": self
-                .tab_snapshots()
+                .groups
                 .iter()
-                .map(|t| json!({"path": t.path, "mode": t.mode.as_str(), "title": t.title()}))
+                .enumerate()
+                .map(|(ix, g)| {
+                    let view = self.group_view(ix);
+                    json!({
+                        "id": g.id,
+                        "active_tab": view.active_tab,
+                        "dimension": g.dimension(),
+                        "tabs": view.tabs.iter().map(tab_json).collect::<Vec<Value>>(),
+                    })
+                })
                 .collect::<Vec<Value>>(),
         });
 
@@ -4429,10 +6065,12 @@ impl Workspace {
             json!(match self.left_tab {
                 LeftTab::Files => "files",
                 LeftTab::Search => "search",
+                LeftTab::Bookmarks => "bookmarks",
             }),
         );
         left.insert("explorer".into(), self.explorer.read(cx).describe(rows));
         left.insert("search".into(), self.search.read(cx).describe(rows, cx));
+        left.insert("bookmarks".into(), self.bookmarks.read(cx).describe(rows));
 
         let mut right = Map::new();
         right.insert("visible".into(), json!(self.right_visible));
@@ -4481,6 +6119,7 @@ impl Workspace {
             "vault": Value::Object(vault),
             "file": Value::Object(file),
             "tabs": tabs,
+            "groups": groups,
             "docks": {"left": Value::Object(left), "right": Value::Object(right)},
             "modal": self.describe_modal(rows, cx),
             "editor": self.editor.read(cx).describe(text, cx),
@@ -4553,6 +6192,12 @@ impl Workspace {
                 }
                 Some(PendingOp::UpdateLinks { from, to }) => {
                     json!({"op": "update-links", "from": from, "to": to})
+                }
+                Some(PendingOp::AddBookmark(draft)) => {
+                    json!({"op": "add-bookmark", "placeholder": draft.placeholder()})
+                }
+                Some(PendingOp::EditBookmark(path)) => {
+                    json!({"op": "edit-bookmark", "path": path})
                 }
             },
         );
@@ -5334,37 +6979,146 @@ fn prune_history(history: &mut Vec<String>, ix: usize, path: &str) -> usize {
     cursor.min(history.len())
 }
 
-/// Every `leaf` node under `node`, depth first, in the order Obsidian
-/// lays them out.
-fn collect_leaves(node: &Value, out: &mut Vec<Value>) {
-    if node.get("type").and_then(Value::as_str) == Some("leaf") {
-        out.push(node.clone());
-        return;
-    }
-    if let Some(children) = node.get("children").and_then(Value::as_array) {
-        for child in children {
-            collect_leaves(child, out);
+/// A `tabs` node of `workspace.json` read into tabs, before any group
+/// exists for it: each leaf's id with its tab, the `currentTab`, and the
+/// node's own keys less `children` and `currentTab`, which are rewritten.
+#[derive(Debug, Clone, PartialEq)]
+struct GroupSpec {
+    tabs: Vec<(String, Tab)>,
+    active_tab: usize,
+    node: Map<String, Value>,
+}
+
+/// `main` as read: the tree of splits over the groups, without the groups
+/// existing yet. Pure, so the reading can be tested without a window.
+#[derive(Debug, Clone, PartialEq)]
+enum LayoutSpec {
+    Group(GroupSpec),
+    Split {
+        direction: SplitDirection,
+        children: Vec<LayoutSpec>,
+        node: Map<String, Value>,
+    },
+}
+
+/// Reads `main`. A `tabs` node with no leaf left (every file gone) is
+/// dropped, and a split with no child left goes with its children; a split
+/// with one child stays nested as Obsidian keeps it. `known` says whether a
+/// leaf's file is still in the vault.
+fn read_main(
+    node: &Value,
+    default_mode: ViewMode,
+    known: &dyn Fn(&str) -> bool,
+) -> Option<LayoutSpec> {
+    let object = node.as_object()?;
+    match node.get("type").and_then(Value::as_str) {
+        Some("tabs") => {
+            let tabs: Vec<(String, Tab)> = node
+                .get("children")
+                .and_then(Value::as_array)
+                .map(|leaves| {
+                    leaves
+                        .iter()
+                        .filter_map(|leaf| tab_from_leaf(leaf, default_mode, known))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if tabs.is_empty() {
+                return None;
+            }
+            let active_tab = node
+                .get("currentTab")
+                .and_then(Value::as_u64)
+                .map(|t| t as usize)
+                .unwrap_or(0)
+                .min(tabs.len() - 1);
+            let mut own = object.clone();
+            own.shift_remove("children");
+            own.shift_remove("currentTab");
+            Some(LayoutSpec::Group(GroupSpec {
+                tabs,
+                active_tab,
+                node: own,
+            }))
         }
+        Some("split") => {
+            let children: Vec<LayoutSpec> = node
+                .get("children")
+                .and_then(Value::as_array)
+                .map(|c| {
+                    c.iter()
+                        .filter_map(|child| read_main(child, default_mode, known))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if children.is_empty() {
+                return None;
+            }
+            let direction = SplitDirection::parse(node.get("direction").and_then(Value::as_str));
+            let mut own = object.clone();
+            own.shift_remove("children");
+            own.shift_remove("direction");
+            Some(LayoutSpec::Split {
+                direction,
+                children,
+                node: own,
+            })
+        }
+        _ => None,
     }
 }
 
-/// How many `tabs` groups `node` holds.
-fn count_tab_groups(node: &Value) -> usize {
-    let own = usize::from(node.get("type").and_then(Value::as_str) == Some("tabs"));
-    own + node
-        .get("children")
-        .and_then(Value::as_array)
-        .map(|c| c.iter().map(count_tab_groups).sum())
-        .unwrap_or(0)
-}
-
-/// The first `tabs` group under `node`, to put the leaves in.
-fn find_tab_group(node: &mut Value) -> Option<&mut Map<String, Value>> {
-    if node.get("type").and_then(Value::as_str) == Some("tabs") {
-        return node.as_object_mut();
-    }
-    let children = node.get_mut("children")?.as_array_mut()?;
-    children.iter_mut().find_map(find_tab_group)
+/// The tab a `leaf` node of `workspace.json` stands for, with the leaf's
+/// id, or `None` for a view  has no tab for or a file that is gone.
+fn tab_from_leaf(
+    leaf: &Value,
+    default_mode: ViewMode,
+    known: &dyn Fn(&str) -> bool,
+) -> Option<(String, Tab)> {
+    let id = leaf.get("id").and_then(Value::as_str)?;
+    let view = leaf
+        .get("state")
+        .and_then(|s| s.get("type"))
+        .and_then(Value::as_str);
+    let inner = leaf.get("state").and_then(|s| s.get("state"));
+    let file = inner.and_then(|s| s.get("file")).and_then(Value::as_str);
+    let tab = match (view, file) {
+        (_, Some(file)) => {
+            if !known(file) {
+                return None;
+            }
+            let mode = match inner.and_then(|s| s.get("mode")).and_then(Value::as_str) {
+                Some("preview") => ViewMode::Reading,
+                Some("source")
+                    if inner
+                        .and_then(|s| s.get("source"))
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false) =>
+                {
+                    ViewMode::Source
+                }
+                Some("source") => ViewMode::LivePreview,
+                _ => default_mode,
+            };
+            Tab {
+                path: Some(file.to_string()),
+                mode,
+                history: vec![file.to_string()],
+                history_ix: 1,
+                leaf: Some(leaf.clone()),
+            }
+        }
+        (Some("empty"), None) => Tab {
+            leaf: Some(leaf.clone()),
+            ..Tab::empty(default_mode)
+        },
+        (Some("graph"), None) => Tab {
+            leaf: Some(leaf.clone()),
+            ..Tab::empty(ViewMode::Graph)
+        },
+        _ => return None,
+    };
+    Some((id.to_string(), tab))
 }
 
 /// The view type of the sidebar's current tab: the `tabs` group's
@@ -5518,113 +7272,6 @@ impl Render for Workspace {
                 .into(),
             None => "No file is open".into(),
         };
-        let crumbs: SharedString = self
-            .current
-            .as_deref()
-            .and_then(|p| p.rsplit_once('/').map(|(dir, _)| dir.replace('/', " / ")))
-            .unwrap_or_default()
-            .into();
-        let mode_label = match self.mode {
-            ViewMode::Reading => "Reading",
-            ViewMode::LivePreview => "Live Preview",
-            ViewMode::Source => "Source",
-            ViewMode::Graph => "Graph",
-        };
-        let can_back = self.history_ix > 1;
-        let can_forward = self.history_ix < self.history.len();
-
-        let header = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .h(px(36.))
-            .px_3()
-            .gap_2()
-            .border_b_1()
-            .border_color(theme.border)
-            .text_size(px(12.))
-            .child(
-                div()
-                    .id("back")
-                    .px_1()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .text_color(if can_back {
-                        theme.text
-                    } else {
-                        theme.text_faint
-                    })
-                    .hover(|s| s.bg(theme.bg_alt))
-                    .on_click(cx.listener(|this, _, window, cx| this.go_back(&GoBack, window, cx)))
-                    .child("←"),
-            )
-            .child(
-                div()
-                    .id("forward")
-                    .px_1()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .text_color(if can_forward {
-                        theme.text
-                    } else {
-                        theme.text_faint
-                    })
-                    .hover(|s| s.bg(theme.bg_alt))
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.go_forward(&GoForward, window, cx)),
-                    )
-                    .child("→"),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_row()
-                    .gap_1()
-                    .whitespace_nowrap()
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .when(!crumbs.is_empty(), |d| {
-                        d.child(div().text_color(theme.text_muted).child(crumbs.clone()))
-                            .child(div().text_color(theme.text_muted).child("/"))
-                    })
-                    .child(div().text_color(theme.text).child(title.clone())),
-            )
-            .child(
-                div()
-                    .id("graph")
-                    .px_2()
-                    .py_px()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .text_color(if self.mode == ViewMode::Graph {
-                        theme.text
-                    } else {
-                        theme.text_muted
-                    })
-                    .hover(|s| s.bg(theme.bg_alt))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.open_graph_action(&OpenGraph, window, cx)
-                    }))
-                    .child("Graph"),
-            )
-            .when(self.mode != ViewMode::Graph, |d| {
-                d.child(
-                    div()
-                        .id("mode")
-                        .px_2()
-                        .py_px()
-                        .rounded_sm()
-                        .cursor_pointer()
-                        .text_color(theme.text_muted)
-                        .hover(|s| s.bg(theme.bg_alt))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.toggle_mode(&ToggleMode, window, cx)
-                        }))
-                        .child(mode_label),
-                )
-            });
 
         let main_body: gpui::AnyElement = if let Some(loading) = &self.loading {
             div()
@@ -5633,7 +7280,8 @@ impl Render for Workspace {
                 .child(loading.clone())
                 .into_any_element()
         } else {
-            self.render_main(&theme, cx)
+            let tree = self.layout_tree.clone();
+            self.render_layout(&tree, &mut Vec::new(), &theme, cx)
         };
 
         let wanted_title: SharedString = match &self.current {
@@ -5652,9 +7300,7 @@ impl Render for Workspace {
             .min_w_0()
             .h_full()
             .overflow_hidden()
-            .child(self.render_tab_strip(&theme, cx))
-            .child(header)
-            .child(div().flex_1().overflow_hidden().child(main_body));
+            .child(main_body);
 
         let show_ribbon = self
             .state
@@ -5666,7 +7312,9 @@ impl Render for Workspace {
         let left_body: gpui::AnyElement = match left_tab {
             LeftTab::Files => self.explorer.clone().into_any_element(),
             LeftTab::Search => self.search.clone().into_any_element(),
+            LeftTab::Bookmarks => self.bookmarks.clone().into_any_element(),
         };
+        let bookmarks_on = self.state.as_ref().is_some_and(|s| s.bookmarks_enabled());
         let left = div()
             .flex()
             .flex_col()
@@ -5706,6 +7354,19 @@ impl Render for Workspace {
                         },
                         cx,
                     ))
+                    .when(bookmarks_on, |d| {
+                        d.child(self.dock_tab(
+                            "Bookmarks",
+                            left_tab == LeftTab::Bookmarks,
+                            &theme,
+                            |this, window, cx| {
+                                this.leave_search_field(window, cx);
+                                this.left_tab = LeftTab::Bookmarks;
+                                cx.notify();
+                            },
+                            cx,
+                        ))
+                    })
                     .child(
                         div()
                             .flex_1()
@@ -6085,25 +7746,133 @@ mod tests {
         assert_eq!(graph["state"]["icon"], json!("lucide-git-fork"));
     }
 
-    #[test]
-    fn leaves_are_collected_depth_first_across_groups() {
-        let layout = json!({
+    /// Obsidian's `main` after "Split right" on A, then B opened in the new
+    /// group and "Split down" there, as observed on 2026-10-20: a vertical
+    /// root over a `tabs` group and a nested horizontal split.
+    fn nested_main() -> Value {
+        json!({
+            "id": "449f821d63addc06",
             "type": "split",
             "children": [
-                {"type": "tabs", "children": [leaf("a", "A.md", "source", false)]},
-                {"type": "split", "children": [
-                    {"type": "tabs", "children": [leaf("b", "B.md", "preview", false)]}
-                ]},
+                {"id": "3ab610226e243404", "type": "tabs", "dimension": 29.411764705882355,
+                 "children": [leaf("3c245a8fc7dc4598", "A.md", "source", false)]},
+                {"id": "0fa61223ab358f4f", "type": "split", "dimension": 70.58823529411765,
+                 "children": [
+                    {"id": "6c9c4444fe9200bb", "type": "tabs",
+                     "children": [leaf("f0559f5cf8f3ac65", "B.md", "source", false)]},
+                    {"id": "189916eb401608c6", "type": "tabs", "currentTab": 1,
+                     "children": [
+                        leaf("747a588e39ce11fa", "B.md", "source", false),
+                        leaf("52ae6ba5c0105abd", "C.md", "preview", false),
+                     ]},
+                 ],
+                 "direction": "horizontal"},
             ],
-        });
-        let mut leaves = Vec::new();
-        collect_leaves(&layout, &mut leaves);
-        let ids: Vec<&str> = leaves.iter().map(|l| l["id"].as_str().unwrap()).collect();
-        assert_eq!(ids, ["a", "b"]);
-        assert_eq!(count_tab_groups(&layout), 2);
-        let mut single = json!({"type": "split", "children": [{"type": "tabs", "children": []}]});
-        assert_eq!(count_tab_groups(&single), 1);
-        assert!(find_tab_group(&mut single).is_some());
+            "direction": "vertical",
+        })
+    }
+
+    #[test]
+    fn main_is_read_as_a_tree_of_groups_with_their_own_keys() {
+        let spec = read_main(&nested_main(), ViewMode::LivePreview, &|_| true).unwrap();
+        let LayoutSpec::Split {
+            direction,
+            children,
+            node,
+        } = spec
+        else {
+            panic!("the root is a split");
+        };
+        assert_eq!(direction, SplitDirection::Vertical);
+        assert_eq!(node.get("id"), Some(&json!("449f821d63addc06")));
+        assert!(!node.contains_key("children") && !node.contains_key("direction"));
+        assert_eq!(children.len(), 2);
+        let LayoutSpec::Group(left) = &children[0] else {
+            panic!("the first child is a group");
+        };
+        assert_eq!(left.tabs.len(), 1);
+        assert_eq!(left.tabs[0].0, "3c245a8fc7dc4598");
+        assert_eq!(left.tabs[0].1.mode, ViewMode::LivePreview);
+        assert_eq!(left.node.get("dimension"), Some(&json!(29.411764705882355)));
+        let LayoutSpec::Split {
+            direction,
+            children,
+            ..
+        } = &children[1]
+        else {
+            panic!("the second child is a split");
+        };
+        assert_eq!(*direction, SplitDirection::Horizontal);
+        let LayoutSpec::Group(bottom) = &children[1] else {
+            panic!("a group");
+        };
+        assert_eq!(bottom.active_tab, 1);
+        assert_eq!(bottom.tabs[1].1.mode, ViewMode::Reading);
+    }
+
+    #[test]
+    fn a_group_whose_files_are_all_gone_is_dropped_with_its_empty_split() {
+        let spec = read_main(&nested_main(), ViewMode::LivePreview, &|f| f == "A.md").unwrap();
+        let LayoutSpec::Split { children, .. } = spec else {
+            panic!("the root is a split");
+        };
+        assert_eq!(children.len(), 1, "the horizontal split had nothing left");
+        assert!(read_main(&nested_main(), ViewMode::LivePreview, &|_| false).is_none());
+    }
+
+    #[test]
+    fn splitting_puts_a_sibling_in_a_split_that_runs_that_way_and_wraps_otherwise() {
+        let mut tree = Layout::split(SplitDirection::Vertical, vec![Layout::Group(1)]);
+        assert_eq!(
+            tree.insert_beside(1, 2, SplitDirection::Vertical),
+            Some(false)
+        );
+        let mut order = Vec::new();
+        tree.groups(&mut order);
+        assert_eq!(order, [1, 2]);
+        assert_eq!(
+            tree.insert_beside(2, 3, SplitDirection::Horizontal),
+            Some(true)
+        );
+        assert_eq!(tree.path_to(3), Some(vec![1, 1]));
+        assert!(matches!(
+            tree.node_at(&[1]),
+            Some(Layout::Split { direction: SplitDirection::Horizontal, children, .. }) if children.len() == 2
+        ));
+        // Neighbours: from 1, right is the whole right column; from 3, up is 2
+        // and left is 1; from 2, down is 3, up is nothing.
+        assert_eq!(tree.neighbors(1, SplitDirection::Vertical, true), [2, 3]);
+        assert_eq!(tree.neighbors(3, SplitDirection::Horizontal, false), [2]);
+        assert_eq!(tree.neighbors(3, SplitDirection::Vertical, false), [1]);
+        assert_eq!(tree.neighbors(2, SplitDirection::Horizontal, true), [3]);
+        assert!(tree
+            .neighbors(2, SplitDirection::Horizontal, false)
+            .is_empty());
+        assert!(tree
+            .neighbors(1, SplitDirection::Vertical, false)
+            .is_empty());
+        // Removing 2 leaves the horizontal split nested around 3, as Obsidian
+        // keeps it; removing 3 too takes the split with it.
+        assert!(tree.remove(2));
+        assert_eq!(tree.path_to(3), Some(vec![1, 0]));
+        assert!(tree.remove(3));
+        let mut order = Vec::new();
+        tree.groups(&mut order);
+        assert_eq!(order, [1]);
+        assert!(matches!(&tree, Layout::Split { children, .. } if children.len() == 1));
+    }
+
+    #[test]
+    fn a_dimension_sits_after_type() {
+        let mut node = Map::new();
+        node.insert("id".into(), json!("x"));
+        node.insert("type".into(), json!("tabs"));
+        node.insert("extra".into(), json!(1));
+        set_dimension(&mut node, Some(40.0));
+        let keys: Vec<&String> = node.keys().collect();
+        assert_eq!(keys, ["id", "type", "dimension", "extra"]);
+        set_dimension(&mut node, None);
+        assert!(!node.contains_key("dimension"));
     }
 
     #[test]

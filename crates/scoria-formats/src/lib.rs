@@ -4,6 +4,7 @@
 //! a vault edited by Obsidian after  never loses data it does not understand.
 
 pub mod base;
+pub mod bookmarks;
 pub mod canvas;
 pub mod config;
 pub mod properties;

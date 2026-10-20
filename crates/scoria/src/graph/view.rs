@@ -199,7 +199,7 @@ fn integerize(value: &mut Value) {
 /// `graph.json` as Obsidian creates it: every key, in its order, with the
 /// current values. Used when the file does not exist yet, since a file
 /// written from the struct alone would be sparse and ordered differently.
-fn full_document(config: &GraphConfig) -> Value {
+pub(crate) fn full_document(config: &GraphConfig) -> Value {
     let collapsed = |key: &str| {
         config
             .extra

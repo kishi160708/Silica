@@ -262,6 +262,8 @@ pub enum ExplorerEvent {
     Move(String),
     Duplicate(String),
     Delete(String),
+    /// "Bookmark...": a file or folder for the Bookmarks pane.
+    Bookmark(String),
 }
 
 /// The right-click menu over a row.
@@ -396,6 +398,7 @@ impl FileExplorer {
                 ),
                 ("Rename...", ExplorerEvent::Rename(row.path.clone())),
                 ("Move folder to...", ExplorerEvent::Move(row.path.clone())),
+                ("Bookmark...", ExplorerEvent::Bookmark(row.path.clone())),
                 ("Delete", ExplorerEvent::Delete(row.path.clone())),
             ]
         } else {
@@ -415,6 +418,7 @@ impl FileExplorer {
                 ("Rename...", ExplorerEvent::Rename(row.path.clone())),
                 ("Move file to...", ExplorerEvent::Move(row.path.clone())),
                 ("Make a copy", ExplorerEvent::Duplicate(row.path.clone())),
+                ("Bookmark...", ExplorerEvent::Bookmark(row.path.clone())),
                 ("Delete", ExplorerEvent::Delete(row.path.clone())),
             ]
         };

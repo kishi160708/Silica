@@ -13,6 +13,7 @@
 // not a defect to deny the build over.
 #![cfg_attr(not(unix), allow(dead_code))]
 
+mod bookmarks;
 mod chooser;
 #[cfg(unix)]
 mod control;

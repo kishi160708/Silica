@@ -17,7 +17,9 @@ open in Live Preview or Source mode with find and replace, multiple cursors and 
 `![[` and `#` autocomplete against the vault's files, aliases, headings, tags and block references; Obsidian's
 sixteen table commands add, move and align rows and columns and tables are edited cell by cell; new note,
 rename, move, copy and delete rewrite links the way Obsidian does, and frontmatter is an editable,
-typed properties table that rewrites only the lines it changes. Everything is bound through
+typed properties table that rewrites only the lines it changes. The main area splits into tab groups
+(Split right, Split down, draggable dividers, the focus commands) and `workspace.json` records the
+tree the way Obsidian does, and the Bookmarks pane reads and writes `bookmarks.json` in Obsidian's bytes. Everything is bound through
 Obsidian's command ids, so a vault's `hotkeys.json` applies unchanged.
 
 ```
@@ -65,7 +67,7 @@ at [.](https://.).
 | --- | --- | --- |
 | 1. Spike | 50k-line editor, parser conformance corpus, 2 s vault index | Done |
 | 2. Reader | A daily user browses their real vault with no missing content | Done: Files, reading view, Backlinks, Outgoing links, Outline, Tags, Search, quick switcher, graph, command palette, read-only Settings, file watching |
-| 3. Writer | The vault round-trips byte-identical after a week of mixed use in both apps | In progress: Source mode, Live Preview, find and replace, file operations with link rewriting, properties, autocompletion, table editing, block references, templates, daily notes, the round-trip harness and the Settings toggles are done; and every Settings control Obsidian offers as one writes; file recovery is out of phase 3 |
+| 3. Writer | The vault round-trips byte-identical after a week of mixed use in both apps | In progress: Source mode, Live Preview, find and replace, file operations with link rewriting, properties, autocompletion, table editing, block references, templates, daily notes, tab groups, bookmarks, the round-trip harness and the Settings toggles are done; and every Settings control Obsidian offers as one writes; file recovery is out of phase 3 |
 | 4. Parity | Core plugin parity | Not started: canvas, bases, PDF, math, themes subset, URI and CLI |
 | 5. Ecosystem | Native plugin SDK | Not started |
 

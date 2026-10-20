@@ -151,6 +151,8 @@ of mixed use in both apps. The gate run opened on 2026-10-18, see
 | Writing settings back | done for every control Obsidian itself offers as one, see [[#Settings writing, 2026-10-18]], [[#Settings dropdowns, 2026-10-18]] and [[#Settings sliders and text fields, 2026-10-18]] |
 | Round-trip harness | done, see [[#Round-trip harness, 2026-10-18]] |
 | Canvas writer | done: the bytes Obsidian writes on an edited save, see [[#Canvas writer, 2026-10-19]]; nothing in the app calls it yet |
+| Tab groups | done: Split right, Split down, the four focus commands, draggable dividers and `workspace.json`'s `main` tree, see [[#Tab groups, 2026-10-20]] |
+| Bookmarks | done: the pane, the seven commands and `bookmarks.json` in Obsidian's bytes, see [[#Bookmarks, 2026-10-20]] |
 | The gate itself | open: the harness passes on the real vault, the week of mixed use has not run, see [[#The gate run opens, 2026-10-18]] |
 
 ### Tabs, the layout file, the ribbon, the Hotkeys tab and the graph panel, 2026-10-20
@@ -453,7 +455,7 @@ Nothing that crosses the socket may panic.
 | `keys` | `keys`: gpui keystrokes, `["ctrl-shift-f","enter"]` | `{"handled","pending"}` |
 | `type` | `text` | `{"target"}`: editor, input or none |
 | `click` | `x`, `y`, `button?`, `count?`, `mods?` | `{"ok"}` |
-| `mouse` | `action`: down, up, move; `x`, `y`, `button?`, `mods?` | `{"ok"}` |
+| `mouse` | `action`: down, up, move; `x`, `y`, `button?`, `mods?` — a `move` naming a `button` is a drag in progress | `{"ok"}` |
 | `scroll` | `x`, `y`, `dx`, `dy`, `unit?`: pixels, lines | `{"ok"}` |
 | `set_selection` | `start`, `end?` (byte offsets) | `{"cursor"}` |
 | `scroll_to` | `line` | `{"ok"}` |
@@ -1677,6 +1679,93 @@ locks and calls `MetadataCache::reresolve` when files appeared or vanished,
 because links elsewhere may now resolve. Unlinked mentions use one regex
 alternation over every note name and alias (`mentions::Finder`), skipping
 matches inside wikilinks, markdown links, inline code and fenced code.
+
+### Bookmarks, 2026-10-20
+
+The Bookmarks core plugin, from the same probe run as the tab groups
+([[Specification#Observed bookmarks behavior, Obsidian 1.14.4 (installer build 1.13.7)]]).
+`-formats::bookmarks` reads `bookmarks.json` keeping every item as the
+JSON object it was — so an item  never touched is written back key for
+key, unknown keys included — and lays out the items  makes in
+Obsidian's order (`type`, `ctime`, then `path`/`subpath`, `query`, `title`
+and `options`, or `items` then `title` for a group). The vault writes the
+file whole, two-space indented, no trailing newline, as observed; the
+observed file is a round-trip test.
+
+The pane is a third tab of the left dock, shown while `core-plugins.json`
+leaves the plugin on: the header's first three buttons ("Bookmark the
+active tab...", "New group", "Collapse all" — the search filter is not
+built), one row per item with a glyph per kind, groups folding, the open
+note's row marked, a right-click "Remove". A file row opens the note at its
+heading or block, a search row fills the Search pane, a graph row opens the
+graph, a folder row shows the folder in Files, a url row opens the browser.
+`workspace.json`'s left dock restores to it when its `currentTab` is the
+`bookmarks` leaf.
+
+The commands: `bookmarks:open`; `bookmark-current-view` (the note, or the
+graph with the whole option document of `graph.json`; a note already
+bookmarked opens "Edit bookmark" whose Remove takes it out);
+`bookmark-current-heading` and `bookmark-current-section` (the block id
+written into the buffer as one edit when the block has none, exactly as the
+link suggester writes one); `bookmark-current-search`;
+`bookmark-all-tabs` (a group of every tab in every group, each member
+stamped with one time, the title defaulting to the moment in Obsidian's
+`MMMM D, YYYY h:mm A`); and `unbookmark-current-view`, which removes the
+plain file item added last, groups included, as Obsidian's lookup by path
+does. Each goes through the same prompt as a rename, "Add bookmark", with
+the default name as the Title field's placeholder; the Files menu gained
+"Bookmark..." for files and folders.
+
+Checked over the control socket in the scratch vault: each command's file
+after Enter matched the probe's bytes shape for shape, `bookmark-current-section`
+wrote ` ^caceeb` onto the paragraph and the autosave saved it, the pane
+listed the items with the open note marked, and clicking the block row
+opened A at the block.
+
+### Tab groups, 2026-10-20
+
+The main area was one strip of tabs over one editor and one reading view;
+`workspace.json`'s `main` was flattened into it on read and left alone on
+write when it held more than one group. It is now a tree. `Layout` is the
+tree Obsidian's `main` records — a root `split` over `tabs` groups and nested
+splits — and every `TabGroup` owns an editor and a reading view of its own, so
+two groups show two notes at once. The active group's tabs and note stay in
+the workspace's live fields, exactly as the active tab's always did, and
+switching groups stashes them and loads the other's without reloading a
+file: the group's views already show its note. A mouse down anywhere in a
+group makes it active before the view handles the click, so an edit always
+lands in the live editor and the autosave, the explorer highlight, the graph
+centre and the right dock all follow.
+
+What was built, each from the probe run of the same day
+([[Specification#Observed tab group behavior, Obsidian 1.14.4 (installer build 1.13.7)]]):
+`workspace:split-vertical` and `split-horizontal` (a sibling when the
+enclosing split runs that way, a wrapping split otherwise, the new group a
+copy of the active leaf and active); `editor:focus-left/right/top/bottom`
+(the sibling on that side, and inside it the most recently used group);
+`workspace:close-tab-group`, `close-others-tab-group` (the group's other
+tabs, as Obsidian's), and a group's last tab closing the group with focus
+going to the most recently used group left; `editor:open-link-in-new-split`;
+a draggable divider between every pair of children that writes Obsidian's
+`dimension` percentages on both, halved by a split and rescaled to a hundred
+by a close; and `main` read as a tree and written back as one, each node
+over the keys it was read with, so a nested layout Obsidian wrote comes back
+to it byte for byte. The socket's `state` gained a `groups` object (active
+id, the tree, every group's tabs and dimension), and its `mouse` `move`
+takes a `button` so a divider can be dragged from a script.
+
+Two limits worth knowing. There is one graph view: the group that shows it
+is the active one when that is in graph mode, else the first that is, and a
+second group asking for the graph says so in its place. And a leaf type
+ has no view for is still dropped on read, as before.
+
+Checked on the desktop over the control socket in a scratch vault: split
+right, open B, split down, click back into the left group, focus-right
+landing on the bottom-right group, close-tab-group taking the group away,
+quit writing the nested `main` with `active` on the right leaf, and a
+relaunch bringing all three groups back with C in reading view. `cargo test
+-p ` has four new tests for reading `main`, splitting, removing,
+neighbours and the `dimension` slot.
 
 ### Search and quick switcher, 2026-10-16
 

@@ -974,14 +974,20 @@ impl Editor {
     /// Ctrl+click opens the one under the pointer. False when the cursor
     /// is not in a link.
     pub fn follow_link_at_cursor(&mut self, cx: &mut Context<Self>) -> bool {
-        let cursor = self.cursor();
-        // Not `rendered_only`: a cursor inside a link is exactly what
-        // makes Live Preview reveal its source.
-        let Some(target) = self.link_at(cursor.line, cursor.col, false) else {
+        let Some(target) = self.link_target_at_cursor() else {
             return false;
         };
         cx.emit(EditorEvent::OpenLink(target));
         true
+    }
+
+    /// The link under the cursor, for a caller that opens it somewhere
+    /// other than this editor's own tab.
+    pub fn link_target_at_cursor(&self) -> Option<LinkTarget> {
+        let cursor = self.cursor();
+        // Not `rendered_only`: a cursor inside a link is exactly what
+        // makes Live Preview reveal its source.
+        self.link_at(cursor.line, cursor.col, false)
     }
 
     /// Types `text` at the cursor the way a keystroke does, so the
@@ -2856,6 +2862,69 @@ impl Editor {
                 None
             }
         }
+    }
+
+    /// The heading the cursor's line is, as `#Heading` — the subpath
+    /// "Bookmark heading under cursor..." records. `None` off a heading.
+    pub fn heading_subpath_at_cursor(&self) -> Option<String> {
+        let line = self.cursor().line as u32;
+        let meta = _cache::index_markdown(self.buf.text());
+        meta.headings
+            .iter()
+            .find(|h| h.position.start.line == line)
+            .map(|h| format!("#{}", h.heading.trim()))
+    }
+
+    /// The id of the block under the cursor, written into the note first
+    /// when it has none — what "Bookmark block under cursor..." does. The
+    /// buffer, not the disk, is what the cursor is in, so the block is
+    /// found in the buffer's own index and the id goes in as one edit the
+    /// autosave writes. `None` on a block that takes no id (a list as a
+    /// whole, a thematic break, the frontmatter), which is reported.
+    pub fn block_id_at_cursor(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<String> {
+        let line = self.cursor().line as u32;
+        let text = self.buf.text().to_string();
+        let meta = _cache::index_markdown(&text);
+        let section = meta
+            .sections
+            .iter()
+            .rfind(|s| s.position.start.line <= line && line <= s.position.end.line)?;
+        if let Some(id) = &section.id {
+            return Some(id.clone());
+        }
+        let Some(placement) = Placement::of(section.kind) else {
+            cx.emit(EditorEvent::Reported(
+                "That block cannot take a block id".into(),
+            ));
+            return None;
+        };
+        let id = blocks::new_id(self.id_seed(), &meta.blocks);
+        let nl = if self.buf.crlf() {
+            "\r\n"
+        } else {
+            newline_of(&text)
+        };
+        let Some(insertion) =
+            blocks::plan_id(&text, section.position.end.offset, placement, &id, nl)
+        else {
+            cx.emit(EditorEvent::Reported(
+                "No id can be written onto that block".into(),
+            ));
+            return None;
+        };
+        let cursor = self.buf.head;
+        self.edit_many(
+            vec![(insertion.range.clone(), insertion.text.clone())],
+            cursor,
+            None,
+            window,
+            cx,
+        );
+        Some(id)
     }
 
     /// A seed for a fresh block id. The clock is the only randomness the

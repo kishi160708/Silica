@@ -5,6 +5,7 @@ pub mod ops;
 
 pub use ops::{OpError, TrashOption};
 use _cache::LinkResolver;
+use _formats::bookmarks::Bookmarks;
 use _formats::config::{
     AppConfig, AppearanceConfig, CommandPaletteConfig, CommunityPlugins, CorePlugins,
     DailyNotesConfig, GraphConfig, Hotkeys, PluginManifest, PropertyTypes, SwitcherConfig,
@@ -396,6 +397,17 @@ impl Vault {
 
     pub fn app_config(&self) -> Result<AppConfig, VaultError> {
         Ok(self.read_config("app.json")?.unwrap_or_default())
+    }
+
+    /// The Bookmarks plugin's `bookmarks.json`; empty when there is none.
+    pub fn bookmarks(&self) -> Result<Bookmarks, VaultError> {
+        Ok(self.read_config("bookmarks.json")?.unwrap_or_default())
+    }
+
+    /// Writes `bookmarks.json` whole, as Obsidian does: items are added,
+    /// removed and reordered, so a merge would keep what was taken out.
+    pub fn write_bookmarks(&self, bookmarks: &Bookmarks) -> Result<(), VaultError> {
+        self.replace_config("bookmarks.json", bookmarks)
     }
 
     pub fn appearance_config(&self) -> Result<AppearanceConfig, VaultError> {
