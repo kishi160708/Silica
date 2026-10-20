@@ -337,6 +337,29 @@ impl Vault {
         name: &str,
         value: &T,
     ) -> Result<(), VaultError> {
+        self.write_config_with(name, value, true)
+    }
+
+    /// Writes one `.obsidian` config file whole, so that a key `value` no
+    /// longer has leaves the file too. For a file that *is* a map of
+    /// entries — `hotkeys.json`, where dropping a command's entry is what
+    /// restores its defaults — the merge in [`Vault::write_config`] would
+    /// keep every entry ever written. The value keeps the file's own entry
+    /// order the way the type reads it, and the byte order mark stays.
+    pub fn replace_config<T: serde::Serialize>(
+        &self,
+        name: &str,
+        value: &T,
+    ) -> Result<(), VaultError> {
+        self.write_config_with(name, value, false)
+    }
+
+    fn write_config_with<T: serde::Serialize>(
+        &self,
+        name: &str,
+        value: &T,
+        merge: bool,
+    ) -> Result<(), VaultError> {
         let dir = self.root.join(&self.config_dir);
         let path = dir.join(name);
         std::fs::create_dir_all(&dir).map_err(|source| VaultError::Io {
@@ -355,10 +378,10 @@ impl Vault {
                 let bom = text.starts_with('\u{feff}');
                 let body = text.strip_prefix('\u{feff}').unwrap_or(&text);
                 match serde_json::from_str(body) {
-                    Ok(old) => (bom, merge_config(old, fresh)),
+                    Ok(old) if merge => (bom, merge_config(old, fresh)),
                     // A file nobody can parse is replaced rather than
                     // merged into.
-                    Err(_) => (bom, fresh),
+                    _ => (bom, fresh),
                 }
             }
             Err(_) => (false, fresh),

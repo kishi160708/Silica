@@ -239,6 +239,20 @@ fn parse_args() -> Args {
     args
 }
 
+/// Every key binding in the app, from scratch: the views' own and the
+/// registry's hotkeys. Called at startup and again whenever `hotkeys.json`
+/// changes, since a binding made from the old registry would otherwise stay.
+pub fn bind_all_keys(cx: &mut App, registry: &CommandRegistry) {
+    cx.clear_key_bindings();
+    editor::bind_keys(cx);
+    workspace::bind_keys(cx, registry);
+    text_input::bind_keys(cx);
+    graph::bind_keys(cx);
+    settings::bind_keys(cx);
+    prompt::bind_keys(cx);
+    cx.bind_keys([KeyBinding::new("ctrl-q", Quit, None)]);
+}
+
 fn main() {
     let args = parse_args();
     // The theme comes from appearance.json and the key bindings from
@@ -265,14 +279,8 @@ fn main() {
 
     gpui_platform::application().run(move |cx: &mut App| {
         cx.set_global(theme);
-        editor::bind_keys(cx);
-        workspace::bind_keys(cx, &registry);
+        bind_all_keys(cx, &registry);
         cx.set_global(Commands(registry));
-        text_input::bind_keys(cx);
-        graph::bind_keys(cx);
-        settings::bind_keys(cx);
-        prompt::bind_keys(cx);
-        cx.bind_keys([KeyBinding::new("ctrl-q", Quit, None)]);
 
         let (width, height) = args.size.unwrap_or((1400.0, 900.0));
         let bounds = Bounds::centered(None, size(px(width), px(height)), cx);

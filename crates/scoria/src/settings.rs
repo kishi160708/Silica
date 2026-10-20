@@ -26,12 +26,12 @@ use crate::theme::Theme;
 use crate::workspace::{Commands, VaultState};
 use gpui::{
     actions, deferred, div, prelude::*, px, rgb, uniform_list, App, Context, Entity, EventEmitter,
-    FocusHandle, Focusable, FontWeight, KeyBinding, SharedString, Subscription,
-    UniformListScrollHandle, Window,
+    FocusHandle, Focusable, FontWeight, KeyBinding, KeyDownEvent, Keystroke, SharedString,
+    Subscription, UniformListScrollHandle, Window,
 };
-use _commands::{hotkey_label, Command};
+use _commands::{hotkey_label, keystroke, Command};
 use _formats::config::{
-    AppConfig, AppearanceConfig, CorePlugins, SwitcherConfig, CORE_PLUGINS,
+    AppConfig, AppearanceConfig, CorePlugins, Hotkey, Hotkeys, SwitcherConfig, CORE_PLUGINS,
 };
 use _search::fuzzy_match;
 use serde_json::{json, Value};
@@ -547,6 +547,9 @@ pub enum SettingChange {
     Switcher(SwitcherConfig),
     CorePlugins(CorePlugins),
     CommunityPlugins(Vec<String>),
+    /// `hotkeys.json` whole: the map in the file's order with one entry
+    /// added, changed or removed.
+    Hotkeys(Hotkeys),
 }
 
 impl SettingChange {
@@ -558,6 +561,7 @@ impl SettingChange {
             SettingChange::Switcher(_) => "switcher.json",
             SettingChange::CorePlugins(_) => "core-plugins.json",
             SettingChange::CommunityPlugins(_) => "community-plugins.json",
+            SettingChange::Hotkeys(_) => "hotkeys.json",
         }
     }
 }
@@ -867,6 +871,9 @@ pub struct SettingsView {
     /// Indices into `all_commands` after search and filter.
     hotkey_rows: Vec<usize>,
     hotkey_scroll: UniformListScrollHandle,
+    /// The command whose ⊕ was clicked: the next chord pressed is its new
+    /// binding, Escape backs out.
+    capturing: Option<String>,
     /// The dropdown whose options are showing, by the key it writes.
     menu: Option<&'static str>,
     /// The text field being typed into, by the key it writes. The rows are
@@ -918,6 +925,7 @@ impl SettingsView {
             all_commands: Vec::new(),
             hotkey_rows: Vec::new(),
             hotkey_scroll: UniformListScrollHandle::new(),
+            capturing: None,
             menu: None,
             editing: None,
             field,
@@ -956,6 +964,11 @@ impl SettingsView {
         // here, only state to drop.
         self.menu = None;
         self.editing = None;
+        self.capturing = None;
+        // A filter typed last time would otherwise be what the next thing
+        // typed appends to.
+        self.hotkey_search
+            .update(cx, |input, cx| input.set_text("", cx));
         self.focus_tab(window, cx);
         cx.notify();
     }
@@ -969,6 +982,7 @@ impl SettingsView {
             "menu": self.menu,
             "editing": self.editing.map(|field| field.key),
             "hotkey_search": self.hotkey_search.read(cx).text(),
+            "capturing": self.capturing,
         })
     }
 
@@ -989,9 +1003,121 @@ impl SettingsView {
         cx.notify();
     }
 
-    fn close_action(&mut self, _: &Close, _: &mut Window, cx: &mut Context<Self>) {
+    fn close_action(&mut self, _: &Close, window: &mut Window, cx: &mut Context<Self>) {
+        // Escape while a chord is being captured backs out of the capture,
+        // not the modal.
+        if self.capturing.take().is_some() {
+            self.focus_tab(window, cx);
+            cx.notify();
+            return;
+        }
         self.dismiss_open_controls(cx);
         cx.emit(SettingsEvent::Close);
+    }
+
+    // ----- hotkeys ----------------------------------------------------------
+
+    /// Waits for the next chord to bind to `id`. The keyboard goes to the
+    /// view's own handle so the filter field does not eat it.
+    fn start_capture(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.capturing = Some(id);
+        window.focus(&self.focus_handle, cx);
+        cx.notify();
+    }
+
+    /// The chord pressed while capturing, as the binding for that command.
+    fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(id) = self.capturing.clone() else {
+            return;
+        };
+        cx.stop_propagation();
+        let Some(hotkey) = hotkey_from_keystroke(&event.keystroke) else {
+            return;
+        };
+        self.capturing = None;
+        self.focus_tab(window, cx);
+        self.change_hotkeys(
+            cx,
+            |overrides, command| {
+                let list = overrides
+                    .entry(command.id.clone())
+                    .or_insert_with(|| command.default_hotkeys.clone());
+                if !list.contains(&hotkey) {
+                    list.push(hotkey);
+                }
+            },
+            &id,
+        );
+    }
+
+    /// Takes one binding off a command. A default binding taken off writes
+    /// the remaining defaults as the entry, and an entry left empty unbinds.
+    fn remove_hotkey(&mut self, id: &str, hotkey: Hotkey, cx: &mut Context<Self>) {
+        self.change_hotkeys(
+            cx,
+            |overrides, command| {
+                let list = overrides
+                    .entry(command.id.clone())
+                    .or_insert_with(|| command.default_hotkeys.clone());
+                list.retain(|h| *h != hotkey);
+            },
+            id,
+        );
+    }
+
+    /// Drops the command's entry, so its defaults are back.
+    fn restore_default_hotkeys(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.change_hotkeys(
+            cx,
+            |overrides, command| {
+                overrides.shift_remove(&command.id);
+            },
+            id,
+        );
+    }
+
+    /// Reads `hotkeys.json` as it stands, lets `edit` change the entry for
+    /// `id`, and asks the workspace to write it. The file's own order is
+    /// kept, so a vault's bindings do not shuffle the first time 
+    /// writes one.
+    fn change_hotkeys(
+        &mut self,
+        cx: &mut Context<Self>,
+        edit: impl FnOnce(&mut Hotkeys, &Command),
+        id: &str,
+    ) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let Some(command) = self.all_commands.iter().find(|c| c.id == id).cloned() else {
+            return;
+        };
+        let mut overrides = match state.vault().hotkeys() {
+            Ok(overrides) => overrides,
+            Err(err) => {
+                // An unreadable file must not be rewritten from defaults.
+                eprintln!("hotkeys.json could not be read: {err}");
+                return;
+            }
+        };
+        edit(&mut overrides, &command);
+        cx.emit(SettingsEvent::Changed(Box::new(SettingChange::Hotkeys(
+            overrides,
+        ))));
+    }
+
+    /// How many commands each chord is bound to, so a duplicate can be
+    /// marked the way Obsidian marks one.
+    fn chord_counts(&self) -> std::collections::HashMap<String, usize> {
+        let mut counts = std::collections::HashMap::new();
+        for c in &self.all_commands {
+            for h in &c.hotkeys {
+                if let Some(k) = keystroke(h) {
+                    *counts.entry(k).or_insert(0) += 1;
+                }
+            }
+        }
+        counts
     }
 
     /// What a click that lands anywhere but on the control itself leaves
@@ -2070,21 +2196,74 @@ impl SettingsView {
         cx: &mut Context<Self>,
     ) -> Vec<gpui::Div> {
         let theme = cx.global::<Theme>().clone();
+        let counts = self.chord_counts();
+        let danger = theme.callout_color("danger");
         range
             .filter_map(|ix| {
                 let c = self.all_commands.get(*self.hotkey_rows.get(ix)?)?;
-                let chips: Vec<gpui::Div> = c
+                let capturing = self.capturing.as_deref() == Some(c.id.as_str());
+                let id = c.id.clone();
+                let chips: Vec<gpui::AnyElement> = c
                     .hotkeys
                     .iter()
-                    .map(|h| {
-                        let chip = hotkey_chip(hotkey_label(h), &theme);
-                        if c.custom {
-                            chip.border_color(theme.accent).text_color(theme.text)
-                        } else {
-                            chip
+                    .enumerate()
+                    .map(|(hix, h)| {
+                        let duplicate = keystroke(h)
+                            .and_then(|k| counts.get(&k))
+                            .is_some_and(|n| *n > 1);
+                        let mut chip = hotkey_chip(hotkey_label(h), &theme)
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap_1();
+                        if duplicate {
+                            chip = chip.border_color(danger).text_color(danger);
+                        } else if c.custom {
+                            chip = chip.border_color(theme.accent).text_color(theme.text);
                         }
+                        let id = id.clone();
+                        let hotkey = h.clone();
+                        chip.child(
+                            div()
+                                .id(SharedString::from(format!("hotkey-remove-{}-{hix}", c.id)))
+                                .cursor_pointer()
+                                .text_color(theme.text_faint)
+                                .hover(|s| s.text_color(theme.text))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.remove_hotkey(&id, hotkey.clone(), cx)
+                                }))
+                                .child("×"),
+                        )
+                        .into_any_element()
                     })
                     .collect();
+                let icon = |name: String, glyph: &'static str, theme: &Theme| {
+                    div()
+                        .id(SharedString::from(name))
+                        .w(px(22.))
+                        .h(px(22.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .text_size(px(14.))
+                        .text_color(theme.text_muted)
+                        .hover(|s| s.bg(theme.bg_alt).text_color(theme.text))
+                        .child(glyph)
+                };
+                let add = {
+                    let id = c.id.clone();
+                    icon(format!("hotkey-add-{}", c.id), "⊕", &theme).on_click(cx.listener(
+                        move |this, _, window, cx| this.start_capture(id.clone(), window, cx),
+                    ))
+                };
+                let restore = c.custom.then(|| {
+                    let id = c.id.clone();
+                    icon(format!("hotkey-restore-{}", c.id), "↺", &theme).on_click(
+                        cx.listener(move |this, _, _, cx| this.restore_default_hotkeys(&id, cx)),
+                    )
+                });
                 Some(
                     div()
                         .w_full()
@@ -2109,9 +2288,10 @@ impl SettingsView {
                             div()
                                 .flex()
                                 .flex_row()
+                                .items_center()
                                 .flex_shrink_0()
                                 .gap_1()
-                                .when(chips.is_empty(), |d| {
+                                .when(chips.is_empty() && !capturing, |d| {
                                     d.child(
                                         div()
                                             .text_size(px(11.))
@@ -2119,7 +2299,16 @@ impl SettingsView {
                                             .child("Blank"),
                                     )
                                 })
-                                .children(chips),
+                                .children(chips)
+                                .when(capturing, |d| {
+                                    d.child(
+                                        hotkey_chip("Press hotkey...".into(), &theme)
+                                            .border_color(theme.accent)
+                                            .text_color(theme.text),
+                                    )
+                                })
+                                .children(restore)
+                                .child(add),
                         ),
                 )
             })
@@ -2207,6 +2396,7 @@ impl Render for SettingsView {
             .key_context("Settings")
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::close_action))
+            .on_key_down(cx.listener(Self::key_down))
             .on_click(cx.listener(|this, _, _, cx| this.dismiss_open_controls(cx)))
             // The backdrop is outside the panel, and it closes the modal on
             // mouse up; writing on the way down is what keeps a click there
@@ -2279,9 +2469,93 @@ impl Render for SettingsView {
     }
 }
 
+/// The chord a key press names, in `hotkeys.json`'s terms: Obsidian's
+/// `KeyboardEvent.key` spelling (`P`, `ArrowLeft`, `Enter`, ` ` for space)
+/// and modifiers in alphabetical order, with Ctrl written as `Mod` and the
+/// Super key as `Meta`, which is how Obsidian records them on Linux. A
+/// modifier on its own is not a chord.
+fn hotkey_from_keystroke(stroke: &Keystroke) -> Option<Hotkey> {
+    let key = match stroke.key.as_str() {
+        "control" | "ctrl" | "shift" | "alt" | "platform" | "cmd" | "super" | "function" | "fn"
+        | "" => return None,
+        "left" => "ArrowLeft".to_string(),
+        "right" => "ArrowRight".to_string(),
+        "up" => "ArrowUp".to_string(),
+        "down" => "ArrowDown".to_string(),
+        "enter" => "Enter".to_string(),
+        "escape" => "Escape".to_string(),
+        "tab" => "Tab".to_string(),
+        "backspace" => "Backspace".to_string(),
+        "delete" => "Delete".to_string(),
+        "home" => "Home".to_string(),
+        "end" => "End".to_string(),
+        "pageup" => "PageUp".to_string(),
+        "pagedown" => "PageDown".to_string(),
+        "insert" => "Insert".to_string(),
+        "space" => " ".to_string(),
+        k if k.len() > 1 && k.starts_with('f') && k[1..].chars().all(|c| c.is_ascii_digit()) => {
+            k.to_uppercase()
+        }
+        k if k.chars().count() == 1 => k.to_uppercase(),
+        _ => return None,
+    };
+    let m = stroke.modifiers;
+    let mut modifiers: Vec<String> = Vec::new();
+    if m.alt {
+        modifiers.push("Alt".into());
+    }
+    if m.platform {
+        modifiers.push("Meta".into());
+    }
+    if m.control {
+        modifiers.push("Mod".into());
+    }
+    if m.shift {
+        modifiers.push("Shift".into());
+    }
+    Some(Hotkey { modifiers, key })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn stroke(s: &str) -> Keystroke {
+        Keystroke::parse(s).unwrap()
+    }
+
+    #[test]
+    fn a_chord_is_written_the_way_obsidian_spells_it() {
+        let hk = hotkey_from_keystroke(&stroke("ctrl-shift-f")).unwrap();
+        assert_eq!(hk.modifiers, ["Mod", "Shift"]);
+        assert_eq!(hk.key, "F");
+        let hk = hotkey_from_keystroke(&stroke("alt-ctrl-left")).unwrap();
+        assert_eq!(hk.modifiers, ["Alt", "Mod"]);
+        assert_eq!(hk.key, "ArrowLeft");
+        assert_eq!(hotkey_from_keystroke(&stroke("f5")).unwrap().key, "F5");
+        assert_eq!(hotkey_from_keystroke(&stroke("space")).unwrap().key, " ");
+        assert_eq!(
+            hotkey_from_keystroke(&stroke("cmd-k")).unwrap().modifiers,
+            ["Meta"]
+        );
+        assert!(hotkey_from_keystroke(&stroke("shift")).is_none());
+    }
+
+    #[test]
+    fn a_captured_chord_round_trips_through_the_registry_keystroke() {
+        for name in [
+            "ctrl-p",
+            "ctrl-shift-f",
+            "alt-enter",
+            "f2",
+            "ctrl-alt-right",
+            "ctrl-,",
+        ] {
+            let hk = hotkey_from_keystroke(&stroke(name)).unwrap();
+            let back = keystroke(&hk).unwrap();
+            assert_eq!(stroke(&back), stroke(name), "{name} came back as {back}");
+        }
+    }
 
     /// Every toggle of every file writes the key Obsidian writes, flips
     /// only that key, and then reads back the other way round.

@@ -385,6 +385,13 @@ impl VaultState {
                     .write()
                     .unwrap_or_else(|e| e.into_inner()) = config.clone();
             }
+            SettingChange::Hotkeys(overrides) => {
+                // Whole, not merged: an entry taken out is a command back
+                // on its defaults, and a merge would keep it.
+                self.vault()
+                    .replace_config("hotkeys.json", overrides)
+                    .map_err(|e| e.to_string())?;
+            }
         }
         Ok(())
     }
@@ -1463,6 +1470,16 @@ impl Workspace {
         if let Err(err) = state.apply_setting(&change) {
             self.report(format!("{} could not be written: {err}", change.file()), cx);
             return;
+        }
+        if let SettingChange::Hotkeys(overrides) = &change {
+            // The registry is what the palette, the Hotkeys tab and the key
+            // bindings read, so it is rebuilt from the file as written and
+            // every binding made from it again.
+            let mut registry = CommandRegistry::with_known_ids();
+            registry.apply_overrides(overrides);
+            let registry = Arc::new(registry);
+            crate::bind_all_keys(cx, &registry);
+            cx.set_global(Commands(registry));
         }
         self.apply_app_config(&state, cx);
         self.refresh_vault_views(cx);
@@ -6177,6 +6194,31 @@ mod tests {
             .unwrap();
         let text = fs::read_to_string(dir.path().join(".obsidian/switcher.json")).unwrap();
         assert_eq!(text, "{\n  \"showAttachments\": false\n}");
+    }
+
+    #[test]
+    fn a_hotkeys_change_is_written_whole_so_a_restored_default_leaves_the_file() {
+        let (dir, state) = vault();
+        let path = dir.path().join(".obsidian/hotkeys.json");
+        fs::write(
+            &path,
+            "\u{feff}{\n  \"editor:toggle-bold\": [],\n  \"my-plugin:thing\": [\n    {\n      \"modifiers\": [\n        \"Alt\"\n      ],\n      \"key\": \"X\"\n    }\n  ]\n}",
+        )
+        .unwrap();
+        let mut overrides = state.vault().hotkeys().unwrap();
+        assert_eq!(overrides.len(), 2);
+        overrides.shift_remove("editor:toggle-bold");
+        state
+            .apply_setting(&SettingChange::Hotkeys(overrides))
+            .unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.starts_with('\u{feff}'), "the byte order mark stays");
+        assert!(!text.contains("toggle-bold"), "{text}");
+        assert!(text.contains("my-plugin:thing"), "{text}");
+        assert_eq!(
+            text.trim_start_matches('\u{feff}'),
+            "{\n  \"my-plugin:thing\": [\n    {\n      \"modifiers\": [\n        \"Alt\"\n      ],\n      \"key\": \"X\"\n    }\n  ]\n}"
+        );
     }
 
     /// The block id write: it reaches the target's bytes, keeps that
