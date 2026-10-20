@@ -57,6 +57,10 @@ pub enum OpError {
         #[source]
         source: std::io::Error,
     },
+    /// A path the vault refuses to write: outside the folder, or through a
+    /// symbolic link.
+    #[error("{0}")]
+    Refused(#[from] crate::VaultError),
 }
 
 fn io<'p>(action: &'static str, path: &'p Path) -> impl FnOnce(std::io::Error) -> OpError + 'p {
@@ -175,11 +179,11 @@ impl Vault {
         if self.exists(path) {
             return Err(OpError::Exists);
         }
-        let abs = self.absolute(path);
+        let abs = self.write_path(path)?;
         if let Some(parent) = abs.parent() {
             std::fs::create_dir_all(parent).map_err(io("create folder", parent))?;
         }
-        std::fs::write(&abs, text).map_err(io("create", &abs))?;
+        crate::write_no_follow(&abs, text.as_bytes()).map_err(io("create", &abs))?;
         Ok(self.refresh_path(&abs))
     }
 
@@ -189,7 +193,7 @@ impl Vault {
         if self.exists(path) {
             return Err(OpError::Exists);
         }
-        let abs = self.absolute(path);
+        let abs = self.write_path(path)?;
         std::fs::create_dir_all(&abs).map_err(io("create folder", &abs))?;
         self.refresh_path(&abs);
         Ok(())
@@ -230,14 +234,14 @@ impl Vault {
         let from = from.trim_matches('/');
         let to = to.trim_matches('/');
         validate_path(to)?;
-        let from_abs = self.absolute(from);
+        let from_abs = self.entry_path(from)?;
         if !from_abs.exists() {
             return Err(OpError::NotFound(from.to_string()));
         }
         if from == to {
             return Ok(Vec::new());
         }
-        let to_abs = self.absolute(to);
+        let to_abs = self.entry_path(to)?;
         // A case-only rename of the same entry is allowed; anything else
         // already at the destination is not.
         let same_entry = from.eq_ignore_ascii_case(to)
@@ -262,7 +266,7 @@ impl Vault {
     /// files that are gone.
     pub fn trash(&mut self, path: &str, option: TrashOption) -> Result<Vec<String>, OpError> {
         let path = path.trim_matches('/');
-        let abs = self.absolute(path);
+        let abs = self.entry_path(path)?;
         if !abs.exists() {
             return Err(OpError::NotFound(path.to_string()));
         }
@@ -297,8 +301,8 @@ impl Vault {
     }
 
     fn trash_locally(&self, path: &str) -> Result<(), OpError> {
-        let abs = self.absolute(path);
-        let trash = self.root().join(".trash");
+        let abs = self.entry_path(path)?;
+        let trash = self.write_path(".trash")?;
         std::fs::create_dir_all(&trash).map_err(io("create folder", &trash))?;
         let name = path.rsplit('/').next().unwrap_or(path);
         let (stem, ext) = match name.rsplit_once('.') {
@@ -306,7 +310,7 @@ impl Vault {
             _ => (name, ""),
         };
         let target = self.numbered_path(".trash", stem, ext, 2);
-        let target_abs = self.absolute(&target);
+        let target_abs = self.entry_path(&target)?;
         std::fs::rename(&abs, &target_abs).map_err(io("move to .trash", &abs))
     }
 }

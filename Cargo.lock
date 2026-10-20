@@ -4885,6 +4885,7 @@ dependencies = [
 name = "-vault"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "-cache",
  "-formats",
  "-templates",

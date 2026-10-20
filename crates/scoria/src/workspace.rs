@@ -616,11 +616,8 @@ impl VaultState {
                 _ => (name, ""),
             };
             let target = vault.available_path(folder, stem, ext);
-            (
-                target.clone(),
-                vault.absolute(path),
-                vault.absolute(&target),
-            )
+            let to = vault.write_path(&target).map_err(|e| e.to_string())?;
+            (target.clone(), vault.absolute(path), to)
         };
         std::fs::copy(&from, &to).map_err(|e| format!("Could not copy {path}: {e}"))?;
         let files = self
@@ -662,13 +659,13 @@ impl VaultState {
         before: &str,
         insertion: &_suggest::blocks::IdInsertion,
     ) -> Result<(), String> {
-        let absolute = self.vault().absolute(path);
+        let absolute = self.vault().write_path(path).map_err(|e| e.to_string())?;
         let on_disk = std::fs::read_to_string(&absolute)
             .map_err(|e| format!("Could not read {path}: {e}"))?;
         if on_disk != before {
             return Err(format!("{path} changed on disk; no id was written"));
         }
-        std::fs::write(&absolute, insertion.applied(&on_disk).as_bytes())
+        _vault::write_no_follow(&absolute, insertion.applied(&on_disk).as_bytes())
             .map_err(|e| format!("Could not write {path}: {e}"))
     }
 
@@ -701,7 +698,10 @@ impl VaultState {
         let mut stale: Vec<String> = Vec::new();
         let texts = self.texts();
         for rw in &plan {
-            let absolute = self.root.join(&rw.new_path);
+            let absolute = self
+                .vault()
+                .write_path(&rw.new_path)
+                .map_err(|e| e.to_string())?;
             let planned_from = texts.get(&rw.old_path).map(|t| t.to_string());
             match (std::fs::read_to_string(&absolute), planned_from) {
                 (Ok(on_disk), Some(was)) if on_disk != was => {
@@ -710,7 +710,7 @@ impl VaultState {
                 }
                 _ => {}
             }
-            std::fs::write(&absolute, rw.text.as_bytes())
+            _vault::write_no_follow(&absolute, rw.text.as_bytes())
                 .map_err(|e| format!("Could not update links in {}: {e}", rw.new_path))?;
         }
         drop(texts);
@@ -3722,7 +3722,16 @@ impl Workspace {
             return;
         }
         let contents = self.editor.read(cx).file_contents();
-        let absolute = state.vault().absolute(&name);
+        // The one place a note's bytes are written: the path is checked
+        // for links and the open does not follow one, so a save can never
+        // land outside the vault.
+        let absolute = match state.vault().write_path(&name) {
+            Ok(path) => path,
+            Err(err) => {
+                self.report(format!("{name} not saved: {err}"), cx);
+                return;
+            }
+        };
         // The vault is the source of truth. If the file is not the bytes
         // this note was loaded from or last saved as, something else wrote
         // it — Obsidian, in the mixed use the phase 3 gate is about — and
@@ -3754,7 +3763,7 @@ impl Workspace {
                 return;
             }
         }
-        match std::fs::write(&absolute, &contents) {
+        match _vault::write_no_follow(&absolute, contents.as_bytes()) {
             Ok(()) => {
                 self.editor.update(cx, |e, _| e.mark_saved(&contents));
                 self.report(format!("{name} saved"), cx);

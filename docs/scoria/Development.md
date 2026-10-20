@@ -103,6 +103,19 @@ previous tag. A tag with a hyphen in it, `v0.2.0-rc1`, is published as a prerele
 
 Both builds pass `--locked`, so the pinned `gpui` revision and `libc` come from `Cargo.lock`.
 
+Both workflows sign `SHA256SUMS` with GPG when the repository holds the maintainer's key as the
+secrets `GPG_SIGNING_KEY` (the armored private key, `gpg --armor --export-secret-keys <fpr>`) and
+`GPG_PASSPHRASE`; without them the release is published unsigned and its notes say so. To set them
+up once: `gpg --full-generate-key`, then
+`gpg --armor --export-secret-keys <fpr> | gh secret set GPG_SIGNING_KEY` and
+`gh secret set GPG_PASSPHRASE`, and the same two secrets in the Forgejo repository settings; publish
+the public key (`gpg --armor --export <fpr>`) somewhere a reader can fetch it, such as
+keys.openpgp.org, and put the fingerprint in the README. The GitHub workflow also attaches
+[build provenance attestations](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations)
+to every archive, which need no secret: `gh attestation verify <archive> --repo /`
+confirms the archive came out of this workflow at that commit. Private vulnerability reporting is
+enabled on the GitHub repository, and `SECURITY.md` at the root is the policy.
+
 > [!warning] The Windows and macOS binaries are untested
 > CI only runs `cargo check -p ` on those platforms and the release job is the first thing
 > that links them; neither has been started on a real GPU. Nothing is code-signed or notarized, so

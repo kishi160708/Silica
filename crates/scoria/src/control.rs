@@ -561,7 +561,7 @@ fn handle(
                             // a BOM, because the caller supplies the whole
                             // file and  never rewrites bytes it did
                             // not change.
-                            std::fs::write(&absolute, text)
+                            _vault::write_no_follow(&absolute, text.as_bytes())
                                 .map_err(|error| format!("{path}: {error}"))?;
                             Ok(json!({"bytes": count}))
                         })

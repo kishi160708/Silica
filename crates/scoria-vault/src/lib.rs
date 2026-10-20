@@ -31,6 +31,10 @@ pub enum VaultError {
         #[source]
         source: serde_json::Error,
     },
+    #[error("{0} is not a path inside the vault")]
+    OutsideVault(String),
+    #[error("{0} is a symbolic link; the vault folder is the only place  writes")]
+    Symlink(PathBuf),
 }
 
 /// One file in the vault. `path` is vault-relative with `/` separators.
@@ -68,6 +72,23 @@ impl FileChange {
             FileChange::Added(p) | FileChange::Modified(p) | FileChange::Removed(p) => p,
         }
     }
+}
+
+/// Writes a file whole without following a symbolic link in its place: on
+/// Unix the file is opened with `O_NOFOLLOW`, so a link swapped in between
+/// the path check and the write still cannot redirect it. Elsewhere a link
+/// needs privileges to make and the path check alone stands.
+pub fn write_no_follow(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut file = options.open(path)?;
+    file.write_all(bytes)
 }
 
 #[derive(Debug)]
@@ -152,6 +173,61 @@ impl Vault {
     pub fn absolute(&self, rel: &str) -> PathBuf {
         self.root
             .join(rel.replace('/', std::path::MAIN_SEPARATOR_STR))
+    }
+
+    /// The absolute path a write to `rel` may go to. The vault folder is the
+    /// only place  writes, so this refuses what would reach outside
+    /// it: a `..` or an absolute path, and a symbolic link anywhere along
+    /// the way — a link inside the vault pointing at `~/.ssh` must not turn
+    /// a note save into a write there. Every write in the workspace goes
+    /// through here (and [`write_no_follow`]), reads do not.
+    pub fn write_path(&self, rel: &str) -> Result<PathBuf, VaultError> {
+        self.checked_path(rel, false)
+    }
+
+    /// Like [`Vault::write_path`] for an entry that is moved or removed as a
+    /// whole: the entry itself may be a link, since renaming or deleting a
+    /// link touches the link and never what it points at; its ancestors
+    /// may not.
+    pub fn entry_path(&self, rel: &str) -> Result<PathBuf, VaultError> {
+        self.checked_path(rel, true)
+    }
+
+    fn checked_path(&self, rel: &str, leaf_may_link: bool) -> Result<PathBuf, VaultError> {
+        let mut absolute = self.root.clone();
+        let mut parts = Vec::new();
+        for component in Path::new(rel).components() {
+            match component {
+                std::path::Component::Normal(part) => parts.push(part.to_os_string()),
+                std::path::Component::CurDir => {}
+                _ => return Err(VaultError::OutsideVault(rel.to_string())),
+            }
+        }
+        if parts.is_empty() {
+            return Err(VaultError::OutsideVault(rel.to_string()));
+        }
+        let last = parts.len() - 1;
+        for (ix, part) in parts.into_iter().enumerate() {
+            absolute.push(part);
+            if ix == last && leaf_may_link {
+                break;
+            }
+            match std::fs::symlink_metadata(&absolute) {
+                Ok(meta) if meta.file_type().is_symlink() => {
+                    return Err(VaultError::Symlink(absolute));
+                }
+                // What does not exist yet is created below the vault.
+                _ => {}
+            }
+        }
+        Ok(absolute)
+    }
+
+    /// Writes `bytes` to a vault-relative path, through [`Vault::write_path`]
+    /// and without following a link at the file itself.
+    pub fn write_bytes(&self, rel: &str, bytes: &[u8]) -> Result<(), VaultError> {
+        let path = self.write_path(rel)?;
+        write_no_follow(&path, bytes).map_err(|source| VaultError::Io { path, source })
     }
 
     /// Re-enumerates the folder. Skips the config directory, `.trash`, and any
@@ -361,8 +437,8 @@ impl Vault {
         value: &T,
         merge: bool,
     ) -> Result<(), VaultError> {
-        let dir = self.root.join(&self.config_dir);
-        let path = dir.join(name);
+        let path = self.write_path(&format!("{}/{name}", self.config_dir))?;
+        let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
         std::fs::create_dir_all(&dir).map_err(|source| VaultError::Io {
             path: dir.clone(),
             source,
@@ -392,7 +468,7 @@ impl Vault {
             source,
         })?;
         let text = if bom { format!("\u{feff}{text}") } else { text };
-        std::fs::write(&path, text).map_err(|source| VaultError::Io { path, source })
+        write_no_follow(&path, text.as_bytes()).map_err(|source| VaultError::Io { path, source })
     }
 
     pub fn app_config(&self) -> Result<AppConfig, VaultError> {
@@ -909,5 +985,74 @@ mod tests {
             Vault::open(dir.path().join("Note.md")),
             Err(VaultError::NotADirectory(_))
         ));
+    }
+
+    #[test]
+    fn a_write_path_stays_inside_the_vault_and_off_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = dir.path();
+        fs::create_dir_all(r.join("Sub")).unwrap();
+        fs::write(r.join("Sub/a.md"), "a").unwrap();
+        let vault = Vault::open(r).unwrap();
+        assert_eq!(
+            vault.write_path("Sub/a.md").unwrap(),
+            r.join("Sub").join("a.md")
+        );
+        assert_eq!(
+            vault.write_path("New/b.md").unwrap(),
+            r.join("New").join("b.md")
+        );
+        assert!(matches!(
+            vault.write_path("../x.md"),
+            Err(VaultError::OutsideVault(_))
+        ));
+        assert!(matches!(
+            vault.write_path("Sub/../../x.md"),
+            Err(VaultError::OutsideVault(_))
+        ));
+        assert!(matches!(
+            vault.write_path("/etc/passwd"),
+            Err(VaultError::OutsideVault(_))
+        ));
+        assert!(matches!(
+            vault.write_path(""),
+            Err(VaultError::OutsideVault(_))
+        ));
+        #[cfg(unix)]
+        {
+            let outside = tempfile::tempdir().unwrap();
+            fs::write(outside.path().join("secret"), "s").unwrap();
+            std::os::unix::fs::symlink(outside.path(), r.join("Link")).unwrap();
+            std::os::unix::fs::symlink(outside.path().join("secret"), r.join("note.md")).unwrap();
+            // A linked folder on the way, and a linked file at the end.
+            assert!(matches!(
+                vault.write_path("Link/x.md"),
+                Err(VaultError::Symlink(_))
+            ));
+            assert!(matches!(
+                vault.write_path("note.md"),
+                Err(VaultError::Symlink(_))
+            ));
+            assert!(vault.write_bytes("note.md", b"x").is_err());
+            // Nothing outside changed, and the link itself is still a link.
+            assert_eq!(
+                fs::read_to_string(outside.path().join("secret")).unwrap(),
+                "s"
+            );
+            assert!(fs::symlink_metadata(r.join("note.md"))
+                .unwrap()
+                .file_type()
+                .is_symlink());
+            // A link may be moved or removed as an entry, not written through.
+            assert!(vault.entry_path("note.md").is_ok());
+            assert!(matches!(
+                vault.entry_path("Link/x.md"),
+                Err(VaultError::Symlink(_))
+            ));
+            // The open itself refuses a link that appears after the check.
+            assert!(write_no_follow(&r.join("note.md"), b"x").is_err());
+        }
+        vault.write_bytes("Sub/a.md", b"b").unwrap();
+        assert_eq!(fs::read_to_string(r.join("Sub/a.md")).unwrap(), "b");
     }
 }
