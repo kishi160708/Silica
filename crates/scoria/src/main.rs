@@ -9,7 +9,25 @@
 //! running app instead (see `docs//Development.md`).
 
 mod chooser;
+#[cfg(unix)]
 mod control;
+/// `--control` binds a Unix domain socket; on a platform without one the
+/// flag says so and the app runs without it.
+#[cfg(not(unix))]
+mod control {
+    use crate::workspace::Workspace;
+    use gpui::{App, WindowHandle};
+    use std::path::PathBuf;
+
+    pub fn start(path: PathBuf, _window: WindowHandle<Workspace>, _cx: &mut App) {
+        eprintln!(
+            "--control {}: the control socket is a Unix domain socket; there is none on this platform",
+            path.display()
+        );
+    }
+
+    pub fn cleanup() {}
+}
 mod editor;
 mod explorer;
 mod graph;

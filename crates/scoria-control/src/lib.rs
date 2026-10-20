@@ -20,10 +20,14 @@
 //! assert!(req.str_param("rows").is_err());
 //! ```
 
+#[cfg(unix)]
 mod client;
 mod methods;
 mod protocol;
 
+/// The socket is a Unix domain socket, so the client exists only where one
+/// does; the protocol and the method table are for every platform.
+#[cfg(unix)]
 pub use client::Client;
 pub use methods::{
     method, params_schema, protocol_json, MethodSpec, ParamSpec, ParamType, METHODS,

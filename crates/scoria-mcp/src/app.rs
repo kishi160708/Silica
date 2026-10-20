@@ -162,10 +162,23 @@ fn is_ours(path: &Path, uid: Option<u32>) -> bool {
     }
 }
 
-/// This process's user id. `libc::getuid` is not a dependency here, and on
-/// Linux the kernel names the owner of `/proc/self` for us.
+/// This process's user id. `libc::getuid` is not a dependency here. On
+/// Linux the kernel names the owner of `/proc/self` for us; where there is no
+/// procfs (macOS, the BSDs) a directory we create is owned by us, so its
+/// owner is the answer.
 fn our_uid() -> Option<u32> {
-    std::fs::metadata("/proc/self").ok().map(|meta| meta.uid())
+    if let Ok(meta) = std::fs::metadata("/proc/self") {
+        return Some(meta.uid());
+    }
+    let probe = std::env::temp_dir().join(format!("-uid-{}-{}", std::process::id(), nanos()));
+    let mut builder = std::fs::DirBuilder::new();
+    builder.mode(0o700);
+    builder.create(&probe).ok()?;
+    let uid = std::fs::symlink_metadata(&probe)
+        .ok()
+        .map(|meta| meta.uid());
+    let _ = std::fs::remove_dir(&probe);
+    uid
 }
 
 /// `CARGO_MANIFEST_DIR` is `<repo>/crates/-mcp` when this binary is
@@ -639,7 +652,7 @@ mod tests {
     #[test]
     fn only_a_directory_of_ours_is_private_enough_for_the_socket() {
         let uid = our_uid();
-        assert!(uid.is_some(), "/proc/self names our uid on Linux");
+        assert!(uid.is_some(), "every Unix can name our uid");
         let base = std::env::temp_dir().join(format!("-mcp-priv-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).expect("a directory to test in");

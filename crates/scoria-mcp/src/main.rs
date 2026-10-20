@@ -18,13 +18,28 @@
 //! `SCORIA_MCP_BIN`, `SCORIA_MCP_REPO`, `SCORIA_MCP_SCREENSHOT`,
 //! `SCORIA_MCP_TIMEOUT_MS`.
 
+#[cfg(unix)]
 mod app;
+#[cfg(unix)]
 mod base64;
+#[cfg(unix)]
 mod rpc;
+#[cfg(unix)]
 mod tools;
 
+#[cfg(unix)]
 use std::io::{BufRead, Write};
 
+/// The control socket is a Unix socket, so the server is too.
+#[cfg(not(unix))]
+fn main() {
+    eprintln!(
+        "-mcp: the control socket is a Unix domain socket; there is none on this platform"
+    );
+    std::process::exit(1);
+}
+
+#[cfg(unix)]
 fn main() {
     let config = app::Config::from_env();
     // The handshake has no room for this, and a wrong binary or socket is the
