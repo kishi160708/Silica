@@ -153,6 +153,205 @@ of mixed use in both apps. The gate run opened on 2026-10-18, see
 | Canvas writer | done: the bytes Obsidian writes on an edited save, see [[#Canvas writer, 2026-10-19]]; nothing in the app calls it yet |
 | The gate itself | open: the harness passes on the real vault, the week of mixed use has not run, see [[#The gate run opens, 2026-10-18]] |
 
+### The parity campaign, 2026-10-20
+
+[[#Control socket and MCP server, 2026-10-19]] ends with the first thing the socket caught: three
+backlog entries that were one bug seen from three panes, settled by asking the running app what the
+editor did after a heading jump. This is what happened when that question was asked of the whole
+window.
+
+**What the socket made possible.** Every flag under [[#Commands]] arranges a state at startup and
+then the app is on its own, so an audit over those flags is an audit of screenshots: you can see
+that something looks wrong and you cannot ask why, or what the app thinks it just did. Over the
+socket a finding is a transcript — the keystroke, the `state` before, the `state` after — and the
+reviewer reads the same transcript the auditor did. Two measuring tricks came out of the run and
+are worth keeping, because the state dump exposes no *rendered* text (`Editor::describe` reports
+the cursor, selection, scroll and visible lines, never the `DisplayLine`), so colour, weight, pills
+and labels are simply not observable from outside. The first is a y-scan: click every second pixel
+down the editor and read back which line each point resolves to, which gives every row's exact
+height — a 24 px text row, a 56 px collapsed callout, a ~104 px image widget — and so separates a
+laid-out widget from a line of text without a screenshot. The second is an x-scan: sweep across one
+row and map display columns back to source columns, which shows exactly which bytes are hidden or
+substituted, and settles a question like `Note#Heading` versus `Note > Heading` to within a
+character width. Both are race-free. The other thing the socket bought is plain parallelism: eight
+agents, one subsystem and one app each, at the same time.
+
+**The shape of the audit.** Eight probes ran in parallel — Files, Live Preview, reading view, right
+dock and graph, search and the modals, Settings, the source editor, the workspace shell — and every
+finding then went to an adversarial reviewer whose main job was the *Obsidian* half. That is where
+the previous pass had failed: of its four refutations, all four were  behaving correctly
+against an Obsidian behaviour the auditor had remembered rather than observed. The pass confirmed 82
+findings over seven subsystems and refuted seven, and two of the refutations
+are worth remembering by anyone who drives the app this way, because they were the harness, not the
+app: "Tab types a literal tab into the find field" and "Shift+Enter inserts a newline into the
+prompt" both come from gpui's `Window::dispatch_keystroke`, whose first line is
+`keystroke.with_simulated_ime()` — it fabricates a `key_char` for `tab`, `enter` and `space`
+whenever control, alt and platform are absent, and *shift is not excluded*. No user can reproduce
+either. A socket-driven claim about a key needs that check before it is filed.
+
+**The accident: there were two audits.** That first pass did not finish in one sitting — it hit a
+session limit partway and was resumed. The resumed probe agents did not replay from cache; they
+re-ran, and what came back was a genuinely independent second audit of the same window, worded
+differently and reaching 92 findings where the first reached 82. Nobody noticed at the time. The
+fix campaign took the first pass plus the second pass's Live Preview file — which is the only Live
+Preview file either run produced — and worked from those 95, while the second pass's other 79
+findings sat unread. That is a process error, and the arithmetic it produced is what gave it away:
+the counts in the notes did not add up.
+
+It was also the luckiest thing that happened. Two blind audits of one window, graded against each
+other, say more than either alone. Triaging the second pass's 79 against the *finished* binary
+gave a result that is worth more than a re-read of the first pass's list: 27 were already fixed, 52
+still reproduced, and the triage's evidence is against the current code rather than the code as it
+was, so where the two passes overlap its line numbers and its repros are the ones to act on. It
+corrected the first pass in both directions — it narrowed the properties-in-reading-view finding to
+one third of its filed scope, settled the `0` chip question against the backlog's own prediction,
+showed that the published fix sketch for the empty-rename error pointed at the wrong file, and
+caught a fix the first verification pass had scored as complete when only one of its two routes was
+closed. And it found, by a route neither audit had used, the worst bug in the campaign. Two
+independent passes is not a cost to apologise for; the thing to fix is that only one of them was
+read.
+
+Seven waves of fixes followed, each wave a set of agents partitioned by file ownership, with
+`cargo fmt --all`, `cargo check`, `cargo clippy --workspace --all-targets` and
+`cargo test --workspace` as the gate between waves. Two fleets of verification agents then drove
+the rebuilt release binary: the first found 35 fixes confirmed, 12 partly done, one not done and 11
+regressions, and the second re-drove the repairs and swept the window unscripted.
+
+**What the fixes found that code reading had not.** The Writer gate turned out to be the sharpest
+tool in the campaign, because `drive_session` now runs every new editing command over all 1000
+corpus notes and over the real vault. It caught two byte hazards nobody had predicted: the first
+`swap_lines` happily swapped the last content line with the phantom empty line a file's trailing
+newline creates, which would have stripped that newline from every file it touched, and
+`delete_paragraph` can empty a note to zero bytes — correct behaviour, but the harness's "the
+session wrote something" guard had to be made honest about it. Auto-pairing produced a second one
+only a test could see: wrapping two *touching* selections wrote `(alpha()beta)`, because
+`apply_edits` sorts back to front and an opener and a closer landing at the same offset are
+order-sensitive; writing the wrap as one edit over the whole selection removed the whole class.
+The frontmatter-link fix was reproduced as a unit test before it was written, and the test showed a
+self-contradiction inside one cache — `resolved_links("Source.md")` counted the property link while
+`backlinks("Target.md")` was empty. And the setext fix proved a negative: dumping what
+`highlight_lines` actually emits showed the clipped heading span covering the whole of *both* rows
+(`0..2` over `==` and `0..2` over `==`), so a pure function of one line's text and spans cannot tell
+a title row from an underline row, whatever heuristic it uses. That is what moved the fix into the
+parser, where `BlockKind::Heading` has carried a `setext` flag all along and `collect_blocks` was
+throwing it away.
+
+**The three things only an unscripted pass could have found.** The second verification fleet was
+told to drive the rebuilt binary the way a person would rather than to re-run the repros, and that
+is where the campaign's own damage surfaced. Two of the three were regressions this campaign
+introduced, and both compiled, passed clippy and passed every test.
+
+The first is focus after a delete. The fix for "typing into a deleted note is silently discarded"
+parks the keyboard on the workspace handle when the main area goes empty — correct — and nothing
+ever hands it back, because `open_file` never called the new `focus_main`. So: delete the open
+note, then open any other note by any route — the switcher, an explorer row, history — and the
+editor paints the note while `focus` is still `{workspace, ["Workspace"]}`, `type` answers
+`{"target":"none"}` and the arrow keys answer `handled: false`. Every note opened for the rest of
+the session is keyboard-dead until the user happens to click inside the editor. No test could have
+caught it: focus lives in a painted frame's dispatch tree, and `crates/` has no gpui window
+harness.
+
+The second is an empty list property. The property-pill work routes a click on a list-valued row's
+value cell to `PropertyAction::EditItem { index: items.len() }` — the empty input Obsidian keeps
+after the pills. For `aliases: []` the pill strip has no children, so the flex container has zero
+height, so gpui gives it no hitbox, so the handler never runs and the click falls through to the
+editor behind. The visible result is worse than a dead cell: the next keystrokes go to the editor
+caret, and the sweep that found it left `Zed, Alpha` on its own line *inside* the YAML fences —
+corrupted frontmatter from two clicks and a word. The cause is layout, not the action, and the fix
+is `Row::is_blank()` drawing the same faint placeholder an absent value draws, so the row has a
+height and therefore a hitbox.
+
+The third was not ours, and it is the widest: clicking any dock row — an explorer row, a search
+result, an outline row, a backlink — blurs the editor. The root div's `track_focus` focuses the
+workspace handle on any mouse-down outside a focusable child, and none of those row handlers asked
+for the keyboard back, so the note opens and then neither typing nor the arrow keys do anything
+until the user clicks inside the text. It had been true all along; nobody had written a repro for
+"open a note the way a person opens a note, then try to type". All three are fixed, the first two
+in wave 7 through one rule — when what the main area shows changes, the keyboard goes to whatever
+that area paints, requested by the handlers that have no `&mut Window` and honoured at the top of
+the next `render`.
+
+The honest reading of that is that parallel agents editing one tree produce regressions, and the
+gates did not catch them because a regression of this kind compiles and passes. The live sweep did.
+Budget for it: a wave of fixes is not finished when the gate is green, it is finished when somebody
+has driven the thing.
+
+**Wave 8: the bug nobody was looking for.** The triage agents were asked, among other things, to
+try the app with text that is not ASCII. One of them wrote a note holding 45 letters, a non-breaking
+space, and then the search term — and the window disappeared. The log:
+
+```
+thread '<unnamed>' panicked at crates//src/search.rs:552:31:
+start byte index 46 is not a char boundary; it is inside '\u{a0}' (bytes 45..47)
+thread 'main' panicked at async-task-4.7.1/src/task.rs:452:45: Task polled after completion
+```
+
+The snippet windowing walked back to the whitespace before the hit with
+`body[start..first].find(char::is_whitespace)` and then `start += sp + 1`, which is correct only
+while whitespace is one byte; U+00A0, U+2009 and U+3000 are not, and the slice two lines later cut
+inside the character. Reproduced again with the ideographic space. Note where the panic ended up:
+it was raised on the background `run_search` task and still took the main thread down with it, so
+*any* panic in search is fatal to the process and to whatever the user had not saved.
+
+The second thing is the same shape without the crash, filed by the second audit pass — the one the
+campaign never read — and confirmed live by the same triage. Backspace and the arrow
+keys stepped by `char`, so one Backspace turned `é` into a bare `e`, split 🇩🇪 into a lone regional
+indicator, or left a dangling zero-width joiner at the end of a family emoji — and two seconds later
+the autosave wrote that into the vault. That is the only silent corruption either audit turned up,
+and the ground rule it breaks is the first one in the repo.
+
+Both are now fixed. The windowing moved out of the gpui crate into a pure
+`crates/-search/src/snippet.rs` whose `floor`/`ceil` helpers snap every window edge — and
+every hit range, so a stale range widens instead of slicing — to a character boundary, with the
+live panic written as a unit test *before* the fix and a second test sliding a lead-in of emoji,
+CJK, a combining accent and an NBSP past the window edge one byte at a time. The agent then went
+looking for siblings of the class and found one in `fuzzy.rs`, where `simple_search` mapped
+lowercased byte offsets back to the candidate by counting characters; it now carries a per-byte
+source map, and `İstanbul` is its test. `-text` steps by grapheme cluster for Backspace,
+forward Delete, Left/Right, the shifted variants and word motion, and the auto-pair rule only
+treats a single-character cluster as half of a pair. Wave 8 also closed the second route into the
+typeable empty state: deleting the open note was hardened in wave 1, but `Editor::new` still seeded
+the name `"untitled"`, which is exactly the thing `main_view` tests to decide whether a buffer has
+a file behind it — so every launch that opened no markdown, an empty vault or a vault holding only
+a canvas, handed the user a live editor over nothing and discarded what they typed into it.
+
+**The second lesson.** The two deepest defects in the whole campaign — a process-killing panic and
+a silent corruption that reached the vault — were found by typing unusual text into the running
+app. Not by reading code: both sites read perfectly well, and one of them had been read by an
+auditor who filed four other findings in the same file. Not by a scripted repro either, because a
+repro is written from a hypothesis and nobody hypothesised a non-breaking space. They came from an
+agent with a licence to try odd input against a live binary. A vault of real prose is full of
+pasted NBSPs, CJK punctuation, accented names, flags and family emoji, and every one of them is an
+input the test corpus does not contain. The class to grep for is narrow and worth grepping for
+again: an offset into user text computed by arithmetic — `+ 1`, `len()`, `chars().count()` — rather
+than taken from `char_indices`, a regex engine or a grapheme cursor.
+
+**The lesson worth keeping.** Partitioning by file ownership is what let eight agents edit one tree
+at once, and it worked — the waves landed with no merge conflicts and the gate was green between
+each. What it cost is every item that needed two owners. The list property is the worked example.
+Wave 4a built the whole per-item model in `properties.rs`, with tests proving a comma survives the
+round trip; wave 4b built the renderer in `reading/view.rs` that draws an open field in its pill's
+place. Both landed, both were correct, and the user-visible behaviour did not change at all,
+because the only route from a click to an open field runs through `Editor::property_action`, whose
+`match` over `PropertyAction` is exhaustive — adding the variant the pills needed would have left
+`editor.rs` not compiling for every other agent in the wave. Three waves of careful handoff notes
+later, the item was fixed in one wave by one agent holding `editor.rs`, `reading/view.rs` and
+`properties.rs` together. The same shape explains the callout chevron (fold state has to live on
+`Editor`, the chevron is drawn in `reading/view.rs`), the modal focus theft (two `.occlude()` calls
+in `workspace.rs`, useless without the hitbox the editor agent had already added), and the
+frontmatter links (the cache half shipped a wave before the pane that reads it). The rule to carry
+forward: scope a group by the *change*, not by the file, and when a change needs two files, give
+one agent both — a handoff note across a wave boundary costs more than the conflict it avoids.
+
+**Where it ended.** 501 tests pass, clippy is clean across the workspace, and the Writer gate over
+the real PLMCRZY vault still round-trips 14/14 byte-identical, which is the number that matters:
+nothing in a campaign's worth of UI work moved a byte in a vault, and the one path that *was*
+moving bytes it should not — the grapheme split — is closed. Of the 95 findings the waves worked
+from, 54 are fixed. Of the second pass's other 79, 27 were already fixed by that work and two more
+by wave 8, leaving 50 that still reproduce — most of them the same large gaps the first pass had
+filed, a dozen of them sharper than the first pass had them, and twenty that nobody had filed at
+all. All of it, with the probes the declined items are waiting on, is in [[UI parity backlog]].
+
 ### Control socket and MCP server, 2026-10-19
 
 The flag list under [[#Commands]] kept growing, and every flag on it does the
