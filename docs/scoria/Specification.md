@@ -2819,7 +2819,9 @@ sidebar is collapsed) and the window buttons `.titlebar-button.mod-minimize`, `.
 wide in the sidebar colour. `--frame-right-space` is `calc(126px - 0px)` and the root tab header
 is padded `0 134px 0 8px` to stay clear of them. The `.titlebar-text` is 13 px, weight 700, muted at
 opacity 0.85 and reads "New tab - <vault> - Obsidian 1.14.4"; the hidden frame gives it no box.
-`--titlebar-height` is 30 px and `--window-border-radius` is unset.
+`--titlebar-height` is 30 px and `--window-border-radius` is unset; the window's corners are
+nevertheless rounded, about 10 px on all four in a screenshot of 2026-10-21 (KDE Wayland, 2x),
+so the rounding is the hidden frame's own rather than a theme's.
 
 **Fonts.** `--font-interface` is `'??', '??', '??', ui-sans-serif, -apple-system, BlinkMacSystemFont,
 system-ui, "Segoe UI", "Google Sans Flex", Roboto, "Inter Variable", "Inter", …` (the `??` are the

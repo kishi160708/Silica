@@ -288,7 +288,14 @@ nothing under `.obsidian` whichever option is chosen, so there is no vault key f
 and `workspace::client_frame` wraps the shell the way gpui's `window_shadow` example does: a 12 px
 margin that holds a soft shadow and the resize edges (the pointer gets the right cursor from a
 hitbox canvas, a press on the margin calls `start_window_resize`), a one pixel border, and none of
-it on an edge that is tiled or maximised, so a snapped window meets the screen without a gap. The
+it on an edge that is tiled or maximised, so a snapped window meets the screen without a gap.
+Since 2026-10-21 the corners are rounded 10 px, which is what Obsidian's hidden frame measures on
+this desktop (`--window-border-radius` is unset in its CSS, so the rounding is the frame's own):
+gpui clips children to rectangles, so `WindowCorners` works out which corners meet no tiled edge
+and every element that reaches one — the ribbon, a sidebar, the tab strip, the close button, the
+status bar, the Settings backdrop — rounds that corner itself, as Zed's title bar does. A canvas
+tab paints its own background and still squares a corner it reaches with the ribbon hidden and the
+left sidebar collapsed. The
 40 px title row is Obsidian's hidden frame: the left sidebar toggle above the ribbon, the dock tab
 headers and the tab strip, the right toggle at the right end of whichever header is rightmost, and
 three 44 by 40 window buttons overlaying that header's right end (which gets 132 px of padding to

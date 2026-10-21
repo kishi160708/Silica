@@ -1611,6 +1611,71 @@ const MIN_SIDEBAR_WIDTH: f64 = 150.;
 /// shadow lives in it and the pointer resizes the window from it.
 const FRAME_SHADOW: Pixels = px(12.);
 
+/// The radius of a window corner  draws itself. Obsidian's hidden
+/// frame is rounded the same way on this desktop, about 10 px.
+const WINDOW_RADIUS: Pixels = px(10.);
+
+/// Which of the window's corners are rounded: each one that meets no tiled
+/// or maximised edge, when the frame is 's. gpui clips children to
+/// rectangles, so the frame's rounding alone is painted over by whatever
+/// sits in a corner; every element that reaches one rounds itself with
+/// [`WindowCorners::apply`], the way Zed's title bar and status bar do.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+struct WindowCorners {
+    tl: bool,
+    tr: bool,
+    bl: bool,
+    br: bool,
+}
+
+impl WindowCorners {
+    fn of(window: &Window) -> WindowCorners {
+        match window.window_decorations() {
+            Decorations::Client { tiling } => WindowCorners {
+                tl: !(tiling.top || tiling.left),
+                tr: !(tiling.top || tiling.right),
+                bl: !(tiling.bottom || tiling.left),
+                br: !(tiling.bottom || tiling.right),
+            },
+            Decorations::Server => WindowCorners::default(),
+        }
+    }
+
+    /// The left edge's corners only, for the ribbon or the left sidebar.
+    fn left(self) -> WindowCorners {
+        WindowCorners {
+            tr: false,
+            br: false,
+            ..self
+        }
+    }
+
+    /// The right edge's corners only, for the right sidebar.
+    fn right(self) -> WindowCorners {
+        WindowCorners {
+            tl: false,
+            bl: false,
+            ..self
+        }
+    }
+
+    fn apply<T: Styled>(self, mut el: T) -> T {
+        if self.tl {
+            el = el.rounded_tl(WINDOW_RADIUS);
+        }
+        if self.tr {
+            el = el.rounded_tr(WINDOW_RADIUS);
+        }
+        if self.bl {
+            el = el.rounded_bl(WINDOW_RADIUS);
+        }
+        if self.br {
+            el = el.rounded_br(WINDOW_RADIUS);
+        }
+        el
+    }
+}
+
 /// A 28 by 24 icon button of the kind Obsidian calls a clickable icon:
 /// 4 px above and below the icon, 6 px either side, a 4 px radius and a
 /// wash behind it on hover.
@@ -1719,10 +1784,12 @@ fn client_frame(
     window.set_client_inset(if client { FRAME_SHADOW } else { px(0.) });
     let border = theme.border;
     let shadow: Hsla = rgba(0x00000066).into();
+    let corners = WindowCorners::of(window);
     div()
         .id("window-backdrop")
         .size_full()
         .bg(transparent_black())
+        .map(|d| corners.apply(d))
         .when(client, |d| {
             d.when(!tiling.top, |d| d.pt(FRAME_SHADOW))
                 .when(!tiling.bottom, |d| d.pb(FRAME_SHADOW))
@@ -1776,6 +1843,7 @@ fn client_frame(
                 .size_full()
                 .cursor(CursorStyle::Arrow)
                 .bg(theme.bg)
+                .map(|d| corners.apply(d))
                 .when(client, |d| {
                     d.border_color(border)
                         .when(!tiling.top, |d| d.border_t_1())
@@ -1839,6 +1907,8 @@ pub struct Workspace {
     /// read from the window at each render for the renderers that place the
     /// window buttons and the drag areas.
     frameless: bool,
+    /// The window corners rounded this frame, read at the top of `render`.
+    corners: WindowCorners,
     left_tab: LeftTab,
     reading: Entity<ReadingView>,
     editor: Entity<Editor>,
@@ -2184,6 +2254,7 @@ impl Workspace {
             left_width: SIDEBAR_WIDTH as f64,
             right_width: SIDEBAR_WIDTH as f64,
             frameless: false,
+            corners: WindowCorners::default(),
             left_tab: LeftTab::Files,
             reading,
             editor,
@@ -6578,6 +6649,7 @@ impl Workspace {
     fn render_window_controls(&self, theme: &Theme, window: &Window) -> gpui::Div {
         let maximized = window.is_maximized();
         let system = cfg!(target_os = "windows");
+        let corners = self.corners;
         let button = |id: &'static str,
                       name: &'static str,
                       close: bool,
@@ -6598,6 +6670,7 @@ impl Workspace {
                 .items_center()
                 .justify_center()
                 .cursor_pointer()
+                .when(close && corners.tr, |d| d.rounded_tr(WINDOW_RADIUS))
                 .hover(move |s| s.bg(hover_bg))
                 .when(system, |d| d.occlude().window_control_area(area))
                 .when(!system, |d| d.on_click(move |_, window, _| act(window)))
@@ -6716,6 +6789,7 @@ impl Workspace {
             .bg(theme.bg_secondary)
             .border_r_1()
             .border_color(theme.border)
+            .map(|d| self.corners.left().apply(d))
             .child(toggle)
             .child(
                 div()
@@ -6812,10 +6886,14 @@ impl Workspace {
         // in the window's top right corner: this strip's, when the right
         // sidebar is collapsed and this is the last group.
         let under_controls = frameless && last && !self.right_visible;
+        let at_left = first && !self.show_ribbon() && !self.left_visible;
+        let at_right = last && !self.right_visible;
         div()
             .flex()
             .flex_row()
             .items_end()
+            .when(at_left && self.corners.tl, |d| d.rounded_tl(WINDOW_RADIUS))
+            .when(at_right && self.corners.tr, |d| d.rounded_tr(WINDOW_RADIUS))
             .h(px(HEADER_HEIGHT))
             .pt(px(6.))
             .pl(px(8.))
@@ -8080,6 +8158,7 @@ impl Workspace {
             .w(px(self.right_width as f32))
             .h_full()
             .bg(theme.bg_secondary)
+            .map(|d| self.corners.right().apply(d))
             .child(
                 div()
                     .flex()
@@ -8731,6 +8810,8 @@ fn empty_pane(text: &'static str, theme: &Theme) -> gpui::AnyElement {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.corners = WindowCorners::of(window);
+        let corners = self.corners;
         if let Some(kind) = self.pending_canvas_pick.take() {
             self.open_canvas_file_chooser(kind, window, cx);
         }
@@ -8808,6 +8889,7 @@ impl Render for Workspace {
             .w(px(self.left_width as f32))
             .h_full()
             .bg(theme.bg_secondary)
+            .when(!show_ribbon, |d| corners.left().apply(d))
             .child(
                 div()
                     .flex()
@@ -8912,6 +8994,7 @@ impl Render for Workspace {
             .pr(px(8.))
             .py(px(4.))
             .rounded_tl(px(8.))
+            .when(corners.br, |d| d.rounded_br(WINDOW_RADIUS))
             .bg(theme.bg_secondary)
             .border_t_1()
             .border_l_1()
@@ -8975,6 +9058,7 @@ impl Render for Workspace {
                     .absolute()
                     .inset_0()
                     .bg(rgba(0x00000080))
+                    .map(|d| corners.apply(d))
                     .flex()
                     .flex_row()
                     .justify_center()
