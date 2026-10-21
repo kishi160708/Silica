@@ -7,3 +7,9 @@
 
 # The conformance corpus is byte-exact test data; one note deliberately uses CRLF.
 crates/-markdown/tests/corpus/** -text
+
+# site/ vendors the  builder byte for byte (site/README.md); leaving
+# its endings alone is what keeps a diff against that repository readable.
+site/build.mjs -text
+site/lib/** -text
+site/shared/** -text

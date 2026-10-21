@@ -1,0 +1,202 @@
+---
+title: 
+layout: page
+description:  is a native knowledge base written in Rust that opens Obsidian vaults unchanged — same folder, same configuration, same Markdown, nothing converted and nothing moved. Free software under the MIT license, and an independent implementation not affiliated with Obsidian.
+---
+<section class="hero">
+  <img class="mark" src="/assets/logo.svg" alt="" width="189" height="156">
+  <span class="badge pre">Early days · v0.1.0 · reading is solid, writing is young</span>
+  <h1>Your vault, opened natively.</h1>
+  <p class="lede">
+     is a knowledge base written in Rust that opens an
+    <a href="https://obsidian.md">Obsidian</a> vault exactly as it stands — the same folder,
+    the same <code>.obsidian</code> configuration, the same Markdown, the same
+    <code>hotkeys.json</code>. There is no import step, no conversion and no second copy
+    of anything. It is an independent implementation, and it is not affiliated with Obsidian.
+  </p>
+  <div class="btn-row">
+    <a class="btn primary" href="/download/">Download for Linux, Windows, macOS</a>
+    <a class="btn" href="/docs/install/">Install and run</a>
+    <a class="btn" href="/docs/">Read the manual</a>
+  </div>
+  <p class="dim small" style="margin-top:22px">
+    Free software under the MIT license, with the
+    <a href="https://github.com/lw-xiong/">source on GitHub</a>. Only the Linux build has
+    been run on real hardware so far, and nothing is code signed — see
+    <a href="#where-it-is">where it is</a> before you point it at a vault you care about.
+  </p>
+</section>
+
+<section class="band">
+  <h2>The folder is the only source of truth</h2>
+  <p class="lede">
+     has no database, no sync service and no format of its own. It reads your Markdown
+    files and writes them back. The rule the code is built around is that it never writes a
+    file it did not change — and when it does write one, it changes only the bytes you edited.
+  </p>
+  <div class="grid">
+    <div class="card">
+      <span class="k">Nothing moves</span>
+      <h3>Open the folder you already have</h3>
+      <p>Point  at a vault and it scans it, reads <code>.obsidian</code> for your
+      settings, and opens. Your notes stay where they are, named what they are named. Close
+       and Obsidian opens the same vault, unchanged, with no reconciliation step.</p>
+    </div>
+    <div class="card">
+      <span class="k">Byte for byte</span>
+      <h3>BOMs, CRLFs and unknown keys survive</h3>
+      <p>A file's byte-order mark and its line endings are remembered when it is read and put
+      back when it is saved. Keys in a JSON or YAML config that  does not know about are
+      carried through untouched rather than dropped, so a setting a newer Obsidian wrote is
+      still there afterwards.</p>
+    </div>
+    <div class="card">
+      <span class="k">Local</span>
+      <h3>No account, no network</h3>
+      <p>There is nothing to sign in to.  makes no network connection of its own: no
+      telemetry, no update check, no license call. It is a program that reads a directory.</p>
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <h2>One parser behind everything</h2>
+  <p class="lede">
+    The editor, the reading view, the metadata cache and the link rewriter are all built on a
+    single Markdown parser whose every node carries its byte span. That is why a rename can
+    rewrite the links in a thousand notes and change nothing else in them, and why what you
+    see while editing and what you see while reading cannot drift apart.
+  </p>
+  <div class="stats">
+    <div class="stat"><b>652/652</b><span>CommonMark 0.31.2 spec examples, byte-identical HTML</span></div>
+    <div class="stat"><b>1007/1009</b><span>corpus notes rendering as Obsidian 1.13.7 renders them</span></div>
+    <div class="stat"><b>244</b><span>Obsidian command ids, with their default hotkeys</span></div>
+    <div class="stat"><b>&lt; 2 s</b><span>to index a 20,000-file vault, cold</span></div>
+  </div>
+  <p class="dim small" style="margin-top:18px">
+    Both conformance suites are ratchets in CI: they are not allowed to go down. The two corpus
+    notes that differ are nested-delimiter edge cases, listed in the manual.
+    <a href="/docs/reference/compatibility/">What matches and what does not →</a>
+  </p>
+</section>
+
+<section class="band">
+  <h2>What is in it today</h2>
+  <p class="lede">
+     is built in phases, and the gate for each is a sentence about a person rather than a
+    feature list. Phase 2's gate — a daily user browses their real vault with no missing
+    content — is met. Phase 3's, that a vault round-trips byte-identical after a week of mixed
+    use in both apps, is the one being worked on now.
+  </p>
+  <div class="grid">
+    <div class="card">
+      <span class="k">Reading <span class="tag now">Done</span></span>
+      <h3>The whole three-pane shell</h3>
+      <p>Files, reading view, Backlinks with unlinked mentions, Outgoing links, Outline, Tags,
+      full-query Search, the quick switcher, the graph, the command palette, and a Settings
+      modal that shows your real configuration. Files changed on disk re-index in place, and an
+      open note reloads keeping its scroll position.</p>
+      <p style="margin-top:.8em"><a href="/docs/app/window/">The window →</a></p>
+    </div>
+    <div class="card">
+      <span class="k">Writing <span class="tag soon">In progress</span></span>
+      <h3>Editing, and notes that move</h3>
+      <p>Live Preview and Source mode with soft wrap, find and replace, multiple cursors, smart
+      lists and autosave. New note, rename, move, copy and delete all rewrite the links in the
+      rest of the vault the way Obsidian does, keeping each link's style and alias. Table
+      editing, properties, autocompletion and templates are next.</p>
+      <p style="margin-top:.8em"><a href="/docs/app/editing/">Editing a note →</a></p>
+    </div>
+    <div class="card">
+      <span class="k">Parity <span class="tag soon">Not started</span></span>
+      <h3>Canvas, Bases, math, themes</h3>
+      <p>The on-disk formats for Canvas and Bases are implemented and round-trip, but nothing
+      draws them yet. MathJax, HTML in notes, remote images and PDF export are also still
+      ahead, as is the variable-level subset of Obsidian's CSS custom properties that makes
+      themes work.</p>
+      <p style="margin-top:.8em"><a href="/docs/reference/differences/">What differs →</a></p>
+    </div>
+    <div class="card">
+      <span class="k">Plugins <span class="tag soon">Planned</span></span>
+      <h3>A native API, not a JS runtime</h3>
+      <p>Obsidian's community plugins are JavaScript against an Electron app, and  is not
+      one, so they cannot run here and are out of scope. A native plugin interface of 's
+      own is the last phase; the 35 core plugins are being implemented as part of the app.</p>
+      <p style="margin-top:.8em"><a href="/docs/reference/compatibility/">The four tiers →</a></p>
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <h2>Written clean, from a specification</h2>
+  <p class="lede">
+    Nothing here is copied out of Obsidian's bundle — no code, no CSS, no icons. The behavior
+    was written down first, by observing a real Obsidian and reading its public documentation,
+    and the implementation follows that document. Where the two disagree, a probe in a scratch
+    vault settles it and the specification is the thing that gets corrected.
+  </p>
+  <div class="grid">
+    <div class="card">
+      <span class="k">Evidence</span>
+      <h3>Observed, not guessed</h3>
+      <p>Command ids, setting keys, file names and link-resolution rules were captured from a
+      running Obsidian with throwaway plugins that dumped what it actually does. The
+      "same folder first" rule for ambiguous links turned out to be wrong that way, and got
+      fixed.</p>
+    </div>
+    <div class="card">
+      <span class="k">Ratchets</span>
+      <h3>A thousand notes, every build</h3>
+      <p>A 1,009-note vault rendered by Obsidian is kept as expected output, and a second suite
+      renames every note in it under every link format and checks that no link breaks, appears,
+      disappears, or changes anything but itself.</p>
+    </div>
+    <div class="card">
+      <span class="k">Native</span>
+      <h3>Rust and GPUI</h3>
+      <p>The interface is <a href="https://gpui.rs">GPUI</a>, the GPU-accelerated toolkit from
+      Zed. A 50,000-line note scrolls and types inside a frame budget because only the visible
+      lines are ever shaped, and parsing happens off the UI thread.</p>
+    </div>
+  </div>
+  <p class="dim small" style="margin-top:18px">
+    <a href="/docs/reference/architecture/">How  works →</a>
+  </p>
+</section>
+
+<section class="band" id="where-it-is">
+  <h2>Where it is, plainly</h2>
+  <p class="notice">
+    <strong> is v0.1.0 and the writing half is mid-flight.</strong> Keep a backup of any
+    vault you open with it, and if the vault matters, let  read it and let Obsidian write
+    it until the round-trip gate is met. Reading a vault is well covered; editing is newer code
+    against files you cannot get back.
+  </p>
+  <div class="grid">
+    <div class="card">
+      <span class="k">Platforms</span>
+      <h3>Linux is the tested one</h3>
+      <p>Each release builds Linux x86-64, Windows x86-64 and macOS on Apple silicon, but only
+      the Linux build has been started on a real GPU. The other two are compiled and linked by
+      CI and otherwise unproven.</p>
+    </div>
+    <div class="card">
+      <span class="k">Signing</span>
+      <h3>Unsigned, so the OS will object</h3>
+      <p>Nothing is code signed or notarized. macOS Gatekeeper and Windows SmartScreen will
+      both complain on first launch; the download page says how to get past each.</p>
+    </div>
+    <div class="card">
+      <span class="k">Not yet</span>
+      <h3>Known gaps</h3>
+      <p>Math renders as its source, HTML in a note shows as text, remote images do not load,
+      Canvas and Bases files do not open, and Settings is read-only — Obsidian rewrites a whole
+      settings file on every change, so writing them waits for the round-trip gate.</p>
+    </div>
+  </div>
+  <div class="btn-row" style="margin-top:26px">
+    <a class="btn primary" href="/download/">Download </a>
+    <a class="btn" href="/docs/from-obsidian/">Coming from Obsidian</a>
+    <a class="btn" href="https://github.com/lw-xiong/">Source and issues</a>
+  </div>
+</section>

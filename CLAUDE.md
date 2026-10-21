@@ -29,6 +29,8 @@ crates/-text      editor text model: buffer, selections, undo, edit plans (no gp
 crates/-suggest   autocompletion: triggers, candidates, the link an accepted row writes (no gpui)
 crates/-bench     spike benchmarks: synthetic vault generator, index timer (bin)
 docs/             Obsidian vault: spec and design notes (dogfooded by )
+docs/img                brand art; _v3_fixed.svg is the logo every other copy is cut from
+site                    : the informational site and the manual (static, node)
 ```
 
 ## Commands
@@ -43,11 +45,15 @@ cargo test --workspace            # all library tests (fast)
 SCORIA_ROUNDTRIP_VAULT=<vault> cargo test -p -text --test writer_roundtrip   # Writer gate round trips, over a real vault too
 cargo check -p              # app, pulls gpui (slow first time)
 cargo run --release -p  -- <vault> [--note "Name#Heading"]   # open a vault (release: the editor reparses on every edit)
+cargo run --release -p  -- <vault> --frame native   # the desktop's title bar instead of the hidden frame (SCORIA_FRAME=native does the same)
 cargo run --release -p  -- <vault> --synthetic 50000 --stress   # editor spike: self-driven edits, prints timings
 cargo run --release -p  -- <vault> --note X --source --type '[[al' [--accept enter]  # open the autocompletion popup (and press its keys) for a screenshot
 cargo run --release -p -bench -- generate <dir>   # synthetic 20k-note vault
 cargo run --release -p -bench -- index <vault>    # time scan/read/index/resolve, check the 2 s gate
 cargo fmt --all && cargo clippy --workspace --all-targets
+
+cd site && npm install && npm run build   #  -> site/dist/ (exits 1 on a dead link)
+cd site && npm run serve                  # the same, served on http://localhost:4321/
 ```
 
 ## Conventions
@@ -61,3 +67,8 @@ cargo fmt --all && cargo clippy --workspace --all-targets
   observed behavior (list it in `docs//Specification.md`).
 - `docs//` is an Obsidian vault: write notes with wikilinks and frontmatter, and keep
   `.obsidian/` committed except `workspace.json`.
+- The logo lives in three places — `docs/img/_v3_fixed.svg` (the master), the app's
+  `crates//assets/logo.svg` and the site's `site/sites//assets/`. Change the master
+  and re-cut the copies; never edit one of the copies on its own.
+- `site/` vendors the builder from the `` repository byte for byte, bar the two
+  differences `site/README.md` records. Port fixes across whole rather than merging.
