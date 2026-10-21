@@ -66,7 +66,7 @@ Most of the 50 are the same large gaps the first pass had already filed — no t
 Hotkeys tab, the graph controls panel — and they are not duplicated below. What the triage added is
 twenty entries nobody had filed before and fresh evidence on a dozen more; both are folded into the
 sections that follow, so the sections held **61 open entries** in total; the five large builds of 2026-10-20 and the
-four small entries they carried closed nine of them, so **52 remain** — plus one filed after the frame work of the same evening, below.
+four small entries they carried closed nine of them, so **52 remain** — plus one filed after the frame work of the same evening, below; the Files header of 2026-10-21 closed one more and halved two.
 
 ## Files view and file operations
 
@@ -89,29 +89,12 @@ bytes it just wrote, so `after_changes` cannot tell a self-write from an externa
 Saving a note moves nothing. (That last sentence is inference from the fixture, not an observation
 — see [[#Declined until Obsidian is probed]].)
 
-**Fix.** Two independent halves. Split `FileExplorer::reveal` into `set_active(path)` (highlight
-only), `scroll_to(path)` (expand plus scroll, no `active`) and the existing `reveal`, and call
-`set_active` from `show_file` and `set_tree`; that one split also closes the three entries below.
-Then in `after_changes`, a Modified(current) whose on-disk text the editor already matches should
-call `refresh_panes` instead of `show_file` — a content check, not an mtime stamp, so a genuine
-external write is never swallowed.
-
-### Opening a note expands every ancestor folder; the leaf's `autoReveal` is never read
-
-*medium, parity-gap, small*
-
-**.** With every folder collapsed, `open {"name":"Deep"}` — a plain wikilink resolution to
-`Deep/A/B/C/Deep.md` — takes the explorer from 15 depth-0 rows to a tree expanded to depth 4.
-Nothing in `crates//src` reads `autoReveal`, and `Vault::workspace_json()`
-(-vault/src/lib.rs:449) still has no caller outside its own test.
-
-**Obsidian.** "Auto-reveal current file" is the file-explorer leaf's `autoReveal`, false in both
-repo fixtures; with it off, following a link expands nothing and
-`file-explorer:reveal-active-file` does the expand-and-scroll on demand.
-
-**Fix.** Read `state.autoReveal` (and `state.sortOrder`) out of `Vault::workspace_json()` once at
-load into a field on `FileExplorer`; `show_file` then calls `set_active`, and only the on-demand
-command keeps the full reveal.
+**Fix.** Two independent halves. The explorer half landed on 2026-10-21 with the Files header:
+`set_tree` no longer reveals anything and `show_file` calls `FileExplorer::follow`, which only
+highlights the row unless the leaf's `autoReveal` is on — so the re-entry still happens but moves
+nothing. What remains is the self-write itself: in `after_changes`, a Modified(current) whose
+on-disk text the editor already matches should call `refresh_panes` instead of `show_file` — a
+content check, not an mtime stamp, so a genuine external write is never swallowed.
 
 ### Rename accepts `/` and silently creates folders; an empty name reports the dot rule
 
@@ -199,25 +182,22 @@ about a file operation reaches the status bar.
 `outcome.rewritten_links == 0`, and otherwise emit exactly `Updated {n} link{s} in {m} file{s}.`
 with no "Renamed X to Y" prefix. Drop the "Deleted" and "Copied" reports.
 
-### Files pane has no header buttons and the explorer takes no keyboard focus
+### The explorer takes no keyboard focus
 
-*low, missing-feature, large*
+*low, missing-feature, medium*
 
 **.** After `file-explorer:open` and `file-explorer:reveal-active-file`, focus is still
 `{editor, [Workspace, Editor]}` and Down does nothing to the tree. `FileExplorer` holds no
-`FocusHandle` and registers no key context; `render` is the uniform list with no header row; and
-`collapse_all`/`expand_all` are still behind `#[cfg(test)]`. With the two reveal entries above still
-live, there is no way to re-collapse the tree except clicking each folder in turn.
+`FocusHandle` and registers no key context. (The header half of this entry — New note, New folder,
+Change sort order with the six `sortOrder` modes, Auto-reveal current file, Expand all — was built
+on 2026-10-21 against the `explorer-header` probe; see
+[[Specification#Observed file explorer header behavior, Obsidian 1.14.4 (installer build 1.13.7)]].)
 
-**Obsidian.** The Files pane has a `.nav-header` / `.nav-buttons-container` with New note, New
-folder, Change sort order and Collapse all; clicking a row focuses the explorer (rows gain
-`has-focus`) and arrow keys walk the tree.
+**Obsidian.** Clicking a row focuses the explorer (rows gain `has-focus`) and arrow keys walk the
+tree.
 
-**Fix.** A 36 px header row with four buttons (the last calling `collapse_all`/`expand_all` with the
-`cfg(test)` removed), plus a `FocusHandle` and an "Explorer" key context with
-Up/Down/Left/Right/Enter over a `selected` index, focused from `file-explorer:open`. The sort menu
-is also the only reachable home for the six `sortOrder` modes, which is why that half of the
-collation finding is filed here rather than as its own entry.
+**Fix.** A `FocusHandle` and an "Explorer" key context with Up/Down/Left/Right/Enter over a
+`selected` index, focused from `file-explorer:open`.
 
 ### Non-markdown rows show the extension inline instead of as a tag
 

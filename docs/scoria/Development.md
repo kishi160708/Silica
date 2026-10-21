@@ -230,7 +230,43 @@ of mixed use in both apps. The gate run opened on 2026-10-18, see
 | Canvas view | done: a `.canvas` opens in the main area, pans, zooms, selects, moves, resizes, draws edges, colours, groups, copies, pastes and undoes, cards are typed into, the menus, controls and commands are Obsidian's, and it autosaves in Obsidian's bytes, see [[#Canvas view, 2026-10-21]] and [[#Canvas view, measured, 2026-10-21]] |
 | Tab groups | done: Split right, Split down, the four focus commands, draggable dividers and `workspace.json`'s `main` tree, see [[#Tab groups, 2026-10-20]]; tabs drag between groups and onto split edges, see [[#Dragging tabs, 2026-10-21]] |
 | Bookmarks | done: the pane, the seven commands and `bookmarks.json` in Obsidian's bytes, see [[#Bookmarks, 2026-10-20]] |
+| Files header | done: New note, New folder, the six sort orders, Auto-reveal current file and Expand all / Collapse all, see [[#Files header, 2026-10-21]] |
 | The gate itself | open: the harness passes on the real vault, the week of mixed use has not run, see [[#The gate run opens, 2026-10-18]] |
+
+### Files header, 2026-10-21
+
+The Files pane's `nav-header`, probed first: `tools/obsidian-probe/explorer-header.mjs`
+drove Obsidian over CDP through the five buttons, every sort order, the auto-reveal
+toggle with a note opened in a collapsed folder either way, and the Expand all /
+Collapse all swap, and the findings are
+[[Specification#Observed file explorer header behavior, Obsidian 1.14.4 (installer build 1.13.7)]].
+What that settled that a guess would have missed: folders keep their name order under
+every sort, the six orders live in the leaf's `sortOrder` in `workspace.json` and never
+in `app.json`, the last button's label follows the tree (one folder opened by hand
+makes it "Collapse all"), and turning auto-reveal on reveals the open file at once.
+
+Built: `SortOrder` in `explorer.rs` with Obsidian's strings and labels; `FileTree`
+keeps its folder tree and re-lists the files of each folder on `set_sort`, by name,
+`mtime` or the new `VaultFile::ctime` (the birth time, the mtime where the filesystem
+has none); `collapse_all` and `expand_all` lost their `cfg(test)`; the header is a
+40 px row of 28 by 24 icon buttons with tooltips, the sort menu hangs under its
+button with a check on the order in force, and the auto-reveal button wears the
+accent while on. `FileExplorer::follow` replaces the unconditional `reveal` where a
+file becomes the open one: the row is highlighted, and only with auto-reveal on are
+its folders expanded and the row scrolled to. `set_tree` no longer reveals anything,
+so a write elsewhere in the vault no longer moves the list. The two keys are read
+from the file-explorer leaf in `workspace.json` at restore and written back in place
+at save, in Obsidian's key order (`explorer_leaf_state_is_read_and_written_in_place`).
+The header's New note runs `file-explorer:new-file`; New folder opens the existing
+prompt at the vault root, where Obsidian's inline rename is still a backlog entry.
+The socket's `explorer` state gained `sort_order`, `auto_reveal` and `any_expanded`.
+
+Seen working in the app over the control socket on the probe's own vault: the menu
+with its check, the rows in `byModifiedTime` order, the toggle revealing
+`Projects/Deep/Inner.md` through two collapsed folders and leaving `Archive/old.md`
+alone once off, Collapse all, both creation buttons, and the two keys coming back
+from `workspace.json` after a quit. One fix on the way: a menu item's click also
+reached the explorer row under it until the menu was `occlude()`d.
 
 ### The frame, the type and the icons, 2026-10-20
 

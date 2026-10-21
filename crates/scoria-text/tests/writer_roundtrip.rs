@@ -389,6 +389,7 @@ fn suggest_fixture() -> (Vec<VaultFile>, MetadataCache) {
             kind: _formats::FileKind::from_path(path),
             size: 0,
             mtime: 0,
+            ctime: 0,
         })
         .collect();
     let cache = MetadataCache::new(

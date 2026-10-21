@@ -47,6 +47,10 @@ pub struct VaultFile {
     /// the link suggester orders an empty query by it, newest first. Zero
     /// when the filesystem does not say.
     pub mtime: u64,
+    /// Creation time in the same units, like `TFile.stat.ctime`: the Files
+    /// view's two "Created time" orders sort by it. The modification time
+    /// stands in on a filesystem that keeps no birth time.
+    pub ctime: u64,
 }
 
 /// A file's modification time in milliseconds since the Unix epoch.
@@ -56,6 +60,16 @@ fn mtime_ms(meta: &std::fs::Metadata) -> u64 {
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// A file's creation time in milliseconds since the Unix epoch, or its
+/// modification time where the filesystem records no birth time.
+fn ctime_ms(meta: &std::fs::Metadata) -> u64 {
+    meta.created()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or_else(|| mtime_ms(meta))
 }
 
 /// What [`Vault::refresh_path`] found; paths are vault-relative.
@@ -264,15 +278,16 @@ impl Vault {
             if !entry.file_type().is_file() {
                 continue;
             }
-            let (size, mtime) = entry
+            let (size, mtime, ctime) = entry
                 .metadata()
-                .map(|m| (m.len(), mtime_ms(&m)))
-                .unwrap_or((0, 0));
+                .map(|m| (m.len(), mtime_ms(&m), ctime_ms(&m)))
+                .unwrap_or((0, 0, 0));
             files.push(VaultFile {
                 kind: FileKind::from_path(&rel),
                 path: rel,
                 size,
                 mtime,
+                ctime,
             });
         }
         files.sort_by(|a, b| a.path.cmp(&b.path));
@@ -307,6 +322,7 @@ impl Vault {
                     path: rel.clone(),
                     size: meta.len(),
                     mtime: mtime_ms(&meta),
+                    ctime: ctime_ms(&meta),
                 };
                 match self.files.binary_search_by(|f| f.path.cmp(&rel)) {
                     Ok(ix) => {

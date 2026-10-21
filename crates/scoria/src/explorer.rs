@@ -4,26 +4,112 @@
 //! and [`FileExplorer`] the GPUI entity that draws it with a uniform list, so
 //! a 20k-file vault costs one row element per visible line. Names are ordered
 //! with [`natural_cmp`], the collation the search pane uses, so two lists of
-//! the same files in one window cannot disagree. A right click
-//! opens the file menu (new note, new folder, rename, move, copy, delete);
-//! the explorer only reports the choice, the workspace does the work.
+//! the same files in one window cannot disagree, and the files of each
+//! folder follow the leaf's [`SortOrder`]. A right click opens the file menu
+//! (new note, new folder, rename, move, copy, delete); the explorer only
+//! reports the choice, the workspace does the work. Above the tree sits
+//! Obsidian's `nav-header`: New note, New folder, Change sort order,
+//! Auto-reveal current file, and Expand all (Collapse all once a folder is
+//! open).
 
-use crate::theme::Theme;
+use crate::assets::icon;
+use crate::canvas::menu::tooltip;
+use crate::theme::{Theme, ICON_SIZE};
 use gpui::{
-    anchored, deferred, div, prelude::*, px, uniform_list, Context, EventEmitter, FontWeight,
-    MouseButton, Pixels, Point, ScrollStrategy, SharedString, UniformListScrollHandle, Window,
+    anchored, deferred, div, point, prelude::*, px, uniform_list, ClickEvent, Context,
+    EventEmitter, FontWeight, MouseButton, Pixels, Point, ScrollStrategy, SharedString,
+    UniformListScrollHandle, Window,
 };
 use _formats::FileKind;
 use _search::natural_cmp;
 use _vault::VaultFile;
 use serde_json::{json, Value};
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashSet};
 use std::ops::Range;
 
-/// One line of the tree with every folder expanded.
 /// The font size of a row's extension tag.
 const TAG_SIZE: f32 = 10.0;
 
+/// The header row: Obsidian's `.nav-header` is 40 px, 8 px of padding
+/// around a centred row of 28 by 24 buttons 2 px apart.
+const HEADER_HEIGHT: f32 = 40.0;
+
+/// The order the files of each folder are listed in: the six values of the
+/// Files leaf's `sortOrder`. Folders keep their name order whichever is on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SortOrder {
+    #[default]
+    Alphabetical,
+    AlphabeticalReverse,
+    ByModifiedTime,
+    ByModifiedTimeReverse,
+    ByCreatedTime,
+    ByCreatedTimeReverse,
+}
+
+impl SortOrder {
+    /// Every order, in the order the menu lists them.
+    pub const ALL: [SortOrder; 6] = [
+        SortOrder::Alphabetical,
+        SortOrder::AlphabeticalReverse,
+        SortOrder::ByModifiedTime,
+        SortOrder::ByModifiedTimeReverse,
+        SortOrder::ByCreatedTime,
+        SortOrder::ByCreatedTimeReverse,
+    ];
+
+    /// The string `workspace.json` records.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SortOrder::Alphabetical => "alphabetical",
+            SortOrder::AlphabeticalReverse => "alphabeticalReverse",
+            SortOrder::ByModifiedTime => "byModifiedTime",
+            SortOrder::ByModifiedTimeReverse => "byModifiedTimeReverse",
+            SortOrder::ByCreatedTime => "byCreatedTime",
+            SortOrder::ByCreatedTimeReverse => "byCreatedTimeReverse",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<SortOrder> {
+        SortOrder::ALL.into_iter().find(|o| o.as_str() == s)
+    }
+
+    /// The menu's label.
+    pub fn label(self) -> &'static str {
+        match self {
+            SortOrder::Alphabetical => "File name (A to Z)",
+            SortOrder::AlphabeticalReverse => "File name (Z to A)",
+            SortOrder::ByModifiedTime => "Modified time (new to old)",
+            SortOrder::ByModifiedTimeReverse => "Modified time (old to new)",
+            SortOrder::ByCreatedTime => "Created time (new to old)",
+            SortOrder::ByCreatedTimeReverse => "Created time (old to new)",
+        }
+    }
+
+    /// How two files of one folder compare under this order. Names tie
+    /// break every time sort, and the full file name breaks a tie between
+    /// two display names, so the order of a rescan is stable.
+    fn compare(self, a: &Entry, b: &Entry) -> Ordering {
+        let by_name = |a: &Entry, b: &Entry| {
+            natural_cmp(display_name(&a.name), display_name(&b.name))
+                .then_with(|| natural_cmp(&a.name, &b.name))
+        };
+        match self {
+            SortOrder::Alphabetical => by_name(a, b),
+            SortOrder::AlphabeticalReverse => {
+                natural_cmp(display_name(&b.name), display_name(&a.name))
+                    .then_with(|| natural_cmp(&a.name, &b.name))
+            }
+            SortOrder::ByModifiedTime => b.mtime.cmp(&a.mtime).then_with(|| by_name(a, b)),
+            SortOrder::ByModifiedTimeReverse => a.mtime.cmp(&b.mtime).then_with(|| by_name(a, b)),
+            SortOrder::ByCreatedTime => b.ctime.cmp(&a.ctime).then_with(|| by_name(a, b)),
+            SortOrder::ByCreatedTimeReverse => a.ctime.cmp(&b.ctime).then_with(|| by_name(a, b)),
+        }
+    }
+}
+
+/// One line of the tree with every folder expanded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
     /// Vault-relative path; folders without a trailing slash.
@@ -38,15 +124,26 @@ pub struct Row {
     pub kind: FileKind,
 }
 
+/// A file as its folder holds it: what the sort orders need of it.
+#[derive(Debug, Clone)]
+struct Entry {
+    name: String,
+    kind: FileKind,
+    mtime: u64,
+    ctime: u64,
+}
+
 #[derive(Debug, Default)]
 struct Folder {
     folders: BTreeMap<String, Folder>,
-    files: Vec<(String, FileKind)>,
+    files: Vec<Entry>,
 }
 
 /// Folder tree with per-folder collapse state.
 #[derive(Debug, Default)]
 pub struct FileTree {
+    root: Folder,
+    sort: SortOrder,
     all: Vec<Row>,
     collapsed: HashSet<String>,
     visible: Vec<usize>,
@@ -78,22 +175,45 @@ impl FileTree {
             for part in parts {
                 folder = folder.folders.entry(part.to_string()).or_default();
             }
-            folder.files.push((name, file.kind));
+            folder.files.push(Entry {
+                name,
+                kind: file.kind,
+                mtime: file.mtime,
+                ctime: file.ctime,
+            });
         }
         let mut all = Vec::new();
-        flatten(&root, "", 0, &mut all);
+        flatten(&root, "", 0, SortOrder::Alphabetical, &mut all);
         let collapsed = all
             .iter()
             .filter(|r| r.is_folder)
             .map(|r| r.path.clone())
             .collect();
         let mut tree = FileTree {
+            root,
+            sort: SortOrder::Alphabetical,
             all,
             collapsed,
             visible: Vec::new(),
         };
         tree.recompute();
         tree
+    }
+
+    pub fn sort(&self) -> SortOrder {
+        self.sort
+    }
+
+    /// Re-lists every folder's files in `sort`; folders and their collapse
+    /// state stay as they were.
+    pub fn set_sort(&mut self, sort: SortOrder) {
+        if self.sort == sort {
+            return;
+        }
+        self.sort = sort;
+        self.all.clear();
+        flatten(&self.root, "", 0, sort, &mut self.all);
+        self.recompute();
     }
 
     fn recompute(&mut self) {
@@ -152,7 +272,6 @@ impl FileTree {
         self.recompute();
     }
 
-    #[cfg(test)]
     pub fn collapse_all(&mut self) {
         self.collapsed = self
             .all
@@ -163,10 +282,17 @@ impl FileTree {
         self.recompute();
     }
 
-    #[cfg(test)]
     pub fn expand_all(&mut self) {
         self.collapsed.clear();
         self.recompute();
+    }
+
+    /// Whether any folder is open: the header's last button is "Collapse
+    /// all" then and "Expand all" otherwise, as Obsidian's swaps.
+    pub fn any_expanded(&self) -> bool {
+        self.all
+            .iter()
+            .any(|r| r.is_folder && !self.collapsed.contains(&r.path))
     }
 
     /// Expands every ancestor of `path` and returns its visible row index.
@@ -190,7 +316,7 @@ impl FileTree {
     }
 }
 
-fn flatten(folder: &Folder, prefix: &str, depth: usize, out: &mut Vec<Row>) {
+fn flatten(folder: &Folder, prefix: &str, depth: usize, sort: SortOrder, out: &mut Vec<Row>) {
     let mut names: Vec<&String> = folder.folders.keys().collect();
     names.sort_by(|a, b| natural_cmp(a, b));
     for name in names {
@@ -207,15 +333,12 @@ fn flatten(folder: &Folder, prefix: &str, depth: usize, out: &mut Vec<Row>) {
             is_folder: true,
             kind: FileKind::Other,
         });
-        flatten(&folder.folders[name], &path, depth + 1, out);
+        flatten(&folder.folders[name], &path, depth + 1, sort, out);
     }
-    let mut files: Vec<&(String, FileKind)> = folder.files.iter().collect();
-    // Two files can share a display name once the `.md` is dropped, so the
-    // full file name breaks the tie and keeps the order of a rescan stable.
-    files.sort_by(|(a, _), (b, _)| {
-        natural_cmp(display_name(a), display_name(b)).then_with(|| natural_cmp(a, b))
-    });
-    for (name, kind) in files {
+    let mut files: Vec<&Entry> = folder.files.iter().collect();
+    files.sort_by(|a, b| sort.compare(a, b));
+    for entry in files {
+        let name = &entry.name;
         out.push(Row {
             path: if prefix.is_empty() {
                 name.clone()
@@ -226,7 +349,7 @@ fn flatten(folder: &Folder, prefix: &str, depth: usize, out: &mut Vec<Row>) {
             tag: file_tag(name),
             depth,
             is_folder: false,
-            kind: *kind,
+            kind: entry.kind,
         });
     }
 }
@@ -280,8 +403,12 @@ pub enum ExplorerEvent {
     Open(String),
     /// A Ctrl+click: the file goes to a new tab.
     OpenInNewTab(String),
+    /// The header's "New note": what the `file-explorer:new-file` command
+    /// does, the folder following `newFileLocation`.
+    NewNoteFromHeader,
     /// Context-menu actions; paths are vault-relative, folders without a
-    /// trailing slash (`""` is the vault root).
+    /// trailing slash (`""` is the vault root). The header's "New folder"
+    /// is a `NewFolder` at the root.
     NewNote {
         folder: String,
     },
@@ -305,8 +432,14 @@ struct Menu {
 pub struct FileExplorer {
     tree: FileTree,
     active: Option<String>,
+    /// The leaf's `autoReveal`: whether opening a file expands its folders
+    /// and scrolls to its row, or only highlights the row if it is on
+    /// screen. Off in a fresh vault, as in Obsidian.
+    auto_reveal: bool,
     scroll: UniformListScrollHandle,
     menu: Option<Menu>,
+    /// The sort menu is open under its header button.
+    sort_menu_open: bool,
 }
 
 impl EventEmitter<ExplorerEvent> for FileExplorer {}
@@ -316,19 +449,86 @@ impl FileExplorer {
         FileExplorer {
             tree: FileTree::default(),
             active: None,
+            auto_reveal: false,
             scroll: UniformListScrollHandle::new(),
             menu: None,
+            sort_menu_open: false,
         }
     }
 
+    /// A rebuilt tree: the folders that were open stay open, the sort order
+    /// carries over and the open file keeps its highlight. Nothing is
+    /// expanded or scrolled, so a file written elsewhere in the vault does
+    /// not move the list.
     pub fn set_tree(&mut self, mut tree: FileTree, cx: &mut Context<Self>) {
         let expanded = self.tree.expanded_folders();
         tree.expand_folders(&expanded);
+        tree.set_sort(self.tree.sort());
         self.tree = tree;
-        if let Some(active) = self.active.clone() {
-            self.reveal(&active, cx);
+        cx.notify();
+    }
+
+    /// The leaf's state as `workspace.json` recorded it.
+    pub fn set_leaf_state(&mut self, sort: SortOrder, auto_reveal: bool, cx: &mut Context<Self>) {
+        self.tree.set_sort(sort);
+        self.auto_reveal = auto_reveal;
+        cx.notify();
+    }
+
+    pub fn sort_order(&self) -> SortOrder {
+        self.tree.sort()
+    }
+
+    pub fn auto_reveal(&self) -> bool {
+        self.auto_reveal
+    }
+
+    fn set_sort(&mut self, sort: SortOrder, cx: &mut Context<Self>) {
+        self.tree.set_sort(sort);
+        self.sort_menu_open = false;
+        cx.notify();
+    }
+
+    /// "Auto-reveal current file": switching it on reveals the open file
+    /// right away, as Obsidian does.
+    fn toggle_auto_reveal(&mut self, cx: &mut Context<Self>) {
+        self.auto_reveal = !self.auto_reveal;
+        if self.auto_reveal {
+            if let Some(active) = self.active.clone() {
+                self.reveal(&active, cx);
+            }
         }
         cx.notify();
+    }
+
+    /// "Expand all" opens every folder at every depth; "Collapse all", the
+    /// same button once any folder is open, closes them all.
+    fn toggle_all(&mut self, cx: &mut Context<Self>) {
+        if self.tree.any_expanded() {
+            self.tree.collapse_all();
+        } else {
+            self.tree.expand_all();
+        }
+        cx.notify();
+    }
+
+    /// The file that just became the open one: highlighted, and with
+    /// auto-reveal on, also expanded into view.
+    pub fn follow(&mut self, path: &str, cx: &mut Context<Self>) {
+        if self.auto_reveal {
+            self.reveal(path, cx);
+        } else {
+            self.set_active(path, cx);
+        }
+    }
+
+    /// Marks `path` as the open file without touching the tree: its row is
+    /// highlighted if a folder is not hiding it.
+    pub fn set_active(&mut self, path: &str, cx: &mut Context<Self>) {
+        if self.active.as_deref() != Some(path) {
+            self.active = Some(path.to_string());
+            cx.notify();
+        }
     }
 
     /// No file is open: nothing is highlighted.
@@ -368,6 +568,9 @@ impl FileExplorer {
             .collect();
         json!({
             "active": self.active,
+            "sort_order": self.tree.sort().as_str(),
+            "auto_reveal": self.auto_reveal,
+            "any_expanded": self.tree.any_expanded(),
             "rows": shown,
             "rows_total": if total > shown.len() { Some(total) } else { None },
         })
@@ -465,6 +668,7 @@ impl FileExplorer {
             .shadow_lg()
             .text_size(px(13.))
             .text_color(theme.text)
+            .occlude()
             .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_menu(cx)));
         for (ix, (label, event)) in items.into_iter().enumerate() {
             let event = std::cell::Cell::new(Some(event));
@@ -488,6 +692,184 @@ impl FileExplorer {
             deferred(
                 anchored()
                     .position(menu.position)
+                    .snap_to_window_with_margin(px(8.))
+                    .child(list),
+            )
+            .with_priority(1)
+            .into_any_element(),
+        )
+    }
+
+    /// A header button: Obsidian's `nav-action-button`, 28 by 24 with a
+    /// 4 px radius, the icon muted until the pointer is over it; `active`
+    /// is the wash and accent of an `is-active` one.
+    fn header_button(
+        id: &'static str,
+        icon_name: &'static str,
+        label: &'static str,
+        active: bool,
+        theme: &Theme,
+    ) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id(id)
+            .flex_shrink_0()
+            .w(px(28.))
+            .h(px(24.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(4.))
+            .cursor_pointer()
+            .when(active, |d| d.bg(theme.bg_alt))
+            .hover(|s| s.bg(theme.bg_alt))
+            .tooltip(tooltip(label))
+            .child(icon(
+                icon_name,
+                ICON_SIZE,
+                if active {
+                    theme.accent
+                } else {
+                    theme.text_muted
+                },
+            ))
+    }
+
+    fn render_header(&mut self, cx: &mut Context<Self>) -> gpui::Div {
+        let theme = cx.global::<Theme>().clone();
+        let any_expanded = self.tree.any_expanded();
+        let (fold_id, fold_icon, fold_label) = if any_expanded {
+            ("explorer-collapse-all", "chevrons-down-up", "Collapse all")
+        } else {
+            ("explorer-expand-all", "chevrons-up-down", "Expand all")
+        };
+        let sort_menu = self.render_sort_menu(&theme, cx);
+        div()
+            .flex_shrink_0()
+            .h(px(HEADER_HEIGHT))
+            .p(px(8.))
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_center()
+            .gap(px(2.))
+            .child(
+                Self::header_button("explorer-new-note", "square-pen", "New note", false, &theme)
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(ExplorerEvent::NewNoteFromHeader))),
+            )
+            .child(
+                Self::header_button(
+                    "explorer-new-folder",
+                    "folder-plus",
+                    "New folder",
+                    false,
+                    &theme,
+                )
+                .on_click(cx.listener(|_, _, _, cx| {
+                    cx.emit(ExplorerEvent::NewFolder {
+                        parent: String::new(),
+                    })
+                })),
+            )
+            .child(
+                // The menu hangs off this wrapper, so it opens under the
+                // button wherever the dock is.
+                div()
+                    .relative()
+                    .child(
+                        Self::header_button(
+                            "explorer-sort",
+                            "arrow-up-narrow-wide",
+                            "Change sort order",
+                            false,
+                            &theme,
+                        )
+                        .on_click(cx.listener(
+                            |this, _: &ClickEvent, _, cx| {
+                                this.sort_menu_open = !this.sort_menu_open;
+                                cx.notify();
+                            },
+                        )),
+                    )
+                    .children(sort_menu),
+            )
+            .child(
+                Self::header_button(
+                    "explorer-auto-reveal",
+                    "gallery-vertical",
+                    "Auto-reveal current file",
+                    self.auto_reveal,
+                    &theme,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_auto_reveal(cx))),
+            )
+            .child(
+                Self::header_button(fold_id, fold_icon, fold_label, false, &theme)
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_all(cx))),
+            )
+    }
+
+    /// "Change sort order": the six orders in three pairs, a check against
+    /// the one in force.
+    fn render_sort_menu(
+        &mut self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        if !self.sort_menu_open {
+            return None;
+        }
+        let current = self.tree.sort();
+        let mut list = div()
+            .id("explorer-sort-menu")
+            .flex()
+            .flex_col()
+            .min_w(px(220.))
+            .py_1()
+            .bg(theme.bg_secondary)
+            .border_1()
+            .border_color(theme.border)
+            .rounded_md()
+            .shadow_lg()
+            .text_size(px(13.))
+            .text_color(theme.text)
+            // Keeps a click on an item from reaching the row under it.
+            .occlude()
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                this.sort_menu_open = false;
+                cx.notify();
+            }));
+        for (ix, order) in SortOrder::ALL.into_iter().enumerate() {
+            if ix > 0 && ix % 2 == 0 {
+                list = list.child(div().my_1().h(px(1.)).bg(theme.border));
+            }
+            let checked = order == current;
+            list = list.child(
+                div()
+                    .id(("explorer-sort-item", ix))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .px_3()
+                    .py_1()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme.bg_alt))
+                    .on_click(cx.listener(move |this, _, _, cx| this.set_sort(order, cx)))
+                    .child(
+                        div()
+                            .w(px(16.))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .children(checked.then(|| icon("check", 14., theme.text_muted))),
+                    )
+                    .child(order.label()),
+            );
+        }
+        Some(
+            deferred(
+                anchored()
+                    .offset(point(px(0.), px(26.)))
                     .snap_to_window_with_margin(px(8.))
                     .child(list),
             )
@@ -597,12 +979,18 @@ impl Render for FileExplorer {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let count = self.tree.len();
         let menu = self.render_menu(cx);
+        let header = self.render_header(cx);
         div()
             .size_full()
+            .flex()
+            .flex_col()
+            .child(header)
             .child(
                 uniform_list("file-explorer", count, cx.processor(Self::render_rows))
                     .track_scroll(&self.scroll)
-                    .size_full()
+                    .flex_1()
+                    .w_full()
+                    .min_h(px(0.))
                     .px_1(),
             )
             .children(menu)
@@ -621,8 +1009,194 @@ mod tests {
                 kind: FileKind::from_path(p),
                 size: 0,
                 mtime: 0,
+                ctime: 0,
             })
             .collect()
+    }
+
+    /// The orders Obsidian showed on 2026-10-21 for a vault whose files
+    /// were created in one order and modified in another (the
+    /// `explorer-header` probe): folders stay in name order under every
+    /// sort, and only the files of each folder move.
+    #[test]
+    fn the_six_sort_orders_move_files_but_not_folders() {
+        let created = [
+            "Alpha.md",
+            "beta.md",
+            "Gamma.md",
+            "n2.md",
+            "n10.md",
+            "Projects/Plan.md",
+            "Projects/Deep/Inner.md",
+            "Archive/old.md",
+            "Projects/Budget.md",
+            "cover.png",
+        ];
+        let modified = [
+            "n10.md",
+            "Archive/old.md",
+            "Alpha.md",
+            "Projects/Budget.md",
+            "cover.png",
+            "Gamma.md",
+            "Projects/Deep/Inner.md",
+            "beta.md",
+            "Projects/Plan.md",
+            "n2.md",
+        ];
+        let files: Vec<VaultFile> = created
+            .iter()
+            .enumerate()
+            .map(|(ix, p)| VaultFile {
+                path: p.to_string(),
+                kind: FileKind::from_path(p),
+                size: 0,
+                mtime: 1 + modified.iter().position(|m| m == p).unwrap() as u64,
+                ctime: 1 + ix as u64,
+            })
+            .collect();
+        let empty = vec!["Empty".to_string()];
+        let mut tree = FileTree::new(&files, &empty, false);
+        tree.expand_all();
+        let names = |tree: &FileTree| -> Vec<String> {
+            tree.rows()
+                .map(|r| {
+                    if r.is_folder {
+                        format!("{}/", r.name)
+                    } else {
+                        r.name.clone()
+                    }
+                })
+                .collect()
+        };
+        let observed: [(SortOrder, &[&str]); 6] = [
+            (
+                SortOrder::Alphabetical,
+                &[
+                    "Archive/",
+                    "old",
+                    "Empty/",
+                    "Projects/",
+                    "Deep/",
+                    "Inner",
+                    "Budget",
+                    "Plan",
+                    "Alpha",
+                    "beta",
+                    "cover",
+                    "Gamma",
+                    "n2",
+                    "n10",
+                ],
+            ),
+            (
+                SortOrder::AlphabeticalReverse,
+                &[
+                    "Archive/",
+                    "old",
+                    "Empty/",
+                    "Projects/",
+                    "Deep/",
+                    "Inner",
+                    "Plan",
+                    "Budget",
+                    "n10",
+                    "n2",
+                    "Gamma",
+                    "cover",
+                    "beta",
+                    "Alpha",
+                ],
+            ),
+            (
+                SortOrder::ByModifiedTime,
+                &[
+                    "Archive/",
+                    "old",
+                    "Empty/",
+                    "Projects/",
+                    "Deep/",
+                    "Inner",
+                    "Plan",
+                    "Budget",
+                    "n2",
+                    "beta",
+                    "Gamma",
+                    "cover",
+                    "Alpha",
+                    "n10",
+                ],
+            ),
+            (
+                SortOrder::ByModifiedTimeReverse,
+                &[
+                    "Archive/",
+                    "old",
+                    "Empty/",
+                    "Projects/",
+                    "Deep/",
+                    "Inner",
+                    "Budget",
+                    "Plan",
+                    "n10",
+                    "Alpha",
+                    "cover",
+                    "Gamma",
+                    "beta",
+                    "n2",
+                ],
+            ),
+            (
+                SortOrder::ByCreatedTime,
+                &[
+                    "Archive/",
+                    "old",
+                    "Empty/",
+                    "Projects/",
+                    "Deep/",
+                    "Inner",
+                    "Budget",
+                    "Plan",
+                    "cover",
+                    "n10",
+                    "n2",
+                    "Gamma",
+                    "beta",
+                    "Alpha",
+                ],
+            ),
+            (
+                SortOrder::ByCreatedTimeReverse,
+                &[
+                    "Archive/",
+                    "old",
+                    "Empty/",
+                    "Projects/",
+                    "Deep/",
+                    "Inner",
+                    "Plan",
+                    "Budget",
+                    "Alpha",
+                    "beta",
+                    "Gamma",
+                    "n2",
+                    "n10",
+                    "cover",
+                ],
+            ),
+        ];
+        for (order, rows) in observed {
+            tree.set_sort(order);
+            assert_eq!(names(&tree), rows, "{}", order.as_str());
+            assert_eq!(SortOrder::parse(order.as_str()), Some(order));
+        }
+        // A collapsed folder stays collapsed across a re-sort.
+        tree.toggle("Projects");
+        tree.set_sort(SortOrder::Alphabetical);
+        assert!(tree.is_collapsed("Projects"));
+        assert!(tree.any_expanded(), "Archive is still open");
+        tree.collapse_all();
+        assert!(!tree.any_expanded());
     }
 
     #[test]

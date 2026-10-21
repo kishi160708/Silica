@@ -41,6 +41,7 @@ Scripts, each one checklist block of `docs//Interaction probes.md`:
 | `frame-typography.mjs` | the shell's chrome in the hidden frame: the title row, its window buttons and sidebar toggles, the ribbon, every header's height, the Lucide icon each control names, the computed font sizes, weights and colours of the shell and of a note, and what dragging a sidebar's handle and toggling a sidebar write to `workspace.json` | fixtures, run |
 | `frame-settings.mjs` | the ribbon's own classes and icons, the dark and light palettes as computed custom properties | fixtures, run |
 | `frame-setting-key.mjs` | the "Window frame style" setting: 1.14 opens Settings in a popout window, so its rows are reached through `app.setting.activeTab.containerEl`; records the setting's tab, label, options and default, and that no option writes anything under `.obsidian` | fixtures, run |
+| `explorer-header.mjs` | the Files pane's header: its five buttons and their icons, the sort menu and what each of the six orders does to the rows and to `workspace.json`, the auto-reveal toggle with a note opened in a collapsed folder either way, the Expand all / Collapse all swap, and where the header's New note and New folder put their file | fixtures, run |
 | `autopair.mjs` | auto-pairing (predates the runner: start Obsidian yourself with `--remote-debugging-port=9222` on a scratch vault and run it directly) | — |
 
 `results/` keeps the raw JSON of the runs the specification cites, named by

@@ -13,7 +13,7 @@ use crate::bookmarks::{BookmarkEvent, BookmarksPane};
 use crate::canvas::{CanvasEvent, CanvasView};
 use crate::chooser::{Chooser, ChooserEvent, Row as ChooserRow};
 use crate::editor::{Editor, EditorEvent};
-use crate::explorer::{display_name, kind_name, ExplorerEvent, FileExplorer, FileTree};
+use crate::explorer::{display_name, kind_name, ExplorerEvent, FileExplorer, FileTree, SortOrder};
 use crate::graph::{GraphEvent, GraphView};
 use crate::mentions::{Finder, Name};
 use crate::palette::{CommandPalette, PaletteCommand, PaletteEvent};
@@ -2011,6 +2011,9 @@ impl Workspace {
                         this.open_in_new_tab(path.clone(), None, cx)
                     }
                     ExplorerEvent::NewNote { folder } => this.new_note(folder, window, cx),
+                    ExplorerEvent::NewNoteFromHeader => {
+                        this.run_command("file-explorer:new-file", window, cx)
+                    }
                     ExplorerEvent::NewFolder { parent } => {
                         this.start_new_folder(parent, window, cx)
                     }
@@ -3795,7 +3798,7 @@ impl Workspace {
                 );
             }
         }
-        self.explorer.update(cx, |e, cx| e.reveal(path, cx));
+        self.explorer.update(cx, |e, cx| e.follow(path, cx));
         self.graph
             .update(cx, |g, cx| g.set_current(Some(path.to_string()), cx));
         let kind = FileKind::from_path(path);
@@ -3932,7 +3935,7 @@ impl Workspace {
         self.current = previous.filter(|p| p.as_str() != path);
         match self.current.clone() {
             Some(back) => {
-                self.explorer.update(cx, |e, cx| e.reveal(&back, cx));
+                self.explorer.update(cx, |e, cx| e.follow(&back, cx));
                 self.graph.update(cx, |g, cx| g.set_current(Some(back), cx));
             }
             None => self.detach_current(true, state, cx),
@@ -5146,7 +5149,7 @@ impl Workspace {
         };
         self.after_changes(outcome.changes, cx);
         if let Some(current) = self.current.clone() {
-            self.explorer.update(cx, |e, cx| e.reveal(&current, cx));
+            self.explorer.update(cx, |e, cx| e.follow(&current, cx));
         }
         self.report(format!("{summary}{links}{skipped}"), cx);
     }
@@ -5899,7 +5902,7 @@ impl Workspace {
         match (self.current.clone(), self.state.clone()) {
             (Some(path), Some(state)) => {
                 if state.vault().absolute(&path).is_file() {
-                    self.explorer.update(cx, |e, cx| e.reveal(&path, cx));
+                    self.explorer.update(cx, |e, cx| e.follow(&path, cx));
                     self.graph
                         .update(cx, |g, cx| g.set_current(Some(path.clone()), cx));
                     self.refresh_panes(&state, cx);
@@ -6891,6 +6894,10 @@ impl Workspace {
             }
         };
         self.layout_restored = true;
+        if let Some((sort, auto_reveal)) = explorer_leaf_state(&layout) {
+            self.explorer
+                .update(cx, |e, cx| e.set_leaf_state(sort, auto_reveal, cx));
+        }
         self.last_open_files = layout
             .get("lastOpenFiles")
             .and_then(Value::as_array)
@@ -7050,11 +7057,19 @@ impl Workspace {
     /// read with the tab groups, the active leaf, the sidebars' collapse
     /// state and `lastOpenFiles` brought up to date, and every other key as
     /// it was.
-    fn layout_json(&self) -> Value {
+    fn layout_json(&self, cx: &App) -> Value {
         let mut layout = self.layout.clone().unwrap_or_else(|| json!({}));
         let Some(object) = layout.as_object_mut() else {
             return layout;
         };
+        // The Files leaf's own state, where the file has that leaf.
+        {
+            let explorer = self.explorer.read(cx);
+            let (sort, auto_reveal) = (explorer.sort_order(), explorer.auto_reveal());
+            if let Some(left) = object.get_mut("left") {
+                set_explorer_leaf_state(left, sort, auto_reveal);
+            }
+        }
         let mut active_id = Value::Null;
         let main = self.layout_node_json(&self.layout_tree, &mut active_id);
         // `main` keeps its place in a file that had one.
@@ -7178,7 +7193,7 @@ impl Workspace {
         let Some(state) = self.state.clone() else {
             return;
         };
-        let fresh = self.layout_json();
+        let fresh = self.layout_json(cx);
         if self.layout.as_ref() == Some(&fresh) {
             return;
         }
@@ -8409,6 +8424,72 @@ fn dock_current_view(layout: &Value, dock: &str) -> Option<String> {
     leaf.get("state")?.get("type")?.as_str().map(str::to_string)
 }
 
+/// The `file-explorer` leaf anywhere under a dock's tree, as the leaf node.
+fn explorer_leaf_mut(node: &mut Value) -> Option<&mut Map<String, Value>> {
+    let is_explorer = node.get("type").and_then(Value::as_str) == Some("leaf")
+        && node
+            .get("state")
+            .and_then(|s| s.get("type"))
+            .and_then(Value::as_str)
+            == Some("file-explorer");
+    if is_explorer {
+        return node.as_object_mut();
+    }
+    let children = node.get_mut("children")?.as_array_mut()?;
+    children.iter_mut().find_map(explorer_leaf_mut)
+}
+
+fn explorer_leaf(node: &Value) -> Option<&Map<String, Value>> {
+    let is_explorer = node.get("type").and_then(Value::as_str) == Some("leaf")
+        && node
+            .get("state")
+            .and_then(|s| s.get("type"))
+            .and_then(Value::as_str)
+            == Some("file-explorer");
+    if is_explorer {
+        return node.as_object();
+    }
+    let children = node.get("children")?.as_array()?;
+    children.iter().find_map(explorer_leaf)
+}
+
+/// The Files leaf's `sortOrder` and `autoReveal` from `workspace.json`'s
+/// left dock, each at Obsidian's default (`alphabetical`, off) when the key
+/// is missing or unreadable; `None` when the dock has no such leaf.
+fn explorer_leaf_state(layout: &Value) -> Option<(SortOrder, bool)> {
+    let leaf = explorer_leaf(layout.get("left")?)?;
+    let state = leaf.get("state").and_then(|s| s.get("state"));
+    let sort = state
+        .and_then(|s| s.get("sortOrder"))
+        .and_then(Value::as_str)
+        .and_then(SortOrder::parse)
+        .unwrap_or_default();
+    let auto_reveal = state
+        .and_then(|s| s.get("autoReveal"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    Some((sort, auto_reveal))
+}
+
+/// Writes the two keys into the Files leaf's state under `dock`, in the
+/// place they had; a leaf without a state object gains one holding only
+/// them. A dock without the leaf is left alone.
+fn set_explorer_leaf_state(dock: &mut Value, sort: SortOrder, auto_reveal: bool) {
+    let Some(leaf) = explorer_leaf_mut(dock) else {
+        return;
+    };
+    let Some(outer) = leaf.get_mut("state").and_then(Value::as_object_mut) else {
+        return;
+    };
+    if !outer.get("state").is_some_and(Value::is_object) {
+        outer.insert("state".into(), json!({}));
+    }
+    if let Some(state) = outer.get_mut("state").and_then(Value::as_object_mut) {
+        state.insert("sortOrder".into(), json!(sort.as_str()));
+        state.insert("autoReveal".into(), json!(auto_reveal));
+    }
+}
+
 /// A fresh leaf id in Obsidian's shape: sixteen hex digits.
 fn leaf_id() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -9304,6 +9385,58 @@ mod tests {
         assert_eq!(keys, ["id", "type", "dimension", "extra"]);
         set_dimension(&mut node, None);
         assert!(!node.contains_key("dimension"));
+    }
+
+    /// The Files leaf's state round trips through the two helpers: the
+    /// keys keep their place among the ones Obsidian also writes, and a
+    /// leaf written without a state gains one.
+    #[test]
+    fn explorer_leaf_state_is_read_and_written_in_place() {
+        let mut layout = json!({
+            "left": {"type": "split", "children": [{
+                "type": "tabs",
+                "children": [
+                    {"type": "leaf", "state": {"type": "file-explorer", "state": {
+                        "sortOrder": "byModifiedTime", "autoReveal": true,
+                        "showSearch": false, "searchQuery": ""
+                    }}},
+                    {"type": "leaf", "state": {"type": "search"}},
+                ],
+            }]},
+        });
+        assert_eq!(
+            explorer_leaf_state(&layout),
+            Some((SortOrder::ByModifiedTime, true))
+        );
+        set_explorer_leaf_state(&mut layout["left"], SortOrder::ByCreatedTimeReverse, false);
+        let state = &layout["left"]["children"][0]["children"][0]["state"]["state"];
+        let keys: Vec<&String> = state.as_object().unwrap().keys().collect();
+        assert_eq!(
+            keys,
+            ["sortOrder", "autoReveal", "showSearch", "searchQuery"]
+        );
+        assert_eq!(state["sortOrder"], "byCreatedTimeReverse");
+        assert_eq!(state["autoReveal"], false);
+
+        let mut bare = json!({"left": {"type": "split", "children": [{
+            "type": "tabs",
+            "children": [{"type": "leaf", "state": {"type": "file-explorer"}}],
+        }]}});
+        assert_eq!(
+            explorer_leaf_state(&bare),
+            Some((SortOrder::Alphabetical, false))
+        );
+        set_explorer_leaf_state(&mut bare["left"], SortOrder::AlphabeticalReverse, true);
+        assert_eq!(
+            bare["left"]["children"][0]["children"][0]["state"]["state"],
+            json!({"sortOrder": "alphabeticalReverse", "autoReveal": true})
+        );
+
+        let no_leaf = json!({"left": {"type": "split", "children": []}});
+        assert_eq!(explorer_leaf_state(&no_leaf), None);
+        let mut untouched = no_leaf.clone();
+        set_explorer_leaf_state(&mut untouched["left"], SortOrder::ByCreatedTime, true);
+        assert_eq!(untouched, no_leaf);
     }
 
     #[test]

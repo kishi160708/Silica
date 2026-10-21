@@ -3048,3 +3048,74 @@ file menu's "Bookmark..." entries (the explorer was hidden behind the Search
 pane when they were tried); the order of `folder` and `url` keys as the UI
 writes them; the "Bookmark group" dropdown; renaming and dragging items; the
 search filter.
+
+## Observed file explorer header behavior, Obsidian 1.14.4 (installer build 1.13.7)
+
+Read from a running Obsidian on Linux over CDP on 2026-10-21 with
+`tools/obsidian-probe/explorer-header.mjs` (raw run in
+`tools/obsidian-probe/results/2026-10-21-explorer-header.json`), on a scratch
+vault of ten files in four folders, created in one order and given
+modification times in another so the time sorts could be told apart.
+
+**The header.** `.nav-header` is 40 px tall with 8 px of padding and no
+border; inside it `.nav-buttons-container` is a flex row, `justify-content:
+center`, `gap: 2px`, `flex-wrap: wrap`. Five `clickable-icon nav-action-button`
+of 28 by 24 (padding `4px 6px`, radius 4 px, `--text-muted`), in order, each
+with its `aria-label` as the tooltip (`.tooltip` below the button):
+
+| Label | Icon | Does |
+| --- | --- | --- |
+| New note | `lucide-edit` (Lucide's `square-pen`) | what `file-explorer:new-file` does: `Untitled.md` in the folder `newFileLocation` names (`root` → the vault root, `current` → the open note's folder), opened in a new tab with the inline title focused |
+| New folder | `lucide-folder-plus` | `Untitled/` at the vault root, its row in inline rename (`is-being-renamed`, `contenteditable`); Escape keeps the folder under that name |
+| Change sort order | `lucide-sort-asc` (`arrow-up-narrow-wide`) | the menu below |
+| Auto-reveal current file | `lucide-gallery-vertical` | toggles the leaf's `autoReveal`; the button carries `is-active` while on |
+| Expand all | `lucide-chevrons-up-down` | opens every folder at every depth; while any folder is open the same button reads "Collapse all" with `lucide-chevrons-down-up` and closes them all |
+
+A sixth, "Show search filter" (`lucide-search`), is in the DOM with a zero
+rect in this build. The last button's label follows the tree, not the last
+press: one folder opened by hand turns "Expand all" into "Collapse all".
+
+**The sort menu.** Six items in three pairs separated by `menu-separator`,
+the one in force `mod-checked` with a `lucide-check` icon: "File name (A to
+Z)", "File name (Z to A)", "Modified time (new to old)", "Modified time (old
+to new)", "Created time (new to old)", "Created time (old to new)". The leaf's
+`sortOrder` takes `alphabetical`, `alphabeticalReverse`, `byModifiedTime`,
+`byModifiedTimeReverse`, `byCreatedTime`, `byCreatedTimeReverse`; it is
+written into the file-explorer leaf's `state` in `workspace.json` (key order
+`sortOrder`, `autoReveal`, `showSearch`, `searchQuery`) and `app.json` stays
+`{}` — the `fileSortOrder` key of [[#Observed settings write behavior, Obsidian 1.14.4]] is not what the
+header writes. **Folders keep their name order under every sort**; only the
+files of each folder move. Observed, with folders `Archive/old`, `Empty`,
+`Projects/{Deep/Inner, Budget, Plan}` and root files `Alpha`, `beta`, `cover.png`,
+`Gamma`, `n2`, `n10`:
+
+| `sortOrder` | Root files | Projects |
+| --- | --- | --- |
+| `alphabetical` | Alpha, beta, cover, Gamma, n2, n10 | Budget, Plan |
+| `alphabeticalReverse` | n10, n2, Gamma, cover, beta, Alpha | Plan, Budget |
+| `byModifiedTime` | newest first by mtime | newest first |
+| `byModifiedTimeReverse` | the exact reverse | the exact reverse |
+| `byCreatedTime` | newest first by birth time (`cover.png`, created last, led) | newest first |
+| `byCreatedTimeReverse` | the exact reverse | the exact reverse |
+
+**Auto-reveal.** Off in a fresh vault (`autoReveal: false`; `view.autoReveal`
+is undefined, the flag lives in the state). With it off, opening
+`Projects/Deep/Inner.md` through a link expanded nothing: the tree stayed as
+it was and no visible row was `is-active`. `file-explorer:reveal-active-file`
+then expanded `Projects` and `Deep` and marked `Inner` active. Clicking the
+button turned it on, wrote `autoReveal: true` and **revealed the open file at
+once**; opening `Archive/old.md` next expanded `Archive` and marked its row.
+Turning it off again left the tree expanded.
+
+ implements this since 2026-10-21 ([[Development#Files header, 2026-10-21]]):
+the five buttons with the same Lucide drawings and labels, the sort menu and
+its six orders (files by name, mtime or birth time; folders by name), the
+leaf's two keys read from and written back into `workspace.json`, and
+`FileExplorer::follow`, which highlights the open file and only expands to it
+with auto-reveal on. New folder goes through 's prompt modal rather
+than inline rename, and the search filter is not built.
+
+**Unprobed:** the computed colour and background of the `is-active` button
+( paints the accent on the hover wash); whether a visible row of the
+open file is `is-active` with auto-reveal off ( highlights it); the
+menu's position relative to the button.

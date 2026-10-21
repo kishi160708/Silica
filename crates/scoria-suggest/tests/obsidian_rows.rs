@@ -52,6 +52,7 @@ fn files() -> Vec<VaultFile> {
             kind: FileKind::from_path(path),
             size: 0,
             mtime: 1_000 + ix as u64,
+            ctime: 1_000 + ix as u64,
         });
     }
     for path in ATTACHMENTS {
@@ -60,6 +61,7 @@ fn files() -> Vec<VaultFile> {
             kind: FileKind::from_path(path),
             size: 0,
             mtime: 1_000,
+            ctime: 1_000,
         });
     }
     out
