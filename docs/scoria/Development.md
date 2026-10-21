@@ -133,19 +133,48 @@ crates. The binary opens `docs/` and draws the shell: ribbon, file list, tabs, t
 properties table, and the reading view with headings, wikilinks and lists. Nothing is written to
 stderr.
 
-Two things to know before trusting it:
+One thing to know before trusting it: only the opening frame was checked. There is no control
+socket on Windows — it is a Unix domain socket, and `--control` says so and carries on — so the
+keyboard, editing and saving paths have not been driven there the way the Linux ones are.
 
-- The window wears the **desktop's own title bar**. `frame_style` returns `hidden` on every
-  platform and asks for `WindowDecorations::Client`, which the Windows backend does not honour, so
-  the caption is the system's and the app's tab strip sits below it rather than in it. Obsidian's
-  own default on Windows is the hidden frame, so this is a parity gap, not a choice.
-- Only the opening frame was checked. There is no control socket on Windows — it is a Unix domain
-  socket, and `--control` says so and carries on — so the keyboard, editing and saving paths have
-  not been driven there the way the Linux ones are.
+The window wore the desktop's own title bar on the day; see
+[[#The hidden frame on Windows, 2026-10-20]] for the fix.
 
 The app has to be started in the interactive session to draw anything: over SSH it lands in
 session 0, where there is no desktop. A scheduled task created with `/ru <user> /it` runs it in
-the logged-on session, and the same trick takes the screenshot.
+the logged-on session, and the same trick takes the screenshot. Point the task at
+`powershell.exe -WindowStyle Hidden -File <script>` rather than a `.bat`, or its console window
+stands in front of whatever is being photographed.
+
+Beware the coordinates: the test machine is a 3840x2160 display at 150%, and a DPI-unaware caller
+like `powershell.exe` is handed the 2560x1440 virtual desktop by `GetWindowRect` and `SetCursorPos`
+while `CopyFromScreen` copies real pixels into a bitmap of the virtual size. A window centred by
+Windows' own numbers therefore lands right of centre in the screenshot, and is clipped at its
+right edge. The app itself is scaled correctly; only the measuring tape is confused.
+
+### The hidden frame on Windows, 2026-10-20
+
+The caption came back because `TitlebarOptions::appears_transparent` was left at its default.
+`window_decorations` is the Linux question — Wayland and X11 answer whether the compositor handed
+the frame over, and `Decorations::Client` is what the workspace looks for — but Windows has no
+implementation of it at all and answers `Server` whatever it does. What the Windows backend reads
+is `appears_transparent`: with it set, `WM_NCCALCSIZE` keeps the client area's top edge and the
+title bar is gone, while the system keeps the drop shadow and the resize border outside the
+window. So the hidden frame now asks for both, and `frameless` asks the platform the question it
+can answer: the compositor on Linux, and on Windows what was asked for.
+
+Drawing the row is only half of it. `start_window_move` and `show_window_menu` are no-ops on
+Windows; dragging, double-click-to-maximise and the right-click window menu all come from the hit
+test instead, by naming the empty part of the title row `WindowControlArea::Drag` so `WM_NCHITTEST`
+answers `HTCAPTION`. The three window buttons name themselves `Min`, `Max` and `Close` the same
+way and carry no click handler there: gpui performs the action on the non-client mouse-up, and
+Windows 11 opens its snap layouts when the pointer rests on a button that answers `HTMAXBUTTON`,
+which a click handler could never offer. Each button also needs `occlude`, or the caption hitbox
+underneath wins the hit test and pressing a button drags the window.
+
+Verified on `w11` by clicking the buttons through `SetCursorPos` and `mouse_event` from the
+logged-on session: the window minimised, then maximised to the full work area, and the title row
+holds the three buttons with no caption above it.
 
 ## Reader (phase 2)
 

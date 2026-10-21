@@ -280,6 +280,15 @@ pub fn frame_style_label() -> &'static str {
     }
 }
 
+/// Whether the window is opened without the desktop's own title bar, which
+/// is what Obsidian's "Hidden" frame style means and its default on Linux
+/// and Windows. Answered once: the window asks on the way up, and the
+/// workspace asks again on every frame.
+pub fn hidden_frame() -> bool {
+    static HIDDEN: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *HIDDEN.get_or_init(|| frame_style() != "native")
+}
+
 /// `--frame`'s value, `SCORIA_FRAME`'s, or `hidden`.
 fn frame_style() -> String {
     let mut it = std::env::args().skip(1);
@@ -362,6 +371,15 @@ fn main() {
                         window_bounds: Some(WindowBounds::Windowed(bounds)),
                         titlebar: Some(TitlebarOptions {
                             title: Some("".into()),
+                            // What hides the caption on Windows, where
+                            // `window_decorations` is not read at all: the
+                            // window keeps the system's shadow and resize
+                            // border and loses only the title bar, which is
+                            // the frame Obsidian draws there. macOS would
+                            // need its traffic lights placed over the tab
+                            // strip first, so it keeps its own frame until
+                            // somebody can run it.
+                            appears_transparent: cfg!(target_os = "windows") && frame != "native",
                             ..Default::default()
                         }),
                         // KWin only honours the xdg-activation token that
@@ -371,9 +389,15 @@ fn main() {
                         window_decorations: Some(decorations),
                         // A client-drawn frame paints its shadow in a margin
                         // around the content, which has to be see-through.
+                        // Only Linux draws that margin: Windows keeps the
+                        // system's shadow outside the window, so a
+                        // transparent background there would only show the
+                        // desktop through the app's own rounded corners.
                         window_background: match decorations {
-                            WindowDecorations::Client => WindowBackgroundAppearance::Transparent,
-                            WindowDecorations::Server => WindowBackgroundAppearance::Opaque,
+                            WindowDecorations::Client if !cfg!(target_os = "windows") => {
+                                WindowBackgroundAppearance::Transparent
+                            }
+                            _ => WindowBackgroundAppearance::Opaque,
                         },
                         window_min_size: Some(size(px(480.), px(320.))),
                         ..Default::default()

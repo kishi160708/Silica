@@ -29,7 +29,7 @@ use gpui::{
     actions, canvas, div, point, prelude::*, px, rgb, rgba, transparent_black, uniform_list,
     Action, App, BoxShadow, Context, CursorStyle, Decorations, DragMoveEvent, Entity, FocusHandle,
     Focusable, Global, HitboxBehavior, Hsla, KeyBinding, MouseButton, Pixels, ResizeEdge,
-    SharedString, Subscription, Task, Tiling, UniformListScrollHandle, Window,
+    SharedString, Subscription, Task, Tiling, UniformListScrollHandle, Window, WindowControlArea,
 };
 use rayon::prelude::*;
 use _cache::{
@@ -1495,18 +1495,29 @@ fn icon_button(id: &'static str, name: &str, theme: &Theme) -> gpui::Stateful<gp
 /// a press drags the window, a double click maximises or restores it and a
 /// right click opens the desktop's window menu, as the empty part of
 /// Obsidian's title row does.
+///
+/// Windows reaches all three through the hit test instead: naming the area
+/// the window's caption is what `WindowControlArea::Drag` does, and the
+/// system then drags, maximises and opens its menu itself. Asking for both
+/// would be worse than asking for one — `start_window_move` is a no-op
+/// there, and a listener that swallowed the press would stop the system
+/// dragging at all.
 fn window_handle(area: gpui::Stateful<gpui::Div>, frameless: bool) -> gpui::Stateful<gpui::Div> {
-    area.when(frameless, |d| {
-        d.on_mouse_down(MouseButton::Left, |_, window, _| window.start_window_move())
-            .on_click(|e, window, _| {
-                if e.click_count() == 2 {
-                    window.zoom_window();
-                }
-            })
-            .on_mouse_down(MouseButton::Right, |e, window, _| {
-                window.show_window_menu(e.position)
-            })
-    })
+    if !frameless {
+        return area;
+    }
+    if cfg!(target_os = "windows") {
+        return area.window_control_area(WindowControlArea::Drag);
+    }
+    area.on_mouse_down(MouseButton::Left, |_, window, _| window.start_window_move())
+        .on_click(|e, window, _| {
+            if e.click_count() == 2 {
+                window.zoom_window();
+            }
+        })
+        .on_mouse_down(MouseButton::Right, |e, window, _| {
+            window.show_window_menu(e.position)
+        })
 }
 
 /// Which edge or corner of the window `pos` is over, when it is in the
@@ -1532,6 +1543,22 @@ fn resize_edge(
         (_, _, _, true) => ResizeEdge::Right,
         _ => return None,
     })
+}
+
+/// Whether  draws the window's title row itself, rather than the
+/// desktop drawing a title bar above it.
+///
+/// On Linux this is what the compositor granted, which is not always what
+/// was asked for: `Decorations::Client` means the frame is ours. Windows
+/// answers `Server` either way — it has no notion of handing the frame over
+/// — and the caption is instead gone whenever the window was opened with a
+/// transparent title bar, so there the answer is what was asked for.
+fn frameless(window: &Window) -> bool {
+    if cfg!(target_os = "windows") {
+        crate::hidden_frame()
+    } else {
+        matches!(window.window_decorations(), Decorations::Client { .. })
+    }
 }
 
 /// 's own window frame, for a window the desktop was asked to leave
@@ -5723,9 +5750,22 @@ impl Workspace {
     /// The window's own buttons in its top right corner, where Obsidian's
     /// hidden frame keeps them: minimise, maximise or restore, and close,
     /// each 44 by 40.
+    /// The minimise, maximise and close buttons in the window's right
+    /// corner, drawn only when the frame is 's.
+    ///
+    /// Windows wants these three named to the hit test rather than clicked:
+    /// the system then performs them itself, and hovering the maximise
+    /// button opens Windows 11's snap layouts, which an ordinary click
+    /// handler can never offer. `occlude` is what keeps the press from
+    /// reaching the caption area underneath and dragging the window instead.
     fn render_window_controls(&self, theme: &Theme, window: &Window) -> gpui::Div {
         let maximized = window.is_maximized();
-        let button = |id: &'static str, name: &'static str, close: bool, act: fn(&mut Window)| {
+        let system = cfg!(target_os = "windows");
+        let button = |id: &'static str,
+                      name: &'static str,
+                      close: bool,
+                      area: WindowControlArea,
+                      act: fn(&mut Window)| {
             let hover_bg: Hsla = if close {
                 rgb(0xe93147).into()
             } else {
@@ -5742,7 +5782,8 @@ impl Workspace {
                 .justify_center()
                 .cursor_pointer()
                 .hover(move |s| s.bg(hover_bg))
-                .on_click(move |_, window, _| act(window))
+                .when(system, |d| d.occlude().window_control_area(area))
+                .when(!system, |d| d.on_click(move |_, window, _| act(window)))
                 .child(
                     div()
                         .when(close, |d| {
@@ -5758,16 +5799,27 @@ impl Workspace {
             .right_0()
             .flex()
             .flex_row()
-            .child(button("win-minimize", "minus", false, |w| {
-                w.minimize_window()
-            }))
+            .child(button(
+                "win-minimize",
+                "minus",
+                false,
+                WindowControlArea::Min,
+                |w| w.minimize_window(),
+            ))
             .child(button(
                 "win-maximize",
                 if maximized { "copy" } else { "square" },
                 false,
+                WindowControlArea::Max,
                 |w| w.zoom_window(),
             ))
-            .child(button("win-close", "x", true, |w| w.remove_window()))
+            .child(button(
+                "win-close",
+                "x",
+                true,
+                WindowControlArea::Close,
+                |w| w.remove_window(),
+            ))
     }
 
     /// The ribbon down the left edge: the quick switcher, the graph, today's
@@ -7686,7 +7738,7 @@ impl Render for Workspace {
             .child(main_body);
 
         let show_ribbon = self.show_ribbon();
-        let frameless = matches!(window.window_decorations(), Decorations::Client { .. });
+        let frameless = frameless(window);
         self.frameless = frameless;
         let ribbon = show_ribbon.then(|| self.render_ribbon(&theme, cx));
         let left_tab = self.left_tab;

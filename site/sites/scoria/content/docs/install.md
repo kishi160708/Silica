@@ -23,9 +23,9 @@ sha256sum -c SHA256SUMS      # against the file in the same release
 ```
 
 > **Warning** Nothing is code signed or notarized. Linux is the platform  is developed on;
-> the Windows build has been started on Windows 11 and opens a vault, but it is not exercised
-> daily and draws the desktop's title bar instead of the hidden frame; the macOS build has never
-> been run. On macOS, Gatekeeper will refuse the first launch — open it once with
+> the Windows build has been started on Windows 11, where it opens a vault and draws the hidden
+> frame, but it is not exercised daily; the macOS build has never been run. On macOS, Gatekeeper
+> will refuse the first launch — open it once with
 > *right-click › Open*, or run `xattr -d com.apple.quarantine `. On Windows,
 > SmartScreen warns — *More info › Run anyway*.
 
