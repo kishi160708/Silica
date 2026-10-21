@@ -155,14 +155,7 @@ impl DisplayLine {
 
 /// Obsidian's heading sizes relative to the body (`--h1-size` and so on).
 pub fn heading_scale(level: u8) -> f32 {
-    match level {
-        1 => 1.802,
-        2 => 1.602,
-        3 => 1.424,
-        4 => 1.266,
-        5 => 1.125,
-        _ => 1.0,
-    }
+    crate::theme::heading_style(level).0
 }
 
 /// Offset inside an ATX heading's text where its closing `#` sequence

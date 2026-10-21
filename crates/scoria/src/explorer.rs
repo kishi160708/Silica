@@ -477,32 +477,39 @@ impl FileExplorer {
             .filter_map(|ix| {
                 let row = self.tree.row(ix)?;
                 let active = self.active.as_deref() == Some(row.path.as_str());
-                let marker: &'static str = if row.is_folder {
+                let marker = row.is_folder.then(|| {
                     if self.tree.is_collapsed(&row.path) {
-                        "▸"
+                        "chevron-right"
                     } else {
-                        "▾"
+                        "chevron-down"
                     }
-                } else {
-                    ""
-                };
+                });
                 let name: SharedString = row.name.clone().into();
                 let faint = !row.is_folder && row.kind != FileKind::Markdown;
+                // Obsidian's row: 13 px text in a 25 px row with an 8 px
+                // radius, muted until it is active or under the pointer.
                 Some(
                     div()
                         .id(("row", ix))
-                        .h(px(24.))
+                        .h(px(25.))
+                        .mb(px(2.))
                         .flex()
                         .flex_row()
                         .items_center()
                         .pl(px(8. + row.depth as f32 * 14.))
                         .pr_2()
-                        .rounded_sm()
+                        .rounded(px(8.))
                         .cursor_pointer()
                         .text_size(px(13.))
-                        .text_color(if faint { theme.text_muted } else { theme.text })
+                        .text_color(if faint {
+                            theme.text_faint
+                        } else if active {
+                            theme.text
+                        } else {
+                            theme.text_muted
+                        })
                         .when(active, |d| d.bg(theme.bg_active))
-                        .hover(|s| s.bg(theme.bg_alt))
+                        .hover(|s| s.bg(theme.bg_alt).text_color(theme.text))
                         .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
                             let modifiers = event.modifiers();
                             this.click(ix, modifiers.control || modifiers.platform, cx)
@@ -515,10 +522,16 @@ impl FileExplorer {
                         )
                         .child(
                             div()
-                                .w(px(14.))
+                                .w(px(16.))
                                 .flex_shrink_0()
-                                .text_color(theme.text_muted)
-                                .child(marker),
+                                .flex()
+                                .items_center()
+                                .opacity(0.85)
+                                .children(
+                                    marker.map(|name| {
+                                        crate::assets::icon(name, 14., theme.text_muted)
+                                    }),
+                                ),
                         )
                         .child(
                             div()

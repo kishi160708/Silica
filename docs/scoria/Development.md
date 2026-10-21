@@ -38,6 +38,7 @@ cargo run --release -p  -- <vault> --note X --find word     # open with the find
 cargo run --release -p  -- <vault> --note X --prompt rename  # open the rename prompt (move, delete, folder) for screenshots
 cargo run --release -p  -- <vault> --note X --rename "New"   # rename the note at startup, rewriting links (use a scratch vault)
 cargo run --release -p  -- <vault> --control /run/user/1000/.sock   # the JSON control socket, see the section below (not with --stress)
+cargo run --release -p  -- <vault> --frame native            # the desktop's own title bar; the default is Obsidian's hidden frame (SCORIA_FRAME=native does the same)
 cargo run --release -p  -- <vault> --control <sock> --size 1400x900       # window size for a reproducible screenshot
 cargo run --release -p -bench -- generate <dir>
 cargo run --release -p -bench -- index <vault>
@@ -167,6 +168,70 @@ of mixed use in both apps. The gate run opened on 2026-10-18, see
 | Tab groups | done: Split right, Split down, the four focus commands, draggable dividers and `workspace.json`'s `main` tree, see [[#Tab groups, 2026-10-20]] |
 | Bookmarks | done: the pane, the seven commands and `bookmarks.json` in Obsidian's bytes, see [[#Bookmarks, 2026-10-20]] |
 | The gate itself | open: the harness passes on the real vault, the week of mixed use has not run, see [[#The gate run opens, 2026-10-18]] |
+
+### The frame, the type and the icons, 2026-10-20
+
+Three asks in one session: lose the desktop's title bar, make the shell look typeset, and make
+sure the panels collapse. The last was already true (`app:toggle-left-sidebar`,
+`app:toggle-right-sidebar`, the toggles in the title row), so the work was the first two plus
+the one panel thing Obsidian had and  lacked: a draggable sidebar width.
+
+**What Obsidian does was probed first** ([[Specification#Observed shell typography and chrome, Obsidian 1.14.4 (installer build 1.13.7)]]).
+Three CDP scripts read the running app's computed styles, bounding boxes, icon class names and
+`workspace.json` writes. Two traps cost a run each: `require('obsidian')` is not in the renderer's
+scope, and **Obsidian 1.14 opens Settings in a popout window**, so `document.querySelector('.setting-item')`
+in the vault window finds nothing — the rows are reached through
+`app.setting.activeTab.containerEl`, which is a different document. The "Window frame style"
+setting turned out to live in the Interface tab, to default to **Hidden** on Linux, and to write
+nothing under `.obsidian` whichever option is chosen, so there is no vault key for  to honour.
+
+**The frame.** The window opens with gpui's client-side decorations and a transparent background,
+and `workspace::client_frame` wraps the shell the way gpui's `window_shadow` example does: a 12 px
+margin that holds a soft shadow and the resize edges (the pointer gets the right cursor from a
+hitbox canvas, a press on the margin calls `start_window_resize`), a one pixel border, and none of
+it on an edge that is tiled or maximised, so a snapped window meets the screen without a gap. The
+40 px title row is Obsidian's hidden frame: the left sidebar toggle above the ribbon, the dock tab
+headers and the tab strip, the right toggle at the right end of whichever header is rightmost, and
+three 44 by 40 window buttons overlaying that header's right end (which gets 132 px of padding to
+stay clear). Empty parts of the row are `window_handle`s: a press drags the window, a double click
+zooms it, a right click opens the compositor's window menu. `--frame native` (or
+`SCORIA_FRAME=native`) asks the desktop for its own frame instead, and the Interface tab shows the
+choice as Obsidian's "Window frame style" row, inert until a per-user settings store exists.
+
+**The type.** The app bundles Inter's six static faces (OFL, `crates//assets/fonts`) and
+registers them before the window opens, so the shell no longer depends on what the machine has,
+and `Theme` defaults both families to it; `appearance.json` fonts still override. The palette is
+the one Obsidian computes: #1C1C1C / #282828 / #333333 with #dadada, #b3b3b3 and #666666 text
+in the dark theme, #ffffff / #f6f6f6 / #e4e4e4 with #222222, #5c5c5c and #ababab in the light,
+the accent `hsl(258, 88%, 66%)`, and hover and active rows a 6.7 percent wash of white or black
+rather than a flat colour. Sizes are `theme.rs` constants now — 13 px UI small, 12 px smaller,
+15 px medium, 40 px headers, 44 px ribbon, 16 px icons, 300 px sidebars — and headings use the
+observed scale (h1 1.618em at 700 down to h6 1em at 600, 1.2 and 1.3 line heights) in the reading
+view and in Live Preview alike. The status bar became Obsidian's bottom-right tab rather than a
+bar across the window.
+
+**The icons.** Every control that Obsidian draws with a Lucide icon names it in the DOM
+(`svg.lucide-search`), so  fetched those drawings from Lucide's own repository (ISC,
+`crates//assets/icons`) and serves them through an `AssetSource`; `assets::icon(name, size,
+color)` is the one way to draw one. The ribbon, the dock tabs (icons only, like Obsidian's), the
+tab strip's close and new-tab buttons, the view header's arrows and actions, the explorer's folder
+chevrons and the window buttons all use them. Where Obsidian uses an icon of its own (the sidebar
+toggles, backlinks and outgoing links, the folder triangle)  picks a Lucide neighbour
+(`panel-left`, `arrow-down-left`, `arrow-up-right`, `chevron-right`), which the clean-room rule
+requires and which reads the same.
+
+**The sidebars.** Each dock is `workspace.json`'s `left.width` / `right.width` wide (300 when the
+file has none), and a 3 px handle on its inner edge — a hairline at rest, the accent under the
+pointer — drags it between 150 px and what leaves the main area room. The width is written back
+only once a drag moved it, so a file's `300` stays the integer Obsidian wrote. `state.docks.*.width`
+reports it over the socket, and a drag is driven with `mouse down/move/up` (the MCP tools have no
+drag).
+
+Verified on the desktop over the MCP server: the window has no KWin bar, maximise and restore work
+from the corner buttons and the shadow goes away while maximised, the right toggle and the window
+buttons move onto the tab strip when the right dock collapses, and a 120 px handle drag widened
+the left dock. Not done, and filed: the explorer header buttons (#24), the tab list button, the
+view header's bookmark and "More options" actions, and a store for the frame style.
 
 ### Tabs, the layout file, the ribbon, the Hotkeys tab and the graph panel, 2026-10-20
 
@@ -1800,9 +1865,10 @@ handler, so IME works.
 
 > [!note] Fonts
 > The pinned gpui does not pick weights out of a variable font, so with Noto
-> Sans (one `NotoSans.ttf` for every weight) nothing renders bold. The default
-> text and interface font is Liberation Sans, which ships static Bold faces;
-> `appearance.json` fonts override it.
+> Sans (one `NotoSans.ttf` for every weight) nothing renders bold. Since
+> 2026-10-20 the app bundles Inter's static faces and registers them at
+> startup, so the default text and interface font is Inter on every machine;
+> `appearance.json` fonts override it. Never bundle `InterVariable.ttf`.
 
 ## Spike gates
 

@@ -290,7 +290,7 @@ impl Palette {
             accent: t.accent,
             link: t.link,
             tag: t.tag,
-            code_bg: t.bg_alt,
+            code_bg: t.code_bg,
             highlight_bg: t.highlight_bg,
             selection,
             border: t.border,

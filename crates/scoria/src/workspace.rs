@@ -8,6 +8,7 @@
 //! then kept current by a filesystem watcher: changed paths are re-read and
 //! re-indexed in place, link edges re-resolved, and every pane refreshed.
 
+use crate::assets::{icon, logo};
 use crate::bookmarks::{BookmarkEvent, BookmarksPane};
 use crate::chooser::{Chooser, ChooserEvent, Row as ChooserRow};
 use crate::editor::{Editor, EditorEvent};
@@ -20,12 +21,15 @@ use crate::reading::{self, LinkTarget, ReadingEvent, ReadingView, TaskMarker, Ta
 use crate::search::{SearchEvent, SearchPane};
 use crate::settings::{self, SettingChange, SettingsEvent, SettingsView};
 use crate::switcher::{QuickSwitcher, SwitcherEvent};
-use crate::theme::Theme;
+use crate::theme::{
+    Theme, FONT_UI_SMALL, FONT_UI_SMALLER, HEADER_HEIGHT, ICON_SIZE, RIBBON_WIDTH, SIDEBAR_WIDTH,
+};
 use crate::watch;
 use gpui::{
-    actions, div, prelude::*, px, rgba, uniform_list, Action, App, Context, DragMoveEvent, Entity,
-    FocusHandle, Focusable, Global, KeyBinding, SharedString, Subscription, Task,
-    UniformListScrollHandle, Window,
+    actions, canvas, div, point, prelude::*, px, rgb, rgba, transparent_black, uniform_list,
+    Action, App, BoxShadow, Context, CursorStyle, Decorations, DragMoveEvent, Entity, FocusHandle,
+    Focusable, Global, HitboxBehavior, Hsla, KeyBinding, MouseButton, Pixels, ResizeEdge,
+    SharedString, Subscription, Task, Tiling, UniformListScrollHandle, Window,
 };
 use rayon::prelude::*;
 use _cache::{
@@ -1455,6 +1459,180 @@ impl Render for NoDragPreview {
     }
 }
 
+/// The payload of a sidebar resize: which dock's inner edge is being dragged.
+#[derive(Debug, Clone)]
+struct DockDrag {
+    left: bool,
+}
+
+/// The narrowest a sidebar can be dragged, and the narrowest `width`
+/// `workspace.json` is believed about.
+const MIN_SIDEBAR_WIDTH: f64 = 150.;
+
+/// The margin around the content when  draws the window frame: the
+/// shadow lives in it and the pointer resizes the window from it.
+const FRAME_SHADOW: Pixels = px(12.);
+
+/// A 28 by 24 icon button of the kind Obsidian calls a clickable icon:
+/// 4 px above and below the icon, 6 px either side, a 4 px radius and a
+/// wash behind it on hover.
+fn icon_button(id: &'static str, name: &str, theme: &Theme) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .flex_shrink_0()
+        .w(px(28.))
+        .h(px(24.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(4.))
+        .cursor_pointer()
+        .hover(|s| s.bg(theme.bg_alt))
+        .child(icon(name, ICON_SIZE, theme.text_muted))
+}
+
+/// Makes `area` a handle on the window itself when the frame is 's:
+/// a press drags the window, a double click maximises or restores it and a
+/// right click opens the desktop's window menu, as the empty part of
+/// Obsidian's title row does.
+fn window_handle(area: gpui::Stateful<gpui::Div>, frameless: bool) -> gpui::Stateful<gpui::Div> {
+    area.when(frameless, |d| {
+        d.on_mouse_down(MouseButton::Left, |_, window, _| window.start_window_move())
+            .on_click(|e, window, _| {
+                if e.click_count() == 2 {
+                    window.zoom_window();
+                }
+            })
+            .on_mouse_down(MouseButton::Right, |e, window, _| {
+                window.show_window_menu(e.position)
+            })
+    })
+}
+
+/// Which edge or corner of the window `pos` is over, when it is in the
+/// shadow margin of one that is not tiled on that side.
+fn resize_edge(
+    pos: gpui::Point<Pixels>,
+    size: gpui::Size<Pixels>,
+    tiling: Tiling,
+) -> Option<ResizeEdge> {
+    let m = FRAME_SHADOW;
+    let top = pos.y < m && !tiling.top;
+    let bottom = pos.y > size.height - m && !tiling.bottom;
+    let left = pos.x < m && !tiling.left;
+    let right = pos.x > size.width - m && !tiling.right;
+    Some(match (top, bottom, left, right) {
+        (true, _, true, _) => ResizeEdge::TopLeft,
+        (true, _, _, true) => ResizeEdge::TopRight,
+        (true, _, _, _) => ResizeEdge::Top,
+        (_, true, true, _) => ResizeEdge::BottomLeft,
+        (_, true, _, true) => ResizeEdge::BottomRight,
+        (_, true, _, _) => ResizeEdge::Bottom,
+        (_, _, true, _) => ResizeEdge::Left,
+        (_, _, _, true) => ResizeEdge::Right,
+        _ => return None,
+    })
+}
+
+/// 's own window frame, for a window the desktop was asked to leave
+/// bare: a margin of [`FRAME_SHADOW`] around the content holds a soft
+/// shadow and the resize handles, and the content gets a one pixel border.
+/// A tiled or maximised edge loses its margin, border and shadow, so a
+/// snapped window meets the screen edge without a gap. With the desktop's
+/// own frame the content is passed through untouched.
+fn client_frame(
+    content: gpui::AnyElement,
+    theme: &Theme,
+    window: &mut Window,
+) -> gpui::Stateful<gpui::Div> {
+    let decorations = window.window_decorations();
+    let tiling = match decorations {
+        Decorations::Client { tiling } => tiling,
+        Decorations::Server => Tiling::default(),
+    };
+    let client = matches!(decorations, Decorations::Client { .. });
+    window.set_client_inset(if client { FRAME_SHADOW } else { px(0.) });
+    let border = theme.border;
+    let shadow: Hsla = rgba(0x00000066).into();
+    div()
+        .id("window-backdrop")
+        .size_full()
+        .bg(transparent_black())
+        .when(client, |d| {
+            d.when(!tiling.top, |d| d.pt(FRAME_SHADOW))
+                .when(!tiling.bottom, |d| d.pb(FRAME_SHADOW))
+                .when(!tiling.left, |d| d.pl(FRAME_SHADOW))
+                .when(!tiling.right, |d| d.pr(FRAME_SHADOW))
+                .child(
+                    canvas(
+                        |_, window, _| {
+                            window.insert_hitbox(
+                                gpui::Bounds::new(
+                                    point(px(0.), px(0.)),
+                                    window.window_bounds().get_bounds().size,
+                                ),
+                                HitboxBehavior::Normal,
+                            )
+                        },
+                        move |_, hitbox, window, _| {
+                            let size = window.window_bounds().get_bounds().size;
+                            let Some(edge) = resize_edge(window.mouse_position(), size, tiling)
+                            else {
+                                return;
+                            };
+                            let style = match edge {
+                                ResizeEdge::Top | ResizeEdge::Bottom => CursorStyle::ResizeUpDown,
+                                ResizeEdge::Left | ResizeEdge::Right => {
+                                    CursorStyle::ResizeLeftRight
+                                }
+                                ResizeEdge::TopLeft | ResizeEdge::BottomRight => {
+                                    CursorStyle::ResizeUpLeftDownRight
+                                }
+                                ResizeEdge::TopRight | ResizeEdge::BottomLeft => {
+                                    CursorStyle::ResizeUpRightDownLeft
+                                }
+                            };
+                            window.set_cursor_style(style, &hitbox);
+                        },
+                    )
+                    .size_full()
+                    .absolute(),
+                )
+                .on_mouse_move(|_, window, _| window.refresh())
+                .on_mouse_down(MouseButton::Left, move |e, window, _| {
+                    let size = window.window_bounds().get_bounds().size;
+                    if let Some(edge) = resize_edge(e.position, size, tiling) {
+                        window.start_window_resize(edge);
+                    }
+                })
+        })
+        .child(
+            div()
+                .size_full()
+                .cursor(CursorStyle::Arrow)
+                .bg(theme.bg)
+                .when(client, |d| {
+                    d.border_color(border)
+                        .when(!tiling.top, |d| d.border_t_1())
+                        .when(!tiling.bottom, |d| d.border_b_1())
+                        .when(!tiling.left, |d| d.border_l_1())
+                        .when(!tiling.right, |d| d.border_r_1())
+                        .when(!tiling.is_tiled(), |d| {
+                            d.shadow(vec![BoxShadow {
+                                color: shadow,
+                                blur_radius: FRAME_SHADOW,
+                                spread_radius: px(0.),
+                                offset: point(px(0.), px(2.)),
+                            }])
+                        })
+                })
+                // The margin's own listeners see only what the content
+                // lets through, so the content keeps the pointer's moves.
+                .on_mouse_move(|_, _, cx| cx.stop_propagation())
+                .child(content),
+        )
+}
+
 /// How many closed tabs `workspace:undo-close-pane` can bring back.
 const CLOSED_TABS_KEPT: usize = 20;
 
@@ -1483,6 +1661,14 @@ pub struct Workspace {
     recent_commands: Vec<String>,
     left_visible: bool,
     right_visible: bool,
+    /// Each sidebar's width in logical pixels, `workspace.json`'s
+    /// `left.width` and `right.width`; a new vault's is 300.
+    left_width: f64,
+    right_width: f64,
+    /// Whether the window has 's own frame rather than the desktop's,
+    /// read from the window at each render for the renderers that place the
+    /// window buttons and the drag areas.
+    frameless: bool,
     left_tab: LeftTab,
     reading: Entity<ReadingView>,
     editor: Entity<Editor>,
@@ -1777,6 +1963,9 @@ impl Workspace {
             recent_commands: Vec::new(),
             left_visible: true,
             right_visible: true,
+            left_width: SIDEBAR_WIDTH as f64,
+            right_width: SIDEBAR_WIDTH as f64,
+            frameless: false,
             left_tab: LeftTab::Files,
             reading,
             editor,
@@ -4678,11 +4867,11 @@ impl Workspace {
             .and_then(|p| p.rsplit_once('/').map(|(dir, _)| dir.replace('/', " / ")))
             .unwrap_or_default()
             .into();
-        let mode_label = match view.mode {
-            ViewMode::Reading => "Reading",
-            ViewMode::LivePreview => "Live Preview",
-            ViewMode::Source => "Source",
-            ViewMode::Graph => "Graph",
+        // Obsidian's view action shows the current mode: a book while
+        // reading, a pencil while editing.
+        let mode_icon = match view.mode {
+            ViewMode::Reading => "book-open",
+            _ => "pencil",
         };
         let can_back = view.history_ix > 1;
         let can_forward = view.history_ix < view.history_len;
@@ -4691,51 +4880,37 @@ impl Workspace {
         } else {
             theme.text_muted
         };
+        // Obsidian's view header: 40 px, 12 px side padding, the history
+        // arrows at 40 percent while they have nowhere to go, the title in
+        // the small UI size, the actions as icons at the right.
         div()
             .flex()
             .flex_row()
             .items_center()
-            .h(px(36.))
-            .px_3()
-            .gap_2()
-            .border_b_1()
-            .border_color(theme.border)
-            .text_size(px(12.))
+            .h(px(HEADER_HEIGHT))
+            .px(px(12.))
+            .gap(px(8.))
+            .text_size(px(FONT_UI_SMALL))
             .child(
                 div()
-                    .id("back")
-                    .px_1()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .text_color(if can_back {
-                        theme.text
-                    } else {
-                        theme.text_faint
-                    })
-                    .hover(|s| s.bg(theme.bg_alt))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.activate_group(id, cx);
-                        this.go_back(&GoBack, window, cx)
-                    }))
-                    .child("←"),
-            )
-            .child(
-                div()
-                    .id("forward")
-                    .px_1()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .text_color(if can_forward {
-                        theme.text
-                    } else {
-                        theme.text_faint
-                    })
-                    .hover(|s| s.bg(theme.bg_alt))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.activate_group(id, cx);
-                        this.go_forward(&GoForward, window, cx)
-                    }))
-                    .child("→"),
+                    .flex()
+                    .flex_row()
+                    .child(
+                        icon_button("back", "arrow-left", theme)
+                            .when(!can_back, |d| d.opacity(0.4))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.activate_group(id, cx);
+                                this.go_back(&GoBack, window, cx)
+                            })),
+                    )
+                    .child(
+                        icon_button("forward", "arrow-right", theme)
+                            .when(!can_forward, |d| d.opacity(0.4))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.activate_group(id, cx);
+                                this.go_forward(&GoForward, window, cx)
+                            })),
+                    ),
             )
             .child(
                 div()
@@ -4755,40 +4930,26 @@ impl Workspace {
             )
             .child(
                 div()
-                    .id("graph")
-                    .px_2()
-                    .py_px()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .text_color(if view.mode == ViewMode::Graph {
-                        theme.text
-                    } else {
-                        theme.text_muted
-                    })
-                    .hover(|s| s.bg(theme.bg_alt))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.activate_group(id, cx);
-                        this.open_graph_action(&OpenGraph, window, cx)
-                    }))
-                    .child("Graph"),
+                    .flex()
+                    .flex_row()
+                    .gap(px(2.))
+                    .child(
+                        icon_button("graph", "git-fork", theme)
+                            .when(view.mode == ViewMode::Graph, |d| d.bg(theme.bg_active))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.activate_group(id, cx);
+                                this.open_graph_action(&OpenGraph, window, cx)
+                            })),
+                    )
+                    .when(view.mode != ViewMode::Graph, |d| {
+                        d.child(icon_button("mode", mode_icon, theme).on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                this.activate_group(id, cx);
+                                this.toggle_mode(&ToggleMode, window, cx)
+                            },
+                        )))
+                    }),
             )
-            .when(view.mode != ViewMode::Graph, |d| {
-                d.child(
-                    div()
-                        .id("mode")
-                        .px_2()
-                        .py_px()
-                        .rounded_sm()
-                        .cursor_pointer()
-                        .text_color(theme.text_muted)
-                        .hover(|s| s.bg(theme.bg_alt))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.activate_group(id, cx);
-                            this.toggle_mode(&ToggleMode, window, cx)
-                        }))
-                        .child(mode_label),
-                )
-            })
     }
 
     /// What a group's area paints, by the same rule as [`Workspace::main_view`]
@@ -4860,6 +5021,10 @@ impl Workspace {
     /// Shown in place of a view that has nothing to show: no open file, or
     /// one whose kind no view can draw.
     fn render_no_file(current: Option<&str>, theme: &Theme) -> gpui::AnyElement {
+        // An empty tab is the one blank canvas the window has, so it is
+        // where the mark goes. A file  cannot open yet is an error
+        // message, not a front door, and gets the line on its own.
+        let empty = current.is_none();
         let message: SharedString = match current {
             Some(path) => format!(
                 "{:?} files are not supported yet",
@@ -4871,9 +5036,12 @@ impl Workspace {
         div()
             .size_full()
             .flex()
+            .flex_col()
+            .gap_5()
             .items_center()
             .justify_center()
             .text_color(theme.text_muted)
+            .when(empty, |d| d.child(logo(104.)))
             .child(message)
             .into_any_element()
     }
@@ -5485,22 +5653,121 @@ impl Workspace {
         } else {
             "app:toggle-right-sidebar"
         };
-        let glyph = if left == visible { "⇤" } else { "⇥" };
+        let _ = visible;
+        icon_button(
+            if left { "toggle-left" } else { "toggle-right" },
+            if left { "panel-left" } else { "panel-right" },
+            theme,
+        )
+        .on_click(cx.listener(move |this, _, window, cx| this.run_command(command, window, cx)))
+    }
+
+    /// Whether `appearance.json` keeps the ribbon on screen.
+    fn show_ribbon(&self) -> bool {
+        self.state
+            .as_ref()
+            .map(|s| s.appearance().show_ribbon.unwrap_or(true))
+            .unwrap_or(true)
+    }
+
+    /// A sidebar's resize handle: the 3 px strip on its inner edge, which
+    /// Obsidian colours with the accent while the pointer is over it.
+    fn dock_handle(&self, left: bool, theme: &Theme) -> gpui::Stateful<gpui::Div> {
         div()
-            .id(if left { "toggle-left" } else { "toggle-right" })
-            .flex_shrink_0()
-            .w(px(26.))
-            .h(px(26.))
+            .id(if left {
+                "left-dock-handle"
+            } else {
+                "right-dock-handle"
+            })
+            .absolute()
+            .top_0()
+            .h_full()
+            .w(px(3.))
+            .when(left, |d| d.right(px(0.)).border_r_1())
+            .when(!left, |d| d.left(px(0.)).border_l_1())
+            .border_color(theme.border)
+            .cursor_col_resize()
+            .occlude()
+            .hover(|s| s.bg(theme.accent).border_color(theme.accent))
+            .on_drag(DockDrag { left }, |_, _, _, cx| cx.new(|_| NoDragPreview))
+    }
+
+    /// A sidebar handle dragged to `position` across the row of `bounds`:
+    /// the dock follows the pointer, between a header row's worth and what
+    /// leaves the main area room.
+    fn drag_dock(
+        &mut self,
+        left: bool,
+        bounds: gpui::Bounds<Pixels>,
+        position: gpui::Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let x = f64::from(f32::from(position.x));
+        let row = f64::from(f32::from(bounds.size.width));
+        let max = (row - 2. * MIN_SIDEBAR_WIDTH).max(MIN_SIDEBAR_WIDTH);
+        if left {
+            let ribbon = if self.show_ribbon() {
+                RIBBON_WIDTH as f64
+            } else {
+                0.
+            };
+            let origin = f64::from(f32::from(bounds.origin.x)) + ribbon;
+            self.left_width = (x - origin).clamp(MIN_SIDEBAR_WIDTH, max);
+        } else {
+            let right = f64::from(f32::from(bounds.origin.x + bounds.size.width));
+            self.right_width = (right - x).clamp(MIN_SIDEBAR_WIDTH, max);
+        }
+        cx.notify();
+    }
+
+    /// The window's own buttons in its top right corner, where Obsidian's
+    /// hidden frame keeps them: minimise, maximise or restore, and close,
+    /// each 44 by 40.
+    fn render_window_controls(&self, theme: &Theme, window: &Window) -> gpui::Div {
+        let maximized = window.is_maximized();
+        let button = |id: &'static str, name: &'static str, close: bool, act: fn(&mut Window)| {
+            let hover_bg: Hsla = if close {
+                rgb(0xe93147).into()
+            } else {
+                theme.bg_alt
+            };
+            let color = theme.text_muted;
+            div()
+                .id(id)
+                .group(id)
+                .w(px(RIBBON_WIDTH))
+                .h(px(HEADER_HEIGHT))
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .hover(move |s| s.bg(hover_bg))
+                .on_click(move |_, window, _| act(window))
+                .child(
+                    div()
+                        .when(close, |d| {
+                            d.group_hover(id, |s| s.text_color(gpui::white()))
+                        })
+                        .text_color(color)
+                        .child(icon(name, 14., color)),
+                )
+        };
+        div()
+            .absolute()
+            .top_0()
+            .right_0()
             .flex()
-            .items_center()
-            .justify_center()
-            .rounded_md()
-            .cursor_pointer()
-            .text_size(px(14.))
-            .text_color(theme.text_muted)
-            .hover(|s| s.bg(theme.bg_alt).text_color(theme.text))
-            .on_click(cx.listener(move |this, _, window, cx| this.run_command(command, window, cx)))
-            .child(glyph)
+            .flex_row()
+            .child(button("win-minimize", "minus", false, |w| {
+                w.minimize_window()
+            }))
+            .child(button(
+                "win-maximize",
+                if maximized { "copy" } else { "square" },
+                false,
+                |w| w.zoom_window(),
+            ))
+            .child(button("win-close", "x", true, |w| w.remove_window()))
     }
 
     /// The ribbon down the left edge: the quick switcher, the graph, today's
@@ -5523,33 +5790,36 @@ impl Workspace {
                 .as_ref()
                 .is_some_and(|s| settings::plugin_enabled(s, plugin))
         };
-        let toggle = self.sidebar_toggle(true, theme, cx);
-        let button = |id: &'static str, glyph: &'static str, command: &'static str| {
-            div()
-                .id(id)
-                .w(px(28.))
-                .h(px(28.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded_md()
-                .cursor_pointer()
-                .text_size(px(16.))
-                .text_color(theme.text_muted)
-                .hover(|s| s.bg(theme.bg_alt).text_color(theme.text))
-                .on_click(
-                    cx.listener(move |this, _, window, cx| this.run_command(command, window, cx)),
-                )
-                .child(glyph)
+        // The left sidebar's toggle sits above the ribbon, in the title
+        // row, which is where Obsidian's hidden frame puts it.
+        let toggle = div()
+            .w(px(RIBBON_WIDTH))
+            .h(px(HEADER_HEIGHT))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(self.sidebar_toggle(true, theme, cx));
+        let button = |id: &'static str, name: &'static str, command: &'static str| {
+            icon_button(id, name, theme).on_click(
+                cx.listener(move |this, _, window, cx| this.run_command(command, window, cx)),
+            )
         };
+        // The icons are the ones Obsidian's ribbon names: `lucide-file-search`
+        // for the switcher, `git-fork` for the graph, `calendar`, `files` for
+        // a template and `terminal` for the palette.
         let items: [(&'static str, &'static str, &'static str, &'static str); 5] = [
-            ("ribbon-switcher", "⚲", "switcher:open", "switcher"),
-            ("ribbon-graph", "◎", "graph:open", "graph"),
-            ("ribbon-daily", "▦", "daily-notes", "daily-notes"),
-            ("ribbon-template", "≡", "insert-template", "templates"),
+            (
+                "ribbon-switcher",
+                "file-search",
+                "switcher:open",
+                "switcher",
+            ),
+            ("ribbon-graph", "git-fork", "graph:open", "graph"),
+            ("ribbon-daily", "calendar", "daily-notes", "daily-notes"),
+            ("ribbon-template", "files", "insert-template", "templates"),
             (
                 "ribbon-palette",
-                "⌨",
+                "terminal",
                 "command-palette:open",
                 "command-palette",
             ),
@@ -5557,26 +5827,33 @@ impl Workspace {
         let buttons: Vec<_> = items
             .into_iter()
             .filter(|(_, _, _, plugin)| enabled(plugin) && !hidden(plugin))
-            .map(|(id, glyph, command, _)| button(id, glyph, command))
+            .map(|(id, name, command, _)| button(id, name, command))
             .collect();
-        let settings = button("ribbon-settings", "⚙", "app:open-settings");
+        let settings = button("ribbon-settings", "settings", "app:open-settings");
         div()
             .flex()
             .flex_col()
             .items_center()
             .flex_shrink_0()
-            .w(px(44.))
+            .w(px(RIBBON_WIDTH))
             .h_full()
-            .py_1()
-            .gap_1()
             .bg(theme.bg_secondary)
             .border_r_1()
             .border_color(theme.border)
             .child(toggle)
-            .child(div().h(px(6.)))
-            .children(buttons)
-            .child(div().flex_1())
-            .child(settings)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .flex_1()
+                    .pt(px(8.))
+                    .pb(px(12.))
+                    .gap(px(6.))
+                    .children(buttons)
+                    .child(div().flex_1())
+                    .child(settings),
+            )
     }
 
     /// A group's tab strip. The sidebar toggles sit at the window's edges:
@@ -5593,18 +5870,24 @@ impl Workspace {
         let active_ix = view.active_tab;
         let group = view.id;
         let group_active = view.active;
-        let show_ribbon = self
-            .state
-            .as_ref()
-            .map(|s| s.appearance().show_ribbon.unwrap_or(true))
-            .unwrap_or(true);
+        let show_ribbon = self.show_ribbon();
+        let frameless = self.frameless;
+        // The window buttons overlay the right end of whichever header is
+        // in the window's top right corner: this strip's, when the right
+        // sidebar is collapsed and this is the last group.
+        let under_controls = frameless && last && !self.right_visible;
         div()
             .flex()
             .flex_row()
             .items_end()
-            .h(px(34.))
-            .pt(px(4.))
-            .px_1()
+            .h(px(HEADER_HEIGHT))
+            .pt(px(6.))
+            .pl(px(8.))
+            .pr(if under_controls {
+                px(3. * RIBBON_WIDTH)
+            } else {
+                px(8.)
+            })
             .gap(px(2.))
             .bg(theme.bg_secondary)
             .border_b_1()
@@ -5613,33 +5896,41 @@ impl Workspace {
             // Without the ribbon a collapsed left sidebar would have no
             // way back from the window.
             .when(first && !show_ribbon && !self.left_visible, |d| {
-                d.child(self.sidebar_toggle(true, theme, cx).mb(px(2.)))
+                d.child(self.sidebar_toggle(true, theme, cx).mb(px(5.)))
             })
             .children(tabs.iter().enumerate().map(|(ix, tab)| {
                 let active = ix == active_ix;
                 let title = tab.title();
+                // Obsidian's tab: 34 px tall, 200 px wide, the active one
+                // in the content's colour with 10 px top corners, its title
+                // in the small UI size and its close button a 20 px disc.
                 div()
                     .id(("tab", ix))
                     .group("tab")
                     .flex()
                     .flex_row()
                     .items_center()
-                    .gap_1()
-                    .h(px(30.))
+                    .gap(px(2.))
+                    .h(px(34.))
+                    .w(px(200.))
                     .min_w(px(60.))
-                    .max_w(px(200.))
-                    .pl_3()
-                    .pr_1()
-                    .rounded_t_md()
+                    .flex_shrink()
+                    .pl(px(10.))
+                    .pr(px(6.))
+                    .rounded_t(px(10.))
                     .cursor_pointer()
-                    .text_size(px(12.))
+                    .text_size(px(FONT_UI_SMALL))
                     .bg(if active { theme.bg } else { theme.bg_secondary })
                     .text_color(if active && group_active {
                         theme.text
-                    } else {
+                    } else if active {
                         theme.text_muted
+                    } else {
+                        theme.text_faint
                     })
-                    .when(!active, |d| d.hover(|s| s.bg(theme.bg_alt)))
+                    .when(!active, |d| {
+                        d.hover(|s| s.bg(theme.bg_alt).text_color(theme.text_muted))
+                    })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.activate_group(group, cx);
                         this.activate_tab(ix, cx)
@@ -5663,41 +5954,53 @@ impl Workspace {
                     .child(
                         div()
                             .id(("tab-close", ix))
-                            .px_1()
-                            .rounded_sm()
-                            .text_color(theme.text_muted)
+                            .flex_shrink_0()
+                            .w(px(20.))
+                            .h(px(20.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(8.))
                             .when(!active, |d| {
                                 d.invisible().group_hover("tab", |s| s.visible())
                             })
-                            .hover(|s| s.bg(theme.bg_active).text_color(theme.text))
+                            .hover(|s| s.bg(theme.bg_active))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 cx.stop_propagation();
                                 this.activate_group(group, cx);
                                 this.close_tab(ix, cx);
                             }))
-                            .child("×"),
+                            .child(icon("x", 14., theme.text_muted)),
                     )
             }))
             .child(
                 div()
                     .id("new-tab")
-                    .mb(px(3.))
-                    .px_2()
-                    .py_px()
-                    .rounded_sm()
+                    .flex_shrink_0()
+                    .ml(px(6.))
+                    .mb(px(5.))
+                    .w(px(24.))
+                    .h(px(24.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(4.))
                     .cursor_pointer()
-                    .text_size(px(14.))
-                    .text_color(theme.text_muted)
-                    .hover(|s| s.bg(theme.bg_alt).text_color(theme.text))
+                    .hover(|s| s.bg(theme.bg_alt))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.activate_group(group, cx);
                         this.new_tab(cx)
                     }))
-                    .child("+"),
+                    .child(icon("plus", ICON_SIZE, theme.text)),
             )
-            .child(div().flex_1())
-            .when(last, |d| {
-                d.child(self.sidebar_toggle(false, theme, cx).mb(px(2.)))
+            .child(window_handle(
+                div().id(("tab-strip-space", group)).flex_1().h_full(),
+                frameless,
+            ))
+            // The right sidebar's toggle lives in its own header while it
+            // is open, and comes here, at the window's edge, when it is not.
+            .when(last && !self.right_visible, |d| {
+                d.child(self.sidebar_toggle(false, theme, cx).mb(px(5.)))
             })
     }
 
@@ -5808,6 +6111,22 @@ impl Workspace {
         };
         self.left_visible = !collapsed("left");
         self.right_visible = !collapsed("right");
+        // A dock's `width` is where its handle was last dragged to; a
+        // fresh vault has 300, and nothing narrower than a header row's
+        // worth of buttons is believed.
+        let width = |dock: &str| {
+            layout
+                .get(dock)
+                .and_then(|d| d.get("width"))
+                .and_then(Value::as_f64)
+                .filter(|w| *w >= MIN_SIDEBAR_WIDTH)
+        };
+        if let Some(w) = width("left") {
+            self.left_width = w;
+        }
+        if let Some(w) = width("right") {
+            self.right_width = w;
+        }
         match dock_current_view(&layout, "left").as_deref() {
             Some("search") => self.left_tab = LeftTab::Search,
             Some("bookmarks") => self.left_tab = LeftTab::Bookmarks,
@@ -5886,12 +6205,25 @@ impl Workspace {
             }
         }
         object.insert("active".into(), active_id);
-        for (dock, visible) in [("left", self.left_visible), ("right", self.right_visible)] {
+        for (dock, visible, width) in [
+            ("left", self.left_visible, self.left_width),
+            ("right", self.right_visible, self.right_width),
+        ] {
             if let Some(d) = object.get_mut(dock).and_then(Value::as_object_mut) {
                 if visible {
                     d.shift_remove("collapsed");
                 } else {
                     d.insert("collapsed".into(), json!(true));
+                }
+                // The width is rewritten only once a drag moved it, so the
+                // `300` Obsidian wrote stays the integer it was and a file
+                // without the key gains it only for a sidebar that moved.
+                let same = d
+                    .get("width")
+                    .and_then(Value::as_f64)
+                    .is_some_and(|w| (w - width).abs() < 0.5);
+                if !same && (d.contains_key("width") || width != SIDEBAR_WIDTH as f64) {
+                    d.insert("width".into(), json!(width));
                 }
             }
         }
@@ -6069,6 +6401,7 @@ impl Workspace {
 
         let mut left = Map::new();
         left.insert("visible".into(), json!(self.left_visible));
+        left.insert("width".into(), json!(self.left_width));
         left.insert(
             "tab".into(),
             json!(match self.left_tab {
@@ -6083,6 +6416,7 @@ impl Workspace {
 
         let mut right = Map::new();
         right.insert("visible".into(), json!(self.right_visible));
+        right.insert("width".into(), json!(self.right_width));
         right.insert(
             "tab".into(),
             json!(match self.right_tab {
@@ -6469,9 +6803,12 @@ impl Workspace {
 
     // ----- rendering -------------------------------------------------------------
 
+    /// A sidebar's tab: Obsidian shows the view's icon alone, 16 px in a
+    /// 28 by 25 button with a 4 px radius, the active one on a wash.
     fn dock_tab(
         &self,
         label: &'static str,
+        icon_name: &'static str,
         active: bool,
         theme: &Theme,
         on_click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
@@ -6479,16 +6816,22 @@ impl Workspace {
     ) -> impl IntoElement {
         div()
             .id(label)
-            .px_2()
-            .py_1()
-            .text_size(px(11.))
+            .flex_shrink_0()
+            .w(px(28.))
+            .h(px(25.))
+            .flex()
+            .items_center()
+            .justify_center()
             .cursor_pointer()
-            .rounded_sm()
-            .text_color(if active { theme.text } else { theme.text_muted })
+            .rounded(px(4.))
             .when(active, |d| d.bg(theme.bg_active))
             .hover(|s| s.bg(theme.bg_alt))
             .on_click(cx.listener(move |this, _, window, cx| on_click(this, window, cx)))
-            .child(label.to_uppercase())
+            .child(icon(
+                icon_name,
+                ICON_SIZE,
+                if active { theme.text } else { theme.text_muted },
+            ))
     }
 
     fn render_outline(
@@ -6718,39 +7061,70 @@ impl Workspace {
                 }
             }
         };
-        let tab_button =
-            |this: &mut Self, label: &'static str, which: RightTab, cx: &mut Context<Self>| {
-                this.dock_tab(
-                    label,
-                    tab == which,
-                    theme,
-                    move |this, _, cx| this.select_right_tab(which, cx),
-                    cx,
-                )
-            };
+        let tab_button = |this: &mut Self,
+                          label: &'static str,
+                          icon_name: &'static str,
+                          which: RightTab,
+                          cx: &mut Context<Self>| {
+            this.dock_tab(
+                label,
+                icon_name,
+                tab == which,
+                theme,
+                move |this, _, cx| this.select_right_tab(which, cx),
+                cx,
+            )
+        };
+        let frameless = self.frameless;
+        // Obsidian draws its own arrows for backlinks and outgoing links;
+        // Lucide's diagonal arrows say the same thing.
         div()
+            .relative()
             .flex()
             .flex_col()
-            .w(px(280.))
+            .flex_shrink_0()
+            .w(px(self.right_width as f32))
             .h_full()
             .bg(theme.bg_secondary)
-            .border_l_1()
-            .border_color(theme.border)
             .child(
                 div()
                     .flex()
                     .flex_row()
-                    .gap_1()
-                    .px_2()
-                    .py_1()
+                    .items_center()
+                    .h(px(HEADER_HEIGHT))
+                    .pl(px(8.))
+                    .pr(if frameless {
+                        px(3. * RIBBON_WIDTH)
+                    } else {
+                        px(8.)
+                    })
+                    .gap(px(3.))
                     .border_b_1()
                     .border_color(theme.border)
-                    .child(tab_button(self, "Backlinks", RightTab::Backlinks, cx))
-                    .child(tab_button(self, "Outgoing", RightTab::Outgoing, cx))
-                    .child(tab_button(self, "Outline", RightTab::Outline, cx))
-                    .child(tab_button(self, "Tags", RightTab::Tags, cx)),
+                    .child(tab_button(
+                        self,
+                        "Backlinks",
+                        "arrow-down-left",
+                        RightTab::Backlinks,
+                        cx,
+                    ))
+                    .child(tab_button(
+                        self,
+                        "Outgoing",
+                        "arrow-up-right",
+                        RightTab::Outgoing,
+                        cx,
+                    ))
+                    .child(tab_button(self, "Outline", "list", RightTab::Outline, cx))
+                    .child(tab_button(self, "Tags", "tags", RightTab::Tags, cx))
+                    .child(window_handle(
+                        div().id("right-dock-space").flex_1().h_full(),
+                        frameless,
+                    ))
+                    .child(self.sidebar_toggle(false, theme, cx)),
             )
             .child(div().flex_1().overflow_hidden().child(body))
+            .child(self.dock_handle(false, theme))
     }
 }
 
@@ -7311,11 +7685,9 @@ impl Render for Workspace {
             .overflow_hidden()
             .child(main_body);
 
-        let show_ribbon = self
-            .state
-            .as_ref()
-            .map(|s| s.appearance().show_ribbon.unwrap_or(true))
-            .unwrap_or(true);
+        let show_ribbon = self.show_ribbon();
+        let frameless = matches!(window.window_decorations(), Decorations::Client { .. });
+        self.frameless = frameless;
         let ribbon = show_ribbon.then(|| self.render_ribbon(&theme, cx));
         let left_tab = self.left_tab;
         let left_body: gpui::AnyElement = match left_tab {
@@ -7325,25 +7697,31 @@ impl Render for Workspace {
         };
         let bookmarks_on = self.state.as_ref().is_some_and(|s| s.bookmarks_enabled());
         let left = div()
+            .relative()
             .flex()
             .flex_col()
-            .w(px(280.))
+            .flex_shrink_0()
+            .w(px(self.left_width as f32))
             .h_full()
             .bg(theme.bg_secondary)
-            .border_r_1()
-            .border_color(theme.border)
             .child(
                 div()
                     .flex()
                     .flex_row()
                     .items_center()
-                    .gap_1()
-                    .px_2()
-                    .py_1()
+                    .h(px(HEADER_HEIGHT))
+                    .px(px(8.))
+                    .gap(px(3.))
                     .border_b_1()
                     .border_color(theme.border)
+                    // With the ribbon hidden the toggle moves to the head
+                    // of this row, where Obsidian keeps it then.
+                    .when(!show_ribbon, |d| {
+                        d.child(self.sidebar_toggle(true, &theme, cx))
+                    })
                     .child(self.dock_tab(
                         "Files",
+                        "folder-closed",
                         left_tab == LeftTab::Files,
                         &theme,
                         |this, window, cx| {
@@ -7355,6 +7733,7 @@ impl Render for Workspace {
                     ))
                     .child(self.dock_tab(
                         "Search",
+                        "search",
                         left_tab == LeftTab::Search,
                         &theme,
                         |this, window, cx| {
@@ -7366,6 +7745,7 @@ impl Render for Workspace {
                     .when(bookmarks_on, |d| {
                         d.child(self.dock_tab(
                             "Bookmarks",
+                            "bookmark",
                             left_tab == LeftTab::Bookmarks,
                             &theme,
                             |this, window, cx| {
@@ -7376,19 +7756,13 @@ impl Render for Workspace {
                             cx,
                         ))
                     })
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_size(px(11.))
-                            .text_color(theme.text_muted)
-                            .text_right()
-                            .whitespace_nowrap()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .child(self.vault_name.clone()),
-                    ),
+                    .child(window_handle(
+                        div().id("left-dock-space").flex_1().h_full(),
+                        frameless,
+                    )),
             )
             .child(div().flex_1().overflow_hidden().child(left_body))
+            .child(self.dock_handle(true, &theme))
             // Obsidian keeps Settings in the ribbon; the footer button is
             // the way in only while the ribbon is hidden.
             .when(!show_ribbon, |d| {
@@ -7438,26 +7812,44 @@ impl Render for Workspace {
         } else {
             (String::new(), self.words, self.chars)
         };
+        // Obsidian's status bar is a tab in the window's bottom right
+        // corner rather than a bar across it: the sidebar colour, a border
+        // on its open sides, an 8 px top left corner, the smaller UI size.
         let status_bar = div()
+            .absolute()
+            .bottom_0()
+            .right_0()
+            .max_w_full()
             .flex()
             .flex_row()
-            .justify_between()
-            .h(px(22.))
-            .px_3()
-            .text_size(px(11.))
-            .text_color(theme.text_muted)
+            .items_center()
+            .gap(px(4.))
+            .pl(px(4.))
+            .pr(px(8.))
+            .py(px(4.))
+            .rounded_tl(px(8.))
+            .bg(theme.bg_secondary)
             .border_t_1()
+            .border_l_1()
             .border_color(theme.border)
+            .text_size(px(FONT_UI_SMALLER))
+            .text_color(theme.text_muted)
             .child(
                 div()
+                    .px(px(4.))
                     .whitespace_nowrap()
                     .text_ellipsis()
                     .overflow_hidden()
                     .child(self.status.clone()),
             )
-            .child(SharedString::from(format!(
-                "{editor_status}{words} words, {chars} characters"
-            )));
+            .child(
+                div()
+                    .px(px(4.))
+                    .whitespace_nowrap()
+                    .child(SharedString::from(format!(
+                        "{editor_status}{words} words, {chars} characters"
+                    ))),
+            );
 
         // Every overlay occludes: a modal in Obsidian owns the pointer as
         // well as the keyboard, and without this the editor's raw window
@@ -7550,8 +7942,9 @@ impl Render for Workspace {
         // instead: without them a hotkey can no longer focus a pane behind
         // the modal, or swap the modal out from under its own Escape.
         let hotkeys_live = self.modal == Modal::None;
+        let controls = frameless.then(|| self.render_window_controls(&theme, window));
 
-        div()
+        let content = div()
             .key_context("Workspace")
             .track_focus(&self.focus_handle)
             .when(hotkeys_live, |d| {
@@ -7568,6 +7961,7 @@ impl Render for Workspace {
             .size_full()
             .bg(theme.bg)
             .font_family(theme.ui_font.clone())
+            .text_size(px(crate::theme::FONT_UI_MEDIUM))
             .text_color(theme.text)
             .child(
                 div()
@@ -7575,6 +7969,10 @@ impl Render for Workspace {
                     .flex_row()
                     .flex_1()
                     .overflow_hidden()
+                    .on_drag_move(cx.listener(|this, e: &DragMoveEvent<DockDrag>, _, cx| {
+                        let left = e.drag(cx).left;
+                        this.drag_dock(left, e.bounds, e.event.position, cx);
+                    }))
                     .children(ribbon)
                     .when(left_visible, |d| d.child(left))
                     .child(main)
@@ -7583,8 +7981,10 @@ impl Render for Workspace {
                     }),
             )
             .child(status_bar)
+            .children(controls)
             .children(overlay)
-            .children(notices)
+            .children(notices);
+        client_frame(content.into_any_element(), &theme, window)
     }
 }
 

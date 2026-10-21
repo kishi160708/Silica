@@ -66,7 +66,7 @@ Most of the 50 are the same large gaps the first pass had already filed — no t
 Hotkeys tab, the graph controls panel — and they are not duplicated below. What the triage added is
 twenty entries nobody had filed before and fresh evidence on a dozen more; both are folded into the
 sections that follow, so the sections held **61 open entries** in total; the five large builds of 2026-10-20 and the
-four small entries they carried closed nine of them, so **52 remain**.
+four small entries they carried closed nine of them, so **52 remain** — plus one filed after the frame work of the same evening, below.
 
 ## Files view and file operations
 
@@ -980,6 +980,28 @@ correct — place the caret when the point is outside the current selection, and
 overlay list dispatching command ids, which the explorer's menu could be generalised into.
 
 ## Workspace shell
+
+### The frame style has no store, and four title-row controls are still missing
+
+- **Severity:** low · **Kind:** parity-gap · **Filed:** 2026-10-20
+
+**Obsidian.** "Window frame style" sits in Settings → Interface with `hidden` (the Linux default),
+`custom` and `native`, needs a restart, and writes nothing under `.obsidian` — the choice is kept
+in Obsidian's own config directory, outside the vault
+([[Specification#Observed shell typography and chrome, Obsidian 1.14.4 (installer build 1.13.7)]]).
+The hidden frame's title row also has a tab-list button (`lucide-chevron-down`) at the right end of
+the tab strip, and the view header has a bookmark action and a "More options" menu beside the mode
+toggle; the Files pane header has its five buttons (#24).
+
+**.** Since [[Development#The frame, the type and the icons, 2026-10-20]] the window draws
+Obsidian's hidden frame by default and `--frame native` / `SCORIA_FRAME=native` asks for the
+desktop's; the Interface tab shows the row with that value but cannot change it, since  has
+no per-user settings file to keep it in. The tab-list button, the bookmark action and the "More
+options" menu are not drawn.
+
+**Fix.** A per-user config file (XDG config dir on Linux) holding the frame style, read before the
+window opens; then the three controls, each after a probe of what its menu holds.
+
 
 ### History back and forward restore the file but not the mode or the scroll
 

@@ -20,6 +20,7 @@
 //! vault is shared, so writing a setting  ignores is still worth
 //! doing — pretending it changes something here is not.
 
+use crate::assets::logo;
 use crate::palette::hotkey_chip;
 use crate::text_input::{InputEvent, TextInput};
 use crate::theme::Theme;
@@ -1322,6 +1323,17 @@ impl SettingsView {
                 a,
                 NATIVE_MENUS,
             ).not_yet(),
+            // Obsidian keeps this one outside the vault: changing it wrote
+            // nothing under `.obsidian` (probed 2026-10-20), so  takes
+            // it from `--frame` or `SCORIA_FRAME` until a per-user store
+            // exists.
+            dropdown(
+                "Window frame style",
+                "Determines the styling of the title bar of Obsidian windows. Requires a full restart to take effect.",
+                crate::frame_style_label(),
+            )
+            .on_restart()
+            .not_yet(),
         ]
     }
 
@@ -1725,6 +1737,37 @@ impl SettingsView {
             .border_r_1()
             .border_color(theme.border)
             .py_2()
+            // Obsidian's sidebar opens straight on "Options"; the mark and
+            // the version above it are ours, and say which program wrote
+            // the `.obsidian/` the rest of this modal is editing.
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .px_3()
+                    .pt_1()
+                    .pb_2()
+                    .child(logo(22.))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .text_color(theme.text)
+                                    .child(""),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.))
+                                    .text_color(theme.text_faint)
+                                    .child(concat!("v", env!("CARGO_PKG_VERSION"))),
+                            ),
+                    ),
+            )
             .child(group_title("Options", theme));
         for tab in Tab::OPTIONS {
             nav = nav.child(self.nav_item(*tab, theme, cx));

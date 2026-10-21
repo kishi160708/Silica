@@ -587,20 +587,21 @@ impl<'a> Renderer<'a> {
                 .children(segments.iter().map(|s| self.segment(s)))
                 .into_any_element(),
             RBlock::Heading { level, text, .. } => {
-                let (size, weight, top) = match level {
-                    1 => (1.802, FontWeight::BOLD, 1.6),
-                    2 => (1.602, FontWeight::BOLD, 1.4),
-                    3 => (1.424, FontWeight::SEMIBOLD, 1.2),
-                    4 => (1.266, FontWeight::SEMIBOLD, 1.0),
-                    5 => (1.125, FontWeight::SEMIBOLD, 0.9),
-                    _ => (1.0, FontWeight::SEMIBOLD, 0.8),
+                // Obsidian's scale: h1 1.618em at 700, down to h6 1em at
+                // 600, with 1.2 line heights at the top; a 40 px gap above
+                // an h2 and 16 px below every heading, the body margin.
+                let (size, weight, line_height) = crate::theme::heading_style(*level);
+                let top = match level {
+                    1 => 1.0,
+                    2 => 2.5,
+                    _ => 1.5,
                 };
                 div()
                     .mt(px(base * top))
-                    .mb(px(base * 0.5))
+                    .mb(px(base))
                     .text_size(px(base * size))
-                    .line_height(px(base * size * 1.3))
-                    .font_weight(weight)
+                    .line_height(px(base * size * line_height))
+                    .font_weight(FontWeight(weight))
                     .child(self.rich(text))
                     .into_any_element()
             }
@@ -619,7 +620,7 @@ impl<'a> Renderer<'a> {
                     .mb(gap)
                     .relative()
                     .group("code-block")
-                    .bg(t.bg_alt)
+                    .bg(t.code_bg)
                     .rounded_md()
                     .py_2()
                     .font_family(t.mono_font.clone())
@@ -1559,7 +1560,7 @@ impl<'a> Renderer<'a> {
                     .gap_1()
                     .px_1p5()
                     .rounded_sm()
-                    .bg(t.bg_alt)
+                    .bg(t.code_bg)
                     .child(self.rich(item))
                     .when_some(on_action.clone(), |d, on_action| {
                         let key = row.key.clone();
@@ -1666,7 +1667,7 @@ impl<'a> Renderer<'a> {
             h.background_color = Some(t.highlight_bg);
         }
         if s.code {
-            h.background_color = Some(t.bg_alt);
+            h.background_color = Some(t.code_bg);
         }
         if s.math {
             h.color = Some(t.accent);

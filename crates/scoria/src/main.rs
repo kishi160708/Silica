@@ -13,6 +13,7 @@
 // not a defect to deny the build over.
 #![cfg_attr(not(unix), allow(dead_code))]
 
+mod assets;
 mod bookmarks;
 mod chooser;
 #[cfg(unix)]
@@ -54,7 +55,7 @@ mod workspace;
 
 use gpui::{
     actions, prelude::*, px, size, App, Bounds, Focusable, KeyBinding, TitlebarOptions,
-    WindowAppearance, WindowBounds, WindowOptions,
+    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowDecorations, WindowOptions,
 };
 use _commands::CommandRegistry;
 use std::fmt::Write as _;
@@ -193,6 +194,8 @@ struct Args {
     control: Option<PathBuf>,
     /// Window size in logical pixels, `--size 1400x900`.
     size: Option<(f32, f32)>,
+    /// `hidden` (the default, Obsidian's on Linux) or `native`.
+    frame: Option<String>,
 }
 
 /// `1400x900` as a width and a height; anything else leaves the default.
@@ -227,6 +230,7 @@ fn parse_args() -> Args {
         menu: None,
         control: None,
         size: None,
+        frame: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -256,11 +260,37 @@ fn parse_args() -> Args {
             "--menu" => args.menu = it.next(),
             "--control" => args.control = it.next().map(PathBuf::from),
             "--size" => args.size = it.next().as_deref().and_then(parse_size),
+            "--frame" => args.frame = it.next(),
             _ if args.vault.is_none() => args.vault = Some(PathBuf::from(a)),
             _ => args.note = Some(a),
         }
     }
     args
+}
+
+/// The "Window frame style" the app was started with, as Obsidian's
+/// Interface tab labels it: "Hidden (default)", "Obsidian frame" or
+/// "Native frame". Obsidian keeps the choice outside the vault, so it is an
+/// argument here (`--frame hidden|native`, or `SCORIA_FRAME`).
+pub fn frame_style_label() -> &'static str {
+    match frame_style().as_str() {
+        "native" => "Native frame",
+        "custom" => "Obsidian frame",
+        _ => "Hidden (default)",
+    }
+}
+
+/// `--frame`'s value, `SCORIA_FRAME`'s, or `hidden`.
+fn frame_style() -> String {
+    let mut it = std::env::args().skip(1);
+    while let Some(a) = it.next() {
+        if a == "--frame" {
+            if let Some(v) = it.next() {
+                return v;
+            }
+        }
+    }
+    std::env::var("SCORIA_FRAME").unwrap_or_else(|_| "hidden".into())
 }
 
 /// Every key binding in the app, from scratch: the views' own and the
@@ -301,266 +331,291 @@ fn main() {
     drop(vault);
     let registry = Arc::new(registry);
 
-    gpui_platform::application().run(move |cx: &mut App| {
-        cx.set_global(theme);
-        bind_all_keys(cx, &registry);
-        cx.set_global(Commands(registry));
+    // Obsidian's "Window frame style" is "Hidden" on Linux and Windows: no
+    // title bar of the desktop's, the tab strip at the window's top edge and
+    // the window buttons in its right corner. `--frame native` asks the
+    // desktop for its own frame instead, which is the choice for a
+    // compositor that draws client windows badly.
+    let frame = args.frame.clone().unwrap_or_else(frame_style);
+    let decorations = if frame == "native" {
+        WindowDecorations::Server
+    } else {
+        WindowDecorations::Client
+    };
 
-        let (width, height) = args.size.unwrap_or((1400.0, 900.0));
-        let bounds = Bounds::centered(None, size(px(width), px(height)), cx);
-        let vault = args.vault.clone();
-        let window = cx
-            .open_window(
-                WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(bounds)),
-                    titlebar: Some(TitlebarOptions {
-                        title: Some("".into()),
+    gpui_platform::application()
+        .with_assets(assets::Assets)
+        .run(move |cx: &mut App| {
+            cx.set_global(theme);
+            if let Err(e) = cx.text_system().add_fonts(assets::fonts()) {
+                eprintln!("could not register the bundled fonts: {e}");
+            }
+            bind_all_keys(cx, &registry);
+            cx.set_global(Commands(registry));
+
+            let (width, height) = args.size.unwrap_or((1400.0, 900.0));
+            let bounds = Bounds::centered(None, size(px(width), px(height)), cx);
+            let vault = args.vault.clone();
+            let window = cx
+                .open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(bounds)),
+                        titlebar: Some(TitlebarOptions {
+                            title: Some("".into()),
+                            ..Default::default()
+                        }),
+                        // KWin only honours the xdg-activation token that
+                        // `activate_window` asks for when it can tie it to an
+                        // application, which is what this id is for.
+                        app_id: Some("".into()),
+                        window_decorations: Some(decorations),
+                        // A client-drawn frame paints its shadow in a margin
+                        // around the content, which has to be see-through.
+                        window_background: match decorations {
+                            WindowDecorations::Client => WindowBackgroundAppearance::Transparent,
+                            WindowDecorations::Server => WindowBackgroundAppearance::Opaque,
+                        },
+                        window_min_size: Some(size(px(480.), px(320.))),
                         ..Default::default()
-                    }),
-                    // KWin only honours the xdg-activation token that
-                    // `activate_window` asks for when it can tie it to an
-                    // application, which is what this id is for.
-                    app_id: Some("".into()),
-                    ..Default::default()
-                },
-                |window, cx| cx.new(|cx| Workspace::new(vault, window, cx)),
-            )
-            .expect("open main window");
-        // Now there is a window to ask: `theme: "system"` follows the
-        // desktop, which is Obsidian's default and what a vault with no
-        // theme key means.
-        if let Some(a) = appearance {
-            let follows_system =
-                !matches!(a.theme.as_deref(), Some("moonstone") | Some("obsidian"));
-            if follows_system {
-                let dark = window
-                    .update(cx, |_, window, _| {
-                        matches!(
-                            window.appearance(),
-                            WindowAppearance::Dark | WindowAppearance::VibrantDark
-                        )
-                    })
-                    .unwrap_or(true);
-                cx.set_global(Theme::from_appearance(&a, dark));
-                window.update(cx, |_, _, cx| cx.notify()).ok();
-            }
-        }
-        cx.on_action(move |_: &Quit, cx| {
-            // Save the note and the layout before the window goes away.
-            window.update(cx, |ws, _, cx| ws.on_quit(cx)).ok();
-            control::cleanup();
-            cx.quit();
-        });
-        // Ctrl+Q is not the only way out: closing the window from the
-        // titlebar quits too, and a socket file left behind makes the next
-        // run look like one that is already listening.
-        cx.on_app_quit(|_| {
-            control::cleanup();
-            async {}
-        })
-        .detach();
-
-        // Bound before the startup flags are applied, so `--control`
-        // composes with `--note`, `--source` and the rest of them.
-        if let Some(path) = args.control.clone() {
-            control::start(path, window, cx);
-        }
-
-        let note = args.note.clone();
-        let search = args.search.clone();
-        let switcher = args.switcher.clone();
-        let pane = args.pane.clone();
-        let graph = args.graph.clone();
-        let palette = args.palette.clone();
-        let settings_tab = args.settings.clone();
-        let source = args.source;
-        let type_text = args.type_text.clone();
-        let accept = args.accept.clone();
-        let cell = args.cell;
-        let command = args.command.clone();
-        let template = args.template.clone();
-        let menu = args.menu.clone();
-        let reading = args.reading;
-        let find = args.find.clone();
-        let find_all = args.find_all.clone();
-        let rename = args.rename.clone();
-        let prompt = args.prompt.clone();
-        let synthetic = args.synthetic;
-        window
-            .update(cx, |ws, window, cx| {
-                if let Some(lines) = synthetic {
-                    let text = synthetic_note(lines);
-                    ws.editor().update(cx, |editor, cx| {
-                        editor.set_text(format!("synthetic-{lines}.md"), text, cx)
-                    });
-                    ws.set_mode(ViewMode::Source, window, cx);
-                    // The flag loop below never runs for a synthetic note, so
-                    // this is as arranged as the window is going to get.
-                    ws.mark_started();
-                } else {
-                    window.focus(&ws.focus_handle(cx), cx);
-                }
-            })
-            .expect("window update");
-        cx.activate(true);
-
-        // The vault indexes in the background; open the requested note once it lands.
-        if synthetic.is_none() {
-            cx.spawn(async move |cx| loop {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(16))
-                    .await;
-                let done = window
-                    .update(cx, |ws, window, cx| {
-                        if !ws.is_loaded() {
-                            return false;
-                        }
-                        // The vault's default view mode, unless a flag says
-                        // otherwise — or `workspace.json` restored the tabs,
-                        // each in the mode it recorded.
-                        let mode = if source {
-                            Some(ViewMode::Source)
-                        } else if reading {
-                            Some(ViewMode::Reading)
-                        } else if ws.layout_restored() {
-                            None
-                        } else {
-                            Some(ws.default_mode())
-                        };
-                        if let Some(mode) = mode {
-                            ws.set_mode(mode, window, cx);
-                        }
-                        // With a layout restored and no note asked for, the
-                        // window stays as `workspace.json` left it, which is
-                        // the empty state when nothing was open.
-                        let opened = match &note {
-                            Some(n) => ws.open_by_name(n, cx),
-                            None => false,
-                        };
-                        if !opened && !ws.layout_restored() {
-                            ws.open_first(cx);
-                        }
-                        if let Some(q) = &search {
-                            ws.show_search(q, Some(window), cx);
-                        }
-                        if let Some(q) = &switcher {
-                            ws.open_switcher(q, window, cx);
-                        }
-                        if let Some(p) = &pane {
-                            ws.show_right_tab(p, cx);
-                        }
-                        if let Some(g) = &graph {
-                            ws.show_graph(g == "local", window, cx);
-                        }
-                        if let Some(q) = &palette {
-                            ws.open_palette(q, window, cx);
-                        }
-                        if let Some(t) = &settings_tab {
-                            ws.open_settings(settings::Tab::parse(t), window, cx);
-                        }
-                        if let Some(q) = &find {
-                            ws.open_find(q, false, window, cx);
-                        }
-                        if let Some(q) = &find_all {
-                            ws.open_find(q, false, window, cx);
-                            ws.editor()
-                                .update(cx, |e, cx| e.find_all_matches(window, cx));
-                        }
-                        if let Some(name) = &rename {
-                            ws.rename_current(name, window, cx);
-                        }
-                        if let Some(kind) = &prompt {
-                            ws.open_file_prompt(kind, window, cx);
-                        }
-                        if let Some(ix) = cell {
-                            ws.editor().update(cx, |e, cx| e.edit_cell(ix, window, cx));
-                        }
-                        if let Some(t) = &type_text {
-                            ws.editor().update(cx, |e, cx| e.type_text(t, window, cx));
-                        }
-                        if let Some(keys) = &accept {
-                            ws.editor()
-                                .update(cx, |e, cx| e.press_keys(keys, window, cx));
-                        }
-                        if let Some(ids) = &command {
-                            for id in ids.split(',') {
-                                ws.run_command(id.trim(), window, cx);
-                            }
-                        }
-                        if let Some(q) = &template {
-                            ws.pick_template(q, window, cx);
-                        }
-                        if let Some(key) = &menu {
-                            ws.open_settings_menu(key, cx);
-                        }
-                        ws.mark_started();
-                        true
-                    })
-                    .unwrap_or(true);
-                if done {
-                    break;
-                }
-            })
-            .detach();
-        }
-
-        let stress = match args.stress {
-            Some(_) if args.control.is_some() => {
-                eprintln!("--stress is ignored with --control: the socket drives the app");
-                None
-            }
-            steps => steps,
-        };
-        if let Some(steps) = stress {
-            cx.spawn(async move |cx| {
-                // Without `--synthetic` the run edits the opened note (and
-                // saves it): wait for the vault to index and the note to open.
-                while synthetic.is_none() {
-                    cx.background_executor()
-                        .timer(std::time::Duration::from_millis(50))
-                        .await;
-                    let ready = window
-                        .update(cx, |ws, window, cx| {
-                            let open = ws.is_loaded() && ws.current().is_some();
-                            if open && !ws.mode().is_editing() {
-                                ws.set_mode(ViewMode::Source, window, cx);
-                            }
-                            open
+                    },
+                    |window, cx| cx.new(|cx| Workspace::new(vault, window, cx)),
+                )
+                .expect("open main window");
+            // Now there is a window to ask: `theme: "system"` follows the
+            // desktop, which is Obsidian's default and what a vault with no
+            // theme key means.
+            if let Some(a) = appearance {
+                let follows_system =
+                    !matches!(a.theme.as_deref(), Some("moonstone") | Some("obsidian"));
+                if follows_system {
+                    let dark = window
+                        .update(cx, |_, window, _| {
+                            matches!(
+                                window.appearance(),
+                                WindowAppearance::Dark | WindowAppearance::VibrantDark
+                            )
                         })
                         .unwrap_or(true);
-                    if ready {
-                        break;
-                    }
+                    cx.set_global(Theme::from_appearance(&a, dark));
+                    window.update(cx, |_, _, cx| cx.notify()).ok();
                 }
-                let started = std::time::Instant::now();
-                for step in 0..steps {
-                    cx.background_executor()
-                        .timer(std::time::Duration::from_millis(8))
-                        .await;
-                    let _ = window.update(cx, |ws, window, cx| {
-                        ws.editor()
-                            .update(cx, |editor, cx| editor.stress_step(step, window, cx));
-                    });
-                }
-                // Let the last parse land (and, on a real note, the autosave
-                // fire) before reporting.
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(if synthetic.is_some() {
-                        1500
-                    } else {
-                        3000
-                    }))
-                    .await;
-                let report = window
-                    .update(cx, |ws, _, cx| ws.editor().read(cx).report())
-                    .unwrap_or_default();
-                eprintln!(
-                    "stress: {steps} steps in {:.1} s\n{report}",
-                    started.elapsed().as_secs_f64()
-                );
-                cx.update(|cx| cx.quit());
+            }
+            cx.on_action(move |_: &Quit, cx| {
+                // Save the note and the layout before the window goes away.
+                window.update(cx, |ws, _, cx| ws.on_quit(cx)).ok();
+                control::cleanup();
+                cx.quit();
+            });
+            // Ctrl+Q is not the only way out: closing the window from the
+            // titlebar quits too, and a socket file left behind makes the next
+            // run look like one that is already listening.
+            cx.on_app_quit(|_| {
+                control::cleanup();
+                async {}
             })
             .detach();
-        }
-    });
+
+            // Bound before the startup flags are applied, so `--control`
+            // composes with `--note`, `--source` and the rest of them.
+            if let Some(path) = args.control.clone() {
+                control::start(path, window, cx);
+            }
+
+            let note = args.note.clone();
+            let search = args.search.clone();
+            let switcher = args.switcher.clone();
+            let pane = args.pane.clone();
+            let graph = args.graph.clone();
+            let palette = args.palette.clone();
+            let settings_tab = args.settings.clone();
+            let source = args.source;
+            let type_text = args.type_text.clone();
+            let accept = args.accept.clone();
+            let cell = args.cell;
+            let command = args.command.clone();
+            let template = args.template.clone();
+            let menu = args.menu.clone();
+            let reading = args.reading;
+            let find = args.find.clone();
+            let find_all = args.find_all.clone();
+            let rename = args.rename.clone();
+            let prompt = args.prompt.clone();
+            let synthetic = args.synthetic;
+            window
+                .update(cx, |ws, window, cx| {
+                    if let Some(lines) = synthetic {
+                        let text = synthetic_note(lines);
+                        ws.editor().update(cx, |editor, cx| {
+                            editor.set_text(format!("synthetic-{lines}.md"), text, cx)
+                        });
+                        ws.set_mode(ViewMode::Source, window, cx);
+                        // The flag loop below never runs for a synthetic note, so
+                        // this is as arranged as the window is going to get.
+                        ws.mark_started();
+                    } else {
+                        window.focus(&ws.focus_handle(cx), cx);
+                    }
+                })
+                .expect("window update");
+            cx.activate(true);
+
+            // The vault indexes in the background; open the requested note once it lands.
+            if synthetic.is_none() {
+                cx.spawn(async move |cx| loop {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(16))
+                        .await;
+                    let done = window
+                        .update(cx, |ws, window, cx| {
+                            if !ws.is_loaded() {
+                                return false;
+                            }
+                            // The vault's default view mode, unless a flag says
+                            // otherwise — or `workspace.json` restored the tabs,
+                            // each in the mode it recorded.
+                            let mode = if source {
+                                Some(ViewMode::Source)
+                            } else if reading {
+                                Some(ViewMode::Reading)
+                            } else if ws.layout_restored() {
+                                None
+                            } else {
+                                Some(ws.default_mode())
+                            };
+                            if let Some(mode) = mode {
+                                ws.set_mode(mode, window, cx);
+                            }
+                            // With a layout restored and no note asked for, the
+                            // window stays as `workspace.json` left it, which is
+                            // the empty state when nothing was open.
+                            let opened = match &note {
+                                Some(n) => ws.open_by_name(n, cx),
+                                None => false,
+                            };
+                            if !opened && !ws.layout_restored() {
+                                ws.open_first(cx);
+                            }
+                            if let Some(q) = &search {
+                                ws.show_search(q, Some(window), cx);
+                            }
+                            if let Some(q) = &switcher {
+                                ws.open_switcher(q, window, cx);
+                            }
+                            if let Some(p) = &pane {
+                                ws.show_right_tab(p, cx);
+                            }
+                            if let Some(g) = &graph {
+                                ws.show_graph(g == "local", window, cx);
+                            }
+                            if let Some(q) = &palette {
+                                ws.open_palette(q, window, cx);
+                            }
+                            if let Some(t) = &settings_tab {
+                                ws.open_settings(settings::Tab::parse(t), window, cx);
+                            }
+                            if let Some(q) = &find {
+                                ws.open_find(q, false, window, cx);
+                            }
+                            if let Some(q) = &find_all {
+                                ws.open_find(q, false, window, cx);
+                                ws.editor()
+                                    .update(cx, |e, cx| e.find_all_matches(window, cx));
+                            }
+                            if let Some(name) = &rename {
+                                ws.rename_current(name, window, cx);
+                            }
+                            if let Some(kind) = &prompt {
+                                ws.open_file_prompt(kind, window, cx);
+                            }
+                            if let Some(ix) = cell {
+                                ws.editor().update(cx, |e, cx| e.edit_cell(ix, window, cx));
+                            }
+                            if let Some(t) = &type_text {
+                                ws.editor().update(cx, |e, cx| e.type_text(t, window, cx));
+                            }
+                            if let Some(keys) = &accept {
+                                ws.editor()
+                                    .update(cx, |e, cx| e.press_keys(keys, window, cx));
+                            }
+                            if let Some(ids) = &command {
+                                for id in ids.split(',') {
+                                    ws.run_command(id.trim(), window, cx);
+                                }
+                            }
+                            if let Some(q) = &template {
+                                ws.pick_template(q, window, cx);
+                            }
+                            if let Some(key) = &menu {
+                                ws.open_settings_menu(key, cx);
+                            }
+                            ws.mark_started();
+                            true
+                        })
+                        .unwrap_or(true);
+                    if done {
+                        break;
+                    }
+                })
+                .detach();
+            }
+
+            let stress = match args.stress {
+                Some(_) if args.control.is_some() => {
+                    eprintln!("--stress is ignored with --control: the socket drives the app");
+                    None
+                }
+                steps => steps,
+            };
+            if let Some(steps) = stress {
+                cx.spawn(async move |cx| {
+                    // Without `--synthetic` the run edits the opened note (and
+                    // saves it): wait for the vault to index and the note to open.
+                    while synthetic.is_none() {
+                        cx.background_executor()
+                            .timer(std::time::Duration::from_millis(50))
+                            .await;
+                        let ready = window
+                            .update(cx, |ws, window, cx| {
+                                let open = ws.is_loaded() && ws.current().is_some();
+                                if open && !ws.mode().is_editing() {
+                                    ws.set_mode(ViewMode::Source, window, cx);
+                                }
+                                open
+                            })
+                            .unwrap_or(true);
+                        if ready {
+                            break;
+                        }
+                    }
+                    let started = std::time::Instant::now();
+                    for step in 0..steps {
+                        cx.background_executor()
+                            .timer(std::time::Duration::from_millis(8))
+                            .await;
+                        let _ = window.update(cx, |ws, window, cx| {
+                            ws.editor()
+                                .update(cx, |editor, cx| editor.stress_step(step, window, cx));
+                        });
+                    }
+                    // Let the last parse land (and, on a real note, the autosave
+                    // fire) before reporting.
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(if synthetic.is_some() {
+                            1500
+                        } else {
+                            3000
+                        }))
+                        .await;
+                    let report = window
+                        .update(cx, |ws, _, cx| ws.editor().read(cx).report())
+                        .unwrap_or_default();
+                    eprintln!(
+                        "stress: {steps} steps in {:.1} s\n{report}",
+                        started.elapsed().as_secs_f64()
+                    );
+                    cx.update(|cx| cx.quit());
+                })
+                .detach();
+            }
+        });
 }

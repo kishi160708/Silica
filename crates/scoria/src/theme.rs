@@ -1,17 +1,53 @@
 //! Colors and fonts for the shell, chosen from `appearance.json` the way
 //! Obsidian's base themes are: `obsidian` is dark, `moonstone` is light,
 //! `system` follows the desktop (dark until GPUI reports the preference).
+//!
+//! The palettes and the sizes below are the values Obsidian 1.14.4 computes
+//! for its own shell on Linux, read from a running copy with the probe in
+//! `tools/obsidian-probe/frame-typography.mjs` on 2026-10-20 and listed in
+//! `docs//Specification.md` ("Shell typography and chrome"). Hovered
+//! and active rows are a 6.7 percent wash of white (dark) or black (light)
+//! over whatever is underneath rather than a flat colour, so the same token
+//! reads right over both backgrounds.
 
-use gpui::{rgb, rgba, Global, Hsla, SharedString};
+use gpui::{hsla, rgb, rgba, Global, Hsla, SharedString};
 use _formats::config::AppearanceConfig;
+
+/// Obsidian's interface sizes: the small UI text of tabs, rows and headers,
+/// the smaller text of the status bar, the height of every header row, the
+/// ribbon's width, the icon box, and the sidebar width a new vault gets.
+pub const FONT_UI_SMALLER: f32 = 12.;
+pub const FONT_UI_SMALL: f32 = 13.;
+pub const FONT_UI_MEDIUM: f32 = 15.;
+pub const HEADER_HEIGHT: f32 = 40.;
+pub const RIBBON_WIDTH: f32 = 44.;
+pub const ICON_SIZE: f32 = 16.;
+pub const SIDEBAR_WIDTH: f32 = 300.;
+
+/// The body font size's multiplier for each heading level, and the weight
+/// and line height Obsidian gives it (`--h1-size`, `--h1-weight`,
+/// `--h1-line-height`; the fourth level down share the third's line height).
+pub fn heading_style(level: u8) -> (f32, f32, f32) {
+    match level {
+        1 => (1.618, 700., 1.2),
+        2 => (1.462, 680., 1.2),
+        3 => (1.318, 660., 1.3),
+        4 => (1.188, 640., 1.3),
+        5 => (1.076, 620., 1.3),
+        _ => (1.0, 600., 1.3),
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Theme {
     pub dark: bool,
     pub bg: Hsla,
     pub bg_secondary: Hsla,
-    /// Code blocks, inline code, hovered rows.
+    /// Code blocks and inline code (`--background-primary-alt`).
+    pub code_bg: Hsla,
+    /// Hovered rows and buttons: a translucent wash (`--background-modifier-hover`).
     pub bg_alt: Hsla,
+    /// The active row, dock tab and explorer file: the same wash.
     pub bg_active: Hsla,
     pub border: Hsla,
     pub text: Hsla,
@@ -33,20 +69,21 @@ impl Theme {
     pub fn dark() -> Theme {
         Theme {
             dark: true,
-            bg: rgb(0x1e1e1e).into(),
-            bg_secondary: rgb(0x262626).into(),
-            bg_alt: rgb(0x2a2a2a).into(),
-            bg_active: rgb(0x363636).into(),
-            border: rgb(0x3a3a3a).into(),
+            bg: rgb(0x1c1c1c).into(),
+            bg_secondary: rgb(0x282828).into(),
+            code_bg: rgb(0x232323).into(),
+            bg_alt: rgba(0xffffff11).into(),
+            bg_active: rgba(0xffffff11).into(),
+            border: rgb(0x333333).into(),
             text: rgb(0xdadada).into(),
-            text_muted: rgb(0x999999).into(),
+            text_muted: rgb(0xb3b3b3).into(),
             text_faint: rgb(0x666666).into(),
-            accent: rgb(0x8a7cf5).into(),
-            link: rgb(0x8a7cf5).into(),
-            tag: rgb(0x8a7cf5).into(),
+            accent: hsla(258. / 360., 0.88, 0.66, 1.),
+            link: hsla(255. / 360., 0.8976, 0.759, 1.),
+            tag: hsla(255. / 360., 0.8976, 0.759, 1.),
             highlight_bg: rgba(0xffd70066).into(),
-            ui_font: "Liberation Sans".into(),
-            text_font: "Liberation Sans".into(),
+            ui_font: crate::assets::FONT_FAMILY.into(),
+            text_font: crate::assets::FONT_FAMILY.into(),
             mono_font: "DejaVu Sans Mono".into(),
             base_font_size: 16.0,
         }
@@ -57,18 +94,19 @@ impl Theme {
             dark: false,
             bg: rgb(0xffffff).into(),
             bg_secondary: rgb(0xf6f6f6).into(),
-            bg_alt: rgb(0xeeeeee).into(),
-            bg_active: rgb(0xe3e3e3).into(),
-            border: rgb(0xdddddd).into(),
+            code_bg: rgb(0xfafafa).into(),
+            bg_alt: rgba(0x00000011).into(),
+            bg_active: rgba(0x00000011).into(),
+            border: rgb(0xe4e4e4).into(),
             text: rgb(0x222222).into(),
             text_muted: rgb(0x5c5c5c).into(),
-            text_faint: rgb(0x9a9a9a).into(),
-            accent: rgb(0x7b6cd9).into(),
-            link: rgb(0x6a5bd0).into(),
-            tag: rgb(0x6a5bd0).into(),
+            text_faint: rgb(0xababab).into(),
+            accent: hsla(258. / 360., 0.88, 0.66, 1.),
+            link: hsla(258. / 360., 0.88, 0.66, 1.),
+            tag: hsla(258. / 360., 0.88, 0.66, 1.),
             highlight_bg: rgba(0xffd70080).into(),
-            ui_font: "Liberation Sans".into(),
-            text_font: "Liberation Sans".into(),
+            ui_font: crate::assets::FONT_FAMILY.into(),
+            text_font: crate::assets::FONT_FAMILY.into(),
             mono_font: "DejaVu Sans Mono".into(),
             base_font_size: 16.0,
         }

@@ -2645,6 +2645,106 @@ never opened — every switch was a synthetic `change` event. Whether a second
 click on a row's collapse icon re-expands it, and whether clicking a row's
 title collapses or opens.
 
+## Observed shell typography and chrome, Obsidian 1.14.4 (installer build 1.13.7)
+
+Read from a running Obsidian on Linux over CDP on 2026-10-20 with
+`tools/obsidian-probe/frame-typography.mjs`, `frame-settings.mjs` and
+`frame-setting-key.mjs` (raw runs in `tools/obsidian-probe/results/2026-10-20-frame-*.json`);
+every number is a computed style or a bounding box in CSS pixels at zoom 1 in a 1024 by 800 window
+on a fresh vault. These are the values `crates//src/theme.rs` and the shell renderers carry.
+
+**The window frame.** `body` carries `is-frameless is-hidden-frameless mod-linux`: on Linux the
+default "Window frame style" is **Hidden**. The setting lives in Settings → **Interface** (not
+Appearance), labelled "Window frame style", described "Determines the styling of the title bar of
+Obsidian windows. Requires a full restart to take effect.", with options `hidden` "Hidden (default)",
+`custom` "Obsidian frame" and `native` "Native frame". Choosing any of them wrote **nothing** under
+`.obsidian` (`appearance.json` stayed `{}` and `app.vault.config` stayed empty): the choice is kept
+outside the vault, so  takes it from `--frame` or `SCORIA_FRAME` and writes no key. Obsidian
+1.14 opens Settings in a popout window; its rows are only reachable through
+`app.setting.activeTab.containerEl`.
+
+In the hidden frame the title row is **39 px** tall (`.titlebar`, transparent, over the 40 px tab
+header containers) and holds, left to right: the left sidebar toggle (`.sidebar-toggle-button.mod-left`,
+44 by 39, its icon in a 28 by 24 button padded `4px 6px`), the left dock's tab header, the root tab
+header, the right sidebar toggle (36 by 39, at the right end of the root header while the right
+sidebar is collapsed) and the window buttons `.titlebar-button.mod-minimize`, `.mod-maximize`,
+`.mod-close`, each **44 by 39** padded `0 16px`, in a `.titlebar-button-container.mod-right` 132 px
+wide in the sidebar colour. `--frame-right-space` is `calc(126px - 0px)` and the root tab header
+is padded `0 134px 0 8px` to stay clear of them. The `.titlebar-text` is 13 px, weight 700, muted at
+opacity 0.85 and reads "New tab - <vault> - Obsidian 1.14.4"; the hidden frame gives it no box.
+`--titlebar-height` is 30 px and `--window-border-radius` is unset.
+
+**Fonts.** `--font-interface` is `'??', '??', '??', ui-sans-serif, -apple-system, BlinkMacSystemFont,
+system-ui, "Segoe UI", "Google Sans Flex", Roboto, "Inter Variable", "Inter", …` (the `??` are the
+theme and override slots, empty here); `--font-text` is the same without the first slot;
+`--font-monospace` is `'??', '??', ui-monospace, SFMono-Regular, "Cascadia Mono", "Roboto Mono",
+"DejaVu Sans Mono", "Liberation Mono", Menlo, Monaco, "Consolas", "Source Code Pro", monospace`.
+`document.fonts` lists Inter 100–900 normal and italic as **loaded** and Source Code Pro as unloaded:
+Inter is what the shell renders in.  bundles Inter's static faces (`crates//assets/fonts`)
+and defaults both families to it.
+
+**Sizes.** `--font-text-size` 16 px; `--font-ui-smaller` 12, `--font-ui-small` 13, `--font-ui-medium`
+15, `--font-ui-large` 20; `--line-height-normal` 1.5, `--line-height-tight` 1.3; `body` is 15 px at
+19.5 px. Headings: `--h1-size` 1.618em, h2 1.462, h3 1.318, h4 1.188, h5 1.076, h6 1em; weights
+700, 680, 660, 640, 620, 600; line heights h1 1.2, h2 1.2, h3 1.3; `--bold-weight` is
+`calc(400 + 200)`. In a note: `h1` 25.888 px / 31.07 line / weight 700 / letter-spacing −0.388 px
+(−0.015em), margin `0 0 16px`; `h2` 23.392 px / 28.07 / 680 / −0.257 px, margin `40px 0 16px`; `p`
+16 px / 24 px line, margin `16px 0`; `.inline-title` is an h1 with margin-bottom 12.944 px; the
+preview and the editor are padded 32 px (`--file-margins: 32px 32px`, `--file-line-width` 700 px);
+a tag is 14 px in a 28 px pill padded `3.5px 9.1px` on a 10 percent accent wash.
+
+**Chrome.** `--header-height` 40 px: every tab header container and the view header are 40 px, the
+view header padded `0 12px` with an 8 px gap, its title 13 px, its nav arrows and actions 28 by 24
+clickable icons padded `4px 6px` with a 4 px radius, the arrows at opacity 0.4 with nowhere to go.
+`--ribbon-width` 44 px: `.workspace-ribbon.mod-left` (classes `workspace-ribbon side-dock-ribbon
+mod-primary`) starts 40 px down, padded `8px 4px 12px`, its `.side-dock-actions` a column with a
+6 px gap of 28 by 24 buttons whose 16 px icons sit at opacity 0.85; `.side-dock-settings` is at the
+bottom. Sidebars: `.mod-left-split` and `.mod-right-split` are **300 px** wide on a fresh vault, the
+right one collapsed at first launch; the dock tab header is padded `0 8px`, its tabs 28 by 25.3 with
+a 4 px radius, the active one on `--background-modifier-hover`, showing only the view's 16 px icon;
+the `.workspace-leaf-resize-handle` is a 3 px strip on the dock's inner edge (`cursor: col-resize`,
+a `--divider-color` hairline, `--divider-color-hover` the accent at `--divider-width-hover` 3 px).
+The root tab: `.workspace-tab-header` 200 by 34.3 (`--tab-width` 200, `--tab-max-width` 320),
+padded `1px 4px 4px`, radius `10px 10px 0 0`, the active one in `--background-primary`; its title
+13 px; its close button 20 by 20 padded 2 px with an 8 px radius (`lucide-x`); the new-tab button
+24 wide (`lucide-plus`) with margin `0 4px 0 8px`; the tab list button `lucide-chevron-down`.
+Explorer rows: `.nav-file-title` 24.9 px tall padded `4px 8px 4px 24px`, margin-bottom 2 px, radius
+8 px, 13 px text, muted until active (then `--text-normal` on the hover wash); `.nav-header` 40 px
+padded 8 px with a 2 px gap of 28 by 24 buttons. The status bar is a tab in the window's bottom right
+rather than a bar across it: `.status-bar` padded `4px 8px 4px 4px`, min-height 18, the sidebar
+colour, a hairline on its left (and top), radius `8px 0 0 0`, 12 px text, items padded `3px 4px`
+with a 4 px gap. Icons everywhere are 16 px with a 2 px stroke on Lucide's 24 unit grid (`--icon-s`,
+`--icon-m` 16, `--icon-l` 18, `--icon-xs` 14).
+
+**Icons named in the DOM** (`svg.lucide-*`, so  draws the same Lucide drawings from Lucide's
+own repository): ribbon `file-search` (switcher), `git-fork` (graph), `layout-dashboard` (canvas),
+`calendar` (daily note), `files` (template), `terminal` (palette), `layout-list` (base); left dock
+`folder-closed`, `search`, `bookmark`; right dock `links-coming-in` and `links-going-out`
+(Obsidian's own), `tags`, `archive` (All properties), `list` (outline); view header `arrow-left`,
+`arrow-right`, actions `bookmark` and `more-vertical`; explorer header `edit`, `folder-plus`,
+`sort-asc`, `gallery-vertical`, `chevrons-up-down`; search `search`, `list`, `move-vertical`; tags
+`folder-tree`; bookmarks `bookmark-plus`, `folder-plus`, `chevrons-down-up`; folder collapse
+`right-triangle` and the sidebar toggles `sidebar-toggle-button-icon` are Obsidian's own.
+
+**Palette.** Dark (`theme-dark`): `--background-primary` #1C1C1C, `-primary-alt` #232323,
+`-secondary` #282828, `-secondary-alt` #333333, `--background-modifier-border` #333333,
+`--background-modifier-hover` `color-mix(in oklch, white 6.7%, transparent)`, `--text-normal`
+#dadada, `--text-muted` #b3b3b3, `--text-faint` #666666, `--interactive-accent` `hsl(258, 88%, 66%)`
+(the picker shows #8a5cf5), `--text-accent` and `--link-color` `hsl(255, 89.76%, 75.9%)` (computed
+rgb(166, 138, 249)), `--tab-text-color` #666666, `--tab-text-color-active` #b3b3b3,
+`--tab-background-active` #1C1C1C, `--nav-item-color` #b3b3b3, `--nav-item-color-active` #dadada,
+`--icon-color` #b3b3b3, `--divider-color` #333333, `--code-background` #232323, `--text-selection`
+a 33 percent accent wash, `--scrollbar-thumb-bg` a 10 percent white wash. Light (`theme-light`):
+#ffffff, #fafafa, #f6f6f6, #fcfcfc, border #e4e4e4, hover `black 6.7%`, text #222222, muted
+#5c5c5c, faint #ababab, accent and link `hsl(258, 88%, 66%)`, tab text #ababab / #5c5c5c,
+selection a 20 percent wash. Radii `--radius-s` 4, `-m` 8, `-l` 12; `--clickable-icon-radius` 4.
+
+**What a sidebar writes.** `workspace.json`'s `left` and `right` nodes carry `"width": 300` on a
+fresh vault; dragging the left handle 120 px wrote `"width": 419.50215911865234` (the dock's new
+`style="width: 419.502px"`), and the sidebar toggle adds `"collapsed": true` after `width` and
+removes it again. `app:toggle-left-sidebar`, `app:toggle-right-sidebar` and `app:toggle-ribbon`
+are the commands ("Toggle left sidebar", "Toggle right sidebar", "Toggle ribbon").
+
 ## Observed tab group behavior, Obsidian 1.14.4 (installer build 1.13.7)
 
 One CDP-driven run on 2026-10-20 (`tools/obsidian-probe/splits-bookmarks.mjs`,
