@@ -10,7 +10,7 @@
   <img alt="100% Rust" src="https://img.shields.io/badge/100%25-Rust-E8590C?style=flat-square&logo=rust&logoColor=white">
   <img alt="Linux, Windows, macOS" src="https://img.shields.io/badge/Linux%20%7C%20Windows%20%7C%20macOS-2b2b2b?style=flat-square">
   <img alt="MIT licensed" src="https://img.shields.io/badge/license-MIT-2b2b2b?style=flat-square">
-  <img alt="Early alpha, v0.2.0" src="https://img.shields.io/badge/status-early%20alpha%20·%20v0.2.0-f2545b?style=flat-square">
+  <img alt="Early alpha, v0.2.1" src="https://img.shields.io/badge/status-early%20alpha%20·%20v0.2.1-f2545b?style=flat-square">
   <a href="https://github.com/lw-xiong//actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status///ci.yml?branch=main&style=flat-square&label=CI"></a>
 </p>
 

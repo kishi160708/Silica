@@ -15,7 +15,7 @@ so in place, rather than describing Obsidian's behavior and leaving you to find 
 > **Note**  is an independent implementation and is not affiliated with Obsidian.
 > Obsidian is a trademark of Dynalist Inc.
 
-> **Warning** This is version 0.2.0. Reading a vault is well covered; writing one is the
+> **Warning** This is version 0.2.1. Reading a vault is well covered; writing one is the
 > half being built now. Keep a backup of any vault you open with it, and see
 > [what differs from Obsidian](/docs/reference/differences/) for the current gaps.
 
