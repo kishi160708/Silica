@@ -160,7 +160,9 @@ Verify a download: `sha256sum -c --ignore-missing SHA256SUMS` checks the archive
 checksums the workflow wrote; `gh attestation verify <archive> --repo /` checks GitHub's
 build provenance, which ties the archive to the workflow run and the commit it was built from. When
 a release carries `SHA256SUMS.asc`, `gpg --verify SHA256SUMS.asc SHA256SUMS` checks the maintainer's
-signature; the key's fingerprint is in the release notes. Security problems go through
+signature. That key is `69BF AA44 7DAC E6C3 EF02  6CBA 4EA6 7A61 88DA 92BD`, `
+<@outlook.com>`, which `gpg --keyserver keys.openpgp.org --recv-keys 4EA67A6188DA92BD`
+fetches; the release notes repeat the fingerprint that signed each release. Security problems go through
 [SECURITY.md](SECURITY.md), not the issue tracker.
 
 ## License

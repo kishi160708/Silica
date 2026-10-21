@@ -105,13 +105,22 @@ previous tag. A tag with a hyphen in it, `v0.2.0-rc1`, is published as a prerele
 Both builds pass `--locked`, so the pinned `gpui` revision and `libc` come from `Cargo.lock`.
 
 Both workflows sign `SHA256SUMS` with GPG when the repository holds the maintainer's key as the
-secrets `GPG_SIGNING_KEY` (the armored private key, `gpg --armor --export-secret-keys <fpr>`) and
-`GPG_PASSPHRASE`; without them the release is published unsigned and its notes say so. To set them
-up once: `gpg --full-generate-key`, then
-`gpg --armor --export-secret-keys <fpr> | gh secret set GPG_SIGNING_KEY` and
-`gh secret set GPG_PASSPHRASE`, and the same two secrets in the Forgejo repository settings; publish
-the public key (`gpg --armor --export <fpr>`) somewhere a reader can fetch it, such as
-keys.openpgp.org, and put the fingerprint in the README. The GitHub workflow also attaches
+secrets `GPG_SIGNING_KEY` and `GPG_PASSPHRASE`; without them the release is published unsigned and
+its notes say so. The key is `69BF AA44 7DAC E6C3 EF02  6CBA 4EA6 7A61 88DA 92BD`, `
+<@outlook.com>`, the same ed25519 key that signs the commits here, published on
+keys.openpgp.org and named in the README.
+
+What the forges hold is **only its signing subkey**, exported with
+`gpg --armor --export-secret-subkeys <fpr>` rather than `--export-secret-keys`: the certify key
+stays on the development machine, so a stolen CI secret can sign a release but cannot make new
+subkeys, certify another identity, or revoke anything. The primary key is certify-only to begin
+with, so the workflow's `--local-user <primary fpr>` resolves to the signing subkey on its own and
+needs no change. Set the pair on GitHub with
+`gpg --armor --export-secret-subkeys <fpr> | gh secret set GPG_SIGNING_KEY` and
+`gh secret set GPG_PASSPHRASE`, and on Forgejo by `PUT`ting `{"data": "<value>"}` to
+`/api/v1/repos///actions/secrets/<name>` with the token in
+`~/.config/forgejo/token`. Rotating the subkey is the whole recovery procedure if a forge is ever
+compromised, and it invalidates nothing already signed. The GitHub workflow also attaches
 [build provenance attestations](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations)
 to every archive, which need no secret: `gh attestation verify <archive> --repo /`
 confirms the archive came out of this workflow at that commit. Private vulnerability reporting is
