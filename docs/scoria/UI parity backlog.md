@@ -1082,9 +1082,12 @@ the leaves under `main` become tabs in their recorded modes, the `active` id pic
 sidebar's `collapsed` and `currentTab` are honoured, and with a layout read the startup flags no
 longer pick a first note — and written on quit only when the session changed it, keeping every key
 Obsidian gave a restored leaf; a main area with more than one tab group is left alone rather than
-flattened on disk. A ribbon runs down the left edge with the switcher, graph, daily note, template,
-palette and Settings, honouring `left-ribbon.hiddenItems`, and each sidebar has a toggle that
-outlives its collapse. The Hotkeys tab binds a chord from a key capture, removes a chip, restores a
+flattened on disk. A ribbon runs down the left edge with the switcher, graph, daily note, template
+and palette, honouring `left-ribbon.hiddenItems`, and each sidebar has a toggle that
+outlives its collapse. The left sidebar ends in Obsidian 1.14's vault profile (2026-10-21): the
+vault's name behind a `chevrons-up-down` switcher, Help and the Settings gear, which is where the
+gear lives now rather than at the foot of the ribbon; the switcher and the vault commands open a
+folder picker and load the chosen vault in place, and Help opens . The Hotkeys tab binds a chord from a key capture, removes a chip, restores a
 default and marks duplicates; `hotkeys.json` is written whole in Obsidian's `{modifiers, key}`
 shape, and the registry and every key binding are rebuilt live. The graph has Obsidian's four-section
 controls panel with timelapse, restore and close, writing `graph.json` a third of a second after a

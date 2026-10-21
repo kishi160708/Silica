@@ -1600,6 +1600,9 @@ struct DockDrag {
     left: bool,
 }
 
+/// Where "Open help" goes: Obsidian opens its help site,  its manual.
+const HELP_URL: &str = "https://";
+
 /// The narrowest a sidebar can be dragged, and the narrowest `width`
 /// `workspace.json` is believed about.
 const MIN_SIDEBAR_WIDTH: f64 = 150.;
@@ -3484,11 +3487,44 @@ impl Workspace {
                 self.right_visible = true;
                 self.show_right_tab("tags", cx);
             }
+            "app:open-help" => cx.open_url(HELP_URL),
+            "app:open-vault" | "app:switch-vault" | "app:open-another-vault" => {
+                self.open_another_vault(window, cx)
+            }
             _ => {
                 let name = self.command_name(id, cx);
                 self.report(format!("{name}: not available in  yet"), cx);
             }
         }
+    }
+
+    /// Obsidian's vault commands all lead to its vault manager;  has no
+    /// manager, so each asks the desktop for a folder and opens it as the
+    /// vault in this window. Cancelling the dialog changes nothing.
+    fn open_another_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Open vault".into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let root = match picked.await {
+                Ok(Ok(Some(mut paths))) if !paths.is_empty() => paths.remove(0),
+                Ok(Ok(_)) => return,
+                Ok(Err(err)) => {
+                    this.update(cx, |ws, cx| {
+                        ws.report(format!("Could not open the folder dialog: {err}"), cx)
+                    })
+                    .ok();
+                    return;
+                }
+                Err(_) => return,
+            };
+            this.update_in(cx, |ws, window, cx| ws.load_vault(root, window, cx))
+                .ok();
+        })
+        .detach();
     }
 
     /// The command's name as the palette shows it, for a message about it.
@@ -6603,10 +6639,11 @@ impl Workspace {
             ))
     }
 
-    /// The ribbon down the left edge: the quick switcher, the graph, today's
-    /// daily note, a template and the palette at the top, Settings at the
-    /// bottom. `workspace.json`'s `left-ribbon.hiddenItems` hides an entry
-    /// by the plugin id its key starts with.
+    /// The ribbon down the left edge: the quick switcher, the graph, a new
+    /// canvas, today's daily note, a template and the palette. `workspace.json`'s
+    /// `left-ribbon.hiddenItems` hides an entry by the plugin id its key starts
+    /// with. Settings is not here: Obsidian 1.14 leaves `.side-dock-settings`
+    /// empty and puts the gear in the sidebar's footer, the vault profile.
     fn render_ribbon(&self, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
         let hidden = |plugin: &str| -> bool {
             self.layout
@@ -6669,7 +6706,6 @@ impl Workspace {
             .filter(|(_, _, _, plugin)| enabled(plugin) && !hidden(plugin))
             .map(|(id, name, command, _)| button(id, name, command))
             .collect();
-        let settings = button("ribbon-settings", "settings", "app:open-settings");
         div()
             .flex()
             .flex_col()
@@ -6690,10 +6726,70 @@ impl Workspace {
                     .pt(px(8.))
                     .pb(px(12.))
                     .gap(px(6.))
-                    .children(buttons)
-                    .child(div().flex_1())
-                    .child(settings),
+                    .children(buttons),
             )
+    }
+
+    /// The left sidebar's footer, Obsidian's vault profile: the vault's
+    /// name behind a `chevrons-up-down` switcher on the left, Help and
+    /// Settings on the right, above a hairline. It is part of the sidebar,
+    /// so it collapses with it, and it stays whether the ribbon shows or not.
+    fn render_vault_profile(&self, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
+        let button = |id: &'static str, name: &'static str, command: &'static str| {
+            icon_button(id, name, theme).on_click(
+                cx.listener(move |this, _, window, cx| this.run_command(command, window, cx)),
+            )
+        };
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .flex_shrink_0()
+            .h(px(HEADER_HEIGHT))
+            .px(px(8.))
+            .gap(px(2.))
+            .border_t_1()
+            .border_color(theme.border)
+            .child(
+                div()
+                    .id("vault-switcher")
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .min_w_0()
+                    .flex_1()
+                    .h(px(24.))
+                    .pr(px(6.))
+                    .rounded(px(4.))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme.bg_alt))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.run_command("app:open-vault", window, cx)
+                    }))
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .w(px(28.))
+                            .h(px(24.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(icon("chevrons-up-down", ICON_SIZE, theme.text_muted)),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .text_size(px(FONT_UI_SMALL))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(theme.text)
+                            .child(self.vault_name.clone()),
+                    ),
+            )
+            .child(button("vault-help", "circle-help", "app:open-help"))
+            .child(button("vault-settings", "settings", "app:open-settings"))
     }
 
     /// A group's tab strip. The sidebar toggles sit at the window's edges:
@@ -8770,36 +8866,8 @@ impl Render for Workspace {
                     )),
             )
             .child(div().flex_1().overflow_hidden().child(left_body))
-            .child(self.dock_handle(true, &theme))
-            // Obsidian keeps Settings in the ribbon; the footer button is
-            // the way in only while the ribbon is hidden.
-            .when(!show_ribbon, |d| {
-                d.child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .px_2()
-                        .py_1()
-                        .border_t_1()
-                        .border_color(theme.border)
-                        .child(
-                            div()
-                                .id("open-settings")
-                                .px_2()
-                                .py_px()
-                                .rounded_sm()
-                                .cursor_pointer()
-                                .text_size(px(11.))
-                                .text_color(theme.text_muted)
-                                .hover(|s| s.bg(theme.bg_alt))
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.open_settings(None, window, cx)
-                                }))
-                                .child("Settings"),
-                        ),
-                )
-            });
+            .child(self.render_vault_profile(&theme, cx))
+            .child(self.dock_handle(true, &theme));
 
         // Obsidian's word count is the Markdown view's: a canvas tab shows
         // none, and no caret either.

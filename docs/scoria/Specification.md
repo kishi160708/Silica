@@ -2863,6 +2863,18 @@ colour, a hairline on its left (and top), radius `8px 0 0 0`, 12 px text, items 
 with a 4 px gap. Icons everywhere are 16 px with a 2 px stroke on Lucide's 24 unit grid (`--icon-s`,
 `--icon-m` 16, `--icon-l` 18, `--icon-xs` 14).
 
+**The vault profile.** Settings is not at the bottom of the ribbon: the probe found
+`.side-dock-settings` 0 px tall. In 1.14 the left sidebar ends with a footer, the vault profile,
+seen on 2026-10-21 in a screenshot of the running app (the docs vault open, dark theme, 2x): a
+hairline across the top, then a row the height of a header with, on the left, a `chevrons-up-down`
+icon at muted strength and the vault's name in 13 px semibold `--text-normal`, and on the right two
+clickable icons, Help (`circle-help`) and Settings (`settings`). The name and its chevrons open the
+vault switcher, Help opens the help site, the gear opens Settings. The footer is part of the sidebar,
+so it goes with it when the sidebar collapses, and it is there whether or not the ribbon is shown.
+Its exact padding and the switcher's hover shape are still to be read over CDP;  draws the row
+40 px tall, padded 8 px, its buttons the ribbon's 28 by 24, and runs `app:open-vault` from the name,
+`app:open-help` from Help and `app:open-settings` from the gear.
+
 **Icons named in the DOM** (`svg.lucide-*`, so  draws the same Lucide drawings from Lucide's
 own repository): ribbon `file-search` (switcher), `git-fork` (graph), `layout-dashboard` (canvas),
 `calendar` (daily note), `files` (template), `terminal` (palette), `layout-list` (base); left dock
