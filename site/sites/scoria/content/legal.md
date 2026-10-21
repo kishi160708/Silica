@@ -26,7 +26,7 @@ There is no free tier, no paid tier, no license key, no activation and no accoun
 is nothing to buy, so there is nothing to refund.
 
 > **Warning** The no-warranty clause is not boilerplate here.  edits the files in your
-> vault in place, it is version 0.1.0, and its writing half is unfinished. Keep a backup of
+> vault in place, it is version 0.2.0, and its writing half is unfinished. Keep a backup of
 > any vault you open with it. If a bug of ours destroys a note, the license means the loss
 > is yours — so please do not let a vault exist only inside an editor this young.
 
