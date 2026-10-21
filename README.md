@@ -1,11 +1,42 @@
-<img src="docs/img/_v3_fixed.svg" alt="" width="108" align="right">
+<p align="center">
+  <img src="docs/img/_v3_fixed.svg" alt="" width="132" height="109">
+</p>
 
-# 
+<h1 align="center"></h1>
+
+<p align="center"><strong>Your vault, opened natively.</strong></p>
+
+<p align="center">
+  <img alt="100% Rust" src="https://img.shields.io/badge/100%25-Rust-E8590C?style=flat-square&logo=rust&logoColor=white">
+  <img alt="Linux, Windows, macOS" src="https://img.shields.io/badge/Linux%20%7C%20Windows%20%7C%20macOS-2b2b2b?style=flat-square">
+  <img alt="MIT licensed" src="https://img.shields.io/badge/license-MIT-2b2b2b?style=flat-square">
+  <img alt="Early alpha, v0.1.0" src="https://img.shields.io/badge/status-early%20alpha%20·%20v0.1.0-f2545b?style=flat-square">
+  <a href="https://github.com/lw-xiong//actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status///ci.yml?branch=main&style=flat-square&label=CI"></a>
+</p>
+
+<p align="center">
+  <a href="#status">Status</a> ·
+  <a href="#the-window">The window</a> ·
+  <a href="#tabs-splits-and-panes">Tabs and splits</a> ·
+  <a href="#search-and-writing">Search and writing</a> ·
+  <a href="#compatibility-tiers">Compatibility</a> ·
+  <a href="#roadmap">Roadmap</a> ·
+  <a href="#releases">Releases</a> ·
+  <a href="https://">Manual</a>
+</p>
 
  is a native knowledge base written in Rust on [GPUI](https://gpui.rs), built to open
 [Obsidian](https://obsidian.md) vaults unchanged: same folder, same `.obsidian` configuration,
-same Markdown dialect, same `.canvas` and `.base` files. It is an independent implementation
-and is not affiliated with Obsidian.
+same Markdown dialect, same `.canvas` and `.base` files. There is no import step, no conversion
+and no second copy of anything. It is an independent implementation and is not affiliated with
+Obsidian.
+
+<img src="docs/img/app/workspace.png" alt="The  window: the Files pane on the left, a note in reading view in the middle with a properties table, a callout and a code block, the Outline pane on the right, all inside a frameless window.">
+
+*The three-pane shell on this repository's own vault, `docs/`, where the specification lives:
+a typed properties table, a callout, a code block and the note's outline. Obsidian's hidden window
+frame, its palette, its type scale and its Lucide icons, all read off a running copy rather than
+guessed at.*
 
 ## Status
 
@@ -24,6 +55,41 @@ typed properties table that rewrites only the lines it changes. The main area sp
 tree the way Obsidian does, and the Bookmarks pane reads and writes `bookmarks.json` in Obsidian's bytes. Everything is bound through
 Obsidian's command ids, so a vault's `hotkeys.json` applies unchanged.
 
+> **Keep a backup of any vault you open with it.** Reading a vault is well covered; editing is
+> newer code against files you cannot get back. Until the round-trip gate is met, let  read
+> a vault that matters and let Obsidian write it.
+
+## The window
+
+The window has no desktop title bar: it draws Obsidian's hidden frame itself — the sidebar toggles,
+the dock tab headers, the tab strip and the window buttons all live in one 40 px row, and the empty
+parts of that row drag, zoom and menu the window. `--frame native` asks the desktop for its own
+frame instead. The palette, the type scale, the 40 px headers, the 44 px ribbon and the 300 px
+sidebars are the values Obsidian computes for its own shell, read over CDP from a running copy and
+written down in the specification; the icons are Lucide's own drawings, which is what Obsidian names
+in its DOM.
+
+## Tabs, splits and panes
+
+<img src="docs/img/app/tabs.gif" alt="Opening notes in new tabs with the quick switcher, then splitting the main area right so two notes sit side by side.">
+
+*A new tab, the quick switcher's fuzzy match, then Split right — two tab groups with their own tab
+strips. The tree is written back to `workspace.json` in the shape Obsidian writes.*
+
+## Search and writing
+
+<img src="docs/img/app/search.png" alt="The Search pane with the query 'line endings', showing 341 results grouped by note with the matches highlighted.">
+
+*Search takes Obsidian's query grammar, groups hits by note with a count, and highlights every
+match in context.*
+
+<img src="docs/img/app/autocomplete.png" alt="Typing two square brackets in Live Preview opens a completion popup listing matching notes.">
+
+*`[[` in Live Preview completes against the vault's files, aliases, headings, tags and block
+references; the accepted row writes the link in the style the vault already uses.*
+
+## Running it
+
 ```
 cargo run --release -p  -- "C:\path\to\your\vault"
 cargo run --release -p  -- docs/ --synthetic 50000 --stress   # editor spike with a report
@@ -36,7 +102,8 @@ cargo test --workspace
 JSON: open a note, run a command id, send keystrokes or clicks, and read back a
 dump of the window's whole state. `-mcp` wraps that protocol as a Model
 Context Protocol server over stdio, so an agent can launch , drive it and
-screenshot it. Both are described in `docs//Development.md`.
+screenshot it — the screenshots and the recording above were made that way. Both
+are described in `docs//Development.md`.
 
 ## Compatibility tiers
 
