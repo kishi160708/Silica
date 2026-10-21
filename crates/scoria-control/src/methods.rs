@@ -125,7 +125,7 @@ pub const METHODS: &[MethodSpec] = &[
     m(
         "state",
         "Dump the whole window as JSON: vault, open file, docks, modal, editor, reading view, \
-         graph, status bar, focus and window size.",
+         graph, canvas, status bar, focus and window size.",
         &[
             p(
                 "text",

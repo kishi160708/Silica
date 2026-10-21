@@ -328,7 +328,7 @@ fn handle(
         "type" => {
             let text = request.str_param("text")?;
             match ctl.workspace(|ws, window, cx| Ok(ws.type_target(window, cx)))? {
-                "editor" => ctl
+                "editor" | "canvas-editor" => ctl
                     .workspace(|ws, window, cx| {
                         Ok(json!({"target": ws.type_into_focused(text, window, cx)}))
                     })

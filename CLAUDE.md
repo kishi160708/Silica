@@ -27,6 +27,7 @@ crates/-commands  command registry, default hotkeys
 crates/-search    search query grammar and matcher, fuzzy search
 crates/-text      editor text model: buffer, selections, undo, edit plans (no gpui)
 crates/-suggest   autocompletion: triggers, candidates, the link an accepted row writes (no gpui)
+crates/-canvas    canvas model: viewport math, edge geometry, hit tests, selection, edits with undo (no gpui)
 crates/-bench     spike benchmarks: synthetic vault generator, index timer (bin)
 docs/             Obsidian vault: spec and design notes (dogfooded by )
 docs/img                brand art; _v3_fixed.svg is the logo every other copy is cut from

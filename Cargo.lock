@@ -4768,6 +4768,7 @@ dependencies = [
  "rayon",
  "regex",
  "-cache",
+ "-canvas",
  "-commands",
  "-control",
  "-formats",
@@ -4801,6 +4802,14 @@ dependencies = [
  "-markdown",
  "serde",
  "serde_yaml",
+]
+
+[[package]]
+name = "-canvas"
+version = "0.2.1"
+dependencies = [
+ "-formats",
+ "serde_json",
 ]
 
 [[package]]

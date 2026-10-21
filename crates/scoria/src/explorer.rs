@@ -10,8 +10,8 @@
 
 use crate::theme::Theme;
 use gpui::{
-    anchored, deferred, div, prelude::*, px, uniform_list, Context, EventEmitter, MouseButton,
-    Pixels, Point, ScrollStrategy, SharedString, UniformListScrollHandle, Window,
+    anchored, deferred, div, prelude::*, px, uniform_list, Context, EventEmitter, FontWeight,
+    MouseButton, Pixels, Point, ScrollStrategy, SharedString, UniformListScrollHandle, Window,
 };
 use _formats::FileKind;
 use _search::natural_cmp;
@@ -21,12 +21,18 @@ use std::collections::{BTreeMap, HashSet};
 use std::ops::Range;
 
 /// One line of the tree with every folder expanded.
+/// The font size of a row's extension tag.
+const TAG_SIZE: f32 = 10.0;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
     /// Vault-relative path; folders without a trailing slash.
     pub path: String,
-    /// Name as shown: markdown files lose `.md`, folders and attachments keep their name.
+    /// Name as shown: a file loses its extension, which `tag` carries.
     pub name: String,
+    /// The extension of a file that is not Markdown, upper-cased at the
+    /// row's right end the way Obsidian's `nav-file-tag` shows it.
+    pub tag: Option<String>,
     pub depth: usize,
     pub is_folder: bool,
     pub kind: FileKind,
@@ -197,6 +203,7 @@ fn flatten(folder: &Folder, prefix: &str, depth: usize, out: &mut Vec<Row>) {
             path: path.clone(),
             name: name.clone(),
             depth,
+            tag: None,
             is_folder: true,
             kind: FileKind::Other,
         });
@@ -215,7 +222,8 @@ fn flatten(folder: &Folder, prefix: &str, depth: usize, out: &mut Vec<Row>) {
             } else {
                 format!("{prefix}/{name}")
             },
-            name: display_name(name).to_string(),
+            name: stem(name).to_string(),
+            tag: file_tag(name),
             depth,
             is_folder: false,
             kind: *kind,
@@ -235,6 +243,28 @@ pub fn kind_name(kind: FileKind) -> &'static str {
         FileKind::Video => "video",
         FileKind::Pdf => "pdf",
         FileKind::Other => "other",
+    }
+}
+
+/// A file's name without its extension, for the explorer's rows: Obsidian
+/// shows every file bare and tags the ones that are not Markdown.
+fn stem(file_name: &str) -> &str {
+    match file_name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() && !ext.is_empty() => stem,
+        _ => file_name,
+    }
+}
+
+/// The row's tag for a file that is not Markdown: its extension in upper
+/// case (`CANVAS`, `PNG`); none for a note or a file without one.
+fn file_tag(file_name: &str) -> Option<String> {
+    match file_name.rsplit_once('.') {
+        Some((stem, ext))
+            if !stem.is_empty() && !ext.is_empty() && !ext.eq_ignore_ascii_case("md") =>
+        {
+            Some(ext.to_ascii_uppercase())
+        }
+        _ => None,
     }
 }
 
@@ -485,12 +515,16 @@ impl FileExplorer {
                     }
                 });
                 let name: SharedString = row.name.clone().into();
-                let faint = !row.is_folder && row.kind != FileKind::Markdown;
+                let tag: Option<SharedString> = row.tag.clone().map(Into::into);
+                // A file no view can open stays faint; a canvas or an image
+                // reads like a note, its tag saying what it is.
+                let faint = !row.is_folder && row.kind == FileKind::Other;
                 // Obsidian's row: 13 px text in a 25 px row with an 8 px
                 // radius, muted until it is active or under the pointer.
                 Some(
                     div()
                         .id(("row", ix))
+                        .w_full()
                         .h(px(25.))
                         .mb(px(2.))
                         .flex()
@@ -541,7 +575,18 @@ impl FileExplorer {
                                 .whitespace_nowrap()
                                 .text_ellipsis()
                                 .child(name),
-                        ),
+                        )
+                        .children(tag.map(|tag| {
+                            // Obsidian's `nav-file-tag`: small upper-case
+                            // text at the row's right end.
+                            div()
+                                .flex_shrink_0()
+                                .ml_2()
+                                .text_size(px(TAG_SIZE))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(theme.text_faint)
+                                .child(tag)
+                        })),
                 )
             })
             .collect()
@@ -624,17 +669,7 @@ mod tests {
         let names: Vec<&str> = tree.rows().map(|r| r.name.as_str()).collect();
         assert_eq!(
             names,
-            vec![
-                "f2",
-                "f10",
-                "Img 2.png",
-                "Img 10.png",
-                "n1",
-                "n2",
-                "n3",
-                "n10",
-                "n20"
-            ],
+            vec!["f2", "f10", "Img 2", "Img 10", "n1", "n2", "n3", "n10", "n20"],
             "folders stay ahead of files, and both groups count"
         );
     }
@@ -646,11 +681,11 @@ mod tests {
         assert_eq!(tree.len(), 2);
         tree.toggle("a");
         let names: Vec<&str> = tree.rows().map(|r| r.name.as_str()).collect();
-        assert_eq!(names, vec!["a", "deep", "x.png", "b"]);
+        assert_eq!(names, vec!["a", "deep", "x", "b"]);
         tree.toggle("a");
         assert_eq!(tree.reveal("a/deep/y.md"), Some(2));
         let names: Vec<&str> = tree.rows().map(|r| r.name.as_str()).collect();
-        assert_eq!(names, vec!["a", "deep", "y", "x.png", "b"]);
+        assert_eq!(names, vec!["a", "deep", "y", "x", "b"]);
         assert!(tree.rows().nth(2).unwrap().path == "a/deep/y.md");
         tree.collapse_all();
         assert_eq!(tree.len(), 2);

@@ -10,6 +10,7 @@
 
 use crate::assets::{icon, logo};
 use crate::bookmarks::{BookmarkEvent, BookmarksPane};
+use crate::canvas::{CanvasEvent, CanvasView};
 use crate::chooser::{Chooser, ChooserEvent, Row as ChooserRow};
 use crate::editor::{Editor, EditorEvent};
 use crate::explorer::{display_name, kind_name, ExplorerEvent, FileExplorer, FileTree};
@@ -26,10 +27,11 @@ use crate::theme::{
 };
 use crate::watch;
 use gpui::{
-    actions, canvas, div, point, prelude::*, px, rgb, rgba, transparent_black, uniform_list,
-    Action, App, BoxShadow, Context, CursorStyle, Decorations, DragMoveEvent, Entity, FocusHandle,
-    Focusable, Global, HitboxBehavior, Hsla, KeyBinding, MouseButton, Pixels, ResizeEdge,
-    SharedString, Subscription, Task, Tiling, UniformListScrollHandle, Window, WindowControlArea,
+    actions, canvas, div, point, prelude::*, px, relative, rgb, rgba, transparent_black,
+    uniform_list, Action, App, BoxShadow, Context, CursorStyle, Decorations, DragMoveEvent, Entity,
+    FocusHandle, Focusable, Global, HitboxBehavior, Hsla, KeyBinding, MouseButton, Pixels,
+    ResizeEdge, SharedString, Subscription, Task, Tiling, UniformListScrollHandle, Window,
+    WindowControlArea,
 };
 use rayon::prelude::*;
 use _cache::{
@@ -138,6 +140,9 @@ pub const RUNNABLE: &[&str] = &[
     "global-search:open",
     "graph:open",
     "graph:open-local",
+    "canvas:new-file",
+    "canvas:jump-to-group",
+    "canvas:convert-to-file",
     "markdown:toggle-preview",
     "markdown:add-metadata-property",
     "markdown:clear-metadata-properties",
@@ -880,6 +885,7 @@ enum MainView {
     Reading,
     Editor,
     Graph,
+    Canvas,
     Empty,
 }
 
@@ -890,6 +896,7 @@ impl MainView {
             MainView::Reading => "reading",
             MainView::Editor => "editor",
             MainView::Graph => "graph",
+            MainView::Canvas => "canvas",
             MainView::Empty => "nothing",
         }
     }
@@ -1144,6 +1151,12 @@ struct Tab {
     /// The `workspace.json` leaf this tab was restored from, so a layout
     /// nothing changed is written back with the keys Obsidian gave it.
     leaf: Option<Value>,
+    /// A canvas tab's `viewState` (`x`, `y`, `zoom`): read from the leaf,
+    /// kept current by the view's [`CanvasEvent::Viewport`] while the tab
+    /// is on screen, and written back into the leaf. It lives here rather
+    /// than being read from the view when the layout is written, because a
+    /// tab that is not live has no view holding it.
+    view_state: Option<Value>,
 }
 
 impl Tab {
@@ -1154,6 +1167,7 @@ impl Tab {
             history: Vec::new(),
             history_ix: 0,
             leaf: None,
+            view_state: None,
         }
     }
 
@@ -1161,13 +1175,23 @@ impl Tab {
     /// "New tab" for one with nothing in it.
     fn title(&self) -> SharedString {
         match (&self.path, self.mode) {
-            (Some(p), _) => display_name(p.rsplit('/').next().unwrap_or(p))
+            (Some(p), _) => tab_display_name(p.rsplit('/').next().unwrap_or(p))
                 .to_string()
                 .into(),
             (None, ViewMode::Graph) => "Graph view".into(),
             (None, _) => "New tab".into(),
         }
     }
+}
+
+/// What the chooser is open for: a template to insert, a vault file for a
+/// canvas card, or a group to jump to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum ChooserPurpose {
+    #[default]
+    Template,
+    CanvasFile,
+    CanvasGroup,
 }
 
 /// How Obsidian names a split's axis: a `vertical` split lays its children
@@ -1271,9 +1295,17 @@ impl Layout {
     /// Puts `new` beside group `id` along `direction`, the way "Split right"
     /// and "Split down" do: a sibling when the enclosing split already runs
     /// that way, otherwise the group is wrapped in a new split holding the
-    /// two of them. Says which it was (`Some(true)` for wrapped), so the
-    /// caller can hand the group's `dimension` on.
-    fn insert_beside(&mut self, id: u64, new: u64, direction: SplitDirection) -> Option<bool> {
+    /// two of them. `after` says which side: right or below when set, left
+    /// or above when not (a tab dropped on a group's near edge). Says which
+    /// it was (`Some(true)` for wrapped), so the caller can hand the group's
+    /// `dimension` on.
+    fn insert_beside(
+        &mut self,
+        id: u64,
+        new: u64,
+        direction: SplitDirection,
+        after: bool,
+    ) -> Option<bool> {
         let Layout::Split {
             direction: own,
             children,
@@ -1285,13 +1317,18 @@ impl Layout {
         let ix = children.iter().position(|c| c.contains(id))?;
         if matches!(children[ix], Layout::Group(g) if g == id) {
             if *own == direction {
-                children.insert(ix + 1, Layout::Group(new));
+                children.insert(if after { ix + 1 } else { ix }, Layout::Group(new));
                 return Some(false);
             }
-            children[ix] = Layout::split(direction, vec![Layout::Group(id), Layout::Group(new)]);
+            let pair = if after {
+                vec![Layout::Group(id), Layout::Group(new)]
+            } else {
+                vec![Layout::Group(new), Layout::Group(id)]
+            };
+            children[ix] = Layout::split(direction, pair);
             return Some(true);
         }
-        children[ix].insert_beside(id, new, direction)
+        children[ix].insert_beside(id, new, direction, after)
     }
 
     /// Takes group `id` out. A split left with one child keeps it (Obsidian
@@ -1365,6 +1402,7 @@ struct TabGroup {
     chars: usize,
     editor: Entity<Editor>,
     reading: Entity<ReadingView>,
+    canvas: Entity<CanvasView>,
     /// The `tabs` node this group was restored from, less its children:
     /// `id`, a `dimension` from a dragged divider, and anything unknown.
     node: Map<String, Value>,
@@ -1375,6 +1413,7 @@ impl TabGroup {
         id: u64,
         editor: Entity<Editor>,
         reading: Entity<ReadingView>,
+        canvas: Entity<CanvasView>,
         mode: ViewMode,
     ) -> TabGroup {
         let mut node = Map::new();
@@ -1390,6 +1429,7 @@ impl TabGroup {
             chars: 0,
             editor,
             reading,
+            canvas,
             node,
         }
     }
@@ -1440,6 +1480,7 @@ struct GroupView {
     detached: Option<SharedString>,
     editor: Entity<Editor>,
     reading: Entity<ReadingView>,
+    canvas: Entity<CanvasView>,
 }
 
 /// The payload of a divider drag: which split, and the boundary between
@@ -1448,6 +1489,100 @@ struct GroupView {
 struct DividerDrag {
     path: Vec<usize>,
     before: usize,
+}
+
+/// The payload of a tab drag: which group's strip the tab was picked up
+/// from and which tab it is. The tab itself stays in its group until the
+/// drop; a drag that ends nowhere changes nothing.
+#[derive(Debug, Clone)]
+struct TabDrag {
+    group: u64,
+    tab: usize,
+    title: SharedString,
+}
+
+/// Where a tab dragged over a group's content would land: in the group's
+/// strip, or in a new group on one of its sides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DropZone {
+    Center,
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+impl DropZone {
+    /// The zone `position` falls in inside `bounds`: the outer band on each
+    /// side is a split, the middle is the strip. The band is a share of the
+    /// shorter side so a tall narrow group still has a middle; which edge
+    /// wins in a corner is the nearer one.
+    fn at(bounds: gpui::Bounds<gpui::Pixels>, position: gpui::Point<gpui::Pixels>) -> DropZone {
+        let w = f32::from(bounds.size.width);
+        let h = f32::from(bounds.size.height);
+        let x = f32::from(position.x - bounds.origin.x);
+        let y = f32::from(position.y - bounds.origin.y);
+        let band = w.min(h) * DROP_EDGE_SHARE;
+        let edges = [
+            (DropZone::Left, x),
+            (DropZone::Right, w - x),
+            (DropZone::Top, y),
+            (DropZone::Bottom, h - y),
+        ];
+        let (zone, distance) = edges
+            .into_iter()
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .unwrap_or((DropZone::Center, 0.0));
+        if distance < band {
+            zone
+        } else {
+            DropZone::Center
+        }
+    }
+
+    /// The split a side zone makes, and whether the new group goes after
+    /// the one it was dropped on.
+    fn split(self) -> Option<(SplitDirection, bool)> {
+        match self {
+            DropZone::Center => None,
+            DropZone::Left => Some((SplitDirection::Vertical, false)),
+            DropZone::Right => Some((SplitDirection::Vertical, true)),
+            DropZone::Top => Some((SplitDirection::Horizontal, false)),
+            DropZone::Bottom => Some((SplitDirection::Horizontal, true)),
+        }
+    }
+}
+
+/// How much of a group's shorter side, from each edge, drops as a split.
+const DROP_EDGE_SHARE: f32 = 0.3;
+
+/// The ghost that follows the pointer while a tab is dragged: the tab's
+/// title on a tab-shaped card.
+struct TabDragPreview {
+    title: SharedString,
+}
+
+impl Render for TabDragPreview {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.global::<Theme>().clone();
+        div()
+            .flex()
+            .items_center()
+            .h(px(34.))
+            .px(px(10.))
+            .max_w(px(200.))
+            .rounded(px(6.))
+            .bg(theme.bg)
+            .border_1()
+            .border_color(theme.border)
+            .shadow_md()
+            .text_size(px(FONT_UI_SMALL))
+            .text_color(theme.text)
+            .whitespace_nowrap()
+            .overflow_hidden()
+            .text_ellipsis()
+            .child(self.title.clone())
+    }
 }
 
 /// The drag's on-screen stand-in: nothing, the divider moves in place.
@@ -1679,6 +1814,11 @@ pub struct Workspace {
     bookmarks: Entity<BookmarksPane>,
     switcher: Entity<QuickSwitcher>,
     chooser: Entity<Chooser>,
+    /// What the chooser's pick means while it is open.
+    chooser_purpose: ChooserPurpose,
+    /// A canvas asked for the note or media picker; the next render opens
+    /// it, with the window the chooser needs to take focus.
+    pending_canvas_pick: Option<crate::canvas::FilePick>,
     palette: Entity<CommandPalette>,
     settings: Entity<SettingsView>,
     prompt: Entity<Prompt>,
@@ -1699,6 +1839,9 @@ pub struct Workspace {
     left_tab: LeftTab,
     reading: Entity<ReadingView>,
     editor: Entity<Editor>,
+    /// The active group's canvas view, like `editor` and `reading`; it
+    /// shows the open file when that is a `.canvas`.
+    canvas: Entity<CanvasView>,
     graph: Entity<GraphView>,
     /// The mode to return to when the graph closes.
     mode_before_graph: ViewMode,
@@ -1725,6 +1868,12 @@ pub struct Workspace {
     /// Group ids, most recently active first: where focus goes when a group
     /// closes, and which group a focus command lands in.
     group_mru: Vec<u64>,
+    /// A tab is being dragged, so every group paints its drop zones. Set
+    /// when the drag starts and cleared when the next frame finds no drag
+    /// under way, however the drag ended.
+    dragging_tab: bool,
+    /// Which group's content the dragged tab is over, and where in it.
+    tab_drop: Option<(u64, DropZone)>,
     /// `workspace.json` as it was read at load, `None` when the vault has
     /// none; what the quit write is merged into.
     layout: Option<Value>,
@@ -1779,9 +1928,26 @@ impl Focusable for Workspace {
 fn view_subscriptions(
     editor: &Entity<Editor>,
     reading: &Entity<ReadingView>,
+    canvas: &Entity<CanvasView>,
     cx: &mut Context<Workspace>,
 ) -> Vec<Subscription> {
     vec![
+        cx.subscribe(
+            canvas,
+            |this, canvas, event: &CanvasEvent, cx| match event {
+                CanvasEvent::Edited => this.schedule_save(cx),
+                CanvasEvent::OpenLink(target) => this.follow_link(target.clone(), cx),
+                CanvasEvent::Viewport(view_state) => {
+                    this.record_canvas_view_state(&canvas, view_state.clone(), cx)
+                }
+                // The chooser needs the window to take focus, which this
+                // subscription does not have: the next render opens it.
+                CanvasEvent::PickFile(kind) => {
+                    this.pending_canvas_pick = Some(*kind);
+                    cx.notify();
+                }
+            },
+        ),
         cx.subscribe(reading, |this, _, event: &ReadingEvent, cx| match event {
             ReadingEvent::OpenLink(target) => this.follow_link(target.clone(), cx),
             ReadingEvent::OpenLinkInNewTab(target) => {
@@ -1822,6 +1988,7 @@ impl Workspace {
         let prompt = cx.new(Prompt::new);
         let reading = cx.new(ReadingView::new);
         let editor = cx.new(|cx| Editor::new(window, cx));
+        let canvas = cx.new(CanvasView::new);
         let graph = cx.new(GraphView::new);
         let subscriptions = vec![
             cx.subscribe_in(
@@ -1943,7 +2110,22 @@ impl Workspace {
                 &chooser,
                 window,
                 |this, _, event: &ChooserEvent, window, cx| match event {
-                    ChooserEvent::Chosen(path) => this.insert_template(path.clone(), window, cx),
+                    ChooserEvent::Chosen(value) => match this.chooser_purpose {
+                        ChooserPurpose::Template => this.insert_template(value.clone(), window, cx),
+                        ChooserPurpose::CanvasFile => {
+                            this.modal = Modal::None;
+                            this.canvas
+                                .update(cx, |c, cx| c.add_file_card_at_center(value, cx));
+                            this.focus_main(window, cx);
+                            cx.notify();
+                        }
+                        ChooserPurpose::CanvasGroup => {
+                            this.modal = Modal::None;
+                            this.canvas.update(cx, |c, cx| c.jump_to_group(value, cx));
+                            this.focus_main(window, cx);
+                            cx.notify();
+                        }
+                    },
                     ChooserEvent::Close => {
                         this.modal = Modal::None;
                         // Whatever the main area paints, not the editor:
@@ -1956,11 +2138,12 @@ impl Workspace {
             ),
         ];
         let mut subscriptions = subscriptions;
-        subscriptions.extend(view_subscriptions(&editor, &reading, cx));
+        subscriptions.extend(view_subscriptions(&editor, &reading, &canvas, cx));
         let groups = vec![TabGroup::new(
             0,
             editor.clone(),
             reading.clone(),
+            canvas.clone(),
             ViewMode::Reading,
         )];
         // Closing the window must not lose edits waiting for the autosave.
@@ -1982,6 +2165,8 @@ impl Workspace {
             bookmarks,
             switcher,
             chooser,
+            chooser_purpose: ChooserPurpose::default(),
+            pending_canvas_pick: None,
             palette,
             settings,
             prompt,
@@ -1996,6 +2181,7 @@ impl Workspace {
             left_tab: LeftTab::Files,
             reading,
             editor,
+            canvas,
             graph,
             mode_before_graph: ViewMode::Reading,
             mode: ViewMode::Reading,
@@ -2011,6 +2197,8 @@ impl Workspace {
             layout_tree: Layout::split(SplitDirection::Vertical, vec![Layout::Group(0)]),
             next_group_id: 1,
             group_mru: vec![0],
+            dragging_tab: false,
+            tab_drop: None,
             layout: None,
             layout_restored: false,
             last_open_files: Vec::new(),
@@ -2342,11 +2530,141 @@ impl Workspace {
         }
         rows.sort_by(|a, b| a.label.cmp(&b.label));
         self.close_editor_suggest(cx);
+        self.chooser_purpose = ChooserPurpose::Template;
         self.modal = Modal::Chooser;
         self.chooser.update(cx, |c, cx| {
             c.open(rows, "Type name of a template...", empty, window, cx)
         });
         cx.notify();
+    }
+
+    /// "Add note from vault" and "Add media from vault": the chooser over
+    /// the vault's notes, or its images, PDFs, audio and video; the pick
+    /// becomes a file card at the middle of the canvas.
+    fn open_canvas_file_chooser(
+        &mut self,
+        kind: crate::canvas::FilePick,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let wanted = |k: FileKind| match kind {
+            crate::canvas::FilePick::Note => k == FileKind::Markdown,
+            crate::canvas::FilePick::Media => matches!(
+                k,
+                FileKind::Image | FileKind::Pdf | FileKind::Audio | FileKind::Video
+            ),
+        };
+        let mut rows: Vec<ChooserRow> = state
+            .vault()
+            .files()
+            .iter()
+            .filter(|f| wanted(f.kind))
+            .map(|f| ChooserRow {
+                label: match kind {
+                    crate::canvas::FilePick::Note => basename(&f.path).to_string(),
+                    crate::canvas::FilePick::Media => f.path.clone(),
+                },
+                value: f.path.clone(),
+            })
+            .collect();
+        rows.sort_by(|a, b| a.label.cmp(&b.label));
+        let (placeholder, empty) = match kind {
+            crate::canvas::FilePick::Note => ("Type name of a note...", "No notes in the vault"),
+            crate::canvas::FilePick::Media => ("Type name of a file...", "No media in the vault"),
+        };
+        self.chooser_purpose = ChooserPurpose::CanvasFile;
+        self.modal = Modal::Chooser;
+        self.chooser
+            .update(cx, |c, cx| c.open(rows, placeholder, empty, window, cx));
+        cx.notify();
+    }
+
+    /// `canvas:jump-to-group`: a chooser over the open canvas's labelled
+    /// groups; the pick is framed and selected. Obsidian hides the command
+    /// when no canvas is active; here it says so.
+    fn jump_to_group(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.main_view(cx) != MainView::Canvas {
+            self.report("Canvas: Jump to group needs an open canvas", cx);
+            return;
+        }
+        let rows: Vec<ChooserRow> = self
+            .canvas
+            .read(cx)
+            .group_targets()
+            .into_iter()
+            .map(|(label, id)| ChooserRow { label, value: id })
+            .collect();
+        self.chooser_purpose = ChooserPurpose::CanvasGroup;
+        self.modal = Modal::Chooser;
+        self.chooser.update(cx, |c, cx| {
+            c.open(
+                rows,
+                "Type name of a group...",
+                "No groups in this canvas",
+                window,
+                cx,
+            )
+        });
+        cx.notify();
+    }
+
+    /// `canvas:convert-to-file`: the selected text card's text becomes a
+    /// note named after its first line (`Untitled` when blank) beside the
+    /// canvas, and the card embeds it. Obsidian asks for the name in a
+    /// dialog first; here the first line names it.
+    fn convert_card_to_file(&mut self, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        if self.main_view(cx) != MainView::Canvas {
+            self.report("Canvas: Convert to file needs a selected text card", cx);
+            return;
+        }
+        let Some((id, text)) = self.canvas.read(cx).selected_text_card() else {
+            self.report("Canvas: Convert to file needs a selected text card", cx);
+            return;
+        };
+        let folder = self
+            .current
+            .as_deref()
+            .and_then(|p| p.rsplit_once('/'))
+            .map(|(dir, _)| dir)
+            .unwrap_or("");
+        let first = text
+            .lines()
+            .map(|l| l.trim().trim_start_matches('#').trim())
+            .find(|l| !l.is_empty())
+            .unwrap_or("Untitled");
+        let name: String = first
+            .chars()
+            .filter(|c| {
+                !matches!(
+                    c,
+                    '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '[' | ']' | '#' | '^'
+                )
+            })
+            .take(60)
+            .collect::<String>()
+            .trim()
+            .to_string();
+        let name = if name.is_empty() {
+            "Untitled".to_string()
+        } else {
+            name
+        };
+        let path = state.vault().available_path(folder, &name, "md");
+        match state.create_note(&path, &text) {
+            Ok(changes) => {
+                self.after_changes(changes, cx);
+                self.canvas
+                    .update(cx, |c, cx| c.convert_to_file(&id, &path, cx));
+                self.report(format!("Created {path}"), cx);
+            }
+            Err(err) => self.report(err, cx),
+        }
     }
 
     /// Opens the chooser and picks `query` out of it, for `--template`.
@@ -2535,6 +2853,14 @@ impl Workspace {
         } else {
             format!("{n} files changed").into()
         };
+        // A card showing one of these files is rebuilt from it, whichever
+        // group's canvas holds it.
+        for change in &changes.files {
+            let path = change.path().to_string();
+            for group in &self.groups {
+                group.canvas.update(cx, |c, cx| c.invalidate(&path, cx));
+            }
+        }
         // Back and forward must never land on a file the vault no longer
         // has, whoever removed it; an atomic external save arrives as a
         // removal too, so only a path that is really gone is forgotten.
@@ -2764,6 +3090,9 @@ impl Workspace {
             "global-search:open" => self.open_search_action(&OpenSearch, window, cx),
             "graph:open" => self.open_graph_action(&OpenGraph, window, cx),
             "graph:open-local" => self.show_graph(true, window, cx),
+            "canvas:new-file" => self.new_canvas(cx),
+            "canvas:jump-to-group" => self.jump_to_group(window, cx),
+            "canvas:convert-to-file" => self.convert_card_to_file(cx),
             "markdown:toggle-preview" => self.toggle_mode(&ToggleMode, window, cx),
             // The properties block is the same editable widget in reading
             // view, and `editor:toggle-fold-properties` was observed running
@@ -3275,6 +3604,7 @@ impl Workspace {
         if unpainted(MainView::Editor, self.editor.read(cx).focus_handle_ref())
             || unpainted(MainView::Reading, &self.reading.focus_handle(cx))
             || unpainted(MainView::Graph, &self.graph.focus_handle(cx))
+            || unpainted(MainView::Canvas, &self.canvas.focus_handle(cx))
         {
             return true;
         }
@@ -3285,7 +3615,8 @@ impl Workspace {
         self.groups.iter().enumerate().any(|(ix, g)| {
             ix != self.active_group
                 && (g.editor.read(cx).focus_handle_ref().is_focused(window)
-                    || g.reading.focus_handle(cx).is_focused(window))
+                    || g.reading.focus_handle(cx).is_focused(window)
+                    || g.canvas.focus_handle(cx).is_focused(window))
         })
     }
 
@@ -3298,6 +3629,7 @@ impl Workspace {
             MainView::Reading => window.focus(&self.reading.focus_handle(cx), cx),
             MainView::Editor => window.focus(&self.editor.focus_handle(cx), cx),
             MainView::Graph => window.focus(&self.graph.focus_handle(cx), cx),
+            MainView::Canvas => window.focus(&self.canvas.focus_handle(cx), cx),
             MainView::Empty => window.focus(&self.focus_handle, cx),
         }
     }
@@ -3467,7 +3799,53 @@ impl Workspace {
         self.graph
             .update(cx, |g, cx| g.set_current(Some(path.to_string()), cx));
         let kind = FileKind::from_path(path);
+        if kind != FileKind::Canvas {
+            self.release_canvas(cx);
+        }
         match kind {
+            FileKind::Canvas => match std::fs::read_to_string(state.vault().absolute(path)) {
+                Ok(text) => {
+                    // Nothing of a note may show through: the reading view
+                    // is emptied and the editor let go of, as for an image.
+                    self.reading.update(cx, |r, cx| {
+                        r.set_note(
+                            None,
+                            reading::build_with("", "", state.as_ref(), state.build_options()),
+                            cx,
+                        )
+                    });
+                    self.release_buffer(cx);
+                    // The same rule as the editor's: the view keeps its
+                    // scene when the file is what it last read or wrote
+                    // (its own save coming back through the watcher), keeps
+                    // unsaved edits when the file changed underneath them,
+                    // and reloads otherwise.
+                    let (same, matches, dirty) = {
+                        let c = self.canvas.read(cx);
+                        (c.path() == Some(path), c.matches_file(&text), c.is_dirty())
+                    };
+                    if same && matches {
+                        // Own write or an unrelated event.
+                    } else if same && dirty {
+                        self.report(format!("{path} changed on disk; unsaved edits kept"), cx);
+                    } else if same {
+                        self.canvas.update(cx, |c, cx| c.reload(&text, cx));
+                    } else {
+                        // Where the tab last looked, when it was restored
+                        // from the layout for this very file.
+                        let view_state = self
+                            .tabs
+                            .get(self.active_tab)
+                            .filter(|t| t.path.as_deref() == Some(path))
+                            .and_then(|t| CanvasView::viewport_from_json(t.view_state.as_ref()));
+                        let state = state.clone();
+                        self.canvas
+                            .update(cx, |c, cx| c.load(path, &text, view_state, state, cx));
+                    }
+                    self.status = path.to_string().into();
+                }
+                Err(err) => self.unreadable(path, previous, &err, state, cx),
+            },
             FileKind::Markdown => match std::fs::read_to_string(state.vault().absolute(path)) {
                 Ok(text) => {
                     let started = Instant::now();
@@ -3501,23 +3879,7 @@ impl Workspace {
                     self.status =
                         format!("{path}  ·  reading view built in {build_ms:.1} ms").into();
                 }
-                Err(err) => {
-                    // `current` may not name a file the app could not read:
-                    // the panes, the explorer row and the autosave all key
-                    // off it while the editor still holds another note, and
-                    // that mismatch is what silently drops the edits typed
-                    // into it. The view goes back to the note it is really
-                    // showing, or lets go of the buffer when there is none.
-                    self.report(format!("Could not read {path}: {err}"), cx);
-                    self.current = previous.filter(|p| p.as_str() != path);
-                    match self.current.clone() {
-                        Some(back) => {
-                            self.explorer.update(cx, |e, cx| e.reveal(&back, cx));
-                            self.graph.update(cx, |g, cx| g.set_current(Some(back), cx));
-                        }
-                        None => self.detach_current(true, state, cx),
-                    }
-                }
+                Err(err) => self.unreadable(path, previous, &err, state, cx),
             },
             FileKind::Image => {
                 let model = reading::build_with(
@@ -3550,6 +3912,41 @@ impl Workspace {
         }
         self.refresh_panes(state, cx);
         cx.notify();
+    }
+
+    /// A file `show_file` could not read. `current` may not name a file
+    /// the app could not read: the panes, the explorer row and the autosave
+    /// all key off it while the editor still holds another note, and that
+    /// mismatch is what silently drops the edits typed into it. The view
+    /// goes back to the note it is really showing, or lets go of the buffer
+    /// when there is none.
+    fn unreadable(
+        &mut self,
+        path: &str,
+        previous: Option<String>,
+        err: &std::io::Error,
+        state: &Arc<VaultState>,
+        cx: &mut Context<Self>,
+    ) {
+        self.report(format!("Could not read {path}: {err}"), cx);
+        self.current = previous.filter(|p| p.as_str() != path);
+        match self.current.clone() {
+            Some(back) => {
+                self.explorer.update(cx, |e, cx| e.reveal(&back, cx));
+                self.graph.update(cx, |g, cx| g.set_current(Some(back), cx));
+            }
+            None => self.detach_current(true, state, cx),
+        }
+    }
+
+    /// Lets go of the canvas on screen, if any. Its edits were flushed by
+    /// whoever is changing the file (every route in calls `flush_save`
+    /// first); what is left is data describing a file that is no longer
+    /// the one shown, and `main_view` would keep painting it.
+    fn release_canvas(&mut self, cx: &mut Context<Self>) {
+        if self.canvas.read(cx).path().is_some() {
+            self.canvas.update(cx, |c, cx| c.release(cx));
+        }
     }
 
     /// Plain text of a cached heading (markup stripped).
@@ -3612,6 +4009,7 @@ impl Workspace {
         } else {
             self.clear_buffer(cx);
         }
+        self.release_canvas(cx);
         self.reading.update(cx, |r, cx| {
             r.set_note(
                 None,
@@ -3928,6 +4326,7 @@ impl Workspace {
         let Some(state) = self.state.clone() else {
             return;
         };
+        self.flush_canvas_save(&state, cx);
         let (dirty, name) = {
             let editor = self.editor.read(cx);
             (editor.is_dirty(), editor.name.to_string())
@@ -4040,6 +4439,107 @@ impl Workspace {
                 self.start_rename(&path, window, cx);
             }
             Err(err) => self.report(err, cx),
+        }
+    }
+
+    /// `canvas:new-file`: `Untitled.canvas` (or the next free number) in
+    /// the vault root as an empty file, which is what Obsidian writes until
+    /// something is put in the canvas (see [[Specification#Observed canvas
+    /// write behavior]]), opened the way a new note is: in a new tab unless
+    /// the active one is empty.
+    fn new_canvas(&mut self, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let path = state.vault().available_path("", "Untitled", "canvas");
+        match state.create_note(&path, "") {
+            Ok(changes) => {
+                self.after_changes(changes, cx);
+                if self.current.is_some() {
+                    self.new_tab(cx);
+                }
+                self.open_file(path.clone(), None, cx);
+                self.report(format!("Created {path}"), cx);
+            }
+            Err(err) => self.report(err, cx),
+        }
+    }
+
+    /// Writes the canvas view's file now if it has unsaved edits, through
+    /// the same checks as the editor's save: the path is checked for links,
+    /// and a file that is not the bytes the view read or last wrote is left
+    /// alone, since someone else wrote it.
+    fn flush_canvas_save(&mut self, state: &Arc<VaultState>, cx: &mut Context<Self>) {
+        let (dirty, path) = {
+            let canvas = self.canvas.read(cx);
+            (canvas.is_dirty(), canvas.path().map(str::to_string))
+        };
+        let Some(path) = path.filter(|_| dirty) else {
+            return;
+        };
+        let absolute = match state.vault().write_path(&path) {
+            Ok(absolute) => absolute,
+            Err(err) => {
+                self.report(format!("{path} not saved: {err}"), cx);
+                return;
+            }
+        };
+        match std::fs::read_to_string(&absolute) {
+            Ok(on_disk) if self.canvas.read(cx).matches_file(&on_disk) => {}
+            Ok(_) => {
+                self.report(
+                    format!("{path} changed on disk; not overwritten, your edits are still here"),
+                    cx,
+                );
+                return;
+            }
+            Err(err) => {
+                self.report(
+                    format!("Could not read {path}: {err}; not overwritten, your edits are kept"),
+                    cx,
+                );
+                return;
+            }
+        }
+        let contents = self.canvas.read(cx).to_json();
+        match _vault::write_no_follow(&absolute, contents.as_bytes()) {
+            Ok(()) => {
+                self.canvas.update(cx, |c, _| c.mark_saved(contents));
+                self.report(format!("{path} saved"), cx);
+            }
+            Err(err) => self.report(format!("Could not save {path}: {err}"), cx),
+        }
+        cx.notify();
+    }
+
+    /// A canvas view moved: the tab showing it records where it looks, so
+    /// `workspace.json` gets it whether or not the tab is live when the
+    /// layout is written. The view may belong to a group that is not the
+    /// active one — the wheel reaches a pane without activating it.
+    fn record_canvas_view_state(
+        &mut self,
+        canvas: &Entity<CanvasView>,
+        view_state: Value,
+        cx: &mut Context<Self>,
+    ) {
+        let path = canvas.read(cx).path().map(str::to_string);
+        if path.is_none() {
+            return;
+        }
+        if *canvas == self.canvas {
+            if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                if self.current == path {
+                    tab.view_state = Some(view_state);
+                }
+            }
+            return;
+        }
+        if let Some(group) = self.groups.iter_mut().find(|g| g.canvas == *canvas) {
+            if let Some(tab) = group.tabs.get_mut(group.active_tab) {
+                if tab.path == path {
+                    tab.view_state = Some(view_state);
+                }
+            }
         }
     }
 
@@ -4695,15 +5195,27 @@ impl Workspace {
             .as_deref()
             .is_some_and(|p| FileKind::from_path(p) == FileKind::Image);
         let has_buffer = !self.editor.read(cx).name.is_empty();
-        Self::main_view_for(self.mode, has_note, image, has_buffer)
+        let canvas =
+            self.current.is_some() && self.canvas.read(cx).path() == self.current.as_deref();
+        Self::main_view_for(self.mode, has_note, image, has_buffer, canvas)
     }
 
-    /// The rule itself, over what the three views have to show: `has_note`
-    /// is the reading view's built note, `image` whether the open file is
-    /// one, and `has_buffer` whether the editor's buffer names a file.
-    fn main_view_for(mode: ViewMode, has_note: bool, image: bool, has_buffer: bool) -> MainView {
+    /// The rule itself, over what the views have to show: `has_note` is the
+    /// reading view's built note, `image` whether the open file is one,
+    /// `has_buffer` whether the editor's buffer names a file, and `canvas`
+    /// whether the canvas view holds the open file. A canvas has no
+    /// reading or source mode, so it is painted in every mode but the
+    /// graph's.
+    fn main_view_for(
+        mode: ViewMode,
+        has_note: bool,
+        image: bool,
+        has_buffer: bool,
+        canvas: bool,
+    ) -> MainView {
         match mode {
             ViewMode::Graph => MainView::Graph,
+            _ if canvas => MainView::Canvas,
             ViewMode::Reading if has_note => MainView::Reading,
             // An image has no source to edit, so it reads the same in the
             // editing modes as it does in the reading view.
@@ -4730,6 +5242,7 @@ impl Workspace {
                 detached: self.detached.clone(),
                 editor: self.editor.clone(),
                 reading: self.reading.clone(),
+                canvas: self.canvas.clone(),
             };
         }
         let tab = g.tabs.get(g.active_tab);
@@ -4745,6 +5258,7 @@ impl Workspace {
             detached: g.detached.clone(),
             editor: g.editor.clone(),
             reading: g.reading.clone(),
+            canvas: g.canvas.clone(),
         }
     }
 
@@ -4869,12 +5383,63 @@ impl Workspace {
             .child(self.render_header(&view, theme, cx))
             .child(
                 div()
+                    .relative()
                     .flex_1()
                     .min_h_0()
                     .overflow_hidden()
-                    .child(self.render_group_main(&view, theme, cx)),
+                    .child(self.render_group_main(&view, theme, cx))
+                    .when(self.dragging_tab, |d| {
+                        d.child(self.render_drop_zones(id, theme, cx))
+                    }),
             )
             .into_any_element()
+    }
+
+    /// The drop target over a group's content while a tab is dragged: it
+    /// follows the pointer to light the zone the tab would land in — the
+    /// whole area for the strip, the near half for a split — and takes the
+    /// drop. It covers the view, so nothing under it reacts to the drag.
+    fn render_drop_zones(
+        &self,
+        id: u64,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let zone = self.tab_drop.filter(|(g, _)| *g == id).map(|(_, z)| z);
+        let wash = theme.accent.opacity(0.15);
+        let edge = theme.accent.opacity(0.6);
+        div()
+            .id(("drop-zones", id))
+            .absolute()
+            .top_0()
+            .left_0()
+            .right_0()
+            .bottom_0()
+            .occlude()
+            .on_drag_move(cx.listener(move |this, e: &DragMoveEvent<TabDrag>, _, cx| {
+                this.tab_drag_moved(id, e.bounds, e.event.position, cx)
+            }))
+            .on_drop(cx.listener(move |this, drag: &TabDrag, window, cx| {
+                this.drop_tab_on_group(drag, id, window, cx)
+            }))
+            .when_some(zone, |d, zone| {
+                let half = relative(0.5);
+                d.child(
+                    div()
+                        .absolute()
+                        .bg(wash)
+                        .border_2()
+                        .border_color(edge)
+                        .rounded(px(6.))
+                        .map(|d| match zone {
+                            DropZone::Center => d.top_0().left_0().right_0().bottom_0(),
+                            DropZone::Left => d.top_0().left_0().bottom_0().w(half),
+                            DropZone::Right => d.top_0().right_0().bottom_0().w(half),
+                            DropZone::Top => d.top_0().left_0().right_0().h(half),
+                            DropZone::Bottom => d.bottom_0().left_0().right_0().h(half),
+                        }),
+                )
+            })
     }
 
     /// The view header: back and forward, the note's folder and name, the
@@ -4883,7 +5448,7 @@ impl Workspace {
     fn render_header(&self, view: &GroupView, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
         let id = view.id;
         let title: SharedString = match &view.current {
-            Some(p) => display_name(p.rsplit('/').next().unwrap_or(p))
+            Some(p) => tab_display_name(p.rsplit('/').next().unwrap_or(p))
                 .to_string()
                 .into(),
             None => "No file is open".into(),
@@ -4989,7 +5554,10 @@ impl Workspace {
             .as_deref()
             .is_some_and(|p| FileKind::from_path(p) == FileKind::Image);
         let has_buffer = !view.editor.read(cx).name.is_empty();
-        match Self::main_view_for(view.mode, has_note, image, has_buffer) {
+        let canvas =
+            view.current.is_some() && view.canvas.read(cx).path() == view.current.as_deref();
+        match Self::main_view_for(view.mode, has_note, image, has_buffer, canvas) {
+            MainView::Canvas => view.canvas.clone().into_any_element(),
             MainView::Graph if self.graph_group() == Some(view.id) => {
                 self.graph.clone().into_any_element()
             }
@@ -5077,13 +5645,20 @@ impl Workspace {
 
     /// Copies the active tab's live fields into its slot.
     fn stash_active_tab(&mut self) {
-        let leaf = self.tabs.get(self.active_tab).and_then(|t| t.leaf.clone());
+        let slot = self.tabs.get(self.active_tab);
+        let leaf = slot.and_then(|t| t.leaf.clone());
+        // The view state belongs to the canvas the tab shows; a tab that
+        // moved on to another file leaves it behind.
+        let view_state = slot
+            .filter(|t| t.path == self.current)
+            .and_then(|t| t.view_state.clone());
         let tab = Tab {
             path: self.current.clone(),
             mode: self.mode,
             history: self.history.clone(),
             history_ix: self.history_ix,
             leaf,
+            view_state,
         };
         match self.tabs.get_mut(self.active_tab) {
             Some(slot) => *slot = tab,
@@ -5140,6 +5715,7 @@ impl Workspace {
     /// nowhere, the way a file that went away leaves it.
     fn show_empty(&mut self, state: &Arc<VaultState>, cx: &mut Context<Self>) {
         self.release_buffer(cx);
+        self.release_canvas(cx);
         self.reading.update(cx, |r, cx| {
             r.set_note(
                 None,
@@ -5307,6 +5883,7 @@ impl Workspace {
         self.chars = group.chars;
         self.editor = group.editor.clone();
         self.reading = group.reading.clone();
+        self.canvas = group.canvas.clone();
         let tab = self
             .tabs
             .get(self.active_tab)
@@ -5357,14 +5934,16 @@ impl Workspace {
     fn new_group(&mut self, mode: ViewMode, window: &mut Window, cx: &mut Context<Self>) -> u64 {
         let editor = cx.new(|cx| Editor::new(window, cx));
         let reading = cx.new(ReadingView::new);
+        let canvas = cx.new(CanvasView::new);
         self._subscriptions
-            .extend(view_subscriptions(&editor, &reading, cx));
+            .extend(view_subscriptions(&editor, &reading, &canvas, cx));
         let id = self.next_group_id;
         self.next_group_id += 1;
         if let Some(state) = self.state.clone() {
             Self::give_editor_the_vault(&editor, &state, cx);
         }
-        self.groups.push(TabGroup::new(id, editor, reading, mode));
+        self.groups
+            .push(TabGroup::new(id, editor, reading, canvas, mode));
         if let Some(state) = self.state.clone() {
             self.apply_app_config(&state, cx);
         }
@@ -5386,31 +5965,14 @@ impl Workspace {
             history: self.history.clone(),
             history_ix: self.history_ix,
             leaf: None,
+            view_state: self
+                .tabs
+                .get(self.active_tab)
+                .and_then(|t| t.view_state.clone()),
         };
         let mode_before_graph = self.mode_before_graph;
         let id = self.new_group(tab.mode, window, cx);
-        let dimension = self.groups[self.active_group].dimension();
-        match self.layout_tree.insert_beside(from, id, direction) {
-            Some(false) => {
-                if let Some(d) = dimension {
-                    let from_ix = self.active_group;
-                    self.groups[from_ix].set_dimension(Some(d / 2.0));
-                    let new_ix = self.group_ix(id).unwrap_or(from_ix);
-                    self.groups[new_ix].set_dimension(Some(d / 2.0));
-                }
-            }
-            Some(true) => {
-                let from_ix = self.active_group;
-                self.groups[from_ix].set_dimension(None);
-                if let Some(mut path) = self.layout_tree.path_to(from) {
-                    path.pop();
-                    if let Some(Layout::Split { node, .. }) = self.layout_tree.node_at_mut(&path) {
-                        set_dimension(node, dimension);
-                    }
-                }
-            }
-            None => {}
-        }
+        self.place_beside(from, id, direction, true);
         let Some(ix) = self.group_ix(id) else {
             return;
         };
@@ -5426,6 +5988,222 @@ impl Workspace {
             }
             self.show_file(&path, &state, cx);
         }
+    }
+
+    /// Puts group `new` into the layout beside group `from`, after it or
+    /// before it along `direction`, and settles the `dimension`: halved
+    /// between the two when they became siblings, moved onto the split that
+    /// now wraps them when they did not.
+    fn place_beside(&mut self, from: u64, new: u64, direction: SplitDirection, after: bool) {
+        let Some(from_ix) = self.group_ix(from) else {
+            return;
+        };
+        let dimension = self.groups[from_ix].dimension();
+        match self.layout_tree.insert_beside(from, new, direction, after) {
+            Some(false) => {
+                if let Some(d) = dimension {
+                    self.groups[from_ix].set_dimension(Some(d / 2.0));
+                    if let Some(new_ix) = self.group_ix(new) {
+                        self.groups[new_ix].set_dimension(Some(d / 2.0));
+                    }
+                }
+            }
+            Some(true) => {
+                self.groups[from_ix].set_dimension(None);
+                if let Some(mut path) = self.layout_tree.path_to(from) {
+                    path.pop();
+                    if let Some(Layout::Split { node, .. }) = self.layout_tree.node_at_mut(&path) {
+                        set_dimension(node, dimension);
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+
+    // ----- dragging tabs ---------------------------------------------------------
+
+    /// A tab drag started: every group paints its drop zones from the next
+    /// frame on. Called from the drag's own constructor, which runs with
+    /// the app rather than this view, so it comes in through a weak handle.
+    fn begin_tab_drag(&mut self, cx: &mut Context<Self>) {
+        self.dragging_tab = true;
+        self.tab_drop = None;
+        cx.notify();
+    }
+
+    /// The dragged tab moved: over group `id`'s content at `position` it
+    /// lights the zone it would land in, and leaving it puts the light out.
+    /// Every group hears every move, so only the one under the pointer
+    /// writes, and only the one that was lit clears.
+    fn tab_drag_moved(
+        &mut self,
+        id: u64,
+        bounds: gpui::Bounds<gpui::Pixels>,
+        position: gpui::Point<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let next = if bounds.contains(&position) {
+            Some((id, DropZone::at(bounds, position)))
+        } else if self.tab_drop.is_some_and(|(g, _)| g == id) {
+            None
+        } else {
+            return;
+        };
+        if self.tab_drop != next {
+            self.tab_drop = next;
+            cx.notify();
+        }
+    }
+
+    /// A tab dropped on group `id`'s content: into its strip from the
+    /// middle, into a new group beside it from a side.
+    fn drop_tab_on_group(
+        &mut self,
+        drag: &TabDrag,
+        id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let zone = match self.tab_drop.take() {
+            Some((g, zone)) if g == id => zone,
+            _ => DropZone::Center,
+        };
+        self.dragging_tab = false;
+        match zone.split() {
+            None => self.move_tab(drag, id, None, cx),
+            Some((direction, after)) => self.split_with_tab(drag, id, direction, after, window, cx),
+        }
+    }
+
+    /// A tab dropped on group `to`'s strip, before tab `at` or at the end:
+    /// it joins that strip, there, and is the active tab.
+    fn drop_tab_on_strip(
+        &mut self,
+        drag: &TabDrag,
+        to: u64,
+        at: Option<usize>,
+        cx: &mut Context<Self>,
+    ) {
+        self.tab_drop = None;
+        self.dragging_tab = false;
+        self.move_tab(drag, to, at, cx);
+    }
+
+    /// Takes tab `ix` out of group `from_ix` with every group stashed. A
+    /// group whose active tab left shows the one that takes its place,
+    /// which means making it live for a moment: its views only ever load
+    /// through the live fields. Says whether the group has nothing left.
+    fn take_tab(&mut self, from_ix: usize, ix: usize, cx: &mut Context<Self>) -> Option<Tab> {
+        let group = &mut self.groups[from_ix];
+        if ix >= group.tabs.len() {
+            return None;
+        }
+        let tab = group.tabs.remove(ix);
+        if group.tabs.is_empty() {
+            return Some(tab);
+        }
+        if ix < group.active_tab {
+            group.active_tab -= 1;
+        } else if ix == group.active_tab {
+            group.active_tab = ix.min(group.tabs.len() - 1);
+            self.load_group(from_ix, cx);
+            self.load_tab(cx);
+            self.stash_active_group();
+        }
+        Some(tab)
+    }
+
+    /// Moves the dragged tab to group `to`, before its tab `at` or at the
+    /// end, and makes it the active tab of the active group. In its own
+    /// group that is a reorder. A group left with nothing closes, as one
+    /// whose last tab closed does.
+    fn move_tab(&mut self, drag: &TabDrag, to: u64, at: Option<usize>, cx: &mut Context<Self>) {
+        self.flush_save(cx);
+        self.stash_active_group();
+        let (Some(from_ix), Some(to_ix)) = (self.group_ix(drag.group), self.group_ix(to)) else {
+            return;
+        };
+        let mut at = at.unwrap_or(usize::MAX);
+        let mut empty = false;
+        let tab = if from_ix == to_ix {
+            // A reorder: the strip's views keep showing what they show
+            // until the end, when the dragged tab takes over if it must.
+            let group = &mut self.groups[to_ix];
+            if drag.tab >= group.tabs.len() {
+                return;
+            }
+            if drag.tab < at {
+                at -= 1;
+            }
+            group.tabs.remove(drag.tab)
+        } else {
+            let Some(tab) = self.take_tab(from_ix, drag.tab, cx) else {
+                return;
+            };
+            empty = self.groups[from_ix].tabs.is_empty();
+            tab
+        };
+        // What the target's views show now: the tab that was active there,
+        // or for a reorder whose active tab left, nothing in particular.
+        let target = &mut self.groups[to_ix];
+        let shown = (from_ix != to_ix || drag.tab != target.active_tab)
+            .then(|| target.tabs.get(target.active_tab).cloned())
+            .flatten();
+        let at = at.min(target.tabs.len());
+        target.tabs.insert(at, tab);
+        target.active_tab = at;
+        self.load_group(to_ix, cx);
+        if shown.is_none() || self.tabs.get(self.active_tab) != shown.as_ref() {
+            self.load_tab(cx);
+        }
+        if empty {
+            self.close_group(drag.group, false, cx);
+        }
+        cx.notify();
+    }
+
+    /// Puts the dragged tab in a new group beside group `beside`, after it
+    /// or before it along `direction`, the way "Split right" and "Split
+    /// down" place theirs, and makes that group active. A group's only tab
+    /// dropped on its own edge has nowhere else to be, so nothing happens.
+    fn split_with_tab(
+        &mut self,
+        drag: &TabDrag,
+        beside: u64,
+        direction: SplitDirection,
+        after: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.flush_save(cx);
+        self.stash_active_group();
+        let Some(from_ix) = self.group_ix(drag.group) else {
+            return;
+        };
+        if drag.group == beside && self.groups[from_ix].tabs.len() <= 1 {
+            return;
+        }
+        if self.group_ix(beside).is_none() {
+            return;
+        }
+        let Some(tab) = self.take_tab(from_ix, drag.tab, cx) else {
+            return;
+        };
+        let empty = self.groups[from_ix].tabs.is_empty();
+        let id = self.new_group(tab.mode, window, cx);
+        self.place_beside(beside, id, direction, after);
+        let Some(ix) = self.group_ix(id) else {
+            return;
+        };
+        self.groups[ix].tabs = vec![tab];
+        self.groups[ix].active_tab = 0;
+        self.load_group(ix, cx);
+        self.load_tab(cx);
+        if empty {
+            self.close_group(drag.group, false, cx);
+        }
+        cx.notify();
     }
 
     /// `workspace:close-tab-group`, and what closing a group's last tab
@@ -5857,9 +6635,10 @@ impl Workspace {
             )
         };
         // The icons are the ones Obsidian's ribbon names: `lucide-file-search`
-        // for the switcher, `git-fork` for the graph, `calendar`, `files` for
-        // a template and `terminal` for the palette.
-        let items: [(&'static str, &'static str, &'static str, &'static str); 5] = [
+        // for the switcher, `git-fork` for the graph, `layout-dashboard` for
+        // a new canvas, `calendar`, `files` for a template and `terminal`
+        // for the palette.
+        let items: [(&'static str, &'static str, &'static str, &'static str); 6] = [
             (
                 "ribbon-switcher",
                 "file-search",
@@ -5867,6 +6646,12 @@ impl Workspace {
                 "switcher",
             ),
             ("ribbon-graph", "git-fork", "graph:open", "graph"),
+            (
+                "ribbon-canvas",
+                "layout-dashboard",
+                "canvas:new-file",
+                "canvas",
+            ),
             ("ribbon-daily", "calendar", "daily-notes", "daily-notes"),
             ("ribbon-template", "files", "insert-template", "templates"),
             (
@@ -5945,6 +6730,10 @@ impl Workspace {
             .border_b_1()
             .border_color(theme.border)
             .overflow_hidden()
+            // A tab dropped on the strip's open space joins it at the end.
+            .on_drop(cx.listener(move |this, drag: &TabDrag, _, cx| {
+                this.drop_tab_on_strip(drag, group, None, cx)
+            }))
             // Without the ribbon a collapsed left sidebar would have no
             // way back from the window.
             .when(first && !show_ribbon && !self.left_visible, |d| {
@@ -5953,6 +6742,13 @@ impl Workspace {
             .children(tabs.iter().enumerate().map(|(ix, tab)| {
                 let active = ix == active_ix;
                 let title = tab.title();
+                let drag = TabDrag {
+                    group,
+                    tab: ix,
+                    title: title.clone(),
+                };
+                let this = cx.weak_entity();
+                let drop_wash = theme.bg_active;
                 // Obsidian's tab: 34 px tall, 200 px wide, the active one
                 // in the content's colour with 10 px top corners, its title
                 // in the small UI size and its close button a 20 px disc.
@@ -5986,6 +6782,18 @@ impl Workspace {
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.activate_group(group, cx);
                         this.activate_tab(ix, cx)
+                    }))
+                    // Picking the tab up: the ghost is its title, and the
+                    // workspace is told so every group shows its zones.
+                    .on_drag(drag, move |drag, _, _, cx| {
+                        this.update(cx, |w, cx| w.begin_tab_drag(cx)).ok();
+                        let title = drag.title.clone();
+                        cx.new(|_| TabDragPreview { title })
+                    })
+                    // A tab dropped on another goes in front of it.
+                    .drag_over::<TabDrag>(move |s, _, _, _| s.bg(drop_wash))
+                    .on_drop(cx.listener(move |this, drag: &TabDrag, _, cx| {
+                        this.drop_tab_on_strip(drag, group, Some(ix), cx)
                     }))
                     .on_mouse_down(
                         gpui::MouseButton::Middle,
@@ -6520,6 +7328,7 @@ impl Workspace {
             "editor": self.editor.read(cx).describe(text, cx),
             "reading": self.reading.read(cx).describe(),
             "graph": graph,
+            "canvas": self.canvas.read(cx).describe(cx),
             "status": self.status_text(),
             "notices": self.notices.texts(),
             "focus": {
@@ -6622,7 +7431,11 @@ impl Workspace {
                 MainView::Editor => "editor",
                 _ => "none",
             },
-            "workspace" | "reading" | "graph" | "none" => "none",
+            "canvas-editor" => match painted {
+                MainView::Canvas => "canvas-editor",
+                _ => "none",
+            },
+            "workspace" | "reading" | "graph" | "canvas" | "none" => "none",
             _ => "input",
         }
     }
@@ -6645,6 +7458,12 @@ impl Workspace {
                 self.editor
                     .update(cx, |e, cx| e.type_text(text, window, cx));
                 "editor"
+            }
+            "canvas-editor" => {
+                if let Some(editor) = self.canvas.read(cx).card_editor().cloned() {
+                    editor.update(cx, |e, cx| e.type_text(text, window, cx));
+                }
+                "canvas-editor"
             }
             // Nothing else is reachable from here, so nothing else is
             // typed into: a focused input is answered by the caller, which
@@ -6677,6 +7496,17 @@ impl Workspace {
         }
         if self.graph.focus_handle(cx).is_focused(window) {
             return "graph";
+        }
+        if self
+            .canvas
+            .read(cx)
+            .card_editor()
+            .is_some_and(|e| e.read(cx).focus_handle_ref().is_focused(window))
+        {
+            return "canvas-editor";
+        }
+        if self.canvas.focus_handle(cx).is_focused(window) {
+            return "canvas";
         }
         if self.switcher.focus_handle(cx).is_focused(window) {
             return "switcher-input";
@@ -6742,6 +7572,7 @@ impl Workspace {
             "editor" => MainView::Editor,
             "reading" => MainView::Reading,
             "graph" => MainView::Graph,
+            "canvas" => MainView::Canvas,
             other => return Err(format!("unknown view: {other}")),
         };
         if wanted != painted {
@@ -7541,6 +8372,7 @@ fn tab_from_leaf(
                 history: vec![file.to_string()],
                 history_ix: 1,
                 leaf: Some(leaf.clone()),
+                view_state: inner.and_then(|s| s.get("viewState")).cloned(),
             }
         }
         (Some("empty"), None) => Tab {
@@ -7632,7 +8464,7 @@ fn leaf_json(tab: &Tab) -> Value {
                 "state": {
                     "type": leaf_view_type(p),
                     "state": {"file": p},
-                    "icon": "lucide-file",
+                    "icon": leaf_icon(p),
                     "title": title,
                 },
             }),
@@ -7658,11 +8490,44 @@ fn leaf_json(tab: &Tab) -> Value {
                 inner.insert("source".into(), json!(source));
             }
         }
+        // A canvas leaf records where the view looked, when it is known; a
+        // tab restored with a `viewState` and never moved keeps the one it
+        // was read with.
+        if leaf_view_type(path) == "canvas" {
+            if let Some(view_state) = &tab.view_state {
+                if let Some(inner) = leaf
+                    .get_mut("state")
+                    .and_then(|s| s.get_mut("state"))
+                    .and_then(Value::as_object_mut)
+                {
+                    inner.insert("viewState".into(), view_state.clone());
+                }
+            }
+        }
         if let Some(state) = leaf.get_mut("state").and_then(Value::as_object_mut) {
             state.insert("title".into(), json!(title));
         }
     }
     leaf
+}
+
+/// The Lucide icon Obsidian records on a file's leaf: the dashboard for a
+/// canvas, the plain file otherwise. OBSERVE: what it writes for images,
+/// PDFs and the rest.
+fn leaf_icon(path: &str) -> &'static str {
+    match FileKind::from_path(path) {
+        FileKind::Canvas => "lucide-layout-dashboard",
+        _ => "lucide-file",
+    }
+}
+
+/// The tab strip's name for a file: a note's name without `.md`, and a
+/// canvas without `.canvas` too, which is how Obsidian titles its tabs.
+fn tab_display_name(file_name: &str) -> &str {
+    match file_name.rsplit_once('.') {
+        Some((stem, ext)) if ext.eq_ignore_ascii_case("canvas") && !stem.is_empty() => stem,
+        _ => display_name(file_name),
+    }
 }
 
 /// The leaf view type Obsidian gives a file of this kind.
@@ -7689,6 +8554,9 @@ fn empty_pane(text: &'static str, theme: &Theme) -> gpui::AnyElement {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(kind) = self.pending_canvas_pick.take() {
+            self.open_canvas_file_chooser(kind, window, cx);
+        }
         // A view's focus handle only joins the dispatch tree when the frame
         // that paints it is prepainted, so this — the start of that frame —
         // is the first moment a focus asked for elsewhere can land. A modal
@@ -7700,9 +8568,16 @@ impl Render for Workspace {
         {
             self.focus_main(window, cx);
         }
+        // A drag that ended anywhere but on a drop zone just stops: gpui
+        // drops it on the mouse up and redraws, and this is where the zones
+        // learn to go away.
+        if self.dragging_tab && !cx.has_active_drag() {
+            self.dragging_tab = false;
+            self.tab_drop = None;
+        }
         let theme = cx.global::<Theme>().clone();
         let title: SharedString = match &self.current {
-            Some(p) => display_name(p.rsplit('/').next().unwrap_or(p))
+            Some(p) => tab_display_name(p.rsplit('/').next().unwrap_or(p))
                 .to_string()
                 .into(),
             None => "No file is open".into(),
@@ -7845,7 +8720,15 @@ impl Render for Workspace {
                 )
             });
 
-        let (editor_status, words, chars) = if self.mode.is_editing() {
+        // Obsidian's word count is the Markdown view's: a canvas tab shows
+        // none, and no caret either.
+        let is_canvas = self
+            .current
+            .as_deref()
+            .is_some_and(|p| FileKind::from_path(p) == FileKind::Canvas);
+        let (editor_status, words, chars) = if is_canvas {
+            (String::new(), 0, 0)
+        } else if self.mode.is_editing() {
             let editor = self.editor.read(cx);
             let cursor = editor.cursor();
             let cursors = match editor.cursor_count() {
@@ -7894,14 +8777,16 @@ impl Render for Workspace {
                     .overflow_hidden()
                     .child(self.status.clone()),
             )
-            .child(
-                div()
-                    .px(px(4.))
-                    .whitespace_nowrap()
-                    .child(SharedString::from(format!(
-                        "{editor_status}{words} words, {chars} characters"
-                    ))),
-            );
+            .when(!is_canvas, |bar| {
+                bar.child(
+                    div()
+                        .px(px(4.))
+                        .whitespace_nowrap()
+                        .child(SharedString::from(format!(
+                            "{editor_status}{words} words, {chars} characters"
+                        ))),
+                )
+            });
 
         // Every overlay occludes: a modal in Obsidian owns the pointer as
         // well as the keyboard, and without this the editor's raw window
@@ -8148,6 +9033,7 @@ mod tests {
             history: vec!["Sub/Note.md".into()],
             history_ix: 1,
             leaf: Some(read.clone()),
+            view_state: None,
         };
         assert_eq!(leaf_json(&tab), read);
     }
@@ -8161,6 +9047,7 @@ mod tests {
             history: Vec::new(),
             history_ix: 0,
             leaf: Some(read.clone()),
+            view_state: None,
         };
         let written = leaf_json(&tab);
         assert_eq!(written["id"], read["id"]);
@@ -8176,6 +9063,34 @@ mod tests {
         assert_eq!(written["state"]["state"]["source"], json!(true));
     }
 
+    /// A canvas tab is written as Obsidian's canvas leaf: its view type and
+    /// icon, the title without the extension, and the `viewState` the view
+    /// reported; a leaf restored with one and never moved keeps it.
+    #[test]
+    fn a_canvas_tab_is_written_as_a_canvas_leaf() {
+        let tab = Tab {
+            path: Some("Plans/Board.canvas".into()),
+            mode: ViewMode::LivePreview,
+            history: Vec::new(),
+            history_ix: 0,
+            leaf: None,
+            view_state: Some(json!({"x": 100, "y": -20, "zoom": -1})),
+        };
+        let written = leaf_json(&tab);
+        assert_eq!(written["state"]["type"], json!("canvas"));
+        assert_eq!(written["state"]["icon"], json!("lucide-layout-dashboard"));
+        assert_eq!(written["state"]["title"], json!("Board"));
+        assert_eq!(
+            written["state"]["state"],
+            json!({"file": "Plans/Board.canvas", "viewState": {"x": 100, "y": -20, "zoom": -1}})
+        );
+        assert!(written["state"]["state"].get("mode").is_none());
+        let known = |_: &str| true;
+        let (_, restored) = tab_from_leaf(&written, ViewMode::Reading, &known).unwrap();
+        assert_eq!(restored.view_state, tab.view_state);
+        assert_eq!(leaf_json(&restored), written);
+    }
+
     #[test]
     fn a_tab_that_moved_to_another_note_gets_a_fresh_leaf() {
         let read = leaf("a1072f377b3d1c69", "Old.md", "source", false);
@@ -8185,6 +9100,7 @@ mod tests {
             history: Vec::new(),
             history_ix: 0,
             leaf: Some(read),
+            view_state: None,
         };
         let written = leaf_json(&tab);
         let id = written["id"].as_str().unwrap();
@@ -8285,14 +9201,14 @@ mod tests {
     fn splitting_puts_a_sibling_in_a_split_that_runs_that_way_and_wraps_otherwise() {
         let mut tree = Layout::split(SplitDirection::Vertical, vec![Layout::Group(1)]);
         assert_eq!(
-            tree.insert_beside(1, 2, SplitDirection::Vertical),
+            tree.insert_beside(1, 2, SplitDirection::Vertical, true),
             Some(false)
         );
         let mut order = Vec::new();
         tree.groups(&mut order);
         assert_eq!(order, [1, 2]);
         assert_eq!(
-            tree.insert_beside(2, 3, SplitDirection::Horizontal),
+            tree.insert_beside(2, 3, SplitDirection::Horizontal, true),
             Some(true)
         );
         assert_eq!(tree.path_to(3), Some(vec![1, 1]));
@@ -8321,6 +9237,60 @@ mod tests {
         tree.groups(&mut order);
         assert_eq!(order, [1]);
         assert!(matches!(&tree, Layout::Split { children, .. } if children.len() == 1));
+    }
+
+    /// A tab dropped on a group's left or top edge goes before it: a sibling
+    /// in front when the split runs that way, the first child of the split
+    /// that wraps the pair when it does not.
+    #[test]
+    fn dropping_on_a_near_edge_puts_the_new_group_in_front() {
+        let mut tree = Layout::split(SplitDirection::Vertical, vec![Layout::Group(1)]);
+        assert_eq!(
+            tree.insert_beside(1, 2, SplitDirection::Vertical, false),
+            Some(false)
+        );
+        let mut order = Vec::new();
+        tree.groups(&mut order);
+        assert_eq!(order, [2, 1]);
+        assert_eq!(
+            tree.insert_beside(1, 3, SplitDirection::Horizontal, false),
+            Some(true)
+        );
+        assert_eq!(tree.path_to(3), Some(vec![1, 0]));
+        assert_eq!(tree.path_to(1), Some(vec![1, 1]));
+        assert_eq!(tree.neighbors(1, SplitDirection::Horizontal, false), [3]);
+    }
+
+    /// The zones over a group's content: the outer band of each side splits
+    /// towards that side, the corner goes to the nearer edge, and the middle
+    /// joins the strip. The band is measured on the shorter side.
+    #[test]
+    fn drop_zones_follow_the_nearest_edge_within_the_band() {
+        let bounds = gpui::Bounds {
+            origin: point(px(100.), px(50.)),
+            size: gpui::size(px(400.), px(200.)),
+        };
+        let at = |x: f32, y: f32| DropZone::at(bounds, point(px(100. + x), px(50. + y)));
+        // The band is 30 percent of 200: 60 px.
+        assert_eq!(at(200., 100.), DropZone::Center);
+        assert_eq!(at(10., 100.), DropZone::Left);
+        assert_eq!(at(390., 100.), DropZone::Right);
+        assert_eq!(at(200., 10.), DropZone::Top);
+        assert_eq!(at(200., 190.), DropZone::Bottom);
+        assert_eq!(at(70., 100.), DropZone::Center);
+        assert_eq!(at(200., 65.), DropZone::Center);
+        // In a corner the nearer edge wins.
+        assert_eq!(at(20., 40.), DropZone::Left);
+        assert_eq!(at(40., 20.), DropZone::Top);
+        assert_eq!(
+            DropZone::Left.split(),
+            Some((SplitDirection::Vertical, false))
+        );
+        assert_eq!(
+            DropZone::Bottom.split(),
+            Some((SplitDirection::Horizontal, true))
+        );
+        assert_eq!(DropZone::Center.split(), None);
     }
 
     #[test]
@@ -8803,38 +9773,45 @@ mod tests {
     fn the_main_area_paints_no_editor_without_a_file_behind_it() {
         for mode in [ViewMode::LivePreview, ViewMode::Source] {
             assert_eq!(
-                Workspace::main_view_for(mode, false, false, false),
+                Workspace::main_view_for(mode, false, false, false, false),
                 MainView::Empty,
                 "{mode:?} with nothing open"
             );
             assert_eq!(
-                Workspace::main_view_for(mode, true, false, true),
+                Workspace::main_view_for(mode, true, false, true, false),
                 MainView::Editor,
                 "{mode:?} with a note open"
             );
             // The `--synthetic` spike hands the editor a note that is in no
             // vault: the buffer names a file, and that is what mounts it.
             assert_eq!(
-                Workspace::main_view_for(mode, false, false, true),
+                Workspace::main_view_for(mode, false, false, true, false),
                 MainView::Editor,
                 "{mode:?} with a buffer that belongs to no vault"
             );
             assert_eq!(
-                Workspace::main_view_for(mode, true, true, true),
+                Workspace::main_view_for(mode, true, true, true, false),
                 MainView::Reading,
                 "{mode:?} over an image"
             );
         }
         assert_eq!(
-            Workspace::main_view_for(ViewMode::Reading, false, false, true),
+            Workspace::main_view_for(ViewMode::Reading, false, false, true, false),
             MainView::Empty,
             "a buffer is not a built note"
         );
         assert_eq!(
-            Workspace::main_view_for(ViewMode::Graph, false, false, false),
+            Workspace::main_view_for(ViewMode::Graph, false, false, false, false),
             MainView::Graph,
             "the graph needs no file"
         );
+        for mode in [ViewMode::Reading, ViewMode::LivePreview, ViewMode::Source] {
+            assert_eq!(
+                Workspace::main_view_for(mode, false, false, false, true),
+                MainView::Canvas,
+                "{mode:?} over a canvas"
+            );
+        }
     }
 
     /// The socket's `type` reaches the editor only while the main area is

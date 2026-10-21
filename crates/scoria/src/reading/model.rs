@@ -237,6 +237,44 @@ pub fn build_with(
     Model { blocks, starts }
 }
 
+/// Builds one part of `text`, the content of `source_path`: the section
+/// under a heading path (`#A#B`, from the heading to the next of the same
+/// or a higher level) or the one block carrying an id (`#^id`). `None`
+/// when the note has no such heading or block. A canvas file card with a
+/// `subpath` shows exactly this, so unlike an embedded section it is built
+/// at depth 0: its task markers are positions in the note itself and its
+/// embeds nest as deep as the note's own would.
+pub(crate) fn build_section(
+    source_path: &str,
+    text: &str,
+    subpath: &Subpath<'_>,
+    vault: &dyn EmbedSource,
+    opts: BuildOptions,
+) -> Option<Model> {
+    let doc = parse(text);
+    let selected: Vec<Block<'_>> = match subpath {
+        Subpath::Headings(names) => section(&doc.blocks, names)?.to_vec(),
+        Subpath::Block(id) => vec![block_by_id(&doc.blocks, id)?.clone()],
+    };
+    let mut b = Builder {
+        vault,
+        source_path,
+        text: doc.source,
+        opts,
+        depth: 0,
+        next_id: 0,
+        footnotes: FootnoteState::default(),
+        line_starts: None,
+    };
+    b.footnotes.definitions = collect_definitions(&doc.blocks);
+    let starts = selected.iter().map(|b| b.span.start).collect();
+    let mut blocks = b.blocks(&selected, false);
+    if let Some(section) = b.footnote_section(&doc) {
+        blocks.push(section);
+    }
+    Some(Model { blocks, starts })
+}
+
 /// A top-level block Live Preview renders in place of its source lines:
 /// a table, a math block, or a paragraph that is one embed.
 #[derive(Debug, Clone, PartialEq)]

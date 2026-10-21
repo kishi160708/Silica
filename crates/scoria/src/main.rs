@@ -15,6 +15,7 @@
 
 mod assets;
 mod bookmarks;
+mod canvas;
 mod chooser;
 #[cfg(unix)]
 mod control;
@@ -311,6 +312,7 @@ pub fn bind_all_keys(cx: &mut App, registry: &CommandRegistry) {
     workspace::bind_keys(cx, registry);
     text_input::bind_keys(cx);
     graph::bind_keys(cx);
+    canvas::view::bind_keys(cx);
     settings::bind_keys(cx);
     prompt::bind_keys(cx);
     cx.bind_keys([KeyBinding::new("ctrl-q", Quit, None)]);

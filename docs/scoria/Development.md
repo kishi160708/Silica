@@ -226,8 +226,9 @@ of mixed use in both apps. The gate run opened on 2026-10-18, see
 | File recovery | out of phase 3: Obsidian keeps its snapshots in IndexedDB outside the vault, so it cannot affect the gate |
 | Writing settings back | done for every control Obsidian itself offers as one, see [[#Settings writing, 2026-10-18]], [[#Settings dropdowns, 2026-10-18]] and [[#Settings sliders and text fields, 2026-10-18]] |
 | Round-trip harness | done, see [[#Round-trip harness, 2026-10-18]] |
-| Canvas writer | done: the bytes Obsidian writes on an edited save, see [[#Canvas writer, 2026-10-19]]; nothing in the app calls it yet |
-| Tab groups | done: Split right, Split down, the four focus commands, draggable dividers and `workspace.json`'s `main` tree, see [[#Tab groups, 2026-10-20]] |
+| Canvas writer | done: the bytes Obsidian writes on an edited save, see [[#Canvas writer, 2026-10-19]]; the canvas view saves through it |
+| Canvas view | done: a `.canvas` opens in the main area, pans, zooms, selects, moves, resizes, draws edges, colours, groups, copies, pastes and undoes, cards are typed into, the menus, controls and commands are Obsidian's, and it autosaves in Obsidian's bytes, see [[#Canvas view, 2026-10-21]] and [[#Canvas view, measured, 2026-10-21]] |
+| Tab groups | done: Split right, Split down, the four focus commands, draggable dividers and `workspace.json`'s `main` tree, see [[#Tab groups, 2026-10-20]]; tabs drag between groups and onto split edges, see [[#Dragging tabs, 2026-10-21]] |
 | Bookmarks | done: the pane, the seven commands and `bookmarks.json` in Obsidian's bytes, see [[#Bookmarks, 2026-10-20]] |
 | The gate itself | open: the harness passes on the real vault, the week of mixed use has not run, see [[#The gate run opens, 2026-10-18]] |
 
@@ -1861,6 +1862,157 @@ after Enter matched the probe's bytes shape for shape, `bookmark-current-section
 wrote ` ^caceeb` onto the paragraph and the autosave saved it, the pane
 listed the items with the open note marked, and clicking the block row
 opened A at the block.
+
+### Canvas view, 2026-10-21
+
+Until now a `.canvas` opened as a placeholder line. `crates//src/canvas/view.rs`
+is the element that draws it, over the gpui-free model in `-canvas`
+(viewport math, hit testing, snapping, the `Scene` with its selection and
+whole-snapshot undo) and the writer in `-formats::canvas`. It is one
+`canvas()` element: prepaint lays out each visible card's content with
+`layout_as_root` at the card's screen size (the content comes from
+`canvas/cards.rs`), paint draws the dot grid anchored to canvas space, the
+groups with a wash and their label, the edges as cubic Béziers with filled
+arrow heads and a pill for a label, the card frames with the content clipped
+inside the border, the selection outline and the eight handles, the
+connector dots of the hovered card and the marquee, and then registers the
+mouse listeners. The keyboard goes through a `CanvasView` key context beneath
+the workspace's, so Ctrl+Z undoes a card move instead of reaching the
+editor's command. The zoom buttons are gpui divs in the corner, with
+Lucide's `plus`, `minus`, `rotate-ccw` and `maximize`; the colour palette is
+a row of swatches floating above the selection.
+
+The drag arithmetic is worth a note. A move keeps the canvas delta it has
+applied so far and on every event moves the selection by `pointer - press -
+applied`, then snaps the pressed card to the grid and carries the rest with
+it, so the cards sit on the grid while they move and never drift; Alt holds
+the snap off. A resize computes the whole target rectangle from the press,
+snaps the moving sides only, and asks the model for the delta that gets it
+there. `begin` on the press and `commit` on the release make the drag one
+undo step, and a press that never travels three pixels commits nothing. A
+connector drag wins over the mid-side handle it overlaps, since on a hovered
+card the dot is what is drawn there.
+
+Persistence is the workspace's, the way the editor's is: the view emits
+`Edited`, the same two-second `save_task` runs, and `flush_save` now flushes
+the canvas before the editor through `write_path` and `write_no_follow`,
+refusing when the file is not the bytes the view read or last wrote. That
+same comparison tells the watcher's event for the view's own save from a
+change by someone else, which goes through `Scene::reload`. An empty file is
+an empty canvas, since `canvas:new-file` writes zero bytes and the first
+edit writes `{"nodes":[...],"edges":[]}`; a file that does not parse shows
+its error and is never written. Each tab group has a `canvas` entity beside
+its editor and reading view, `MainView::Canvas` paints it in every mode but
+the graph's, and the tab records the view's `viewState` as it changes so the
+leaf is written as Obsidian's — `type: canvas`, `lucide-layout-dashboard`,
+the title without the extension — whether or not the tab is live on quit.
+`canvas:new-file` creates `Untitled.canvas` empty in the vault root and opens
+it in a new tab unless the active one is empty.
+
+Checked on the desktop over the control socket, in a scratch copy of this
+vault with a showcase canvas of every node type, the six presets and a hex,
+labelled edges both ways and two groups, aiming by the `canvas.origin`,
+`size` and `viewport` the state dump now carries rather than by guessed
+pixels: the wheel panned and the keys zoomed; a drag of a card landed
+snapped at `(520, 40)` and two seconds later the file came back in
+Obsidian's bytes with only that node's `x` and `y` changed (and the writer's
+fixed edge key order, as Obsidian's own edited save does); Ctrl+Z put it
+back and the save followed; a double click made a card and Delete took it; a
+handle resize went `300` to `400` wide; a swatch set `color` and undo
+cleared it; the marquee selected what it crossed, Shift-click toggled,
+Ctrl+A took everything, Shift+2 framed the selection; a broken file showed
+its error; an empty one opened and its first card was written exactly as
+`new.out.canvas`; `canvas:new-file` made a zero-byte `Untitled.canvas` in a
+new tab; a move written to the file by hand reloaded the view; and the leaf
+in `workspace.json` after quit carried the `viewState`. What is not there:
+typing into a card (`editing` is the hook, set by a double click), menus,
+dropping an edge on empty space to make a card, and every `OBSERVE`
+constant's real value, which the probe owes.
+
+### Canvas view, measured, 2026-10-21
+
+The probe ran the same day, after the user's own Obsidian was closed
+([[Specification#Observed canvas view behavior, Obsidian 1.14.4 (installer build 1.13.7)]]).
+Two things about running it are worth keeping. The harness's first Obsidian
+hung with its debugging port gone after a settings step timed out, and
+nothing but a kill and a relaunch brought it back; and with the window only
+1024 px wide, every input event has to be aimed after centring the view on
+its target, or it lands in a sidebar — the first pass right-clicked the
+ribbon and opened the graph in the canvas's leaf. The fixture lives on in
+the results folder, the scripts beside the harness.
+
+What the measurements changed: the constants in `-canvas` (zoom -4 to
+1, threshold -1.7, the 7 unit edge inset, the [70, 150] control reach, the
+10.4 by 13 arrow), the edge geometry (a stub on an arrowless end, the arrow's
+tip on the card), the √scale counter-scaling of labels and strokes, the
+card's 0.7 border and 0.07 tint alphas, the group label pill, the dot grid's
+doubling rule, the controls' move to the top right in Obsidian's four groups,
+the card menu at the bottom, a group body that is background, a double click
+that centres the card on the pointer, and the arrow keys as nudges.
+
+What landed with them: typing into a card. `sync_editor` runs at the start
+of every render and makes an `Editor` entity match the `editing` field, so
+a double click, Enter, the menu's *Edit* and an edge dropped on empty space
+all just set the field. The editor is laid out in the card's frame in place
+of the card's content, with the vault for its embeds and autocompletion;
+every `Edited` event copies its text into the node and marks the scene
+dirty without closing the undo step, so the autosave writes while the
+session stays one step; Escape or a click elsewhere commits it, and a card
+left empty is removed, as Obsidian's is. The socket's `type` reaches it
+(`focus.name` is `canvas-editor`). Then the floating menu with Obsidian's
+items per selection (the swatches under *Set color*), the right-click
+menus, the card menu's three buttons (the note and media pickers reuse the
+chooser, with a `ChooserPurpose` so the workspace knows what a pick means
+and a `pending_canvas_pick` because the subscription has no window),
+`canvas:jump-to-group` through the same chooser, `canvas:convert-to-file`
+(the note named after the card's first line), clipboard, duplicate and
+group keys, task checkboxes inside text cards, and the status bar's word
+count hidden for a canvas tab.
+
+Checked over the socket on the probe's own fixture: a double click made a
+card at `(1075, 620)` for a pointer at `(1200, 650)` and opened it, typed
+text appeared in the state dump, Escape wrote the node with `"text":"Hello
+card"` two seconds later and Ctrl+Z took the text back in one step;
+`canvas:jump-to-group` listed the three groups and framed *Colored group*;
+`canvas:convert-to-file` on *Yellow 3* wrote `Yellow 3.md` and the card came
+back as `"type":"file"` with its colour kept; the card menu's note button
+opened the chooser over the notes and *Plan* became a second `Plan.md`
+card. The screenshots against Obsidian's rendering of the same fixture
+match in layout, colours, labels and edges; the differences are listed in
+the Specification's divergences paragraph.
+
+### Dragging tabs, 2026-10-21
+
+A tab header can be picked up and dropped: on another tab (in front of it),
+on a strip's open space (at its end), or on a group's content, where the
+outer band of each side makes a new group on that side and the middle joins
+the strip. The zones light up as the pointer crosses them, the ghost is the
+tab's title, and a drag let go anywhere else changes nothing. The split a
+side drop makes goes through the same `place_beside` as "Split right" and
+"Split down" — a sibling when the enclosing split runs that way, a wrapping
+split otherwise, the `dimension` halved or handed to the wrapper — only now
+the new group can go in front as well as behind, so `Layout::insert_beside`
+took an `after` flag. The tab itself moves between the groups' stashed tab
+lists with every group stashed first; a group whose active tab left shows
+the next one, which means making it live for a moment since views only load
+through the live fields; the target then goes live with the dropped tab
+active, and a group left empty closes through `close_group`. gpui ends a
+drag on the mouse up and redraws, so the next frame clears the zones when
+no drag is under way, whatever ended it.
+
+The geometry is a guess: the band is 30 percent of the group's shorter
+side, the nearer edge wins in a corner, and Obsidian's own has not been
+probed (the Specification says so). Checked on the desktop over the control
+socket in a scratch vault of three notes, driving `mouse` `down`, `move`
+with `button: "left"` and `up` from a script: a third tab dragged to the
+right edge made a second column and became active; the left group's only
+tab dragged to the bottom edge of the right one closed the left group and
+wrapped the right in a horizontal split with the new group below; that tab
+dropped on the upper strip joined it at the end and the split kept its one
+child; a drop on the first tab moved it in front; and a drag released over
+the sidebar left everything as it was with no zone still lit. Mid-drag
+screenshots show the lit half and the ghost. Two unit tests cover inserting
+in front and the zone geometry.
 
 ### Tab groups, 2026-10-20
 

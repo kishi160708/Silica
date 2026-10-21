@@ -23,6 +23,7 @@ path = "src/main.rs"
 -suggest.workspace = true
 -templates.workspace = true
 -text.workspace = true
+-canvas.workspace = true
 anyhow.workspace = true
 async-channel.workspace = true
 indexmap.workspace = true

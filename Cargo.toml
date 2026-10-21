@@ -11,6 +11,7 @@ members = [
     "crates/-control",
     "crates/-search",
     "crates/-text",
+    "crates/-canvas",
     "crates/-suggest",
     "crates/-templates",
     "crates/-bench",
@@ -33,6 +34,7 @@ publish = false
 -control = { path = "crates/-control" }
 -search = { path = "crates/-search" }
 -text = { path = "crates/-text" }
+-canvas = { path = "crates/-canvas" }
 -suggest = { path = "crates/-suggest" }
 -templates = { path = "crates/-templates" }
 

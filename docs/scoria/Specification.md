@@ -61,6 +61,7 @@ with the command inventory and bundle evidence.
 | Writing a config file changes only what the value changed: the new value is merged into the file's own JSON, so key order, number spelling (`1` not `1.0`, and more digits than an `f32` field holds), and keys the type does not serialize all survive | `-vault::Vault::write_config` |
 | `core-plugins.json` map and legacy array shapes | `-formats::config::CorePlugins` |
 | JSON Canvas 1.0 fields, z-order by array order, unknown keys at every level; written as Obsidian 1.14.4 writes an edited save: the file's own key order kept with the model's keys appended in its fixed order, groups first, default edge ends dropped, one object per line unless it nests one, tabs, no trailing newline, see [[#Observed canvas write behavior, Obsidian 1.14.4 (installer build 1.13.7)]] | `-formats::canvas`, `-formats/tests/canvas_obsidian.rs` (ratchet), `-text/tests/writer_roundtrip.rs` |
+| Canvas view: the dot grid, cards, groups, edges, labels and controls drawn as Obsidian 1.14.4 draws them; pan, zoom, selection, moving, resizing, drawing edges, typing into a card, the menus and the keyboard, saving through the canvas writer; the leaf's `viewState`, see [[#Observed canvas view behavior, Obsidian 1.14.4 (installer build 1.13.7)]] | `::canvas`, `-canvas` |
 | Bases top-level keys and recursive filters | `-formats::base` |
 | Command ids, palette names and default hotkeys as Obsidian 1.14.4 registers them; `hotkeys.json` entries replace the defaults and an empty list unbinds; labels read `Ctrl + Shift + F` | `-commands` |
 | Command palette: fuzzy over names, pinned ids from `command-palette.json` first, then this session's recent commands, then registration order; commands that cannot run are not listed | `::palette` |
@@ -639,6 +640,152 @@ Consequences, each observed:
 odd zoom (the writer formats `0.5` as JavaScript would, but exponent forms
 from 1e21 and below 1e-6 are not reproduced), and whether `backgroundStyle`
 is written for a group that has no `background`.
+
+## Observed canvas view behavior, Obsidian 1.14.4 (installer build 1.13.7)
+
+Observed on 2026-10-21 over CDP on a scratch vault
+(`tools/obsidian-probe/canvas-view.mjs` for the API, command and CSS
+dumps, then `canvas-view-probe-a.mjs`, `-b.mjs` and `-c.mjs` for the
+measurements and the input events; raw results in
+`tools/obsidian-probe/results/2026-10-21-canvas-view.json`). The fixture
+held every node type, the six preset colours and a hex colour, three
+groups (one coloured, one with a `cover` background) and seven edges with
+labels, both arrow directions and no arrows. `-canvas` carries the
+numbers as constants and `::canvas` draws from them.
+
+**The viewport and the leaf.** The canvas is one CSS transform,
+`translate(w/2 - x·s, h/2 - y·s) scale(s)` with `s = 2^zoom`: `x` and `y`
+are the canvas point at the view's centre and `zoom` is the base-2
+logarithm of the scale. Those three are what the leaf records,
+`{"type":"leaf","state":{"type":"canvas","state":{"file":"Fixture.canvas","viewState":{"x":123.5,"y":-45.25,"zoom":-0.75}},"icon":"lucide-layout-dashboard","title":"Fixture"}}`,
+written on the layout's save. The zoom runs from -4 (scale 1/16) to 1
+(scale 2). A plain wheel pans (a 100-unit wheel step moved the view 93
+units at scale 1), Shift+wheel pans sideways, Ctrl+wheel zooms by a third
+of a doubling per 100 units around the pointer; the middle button drags
+the view and so does Space with the left button. Zoom to fit is Shift+1,
+zoom to selection Shift+2.
+
+**Chrome.** Top right, 8 px in, four bordered groups of 32 px buttons
+(34 px with the 1 px border, radius 4): *Canvas settings*; *Zoom in*,
+*Reset zoom*, *Zoom to fit (Shift + 1)*, *Zoom out*; *Undo*, *Redo*;
+*Canvas help*. Bottom centre, 16 px up, the card menu: three 48 px
+buttons in a 144 by 48 box of radius 4, *Drag to add card*, *Drag to add
+note from vault*, *Drag to add media from vault*. Dark theme: group
+`#333333` on `#333333`, buttons `#1c1c1c` with `#b3b3b3` glyphs, the card
+menu `#282828`; light: white on `#e4e4e4`, glyphs `#5c5c5c`.
+
+**The dot grid.** An SVG pattern of `0.7` px circles in
+`--canvas-dot-pattern` (`#333333` dark, `#e4e4e4` light) on
+`--canvas-background` (`#1c1c1c`, `#ffffff`), anchored to canvas space.
+The pattern is 20 canvas units; it is doubled while it would be smaller
+than 20/√2 ≈ 14.14 px on screen (20 px at scale 1 and at 0.5, 14.14 px at
+scale 0.177).
+
+**Cards.** Border 1 px plus a 1 px inset ring of the same colour, radius
+8, all in canvas units, so they scale with the zoom. A coloured card's
+border is its colour at alpha 0.7 and its body is tinted with it at alpha
+0.07 over the canvas background; an uncoloured card has a solid
+`--canvas-color` border (`#7e7e7e` dark, `#c0c0c0` light) and no tint.
+Presets, dark: 1 `#fb464c`, 2 `#e9973f`, 3 `#e0de71`, 4 `#44cf6e`, 5
+`#53dfdd`, 6 `#a882ff`; light: `#e93147`, `#ec7500`, `#e0ac00`,
+`#08b94e`, `#00bfbc`, `#7852ee`. A hex colour is used as is. Content is
+padded 16 units. Selected (`is-focused`): the border solid and a 2 unit
+ring of the colour outside it. The resize handles are invisible: 20 unit
+strips along each side and 20 unit squares at the corners, which appear
+on hover with the four 20 unit connection points at the side midpoints
+(no visible dot). Smallest card 50 by 50. A double click on the
+background makes a 250 by 60 text card centred on the pointer, unsnapped,
+already in edit mode; a file, link or group card made from the menus is
+400 by 400; a new group is labelled `Untitled group`.
+
+**Labels.** Everything above a card is drawn in canvas units and
+counter-scaled by 1/√scale, so it shrinks slower than the cards. A file
+card's name (the page title for a link card) sits at the frame's top
+left, 15 units of `--canvas-card-label-color` (`#666666`, `#ababab`),
+its bottom 4 units above the frame, at most the card's width, ellipsised;
+a text card has none. A group's label is a pill at the same place: 22.5
+units of text, padded 4 by 8, radius 4; solid in the group's colour with
+black text (white in the light theme) for a coloured group, the default
+colour at alpha 0.1 under `--text-muted` for a plain one. An edge's label
+is a pill at the curve's midpoint: 20 units of text in 26 of line, padded
+6, radius 4, the canvas background behind it, drawn above the cards.
+
+**Edges.** The curve starts 7 units out from the middle of the side and
+ends 7 units short of the other; an end without an arrow gets a straight
+7 unit stub to the card, an arrow (tip on the card's edge, 10.4 long,
+13 wide, pointing in) covers it. The control points sit along the sides'
+normals at half the distance between the curve's ends, clamped to
+[70, 150] (observed at spans from 46 to 1826 units). Stroke 2/√scale
+units (2√scale px on screen), colour the edge's or `--canvas-color`; the
+hit area is 24/√scale units wide. A selected edge keeps its stroke.
+Dropping a drawn edge on a card records the side nearest the drop point;
+dropping it on empty space makes a 250 by 60 text card there and opens
+the creation menu (*Add card*, *Add note from vault*, …), and Escape
+takes the card and the edge away again.
+
+**Groups.** The body of a group is background: a click there selects
+nothing and a drag there is a marquee; the frame and the label select
+and drag it. Dragging a group moves the cards wholly inside it (one
+straddling the frame stays). Deleting a group deletes only the group.
+Creating one around the selection (Ctrl+G, or *Create group* on the
+floating menu) appends it to the nodes.
+
+**Selection and keys.** A marquee selects what it crosses (a card half
+covered is selected). The view's own scope binds Ctrl+Z, Ctrl+Shift+Z,
+Ctrl+Y, Ctrl+A, Shift+1, Shift+2 and the arrows: an arrow nudges the
+selection by 20 units, with Shift by 100. Delete and Backspace remove
+the selection, Escape ends editing and leaves the card selected, Enter
+on a selected card edits it, Ctrl+C puts the selection on the clipboard
+as JSON Canvas text and Ctrl+V pastes it (plain text pastes as a new
+card), Ctrl+D duplicates. Snapping (grid and objects, both on by default
+in the Canvas settings tab) is off while Alt is held. A card emptied
+during editing is removed when editing ends; a click outside ends it.
+
+**Menus.** The floating menu above a selection: *Remove*, *Set color*,
+*Zoom to selection (Shift + 2)*, then *Edit* for a text or note card;
+*Align*, *Edit label*, *Set background* for a group; *Line direction*
+(*Nondirectional*, *Unidirectional*, *Bidirectional*) and *Remove label*
+or *Edit label* for an edge; *Create group* and *Align* for several
+cards. *Set color* opens the default plus the six presets plus a custom
+swatch. Right-click on a card: *Zoom to selection*, *Edit*, *Convert to
+file...*, separator, *Remove*; on several: *Zoom to selection*, *Create
+group*, separator, *Cut*, *Copy*, *Paste*, separator, *Delete*; on an
+edge: *Edit label*, *Follow connection*, separator, *Remove*; on the
+background: *Add card*, *Add note from vault*, *Add media from vault*,
+*Add web page*, *Create group*, separator, *Undo*, separator, *Paste*,
+separator, *Snap to grid*, *Snap to objects*, *Read-only*. Ctrl+drag on
+the background draws a rectangle and offers *Add card*, *Add note from
+vault*, *Add media from vault*, *Add web page*, *Create group* for it.
+The commands are `canvas:new-file` (*Create new canvas*),
+`canvas:jump-to-group`, `canvas:convert-to-file` (*Convert to file...*)
+and `canvas:export-as-image`, none with a default hotkey; the last three
+are shown only while a canvas is active.
+
+**Zoomed out.** At zoom -1.7 and below (scale 0.3078; the *Zoom
+threshold for hiding card content* setting) the wrapper gets
+`mod-zoomed-out`: a text card shows a centred `align-left` icon, a note
+card its name at 32 px semibold, an image card keeps its image and a
+link card its web view.
+
+**Saving.** An edit is written about 2 s later (2011 ms measured); a
+viewport change alone writes nothing to the canvas file.
+
+**'s divergences.** The resize handles and connection points are
+drawn (small dots in the card's colour) rather than invisible; a
+selected edge gets a translucent halo; an uncoloured selected card uses
+the accent for its ring (not observed); a link card shows its address
+rather than a web view and its label is the address rather than the
+page title; *Align*, *Set background*, *Edit label*, *Add web page*,
+*Read-only*, the snapping toggles, the settings and help buttons and
+`canvas:export-as-image` are not there; the card menu's buttons are
+clicked, not dragged; an edge dropped on empty space makes its card at
+once rather than through the creation menu; the editor in a card draws
+at the base font size rather than scaled with the zoom; *Convert to
+file* names the note after the card's first line rather than asking.
+
+**Unprobed:** the exact fit padding of Shift+1, the zoom step of the
+buttons, snap-to-objects' rules, the creation rectangle of a Ctrl+drag,
+and the colour of an uncoloured card's selection ring.
 
 ## Observed task checkbox behavior, Obsidian 1.14.4 (installer build 1.13.7)
 
@@ -2810,10 +2957,24 @@ The layout:
 with one graph view shared between groups: a second group showing the graph
 says so in place of it.
 
+Since 2026-10-21 a tab header can also be dragged ([[Development#Dragging tabs, 2026-10-21]]).
+The rule  uses is **not probed**, it is the common desktop one: dropped on
+another tab it goes in front of that tab, on a strip's open space at its end,
+and over a group's content the outer band of each side (30 percent of the
+shorter side, the nearer edge winning in a corner) makes a new group on that
+side the way "Split right" and "Split down" place theirs — a sibling in front
+or behind when the enclosing split runs that way, a wrapping split otherwise —
+while the middle joins the strip. The dropped tab is the active tab of the
+group it landed in, and a group left with no tab closes as it does when its
+last tab is closed. Obsidian's zone geometry, highlight and ghost are still
+to be observed.
+
 **Unprobed:** the `dimension` a drag writes when only *some* siblings have one;
 `workspace:close-others` (without `-tab-group`) across groups; dragging a tab
-header into another group or onto a split edge; `workspace:toggle-stacked-tabs`;
-what "Split right" does from the sidebar's "More options" menu.
+header into another group or onto a split edge (where the zones start, what is
+highlighted, whether a split from a drop halves a `dimension` as "Split right"
+does); `workspace:toggle-stacked-tabs`; what "Split right" does from the
+sidebar's "More options" menu.
 
 ## Observed bookmarks behavior, Obsidian 1.14.4 (installer build 1.13.7)
 
