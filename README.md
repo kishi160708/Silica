@@ -151,9 +151,10 @@ Pushing a `v*` tag builds the `` binary on both forges and attaches the archives
 - [GitHub releases](https://github.com/lw-xiong//releases) — Linux x86_64, Windows x86_64, macOS arm64
 - [git. releases](https://git.///releases) — Linux x86_64
 
-There is no installer: unpack the archive and run ` /path/to/vault`. Only the Linux build
-has been run on a real GPU, and nothing is code-signed for macOS or Windows — see
-`docs//Development.md`.
+There is no installer: unpack the archive and run ` /path/to/vault`. Linux x86_64 is the
+build that runs on the reference machine; the Windows build opens a vault on Windows 11, with the
+desktop's own title bar rather than the hidden frame. The macOS build has never been started.
+Nothing is code-signed for macOS or Windows — see `docs//Development.md`.
 
 Verify a download: `sha256sum -c --ignore-missing SHA256SUMS` checks the archive against the
 checksums the workflow wrote; `gh attestation verify <archive> --repo /` checks GitHub's

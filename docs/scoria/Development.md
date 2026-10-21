@@ -117,11 +117,35 @@ to every archive, which need no secret: `gh attestation verify <archive> --repo 
 confirms the archive came out of this workflow at that commit. Private vulnerability reporting is
 enabled on the GitHub repository, and `SECURITY.md` at the root is the policy.
 
-> [!warning] The Windows and macOS binaries are untested
-> CI only runs `cargo check -p ` on those platforms and the release job is the first thing
-> that links them; neither has been started on a real GPU. Nothing is code-signed or notarized, so
-> macOS Gatekeeper and Windows SmartScreen will both object. Linux x86_64 is the only build that
-> runs on the reference machine.
+> [!warning] The macOS binary is untested, and Windows is only smoke-tested
+> CI runs `cargo check -p ` on both and the release job is the first thing that links them.
+> Nothing is code-signed or notarized, so macOS Gatekeeper and Windows SmartScreen will both
+> object. Linux x86_64 is the build that runs on the reference machine; see
+> [[#Windows smoke test, 2026-10-20]] for what the Windows one was seen to do.
+
+### Windows smoke test, 2026-10-20
+
+Cut with 0.2.0, on `w11`: Windows 11 Pro (build 26200), rustc 1.98.1 MSVC with the Visual Studio
+2022 Build Tools and the cmake they bundle, an NVIDIA GeForce RTX 3060 beside the virtual display
+adapter. `cargo build --release --locked -p ` compiles the pinned `gpui` revision clean in
+3m18s, with no warning of ours; `gpui_windows` builds in place of the Wayland and X11 platform
+crates. The binary opens `docs/` and draws the shell: ribbon, file list, tabs, the
+properties table, and the reading view with headings, wikilinks and lists. Nothing is written to
+stderr.
+
+Two things to know before trusting it:
+
+- The window wears the **desktop's own title bar**. `frame_style` returns `hidden` on every
+  platform and asks for `WindowDecorations::Client`, which the Windows backend does not honour, so
+  the caption is the system's and the app's tab strip sits below it rather than in it. Obsidian's
+  own default on Windows is the hidden frame, so this is a parity gap, not a choice.
+- Only the opening frame was checked. There is no control socket on Windows — it is a Unix domain
+  socket, and `--control` says so and carries on — so the keyboard, editing and saving paths have
+  not been driven there the way the Linux ones are.
+
+The app has to be started in the interactive session to draw anything: over SSH it lands in
+session 0, where there is no desktop. A scheduled task created with `/ru <user> /it` runs it in
+the logged-on session, and the same trick takes the screenshot.
 
 ## Reader (phase 2)
 
