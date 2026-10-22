@@ -285,15 +285,25 @@ setting turned out to live in the Interface tab, to default to **Hidden** on Lin
 nothing under `.obsidian` whichever option is chosen, so there is no vault key for  to honour.
 
 **The frame.** The window opens with gpui's client-side decorations and a transparent background,
-and `workspace::client_frame` wraps the shell the way gpui's `window_shadow` example does: a 12 px
+and `workspace::client_frame` wraps the shell the way gpui's `window_shadow` example does: a 24 px
 margin that holds a soft shadow and the resize edges (the pointer gets the right cursor from a
 hitbox canvas, a press on the margin calls `start_window_resize`), a one pixel border, and none of
 it on an edge that is tiled or maximised, so a snapped window meets the screen without a gap.
+The margin was 12 px until 2026-10-21, with a shadow of sigma 12 at 40 % that the margin cut off
+while it was still an eighth black, which read as a dark band around the window. Obsidian's
+hidden frame measures black at 32 %, sigma 13, pushed 12 px down, in margins of 23 px at the
+sides, 15 above and 46 below ([[Specification#Observed shell typography and chrome, Obsidian 1.14.4 (installer build 1.13.7)|the spec records the profile]]);
+gpui's client inset is one value for all four sides, so  keeps Obsidian's side margin and a
+shorter shadow (sigma 11, 6 px down, the same 32 %) that is as dark at the content's edge and gone
+before the margin ends.
 Since 2026-10-21 the corners are rounded 10 px, which is what Obsidian's hidden frame measures on
 this desktop (`--window-border-radius` is unset in its CSS, so the rounding is the frame's own):
 gpui clips children to rectangles, so `WindowCorners` works out which corners meet no tiled edge
-and every element that reaches one — the ribbon, a sidebar, the tab strip, the close button, the
-status bar, the Settings backdrop — rounds that corner itself, as Zed's title bar does. A canvas
+and every element that reaches one — the workspace's own root box, the ribbon, a sidebar, the tab
+strip, the close button, the status bar, the Settings backdrop — rounds that corner itself, as
+Zed's title bar does. The root box is the one that is easy to miss: it paints `theme.bg` over the
+whole content, so left square it fills each corner with a notch outside every rounded child, and
+the window looks square with a dark fleck in the corner. A canvas
 tab paints its own background and still squares a corner it reaches with the ribbon hidden and the
 left sidebar collapsed. The
 40 px title row is Obsidian's hidden frame: the left sidebar toggle above the ribbon, the dock tab

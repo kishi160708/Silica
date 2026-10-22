@@ -1608,8 +1608,26 @@ const HELP_URL: &str = "https://";
 const MIN_SIDEBAR_WIDTH: f64 = 150.;
 
 /// The margin around the content when  draws the window frame: the
-/// shadow lives in it and the pointer resizes the window from it.
-const FRAME_SHADOW: Pixels = px(12.);
+/// shadow lives in it and the pointer resizes the window from it. Obsidian's
+/// hidden frame measures 23 px at the sides, 15 above and 46 below on this
+/// desktop; gpui's client inset is one value for all four sides, so this is
+/// the side margin, and the shadow is shaped to fade out inside it.
+const FRAME_SHADOW: Pixels = px(24.);
+
+/// The frame shadow's gaussian sigma, which is what gpui's `blur_radius` is.
+/// Obsidian's shadow fits sigma 13 with a 12 px downward offset; a shorter
+/// one with a smaller offset is as dark at the content's edge and is gone
+/// before the margin ends, where Obsidian's deeper bottom margin lets its own
+/// tail run out. A tail cut off by the margin reads as a band around the
+/// window.
+const FRAME_SHADOW_BLUR: Pixels = px(11.);
+
+/// How far the frame shadow sits below the content.
+const FRAME_SHADOW_OFFSET: Pixels = px(6.);
+
+/// The frame shadow's colour: black at 32 %, which is what Obsidian's comes
+/// to at the sides.
+const FRAME_SHADOW_COLOR: u32 = 0x00000052;
 
 /// The radius of a window corner  draws itself. Obsidian's hidden
 /// frame is rounded the same way on this desktop, about 10 px.
@@ -1783,7 +1801,7 @@ fn client_frame(
     let client = matches!(decorations, Decorations::Client { .. });
     window.set_client_inset(if client { FRAME_SHADOW } else { px(0.) });
     let border = theme.border;
-    let shadow: Hsla = rgba(0x00000066).into();
+    let shadow: Hsla = rgba(FRAME_SHADOW_COLOR).into();
     let corners = WindowCorners::of(window);
     div()
         .id("window-backdrop")
@@ -1853,9 +1871,9 @@ fn client_frame(
                         .when(!tiling.is_tiled(), |d| {
                             d.shadow(vec![BoxShadow {
                                 color: shadow,
-                                blur_radius: FRAME_SHADOW,
+                                blur_radius: FRAME_SHADOW_BLUR,
                                 spread_radius: px(0.),
-                                offset: point(px(0.), px(2.)),
+                                offset: point(px(0.), FRAME_SHADOW_OFFSET),
                             }])
                         })
                 })
@@ -9130,6 +9148,10 @@ impl Render for Workspace {
             .flex_col()
             .size_full()
             .bg(theme.bg)
+            // This box paints the whole content square, over the frame's
+            // rounding and under its children's; a corner left square here
+            // is a notch of `theme.bg` outside every rounded child.
+            .map(|d| corners.apply(d))
             .font_family(theme.ui_font.clone())
             .text_size(px(crate::theme::FONT_UI_MEDIUM))
             .text_color(theme.text)

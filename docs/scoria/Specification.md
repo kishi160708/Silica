@@ -2823,6 +2823,16 @@ opacity 0.85 and reads "New tab - <vault> - Obsidian 1.14.4"; the hidden frame g
 nevertheless rounded, about 10 px on all four in a screenshot of 2026-10-21 (KDE Wayland, 2x),
 so the rounding is the hidden frame's own rather than a theme's.
 
+**The hidden frame's shadow.** A window capture at scale 1 on 2026-10-21 (KDE Wayland, the
+surface's own pixels with alpha) shows the content in a transparent margin of **23 px at the left
+and right, 15 px above and 46 px below**. The margin holds a shadow that is pure black at a
+varying alpha: along a side it rises from 0.016 at the outer edge to 0.16 at the content, along
+the top from 0.004 to 0.06, and along the bottom from 0.016 at the outer edge to 0.27 at the
+content, which fits a gaussian of sigma 13 at 32 % black offset 12 px downward (CSS
+`0 12px 27px rgba(0,0,0,0.32)`). The last pixel before the content is darker than the ramp —
+alpha 0.27 at the sides, two pixels of 0.15 and 0.11 at the top — a one pixel outline on the
+shadow rather than a border inside the content, whose first pixel is `--background-secondary`.
+
 **Fonts.** `--font-interface` is `'??', '??', '??', ui-sans-serif, -apple-system, BlinkMacSystemFont,
 system-ui, "Segoe UI", "Google Sans Flex", Roboto, "Inter Variable", "Inter", …` (the `??` are the
 theme and override slots, empty here); `--font-text` is the same without the first slot;
