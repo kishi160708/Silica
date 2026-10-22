@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1280" height="640" viewBox="0 0 1280 640">
+  <defs>
+    <radialGradient id="glow" cx="0.28" cy="0.5" r="0.6">
+      <stop offset="0" stop-color="#E8590C" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#E8590C" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1280" height="640" fill="#0b0b0c"/>
+  <rect width="1280" height="640" fill="url(#glow)"/>
+  <image xlink:href="_v3_fixed.svg" x="130" y="168" width="370" height="305"/>
+  <text x="560" y="292" font-family="Inter" font-weight="700" font-size="112" fill="#faf9f7" letter-spacing="-3"></text>
+  <text x="564" y="356" font-family="Inter" font-weight="500" font-size="38" fill="#e7e5e2">Your vault, opened natively.</text>
+  <text x="564" y="410" font-family="Inter" font-weight="400" font-size="25" fill="#8b8984">Native Rust/GPUI. Opens Obsidian vaults unchanged:</text>
+  <text x="564" y="446" font-family="Inter" font-weight="400" font-size="25" fill="#8b8984">same folder, same Markdown, canvas and bases.</text>
+  <text x="564" y="500" font-family="Inter" font-weight="500" font-size="25" fill="#F2691F"></text>
+</svg>
