@@ -3264,3 +3264,119 @@ row, or the first. The socket's `focus` method takes `explorer`.
 **Unprobed:** Right on a file; where Down starts with no `focusedItem` at
 all; the light theme's ring colour ( uses `#c0c0c0`); whether Up or
 Down from a hidden `focusedItem` (its folder since collapsed) starts over.
+
+## Observed outgoing links pane behavior, Obsidian 1.14.4 (installer build 1.13.7)
+
+Read from a running Obsidian on Linux over CDP on 2026-10-22 with
+`tools/obsidian-probe/outgoing-links.mjs` (raw run in
+`tools/obsidian-probe/results/2026-10-22-outgoing-links.json`), on a scratch
+vault of five notes. `Alpha.md` carried a `related: "[[Gamma]]"` property and,
+in its body, `[[Beta]]`, `[[Beta#Heading|the alias]]`, `[[Beta]]` again,
+`[[Missing]]`, `[Beta link](Beta.md)`, `![[Beta]]`, `[[#Local]]`,
+`[[Gamma#^blk]]` and `[[Sub/Deep]]`, then a line mentioning `Gamma`, `gamma`,
+`GammaAlias` (an alias of Gamma), `Delta`, `Beta` and `delta` without links.
+The right split was 300 px wide. The dark theme's values are the ones quoted;
+`--text-normal` is `#dadada`, `--text-muted` `#b3b3b3`, `--text-faint`
+`#666666`, `--background-primary` `#1C1C1C`, `--background-modifier-border`
+`#333333`.
+
+**The leaf.** `outgoing-links:open` activates a leaf of type `outgoing-link`
+(tab icon `links-going-out`, title "Outgoing links") whose state is
+`{"file": "Alpha.md", "linksCollapsed": false, "unlinkedCollapsed": true}` —
+the unlinked section starts folded. Both keys follow the headers' folds and
+are written to `workspace.json` on quit and read back on restart. The pane has
+no `nav-header` of its own: `.view-content` holds `.outgoing-link-pane`
+directly, padded `12px 12px 32px`.
+
+**Section headers.** "Links" and "Unlinked mentions" are each a
+`div.tree-item-self.is-clickable` (25 px tall, `padding: 4px 8px`, 8 px radius,
+2 px below; `aria-label` "Click to collapse" / "Click to expand") holding a
+`span.tree-item-icon.collapse-icon` that is `display: none` even under the
+pointer, a `div.tree-item-inner` with the label at 13 px, weight 500,
+`--text-normal`, and a `tree-item-flair` with the count at 12 px,
+`--text-faint`. A folded header (`is-collapsed`) is `--text-faint`
+throughout and shows no count. Hovering a header paints
+`--background-modifier-hover` and turns the count `--text-muted`. Clicking
+the Links header folds its list and flips `linksCollapsed`; a second click
+unfolds it.
+
+**The Links section** listed seven rows for the ten links written, in this
+order: `Gamma`, `Beta`, `Heading` / `Beta`, `Missing`, `Local`, `blk` /
+`Gamma`, `Sub/Deep` / `Sub`. So the property link comes first, the body
+follows in order of first occurrence, and one row stands for every link to
+the same target and subpath: `[[Beta]]`, `[Beta link](Beta.md)` and
+`![[Beta]]` collapse into the one "Beta" row, and the alias `the alias` is
+shown nowhere. Each row is `div.tree-item-self.is-clickable.outgoing-link-item`
+(`padding: 4px 8px 4px 24px`, 8 px radius, 2 px below, `--text-muted`, 13 px;
+25 px tall with one line of text, 39 px with two) holding a
+`span.tree-item-icon` (16 by 17, `margin-left: -20px` so it sits in the left
+padding, opacity 0.85, a 14 px icon) and a `div.tree-item-inner` with a
+`div.tree-item-inner-text` and, for some rows, a `div.tree-item-inner-subtext`
+under it at 0.85 em (11.05 px) in `--text-faint`. The icon says what the link
+points at: `lucide-link` for a note, Obsidian's own `heading-glyph` for a
+heading subpath, `lucide-layout-list` for a block subpath, and
+`lucide-file-plus` for a link that resolves to nothing, whose row also carries
+`aria-label="Not created yet"` and is otherwise styled like the rest (no
+unresolved colour, opacity 1). The text is the subpath's last element for a
+heading or block link (`Heading`, `blk`, `Local`), else the path as written
+(`Beta`, `Missing`, `Sub/Deep`); the subtext is the note's name under a
+heading or block link to another note (`Beta`, `Gamma`) — a self link
+(`[[#Local]]`) has none — and the folder under a note link (`Sub`), so a root
+note has none either. Hovering a row paints `--background-modifier-hover` and
+turns the text `--text-normal`.
+
+**Clicks.** The `Heading` / `Beta` row made `Beta.md` the active file in the
+root leaf, in source mode with the cursor at line 4 column 0 — the heading's
+line. The `Missing` row created an empty `Missing.md` at the vault root and
+opened it, with no dialog. A right click on a row opens the file menu: Open in
+new tab, Open to the right, Open in new window, ---, Rename..., Move file
+to..., Bookmark..., ---, Copy path, ---, Open in default app, Show in system
+explorer, Reveal file in navigation.
+
+**Unlinked mentions** (count 6: every occurrence, case-insensitively, aliases
+included, `Delta` and `delta` both). The section is a `search-result-container`
+(`padding: 4px 1px 16px`) holding one `div.tree-item.search-result` with
+*no* `search-result-file-title` row — the file is the open note itself — and
+a `div.search-result-file-matches` (background `--background-primary`, 4 px
+radius, `margin: 4px 0 8px`, 12 px, line height 1.3, `--text-muted`, no
+border). Each `div.search-result-file-match.tappable` is padded
+`8px 20px 8px 12px`, wraps (`white-space: pre-wrap`), holds the whole line
+with the mention in a `span.search-result-file-matched-text` (background
+`--text-highlight-bg`, text `--text-normal`), and under it, 6 px down, a
+`div.search-result-file-match-destination-file` chip
+(`aria-label="Link this file"`, `padding: 4px 6px`, background
+`--background-modifier-border`, 4 px radius) holding a 14 px `lucide-link` in
+`--text-faint` and the mentioned note's name at 12 px in `--text-muted`. Under
+the pointer a match paints the accent at 33% (`oklch(0.60 0.217 292 / 0.33)`)
+and two `search-result-hover-button`s (`mod-top` with `lucide-chevron-up`,
+`mod-bottom` with `lucide-chevron-down`, both labelled "Show more context")
+appear at its right. Clicking the chip under `Gamma` rewrote the line to
+`[[Gamma]] and gamma and GammaAlias …` with nothing else in the file touched
+and no notice; the pane then listed five mentions. Clicking a match's text
+moved the editor's cursor to the mention's first character (line 9, column 24
+for `GammaAlias`) and left the note open.
+
+**The Backlinks pane in the same run**, for comparison with the search pane's
+rows it reuses: the same section headers (flair `--text-faint`, no visible
+triangle); a `div.tree-item-self.search-result-file-title.is-clickable` per
+file (`padding: 4px 8px 4px 24px`) with a *visible* `right-triangle` collapse
+icon in the left padding, the name at 13 px `--text-normal` and a faint count;
+then the same `search-result-file-matches` card. Two links on one line
+(`[[Alpha]] and [[Alpha#Local|local]]`) are one match with two highlighted
+spans and count two. An unlinked mention's `button.search-result-file-match-replace-button`
+reading "Link" (12 px, `padding: 4px 8px`, background
+`--background-modifier-border`, 5 px radius, `--text-normal`) is absolutely
+placed 2 px from the top and 24 px from the right of the match and has no size
+until the match is hovered; clicking it rewrote `Mentions Alpha once.` to
+`Mentions [[Alpha]] once.`. An empty Linked mentions section shows
+`div.search-empty-state` "No backlinks found." at 13 px `--text-faint`, 8 px in,
+12 px below. The pane's header buttons are `lucide-list` (Collapse results),
+`lucide-move-vertical` (Show more context), `lucide-sort-asc` (Change sort
+order) and `lucide-search` (Show search filter), and the pane under the header
+is padded `4px 12px 32px`.
+
+**Unprobed:** what the Links section shows when the note has no links at all;
+what a link to an image or other non-note file looks like; whether the
+subtext under a note link is the written path's folder or the resolved file's
+(the fixture made them the same); the per-match "Show more context" buttons'
+effect; keyboard navigation of either pane.

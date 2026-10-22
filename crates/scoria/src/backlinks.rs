@@ -13,6 +13,7 @@ use rayon::prelude::*;
 use _cache::links::{link_path, LinkFormat};
 use _cache::{LinkResolver, MetadataCache};
 use _formats::FileKind;
+use _markdown::{parse_linktext, Subpath};
 use _search::natural_cmp;
 use std::collections::HashMap;
 use std::ops::Range;
@@ -38,6 +39,9 @@ pub struct Match {
     /// An unlinked mention's own bytes in the file, which the Link button
     /// rewrites as a link.
     pub mention: Option<Range<usize>>,
+    /// The note an outgoing unlinked mention names, which the "Link this
+    /// file" chip under it shows and links to.
+    pub target: Option<String>,
 }
 
 /// The matches in one file, or one outgoing link.
@@ -50,6 +54,12 @@ pub struct Group {
     /// it the way clicking the link in the note does, subpath and all, and
     /// creates the note when nothing stands behind it.
     pub link: Option<String>,
+    /// A Links row's second line: the note a heading or block belongs to,
+    /// or the folder a note sits in.
+    pub subtext: Option<String>,
+    /// A Links row's glyph: `link` for a note, `heading` or `layout-list`
+    /// for a subpath, `file-plus` for a link nothing stands behind.
+    pub icon: Option<&'static str>,
     pub matches: Vec<Match>,
 }
 
@@ -172,6 +182,7 @@ pub fn linked_mentions(
                 ranges: Vec::new(),
                 offset: Some(offset),
                 mention: None,
+                target: None,
             },
             (None, Some(text)) => {
                 let (snippet, range) = context(text, offset..b.link.position.end.offset, extra);
@@ -180,6 +191,7 @@ pub fn linked_mentions(
                     ranges: vec![range],
                     offset: Some(offset),
                     mention: None,
+                    target: None,
                 }
             }
             (None, None) => Match {
@@ -187,6 +199,7 @@ pub fn linked_mentions(
                 ranges: Vec::new(),
                 offset: Some(offset),
                 mention: None,
+                target: None,
             },
         };
         match groups
@@ -198,6 +211,8 @@ pub fn linked_mentions(
                 path: Some(b.source.to_string()),
                 label: label_of(b.source),
                 link: None,
+                subtext: None,
+                icon: None,
                 matches: vec![m],
             }),
         }
@@ -205,37 +220,86 @@ pub fn linked_mentions(
     Section::of(LINKED, groups)
 }
 
-/// Links: every link, embed and property link `path` writes, one row each
-/// in file order with the properties first, labelled the way the link
-/// reads in the note (its alias when it has one).
+/// Links: one row per distinct target `path` links to, the properties
+/// first and the body in order of first occurrence, as Obsidian lists them:
+/// `[[Beta]]`, `[Beta](Beta.md)` and `![[Beta]]` are one "Beta" row. A
+/// heading or block link is labelled by that heading or block with the
+/// note under it; a note link by the path as written with its folder
+/// under it; an alias is never shown.
 pub fn outgoing_links(cache: &MetadataCache, path: &str) -> Section {
     let Some(meta) = cache.file(path) else {
         return Section::empty(LINKS);
     };
-    let properties = meta
-        .frontmatter_links
-        .iter()
-        .map(|l| (l.link.as_str(), l.display_text.as_deref()));
+    let properties = meta.frontmatter_links.iter().map(|l| l.link.as_str());
     let body = meta
         .links
         .iter()
         .chain(meta.embeds.iter())
-        .map(|l| (l.link.as_str(), l.display_text.as_deref()));
-    let groups = properties
-        .chain(body)
-        .map(|(link, display)| {
-            let target = cache.resolve(link, path).map(str::to_string);
-            Group {
-                label: display
-                    .map(str::to_string)
-                    .unwrap_or_else(|| link.to_string()),
-                path: target,
-                link: Some(link.to_string()),
-                matches: Vec::new(),
+        .map(|l| l.link.as_str());
+    let mut seen: Vec<String> = Vec::new();
+    let mut groups: Vec<Group> = Vec::new();
+    for link in properties.chain(body) {
+        let parsed = parse_linktext(link);
+        let target = cache.resolve(link, path).map(str::to_string);
+        let written = if parsed.path.is_empty() {
+            path.to_string()
+        } else {
+            strip_md(parsed.path).to_string()
+        };
+        let subpath = parsed
+            .subpath
+            .as_ref()
+            .map(|s| match s {
+                Subpath::Headings(h) => format!("#{}", h.join("#")),
+                Subpath::Block(b) => format!("#^{b}"),
+            })
+            .unwrap_or_default();
+        let key = format!(
+            "{}{}",
+            target.as_deref().unwrap_or(&written).to_lowercase(),
+            subpath.to_lowercase()
+        );
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.push(key);
+        let note = target.as_deref().unwrap_or(&written);
+        let other = target.as_deref() != Some(path);
+        let (label, subtext, icon) = match (&parsed.subpath, target.is_some()) {
+            (Some(Subpath::Headings(h)), _) => (
+                h.last().map(|s| s.to_string()).unwrap_or_default(),
+                other.then(|| label_of(note)),
+                "heading",
+            ),
+            (Some(Subpath::Block(b)), _) => {
+                (b.to_string(), other.then(|| label_of(note)), "layout-list")
             }
-        })
-        .collect();
+            (None, true) => (written.clone(), folder_of(note), "link"),
+            (None, false) => (written.clone(), folder_of(&written), "file-plus"),
+        };
+        groups.push(Group {
+            label,
+            path: target,
+            link: Some(link.to_string()),
+            subtext,
+            icon: Some(icon),
+            matches: Vec::new(),
+        });
+    }
     Section::of(LINKS, groups)
+}
+
+fn strip_md(path: &str) -> &str {
+    path.strip_suffix(".md")
+        .or_else(|| path.strip_suffix(".MD"))
+        .unwrap_or(path)
+}
+
+/// The folder part of a path, `None` at the root.
+fn folder_of(path: &str) -> Option<String> {
+    path.rsplit_once('/')
+        .map(|(folder, _)| folder.to_string())
+        .filter(|f| !f.is_empty())
 }
 
 /// Unlinked mentions of `own` (a note's name and aliases) in every other
@@ -269,13 +333,15 @@ pub fn unlinked_incoming(
         let Some(text) = texts.get(&p) else {
             continue;
         };
-        let m = mention_match(text, range, extra);
+        let m = mention_match(text, range, extra, None);
         match groups.last_mut() {
             Some(g) if g.path.as_deref() == Some(p.as_str()) => g.matches.push(m),
             _ => groups.push(Group {
                 label: label_of(&p),
                 path: Some(p),
                 link: None,
+                subtext: None,
+                icon: None,
                 matches: vec![m],
             }),
         }
@@ -286,8 +352,9 @@ pub fn unlinked_incoming(
     section
 }
 
-/// Unlinked mentions of other notes in `path`'s own text: one group per
-/// note mentioned, every mention of it listed.
+/// Unlinked mentions of other notes in `path`'s own text: one group, the
+/// note itself, its mentions in text order, each naming the note it
+/// mentions, which is how Obsidian's Outgoing links pane lists them.
 pub fn unlinked_outgoing(text: &str, path: &str, names: Option<&Finder>, extra: bool) -> Section {
     let Some(finder) = names else {
         return Section::empty(UNLINKED);
@@ -298,35 +365,40 @@ pub fn unlinked_outgoing(text: &str, path: &str, names: Option<&Finder>, extra: 
         .filter(|m| m.path != path)
         .map(|m| (m.path, m.range))
         .collect();
-    found.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.start.cmp(&b.1.start)));
+    found.sort_by(|a, b| a.1.start.cmp(&b.1.start).then(a.0.cmp(&b.0)));
     found.dedup();
     let total = found.len();
-    let mut groups: Vec<Group> = Vec::new();
-    for (p, range) in found.into_iter().take(MAX_MENTIONS) {
-        let m = mention_match(text, range, extra);
-        match groups.last_mut() {
-            Some(g) if g.path.as_deref() == Some(p.as_str()) => g.matches.push(m),
-            _ => groups.push(Group {
-                label: label_of(&p),
-                path: Some(p),
-                link: None,
-                matches: vec![m],
-            }),
-        }
-    }
+    let matches: Vec<Match> = found
+        .into_iter()
+        .take(MAX_MENTIONS)
+        .map(|(p, range)| mention_match(text, range, extra, Some(p)))
+        .collect();
+    let groups = if matches.is_empty() {
+        Vec::new()
+    } else {
+        vec![Group {
+            label: label_of(path),
+            path: Some(path.to_string()),
+            link: None,
+            subtext: None,
+            icon: None,
+            matches,
+        }]
+    };
     let mut section = Section::of(UNLINKED, groups);
     section.count = total;
     section.capped = total > MAX_MENTIONS;
     section
 }
 
-fn mention_match(text: &str, range: Range<usize>, extra: bool) -> Match {
+fn mention_match(text: &str, range: Range<usize>, extra: bool, target: Option<String>) -> Match {
     let (snippet, mapped) = context(text, range.clone(), extra);
     Match {
         text: snippet,
         ranges: vec![mapped],
         offset: Some(range.start),
         mention: Some(range),
+        target,
     }
 }
 
@@ -485,8 +557,52 @@ mod tests {
 
         let out = unlinked_outgoing("A plan and a plan", "A.md", Some(&finder), false);
         assert_eq!(out.count, 2);
-        assert_eq!(out.groups.len(), 1);
+        assert_eq!(out.groups.len(), 1, "one card: the note itself");
+        assert_eq!(out.groups[0].path.as_deref(), Some("A.md"));
         assert_eq!(out.groups[0].matches[1].mention, Some(13..17));
+        assert_eq!(out.groups[0].matches[1].target.as_deref(), Some("Plan.md"));
+    }
+
+    /// One row per target, in first-occurrence order with the properties
+    /// first; a heading or block row is labelled by it with the note
+    /// under; a note row by the written path with its folder under; a
+    /// self link and a root note carry no subtext; the alias is dropped.
+    #[test]
+    fn links_rows_are_one_per_target_with_obsidians_labels() {
+        let mut cache = MetadataCache::default();
+        let alpha = "---\nrelated: \"[[Gamma]]\"\n---\nSee [[Beta]] and [[Beta#Heading|the alias]] and [[Beta]], then [[Missing]], [Beta link](Beta.md), ![[Beta]], [[#Local]], [[Gamma#^blk]] and [[Sub/Deep]].\n\n## Local\n";
+        cache.insert_file("Alpha.md".into(), _cache::index_markdown(alpha));
+        for p in ["Beta.md", "Gamma.md", "Sub/Deep.md"] {
+            cache.add_path(p);
+        }
+        cache.reresolve();
+        let section = outgoing_links(&cache, "Alpha.md");
+        let rows: Vec<(&str, Option<&str>, &str, Option<&str>)> = section
+            .groups
+            .iter()
+            .map(|g| {
+                (
+                    g.label.as_str(),
+                    g.subtext.as_deref(),
+                    g.icon.unwrap(),
+                    g.path.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                ("Gamma", None, "link", Some("Gamma.md")),
+                ("Beta", None, "link", Some("Beta.md")),
+                ("Heading", Some("Beta"), "heading", Some("Beta.md")),
+                ("Missing", None, "file-plus", None),
+                ("Local", None, "heading", Some("Alpha.md")),
+                ("blk", Some("Gamma"), "layout-list", Some("Gamma.md")),
+                ("Sub/Deep", Some("Sub"), "link", Some("Sub/Deep.md")),
+            ]
+        );
+        assert_eq!(section.count, 7);
+        assert_eq!(section.groups[2].link.as_deref(), Some("Beta#Heading"));
     }
 
     #[test]
@@ -495,6 +611,8 @@ mod tests {
             path: Some(format!("{label}.md")),
             label: label.to_string(),
             link: None,
+            subtext: None,
+            icon: None,
             matches: Vec::new(),
         };
         let mut section = Section::of(LINKED, vec![group("b"), group("a10"), group("a2")]);
@@ -523,6 +641,7 @@ mod tests {
             ranges: vec![0..1, 1..1],
             offset: None,
             mention: None,
+            target: None,
         };
         let section = Section::of(
             LINKED,
@@ -531,12 +650,16 @@ mod tests {
                     path: Some("Notes/Apple.md".into()),
                     label: "Apple".into(),
                     link: None,
+                    subtext: None,
+                    icon: None,
                     matches: vec![m("one"), m("two")],
                 },
                 Group {
                     path: Some("Pear.md".into()),
                     label: "Pear".into(),
                     link: None,
+                    subtext: None,
+                    icon: None,
                     matches: vec![m("an apple"), m("a fig")],
                 },
             ],

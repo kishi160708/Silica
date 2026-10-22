@@ -2396,6 +2396,39 @@ in that file alone, the status bar reported the change, and the row moved from
 Unlinked (14 to 13) to Linked (10 to 11). The dump's `backlinks` and `outgoing` are now
 flattened `section` / `file` / `match` rows with `collapsed`, `ranges` and `mention`.
 
+### Outgoing links pane, 2026-10-22
+
+Probed first this time: `tools/obsidian-probe/outgoing-links.mjs` drove Obsidian through
+the pane on a five-note vault, and the findings are
+[[Specification#Observed outgoing links pane behavior, Obsidian 1.14.4 (installer build 1.13.7)]].
+What that settled that the earlier guess had wrong: the Links section lists one row per
+target and subpath (ten links written, seven rows; `[[Beta]]`, `[Beta](Beta.md)` and
+`![[Beta]]` are one row) and never shows an alias; each row wears a glyph for what it
+points at (`link`, a heading glyph, `layout-list`, `file-plus` with "Not created yet")
+and, under its label, the note a heading or block belongs to or the folder a note sits
+in; the section headers have no fold triangle at all, the count is faint, and a folded
+header is faint throughout; a match card has the note's background and no border; and
+the Outgoing pane's unlinked mentions are one card for the note itself with a "Link this
+file" chip naming the mentioned note under each match, where the Backlinks pane has a
+Link button that only appears under the pointer.
+
+Built: `backlinks::outgoing_links` dedups by resolved target plus subpath and gives each
+`Group` a `subtext` and an `icon`; `unlinked_outgoing` is one group in text order whose
+matches carry their `target`; `render_sections` draws the section rows, Links rows and
+cards to the measured sizes (25 px rows with an 8 px radius, 24 px gutter, 11 px faint
+subtext, cards at 4 px radius with 8 px 20 px 8 px 12 px matches, the accent at 33% under
+the pointer), the chip in the Outgoing pane and the hover-only Link button in the
+Backlinks pane, and "No backlinks found." for an empty Linked mentions. Two Lucide icons
+joined the assets, `heading` standing in for Obsidian's own heading glyph. The dump's
+file rows gained `subtext` and `icon`, match rows `target`.
+
+Seen working over the control socket on a copy of the probe's vault: the seven rows in
+Obsidian's order with their glyphs and subtexts; the chip under `Gamma` wrote the same
+bytes Obsidian wrote and the list went from six mentions to five; the `Missing` row
+created an empty `Missing.md` and opened it; the `Heading` row opened Beta. Still open:
+the row context menu (no file menu exists anywhere in the app yet) and the per-match
+"Show more context" chevrons.
+
 ### Live Preview, 2026-10-16
 
 Live Preview is the same editor and buffer with a per-line display

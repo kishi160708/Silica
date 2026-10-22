@@ -34,9 +34,9 @@ use crate::watch;
 use gpui::{
     actions, anchored, canvas, deferred, div, point, prelude::*, px, relative, rgb, rgba,
     transparent_black, uniform_list, Action, App, BoxShadow, Context, CursorStyle, Decorations,
-    DragMoveEvent, Entity, FocusHandle, Focusable, Global, HighlightStyle, HitboxBehavior, Hsla,
-    KeyBinding, MouseButton, PathBuilder, Pixels, ResizeEdge, SharedString, StyledText,
-    Subscription, Task, Tiling, UniformListScrollHandle, Window, WindowControlArea,
+    DragMoveEvent, Entity, FocusHandle, Focusable, FontWeight, Global, HighlightStyle,
+    HitboxBehavior, Hsla, KeyBinding, MouseButton, PathBuilder, Pixels, ResizeEdge, SharedString,
+    StyledText, Subscription, Task, Tiling, UniformListScrollHandle, Window, WindowControlArea,
 };
 use rayon::prelude::*;
 use _cache::{
@@ -9176,11 +9176,14 @@ impl Workspace {
         )
     }
 
-    /// A pane's sections, drawn the way Obsidian's search results are: a
-    /// section row with its count, a collapsible row per file with its
-    /// count, and the file's matches in one card, each with the matched
-    /// text highlighted. The Links section's rows stand alone. A match
-    /// wraps, so this is a scrolling column rather than a uniform list.
+    /// A pane's sections, drawn the way Obsidian's are: a section row with
+    /// its count (no fold glyph; the row itself folds), a collapsible row
+    /// per file with a triangle and its count, and the file's matches in
+    /// one card with the matched text highlighted. The Links section's rows
+    /// stand alone with a glyph for what they point at; the Outgoing pane's
+    /// unlinked mentions are one card for the note itself, each match
+    /// naming the note it mentions. A match wraps, so this is a scrolling
+    /// column rather than a uniform list.
     fn render_sections(
         &mut self,
         which: RightTab,
@@ -9188,30 +9191,32 @@ impl Workspace {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        let sections = match which {
-            RightTab::Outgoing => self.outgoing_sections.clone(),
-            _ => self.backlink_sections.clone(),
+        let outgoing = which == RightTab::Outgoing;
+        let sections = if outgoing {
+            self.outgoing_sections.clone()
+        } else {
+            self.backlink_sections.clone()
         };
-        let prefix = match which {
-            RightTab::Outgoing => "outgoing",
-            _ => "backlinks",
-        };
+        let prefix = if outgoing { "outgoing" } else { "backlinks" };
         let current = self.current.clone().unwrap_or_default();
+        // Obsidian's `.outgoing-link-pane` is padded 12px 12px 32px; the
+        // backlink pane 4px 12px 32px, its nav header carrying the rest.
         let mut list = div()
             .id(prefix)
             .flex()
             .flex_col()
             .flex_1()
             .overflow_y_scroll()
-            .px(px(8.))
-            .pb_2();
+            .px(px(12.))
+            .pt(px(if outgoing { 12. } else { 4. }))
+            .pb(px(32.));
         let mut ix = 0usize;
         let mut next = || {
             ix += 1;
             ix
         };
         for (s_ix, section) in sections.iter().enumerate() {
-            let shown = if which == RightTab::Outgoing {
+            let shown = if outgoing {
                 section.clone()
             } else {
                 backlinks::filter(section, query)
@@ -9222,18 +9227,22 @@ impl Workspace {
             } else {
                 shown.count.to_string().into()
             };
+            // A folded section is drawn faint throughout; an open one's
+            // count brightens from faint to muted under the pointer.
             list = list.child(
                 div()
                     .id(("pane-section", next()))
+                    .group("pane-section")
                     .w_full()
                     .flex_shrink_0()
-                    .h(px(28.))
-                    .px(px(4.))
+                    .h(px(25.))
+                    .mb(px(2.))
+                    .px(px(8.))
                     .flex()
                     .flex_row()
                     .items_center()
-                    .gap(px(6.))
-                    .rounded_sm()
+                    .gap(px(4.))
+                    .rounded(px(8.))
                     .cursor_pointer()
                     .hover(|s| s.bg(theme.bg_alt))
                     .on_click(
@@ -9244,7 +9253,8 @@ impl Workspace {
                             .flex_1()
                             .min_w_0()
                             .text_size(px(FONT_UI_SMALL))
-                            .text_color(theme.text)
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(if folded { theme.text_faint } else { theme.text })
                             .whitespace_nowrap()
                             .overflow_hidden()
                             .text_ellipsis()
@@ -9254,11 +9264,54 @@ impl Workspace {
                         div()
                             .flex_shrink_0()
                             .text_size(px(FONT_UI_SMALLER))
-                            .text_color(theme.text_muted)
+                            .text_color(theme.text_faint)
+                            .when(!folded, |d| {
+                                d.group_hover("pane-section", |s| s.text_color(theme.text_muted))
+                            })
                             .child(count),
                     ),
             );
             if folded {
+                continue;
+            }
+            // Obsidian's `.search-result-container`: 4px 1px 16px.
+            let mut body = div()
+                .w_full()
+                .flex_shrink_0()
+                .flex()
+                .flex_col()
+                .pt(px(4.))
+                .pb(px(16.))
+                .px(px(1.));
+            if !outgoing && s_ix == 0 && shown.groups.is_empty() {
+                body = body.child(
+                    div()
+                        .pl(px(8.))
+                        .mb(px(12.))
+                        .text_size(px(FONT_UI_SMALL))
+                        .text_color(theme.text_faint)
+                        .child("No backlinks found."),
+                );
+            }
+            // The Outgoing pane's unlinked mentions: one card, no title row.
+            let one_card = outgoing && s_ix == 1;
+            if one_card {
+                let mut card = Self::match_card(theme);
+                for group in &shown.groups {
+                    for m in &group.matches {
+                        card = card.child(self.render_match(
+                            which,
+                            next(),
+                            &current,
+                            group,
+                            m,
+                            theme,
+                            cx,
+                        ));
+                    }
+                }
+                body = body.child(card);
+                list = list.child(body);
                 continue;
             }
             for group in &shown.groups {
@@ -9268,16 +9321,31 @@ impl Workspace {
                 let path = group.path.clone();
                 let link = group.link.clone();
                 let resolved = path.is_some();
-                let chevron = (!flat).then(|| {
-                    let key = key.clone();
+                // The fold triangle (a mentions group) or the link's glyph
+                // (a Links row) sits in the row's 24px left gutter.
+                let gutter: gpui::AnyElement = if flat {
+                    let name = group.icon.unwrap_or("link");
                     div()
-                        .id(("pane-chevron", next()))
                         .w(px(16.))
-                        .h(px(24.))
+                        .h(px(17.))
                         .flex_shrink_0()
                         .flex()
                         .items_center()
                         .justify_center()
+                        .opacity(0.85)
+                        .child(icon(name, 14., theme.text_muted))
+                        .into_any_element()
+                } else {
+                    let key = key.clone();
+                    div()
+                        .id(("pane-chevron", next()))
+                        .w(px(16.))
+                        .h(px(17.))
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .opacity(0.85)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.toggle_group(which, key.clone(), cx);
                             cx.stop_propagation();
@@ -9288,27 +9356,34 @@ impl Workspace {
                             } else {
                                 "chevron-down"
                             },
-                            14.,
+                            12.,
                             theme.text_muted,
                         ))
-                });
+                        .into_any_element()
+                };
                 let flair: Option<SharedString> =
                     (!flat).then(|| group.matches.len().to_string().into());
+                let subtext: Option<SharedString> = group.subtext.clone().map(Into::into);
+                let unresolved = flat && !resolved;
                 list = list.child(
                     div()
                         .id(("pane-group", next()))
+                        .group("pane-group")
                         .w_full()
                         .flex_shrink_0()
-                        .h(px(24.))
-                        .pl(px(if flat { 8. } else { 2. }))
-                        .pr(px(4.))
+                        .min_h(px(25.))
+                        .mb(px(2.))
+                        .pl(px(4.))
+                        .pr(px(8.))
+                        .py(px(4.))
                         .flex()
                         .flex_row()
-                        .items_center()
-                        .gap(px(2.))
-                        .rounded_sm()
+                        .items_start()
+                        .gap(px(4.))
+                        .rounded(px(8.))
                         .cursor_pointer()
                         .hover(|s| s.bg(theme.bg_alt))
+                        .when(unresolved, |d| d.tooltip(tooltip("Not created yet")))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             // A Links row follows the link the way the note
                             // would, subpath included, and creates the note
@@ -9320,74 +9395,91 @@ impl Workspace {
                                 this.open_file(path, None, cx);
                             }
                         }))
-                        .children(chevron)
+                        .child(gutter)
                         .child(
                             div()
                                 .flex_1()
                                 .min_w_0()
-                                .text_size(px(FONT_UI_SMALL))
-                                .text_color(if resolved {
-                                    theme.text
-                                } else {
-                                    theme.text_muted
-                                })
-                                .whitespace_nowrap()
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .child(SharedString::from(group.label.clone())),
+                                .flex()
+                                .flex_col()
+                                .child(
+                                    div()
+                                        .text_size(px(FONT_UI_SMALL))
+                                        .line_height(px(17.))
+                                        .text_color(if flat {
+                                            theme.text_muted
+                                        } else {
+                                            theme.text
+                                        })
+                                        .when(flat, |d| {
+                                            d.group_hover("pane-group", |s| {
+                                                s.text_color(theme.text)
+                                            })
+                                        })
+                                        .whitespace_nowrap()
+                                        .overflow_hidden()
+                                        .text_ellipsis()
+                                        .child(SharedString::from(group.label.clone())),
+                                )
+                                .children(subtext.map(|sub| {
+                                    div()
+                                        .text_size(px(11.))
+                                        .line_height(px(14.))
+                                        .text_color(theme.text_faint)
+                                        .whitespace_nowrap()
+                                        .overflow_hidden()
+                                        .text_ellipsis()
+                                        .child(sub)
+                                })),
                         )
                         .children(flair.map(|count| {
                             div()
                                 .flex_shrink_0()
-                                .pr(px(4.))
+                                .pt(px(2.))
                                 .text_size(px(FONT_UI_SMALLER))
-                                .text_color(theme.text_muted)
+                                .text_color(theme.text_faint)
                                 .child(count)
                         })),
                 );
                 if flat || collapsed {
                     continue;
                 }
-                // Children of a scrolling column shrink to fit it unless
-                // told not to, and a card holds every match in full.
-                let mut card = div()
-                    .w_full()
-                    .flex_shrink_0()
-                    .mb(px(6.))
-                    .flex()
-                    .flex_col()
-                    .rounded(px(6.))
-                    .bg(theme.bg)
-                    .border_1()
-                    .border_color(theme.border)
-                    .overflow_hidden();
-                for (m_ix, m) in group.matches.iter().enumerate() {
-                    card = card.child(self.render_match(
-                        which,
-                        next(),
-                        m_ix > 0,
-                        &current,
-                        group,
-                        m,
-                        theme,
-                        cx,
-                    ));
+                let mut card = Self::match_card(theme);
+                for m in &group.matches {
+                    card =
+                        card.child(self.render_match(which, next(), &current, group, m, theme, cx));
                 }
-                list = list.child(card);
+                body = body.child(card);
             }
+            list = list.child(body);
         }
         list.into_any_element()
     }
 
+    /// Obsidian's `.search-result-file-matches`: the note's background,
+    /// a 4px radius, 4px above and 8px below, no border.
+    fn match_card(theme: &Theme) -> gpui::Div {
+        div()
+            .w_full()
+            .flex_shrink_0()
+            .mt(px(4.))
+            .mb(px(8.))
+            .flex()
+            .flex_col()
+            .rounded(px(4.))
+            .bg(theme.bg)
+    }
+
     /// One match in a file's card: its context with the matched text
-    /// highlighted, and for an unlinked mention the Link button that
-    /// turns the text into a link.
+    /// highlighted; for an unlinked mention, the control that turns the
+    /// text into a link: a Link button at the row's right that shows under
+    /// the pointer (Backlinks), or a chip under the text naming the note
+    /// the mention is of (Outgoing links).
     #[allow(clippy::too_many_arguments)]
     fn render_match(
         &self,
         which: RightTab,
         ix: usize,
-        divided: bool,
         current: &str,
         group: &Group,
         m: &PaneMatch,
@@ -9405,6 +9497,7 @@ impl Workspace {
                     r.clone(),
                     HighlightStyle {
                         background_color: Some(theme.highlight_bg),
+                        color: Some(theme.text),
                         ..HighlightStyle::default()
                     },
                 )
@@ -9414,42 +9507,90 @@ impl Workspace {
         // Which note the mention is in and which it names depend on the
         // pane: the Backlinks pane lists other notes mentioning this one,
         // the Outgoing pane this note mentioning others.
-        let link_button = m.mention.clone().zip(path.clone()).map(|(mention, other)| {
-            let (source, target) = match which {
-                RightTab::Outgoing => (current.to_string(), other),
-                _ => (other, current.to_string()),
+        let outgoing = which == RightTab::Outgoing;
+        let link = m.mention.clone().and_then(|mention| {
+            let (source, target) = if outgoing {
+                (current.to_string(), m.target.clone()?)
+            } else {
+                (path.clone()?, current.to_string())
             };
+            Some((source, target, mention))
+        });
+        let chip = link
+            .clone()
+            .filter(|_| outgoing)
+            .map(|(source, target, mention)| {
+                let name: SharedString = display_name(target.rsplit('/').next().unwrap_or(&target))
+                    .to_string()
+                    .into();
+                div().mt(px(6.)).flex().flex_row().child(
+                    div()
+                        .id(("pane-chip", ix))
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(4.))
+                        .px(px(6.))
+                        .py(px(4.))
+                        .rounded(px(4.))
+                        .bg(theme.border)
+                        .cursor_pointer()
+                        .tooltip(tooltip("Link this file"))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.link_mention(
+                                source.clone(),
+                                target.clone(),
+                                mention.clone(),
+                                window,
+                                cx,
+                            );
+                            cx.stop_propagation();
+                        }))
+                        .child(icon("link", 14., theme.text_faint))
+                        .child(
+                            div()
+                                .text_size(px(FONT_UI_SMALLER))
+                                .text_color(theme.text_muted)
+                                .child(name),
+                        ),
+                )
+            });
+        let button = link.filter(|_| !outgoing).map(|(source, target, mention)| {
             div()
                 .id(("pane-link", ix))
-                .flex_shrink_0()
-                .h(px(22.))
+                .absolute()
+                .top(px(2.))
+                .right(px(24.))
                 .px(px(8.))
-                .flex()
-                .items_center()
-                .rounded(px(4.))
-                .bg(theme.bg_active)
+                .py(px(4.))
+                .rounded(px(5.))
+                .bg(theme.border)
                 .text_size(px(FONT_UI_SMALLER))
                 .text_color(theme.text)
-                .hover(|s| s.bg(theme.bg_alt))
+                .cursor_pointer()
+                .invisible()
+                .group_hover("pane-match", |s| s.visible())
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.link_mention(source.clone(), target.clone(), mention.clone(), window, cx);
                     cx.stop_propagation();
                 }))
                 .child("Link")
         });
+        let mut hover = theme.accent;
+        hover.a = 0.33;
         div()
             .id(("pane-match", ix))
+            .group("pane-match")
+            .relative()
             .w_full()
             .flex_shrink_0()
-            .px(px(8.))
-            .py(px(6.))
+            .pl(px(12.))
+            .pr(px(20.))
+            .py(px(8.))
             .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(8.))
+            .flex_col()
             .cursor_pointer()
-            .when(divided, |d| d.border_t_1().border_color(theme.border))
-            .hover(|s| s.bg(theme.bg_alt))
+            .hover(move |s| s.bg(hover))
             .on_click(cx.listener(move |this, _, _, cx| {
                 if let Some(path) = path.clone() {
                     this.open_file(path, None, cx);
@@ -9460,14 +9601,13 @@ impl Workspace {
             }))
             .child(
                 div()
-                    .flex_1()
-                    .min_w_0()
                     .text_size(px(FONT_UI_SMALLER))
-                    .text_color(theme.text)
-                    .line_height(relative(1.4))
+                    .text_color(theme.text_muted)
+                    .line_height(relative(1.3))
                     .child(text),
             )
-            .children(link_button)
+            .children(chip)
+            .children(button)
     }
 
     fn render_tags(
@@ -9825,6 +9965,8 @@ fn section_rows_json(
                 "label": group.label,
                 "path": group.path,
                 "link": group.link,
+                "subtext": group.subtext,
+                "icon": group.icon,
                 "count": group.matches.len(),
                 "collapsed": !group.matches.is_empty()
                     && group_folded(&section.group_key(group)),
@@ -9837,6 +9979,7 @@ fn section_rows_json(
                     "ranges": m.ranges.iter().map(span).collect::<Vec<_>>(),
                     "offset": m.offset,
                     "mention": m.mention.as_ref().map(span),
+                    "target": m.target,
                 }));
             }
         }
@@ -10718,21 +10861,28 @@ mod tests {
         let (_dir, state) = vault();
         let cache = state.cache();
         let section = backlinks::outgoing_links(&cache, "B.md");
-        let rows: Vec<(Option<&str>, &str, Option<&str>)> = section
+        type Row<'a> = (Option<&'a str>, &'a str, Option<&'a str>, Option<&'a str>);
+        let rows: Vec<Row<'_>> = section
             .groups
             .iter()
-            .map(|g| (g.path.as_deref(), g.label.as_str(), g.link.as_deref()))
+            .map(|g| {
+                (
+                    g.path.as_deref(),
+                    g.label.as_str(),
+                    g.link.as_deref(),
+                    g.subtext.as_deref(),
+                )
+            })
             .collect();
         assert_eq!(
             rows,
             vec![
-                (Some("A.md"), "A", Some("A")),
-                (Some("A.md"), "A", Some("A")),
-                (Some("A.md"), "the a", Some("A#A")),
+                (Some("A.md"), "A", Some("A"), None),
+                (Some("A.md"), "A", Some("A#A"), Some("A")),
             ],
-            "the frontmatter link, then the two body links"
+            "the frontmatter link and the body's [[A]] are one row; the heading link its own"
         );
-        assert_eq!(section.count, 3);
+        assert_eq!(section.count, 2);
     }
 
     /// The Linked mentions match for a property link is named by its

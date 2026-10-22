@@ -719,6 +719,21 @@ showing surrounding text with the link highlighted, and a "Link" button on every
 tree-item styling, carrying the match's byte range so the context can highlight it. The Link button
 rewrites the matched range to `[[Name]]` through the text crate's edit plan.
 
+### Backlinks and Outgoing links rows have no context menu
+
+*low, missing-feature, medium*
+
+**.** A right click on a Links row, a mentions group row or a match does nothing;
+the app has no file context menu anywhere yet (the Files view's is a separate entry).
+
+**Obsidian.** [[Specification#Observed outgoing links pane behavior, Obsidian 1.14.4 (installer build 1.13.7)]]:
+a right click on a Links row opens the file menu — Open in new tab, Open to the right,
+Open in new window, ---, Rename..., Move file to..., Bookmark..., ---, Copy path, ---,
+Open in default app, Show in system explorer, Reveal file in navigation.
+
+**Fix.** Build the file menu once (the Files view needs the same one) on
+`canvas::menu::context_menu`, and hang it off every row that stands for a file.
+
 ## Search, switcher, palette and autocompletion
 
 ### Search results cannot be navigated or opened from the keyboard

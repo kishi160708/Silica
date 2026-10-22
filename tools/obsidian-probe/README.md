@@ -46,6 +46,7 @@ Scripts, each one checklist block of `docs//Interaction probes.md`:
 | `tab-list.mjs` | the strip's right end: where the new-tab, tab-list and sidebar-toggle buttons sit against the tab, the divider after the last inactive tab, and the tab-list menu: its rows, icons, checks and separators, what picking a tab, Close all, Stack tabs and Bookmark N tabs do | fixtures, run |
 | `new-tab.mjs` | the new-tab button and `workspace:new-tab` with the active tab in the middle of the strip: where the tab goes, whether it is active, what its empty view offers | fixtures, run |
 | `explorer-keyboard.mjs` | the Files pane's keyboard: what a click on a file, on the open file and on a folder does to focus, and Up, Down, Left, Right, Enter, Space, Home, End, Escape, F2 and Delete on file and folder rows, entering the tree through `reveal-active-file` | fixtures, run |
+| `outgoing-links.mjs` | the Outgoing links pane: its markup and styles, one row per target with a glyph per kind, the subtext under a row, what clicking a heading row and an unresolved row do, the row menu, the unlinked mentions card with its "Link this file" chip and the bytes the chip writes, the two fold keys in `workspace.json`; and the Backlinks pane's rows, hover-only Link button and empty state for comparison | fixtures, run, after-restart |
 | `autopair.mjs` | auto-pairing (predates the runner: start Obsidian yourself with `--remote-debugging-port=9222` on a scratch vault and run it directly) | — |
 
 `results/` keeps the raw JSON of the runs the specification cites, named by
