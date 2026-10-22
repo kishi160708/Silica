@@ -1255,6 +1255,24 @@ impl Layout {
         }
     }
 
+    /// The group in the main area's top right corner: the last child of
+    /// every side-by-side split and the first of every stacked one. Its
+    /// strip is the one Obsidian's `mod-top-right-space` pads for the
+    /// collapsed right sidebar's toggle and the window controls.
+    fn top_right(&self) -> Option<u64> {
+        match self {
+            Layout::Group(id) => Some(*id),
+            Layout::Split {
+                direction,
+                children,
+                ..
+            } => match direction {
+                SplitDirection::Vertical => children.last()?.top_right(),
+                SplitDirection::Horizontal => children.first()?.top_right(),
+            },
+        }
+    }
+
     fn contains(&self, id: u64) -> bool {
         match self {
             Layout::Group(g) => *g == id,
@@ -5634,8 +5652,10 @@ impl Workspace {
         let id = view.id;
         let mut order = Vec::new();
         self.layout_tree.groups(&mut order);
+        // The corner groups: top left is the first group however the
+        // splits run, top right needs the tree's shape.
         let first = order.first() == Some(&id);
-        let last = order.last() == Some(&id);
+        let last = self.layout_tree.top_right() == Some(id);
         div()
             .id(("group", id))
             .flex()
@@ -7163,6 +7183,9 @@ impl Workspace {
 
     /// A group's tab strip. The sidebar toggles sit at the window's edges:
     /// the left one in the first group's strip, the right one in the last's.
+    /// `first` and `last` say the group holds the main area's top left and
+    /// top right corner: those strips carry the collapsed sidebars' toggles
+    /// and clear the window controls.
     fn render_tab_strip(
         &self,
         view: &GroupView,
@@ -7428,9 +7451,11 @@ impl Workspace {
                     )
                     .children(self.render_tab_list_menu(view, theme, cx)),
             )
-            // The right sidebar's toggle lives in its own header while it
-            // is open, and comes here, at the window's edge, when it is not.
-            .when(last && !self.right_visible, |d| {
+            // The right sidebar's toggle sits at the root header's right
+            // end in Obsidian's title row whether the sidebar is open (left
+            // of its header) or collapsed (at the window's edge, before the
+            // window buttons): it never moves into the sidebar's own header.
+            .when(last, |d| {
                 d.child(self.sidebar_toggle(false, theme, cx).mb(px(8.)))
             })
     }
@@ -8731,8 +8756,7 @@ impl Workspace {
                     .child(window_handle(
                         div().id("right-dock-space").flex_1().h_full(),
                         frameless,
-                    ))
-                    .child(self.sidebar_toggle(false, theme, cx)),
+                    )),
             )
             .child(div().flex_1().overflow_hidden().child(body))
             .child(self.dock_handle(false, theme))
@@ -10017,6 +10041,37 @@ mod tests {
         };
         assert_eq!(children.len(), 1, "the horizontal split had nothing left");
         assert!(read_main(&nested_main(), ViewMode::LivePreview, &|_| false).is_none());
+    }
+
+    #[test]
+    fn the_top_right_group_follows_the_splits_shape() {
+        // Side by side: the last child. Stacked: the first.
+        let row = Layout::split(
+            SplitDirection::Vertical,
+            vec![Layout::Group(1), Layout::Group(2)],
+        );
+        assert_eq!(row.top_right(), Some(2));
+        let stack = Layout::split(
+            SplitDirection::Horizontal,
+            vec![Layout::Group(1), Layout::Group(2)],
+        );
+        assert_eq!(stack.top_right(), Some(1));
+        // A stack on the right of a row: its top group holds the corner,
+        // though the depth-first order ends on its bottom one.
+        let nested = Layout::split(
+            SplitDirection::Vertical,
+            vec![
+                Layout::Group(1),
+                Layout::split(
+                    SplitDirection::Horizontal,
+                    vec![Layout::Group(2), Layout::Group(3)],
+                ),
+            ],
+        );
+        assert_eq!(nested.top_right(), Some(2));
+        let mut order = Vec::new();
+        nested.groups(&mut order);
+        assert_eq!(order.last(), Some(&3));
     }
 
     #[test]

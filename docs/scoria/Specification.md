@@ -2813,8 +2813,9 @@ outside the vault, so  takes it from `--frame` or `SCORIA_FRAME` and writes no k
 In the hidden frame the title row is **39 px** tall (`.titlebar`, transparent, over the 40 px tab
 header containers) and holds, left to right: the left sidebar toggle (`.sidebar-toggle-button.mod-left`,
 44 by 39, its icon in a 28 by 24 button padded `4px 6px`), the left dock's tab header, the root tab
-header, the right sidebar toggle (36 by 39, at the right end of the root header while the right
-sidebar is collapsed) and the window buttons `.titlebar-button.mod-minimize`, `.mod-maximize`,
+header, the right sidebar toggle (36 by 39, at the right end of the root header: left of the right
+dock's tab header while the sidebar is open, before the window buttons while it is collapsed; it
+never sits in the right dock's own header) and the window buttons `.titlebar-button.mod-minimize`, `.mod-maximize`,
 `.mod-close`, each **44 by 39** padded `0 16px`, in a `.titlebar-button-container.mod-right` 132 px
 wide in the sidebar colour. `--frame-right-space` is `calc(126px - 0px)` and the root tab header
 is padded `0 134px 0 8px` to stay clear of them. The `.titlebar-text` is 13 px, weight 700, muted at
