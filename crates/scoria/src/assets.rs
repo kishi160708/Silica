@@ -4,7 +4,11 @@
 //! The icons are Lucide's (ISC, `assets/icons/LICENSE`), fetched from the
 //! Lucide repository rather than from any Obsidian bundle; Obsidian names
 //! the Lucide icon each control uses in its DOM (`svg.lucide-search`), and
-//! that name is what [`icon`] takes. The font is Inter (SIL OFL,
+//! that name is what [`icon`] takes. Two of the names Obsidian uses are its
+//! own drawings rather than Lucide's — `links-coming-in` and
+//! `links-going-out` on the right dock's Backlinks and Outgoing links tabs —
+//! so  draws its own under the same names: Lucide's chain at the top
+//! left with a horizontal arrow beneath it, pointing in or out. The font is Inter (SIL OFL,
 //! `assets/fonts/LICENSE-Inter.txt`), the family at the head of Obsidian's
 //! own interface and text font stacks, in the static faces the pinned gpui
 //! can pick weights from (a variable font renders every weight as regular).
@@ -63,6 +67,8 @@ icons!(
     "layout-list",
     "layout-template",
     "link",
+    "links-coming-in",
+    "links-going-out",
     "list",
     "maximize",
     "minus",

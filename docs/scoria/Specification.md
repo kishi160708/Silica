@@ -2959,7 +2959,9 @@ Escape closes it, and opening help again brings the one up forward.
 own repository): ribbon `file-search` (switcher), `git-fork` (graph), `layout-dashboard` (canvas),
 `calendar` (daily note), `files` (template), `terminal` (palette), `layout-list` (base); left dock
 `folder-closed`, `search`, `bookmark`; right dock `links-coming-in` and `links-going-out`
-(Obsidian's own), `tags`, `archive` (All properties), `list` (outline); view header `arrow-left`,
+(Obsidian's own;  draws its own two under those names, Lucide's chain at the top left with a
+horizontal arrow beneath it pointing in or out), `tags`, `archive` (All properties), `list` (outline),
+in that order; view header `arrow-left`,
 `arrow-right`, actions `bookmark` and `more-vertical`; explorer header `edit`, `folder-plus`,
 `sort-asc`, `gallery-vertical`, `chevrons-up-down`; search `search`, `list`, `move-vertical`; tags
 `folder-tree`; bookmarks `bookmark-plus`, `folder-plus`, `chevrons-down-up`; folder collapse

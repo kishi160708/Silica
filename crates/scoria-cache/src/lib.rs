@@ -16,7 +16,8 @@ pub use properties::note_properties;
 pub use resolver::LinkResolver;
 pub use _markdown::{LineIndex, Loc, Pos, Span};
 pub use vault::{
-    all_tags, frontmatter_aliases, frontmatter_tags, Backlink, MetadataCache, TagEntry,
+    all_properties, all_tags, frontmatter_aliases, frontmatter_tags, Backlink, MetadataCache,
+    PropertyEntry, TagEntry,
 };
 
 use _markdown::{

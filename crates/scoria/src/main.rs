@@ -155,7 +155,7 @@ struct Args {
     search: Option<String>,
     /// Open the quick switcher with this query, for screenshots.
     switcher: Option<String>,
-    /// Right-dock tab to show: backlinks, outgoing, outline, tags.
+    /// Right-dock tab to show: backlinks, outgoing, tags, properties, outline.
     pane: Option<String>,
     /// Open the graph view: `global` or `local`.
     graph: Option<String>,

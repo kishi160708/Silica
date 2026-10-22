@@ -91,7 +91,7 @@ the socket behind for somebody to kill by hand.",
         "\
 Dump everything the app can see, as JSON: the vault, the open file and its \
 history, both docks (file explorer, search results, backlinks, outgoing links, \
-outline, tags), any open modal, the editor (cursor, selection, scroll, visible \
+tags, all properties, outline), any open modal, the editor (cursor, selection, scroll, visible \
 lines, find panel, autocompletion popup), the reading view, the graph, the \
 status bar text, what has focus, and the window size. Read this before and \
 after anything else — it is how you find out what actually happened, and it is \

@@ -4,6 +4,8 @@
 //! file at a time.
 
 use crate::{CachedMetadata, LinkCache, LinkResolver};
+use _formats::config::PropertyTypes;
+use _formats::properties::{reserved_type, PropertyType, Value};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -262,6 +264,89 @@ impl MetadataCache {
     }
 }
 
+/// One row of the All properties pane: a property key as the vault uses it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PropertyEntry {
+    /// The key as `types.json` spells it, else as the first note (in path
+    /// order) wrote it; counts merge casings.
+    pub name: String,
+    /// Notes whose properties block has the key.
+    pub count: usize,
+    /// The key's type by Obsidian's precedence (`types.json`, then the
+    /// reserved keys, then the first note's value); `None` for a key whose
+    /// value is a nested mapping, which Obsidian shows with a question mark
+    /// rather than a type.
+    pub ty: Option<PropertyType>,
+}
+
+/// Every property key in the vault, the way Obsidian's All properties pane
+/// lists them (observed 1.14.4): one row per key merged case-insensitively,
+/// with the keys `types.json` names listed even when no note uses them
+/// (`cssclasses` at 0). Sorted by frequency, high to low, ties by name
+/// case-insensitively, which puts digits before letters.
+pub fn all_properties(cache: &MetadataCache, types: &PropertyTypes) -> Vec<PropertyEntry> {
+    // Lowercased key -> entry, in first-seen order.
+    let mut rows: Vec<(String, PropertyEntry)> = Vec::new();
+    let mut index: HashMap<String, usize> = HashMap::new();
+    let mut insert = |name: &str, ty: Option<PropertyType>, count: usize| {
+        let key = name.to_lowercase();
+        match index.get(&key) {
+            Some(&ix) => rows[ix].1.count += count,
+            None => {
+                index.insert(key.clone(), rows.len());
+                rows.push((
+                    key,
+                    PropertyEntry {
+                        name: name.to_string(),
+                        count,
+                        ty,
+                    },
+                ));
+            }
+        }
+    };
+    for (key, ty) in &types.types {
+        insert(key, PropertyType::parse(ty), 0);
+    }
+    for (_, meta) in cache.files() {
+        let Some(serde_yaml::Value::Mapping(map)) = &meta.frontmatter else {
+            continue;
+        };
+        for (key, value) in map {
+            let Some(key) = key.as_str() else {
+                continue;
+            };
+            let ty = reserved_type(key)
+                .map(Some)
+                .unwrap_or_else(|| inferred_type(value));
+            insert(key, ty, 1);
+        }
+    }
+    let mut out: Vec<PropertyEntry> = rows.into_iter().map(|(_, e)| e).collect();
+    out.sort_by(|a, b| {
+        b.count
+            .cmp(&a.count)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    out
+}
+
+/// What Obsidian infers for a frontmatter value with no assigned type: the
+/// rules of [`Value::inferred_type`], and `None` for a nested mapping.
+fn inferred_type(value: &serde_yaml::Value) -> Option<PropertyType> {
+    let v = match value {
+        serde_yaml::Value::Mapping(_) => return None,
+        serde_yaml::Value::Null => Value::Empty,
+        serde_yaml::Value::Bool(b) => Value::Checkbox(*b),
+        serde_yaml::Value::Number(n) => Value::Number(n.as_f64().unwrap_or(0.0)),
+        serde_yaml::Value::String(s) => Value::Text(s.clone()),
+        serde_yaml::Value::Sequence(_) => Value::List(Vec::new()),
+        serde_yaml::Value::Tagged(t) => return inferred_type(&t.value),
+    };
+    Some(v.inferred_type())
+}
+
 /// Inline and frontmatter tags of one note, without `#`, in document order
 /// (frontmatter first), as Obsidian's `getAllTags` returns them.
 pub fn all_tags(meta: &CachedMetadata) -> Vec<String> {
@@ -431,6 +516,50 @@ mod tests {
         let keys: Vec<Option<&str>> = back.iter().map(|b| b.key).collect();
         assert_eq!(keys, vec![Some("related.0"), None]);
         assert_eq!(back[1].link.display_text.as_deref(), Some("here"));
+    }
+
+    #[test]
+    fn all_properties_merges_casings_lists_typed_keys_and_sorts_by_frequency() {
+        let mut c = MetadataCache::default();
+        c.insert_file(
+            "b/Note B.md".into(),
+            index_markdown("---\nstatus: draft\nzebra: 1\n---\n"),
+        );
+        c.insert_file(
+            "a/Note A.md".into(),
+            index_markdown(
+                "---\nStatus: done\nzebra: 2\ndue: 2026-10-22\ndone: true\nshelf:\n  row: 1\ntags: [x]\n2026-10-20: hi\n---\n",
+            ),
+        );
+        let mut types = PropertyTypes::default();
+        types.types.insert("tags".into(), "tags".into());
+        types.types.insert("aliases".into(), "aliases".into());
+        types.types.insert("cssclasses".into(), "multitext".into());
+        types.types.insert("zebra".into(), "datetime".into());
+        let rows = all_properties(&c, &types);
+        let names: Vec<(&str, usize)> = rows.iter().map(|r| (r.name.as_str(), r.count)).collect();
+        assert_eq!(
+            names,
+            vec![
+                ("Status", 2),
+                ("zebra", 2),
+                ("2026-10-20", 1),
+                ("done", 1),
+                ("due", 1),
+                ("shelf", 1),
+                ("tags", 1),
+                ("aliases", 0),
+                ("cssclasses", 0),
+            ]
+        );
+        let ty = |n: &str| rows.iter().find(|r| r.name == n).unwrap().ty;
+        assert_eq!(ty("zebra"), Some(PropertyType::DateTime));
+        assert_eq!(ty("Status"), Some(PropertyType::Text));
+        assert_eq!(ty("due"), Some(PropertyType::Date));
+        assert_eq!(ty("done"), Some(PropertyType::Checkbox));
+        assert_eq!(ty("shelf"), None);
+        assert_eq!(ty("tags"), Some(PropertyType::Tags));
+        assert_eq!(ty("cssclasses"), Some(PropertyType::MultiText));
     }
 
     #[test]

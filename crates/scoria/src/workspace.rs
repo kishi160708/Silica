@@ -217,6 +217,7 @@ pub const RUNNABLE: &[&str] = &[
     "outline:open",
     "outline:open-for-current",
     "tag-pane:open",
+    "properties:open",
     "bookmarks:open",
     "bookmarks:bookmark-current-view",
     "bookmarks:bookmark-current-search",
@@ -946,8 +947,10 @@ impl BookmarkDraft {
 enum RightTab {
     Backlinks,
     Outgoing,
-    Outline,
     Tags,
+    /// All properties: every key in the vault with its type and count.
+    Properties,
+    Outline,
 }
 
 #[derive(Clone)]
@@ -1044,6 +1047,15 @@ fn outgoing_link_rows(cache: &MetadataCache, path: &str) -> Vec<PaneRow> {
 struct TagRow {
     name: SharedString,
     count: usize,
+}
+
+/// A row of the All properties pane.
+#[derive(Clone)]
+struct PropertyRow {
+    name: SharedString,
+    count: usize,
+    /// The type's glyph, as the properties block draws it.
+    glyph: &'static str,
 }
 
 /// Mentions computed off the UI thread for one open note.
@@ -2105,6 +2117,7 @@ pub struct Workspace {
     outgoing_links: Vec<PaneRow>,
     tags: Vec<TagRow>,
     tag_scroll: UniformListScrollHandle,
+    properties: Vec<PropertyRow>,
     /// Matcher over every note name and alias, rebuilt when files change.
     name_finder: Option<Arc<Finder>>,
     mention_generation: u64,
@@ -2438,6 +2451,7 @@ impl Workspace {
             outgoing_links: Vec::new(),
             tags: Vec::new(),
             tag_scroll: UniformListScrollHandle::new(),
+            properties: Vec::new(),
             name_finder: None,
             mention_generation: 0,
             status: "Pass a vault folder as the first argument".into(),
@@ -2537,6 +2551,7 @@ impl Workspace {
                 self.reading
                     .update(cx, |r, _| r.set_property_types(types.clone()));
                 self.editor.update(cx, |e, _| e.set_property_types(types));
+                self.refresh_property_rows(&state);
                 cx.notify();
             }
             Err(err) => {
@@ -3012,6 +3027,20 @@ impl Workspace {
             .update(cx, |e, cx| e.insert_at_cursors(&text, window, cx));
     }
 
+    /// Rebuilds the All properties rows from the cache and `types.json`.
+    fn refresh_property_rows(&mut self, state: &VaultState) {
+        let cache = state.cache();
+        let types = state.property_types();
+        self.properties = _cache::all_properties(&cache, &types)
+            .into_iter()
+            .map(|e| PropertyRow {
+                name: e.name.into(),
+                count: e.count,
+                glyph: e.ty.map_or("?", crate::properties::type_glyph),
+            })
+            .collect();
+    }
+
     /// Rebuilds everything that depends on the file list or the whole cache.
     fn refresh_vault_views(&mut self, cx: &mut Context<Self>) {
         let Some(state) = self.state.clone() else {
@@ -3032,6 +3061,7 @@ impl Workspace {
                 count: t.count,
             })
             .collect();
+        self.refresh_property_rows(&state);
         self.switcher
             .update(cx, |s, cx| s.set_state(state.clone(), cx));
         self.search
@@ -3113,6 +3143,7 @@ impl Workspace {
                     count: t.count,
                 })
                 .collect();
+            self.refresh_property_rows(&state);
             self.search.update(cx, |s, cx| s.rerun(cx));
         }
         let n = changes.files.len();
@@ -3200,6 +3231,7 @@ impl Workspace {
             "outgoing" => RightTab::Outgoing,
             "outline" => RightTab::Outline,
             "tags" => RightTab::Tags,
+            "properties" => RightTab::Properties,
             _ => RightTab::Backlinks,
         };
         self.select_right_tab(which, cx);
@@ -3752,6 +3784,10 @@ impl Workspace {
             "tag-pane:open" => {
                 self.right_visible = true;
                 self.show_right_tab("tags", cx);
+            }
+            "properties:open" => {
+                self.right_visible = true;
+                self.show_right_tab("properties", cx);
             }
             "app:open-help" => self.open_help(window, cx),
             "app:open-vault" | "app:switch-vault" => self.toggle_vault_menu(cx),
@@ -7920,6 +7956,7 @@ impl Workspace {
             Some("outgoing-link") => self.right_tab = RightTab::Outgoing,
             Some("outline") => self.right_tab = RightTab::Outline,
             Some("tag") => self.right_tab = RightTab::Tags,
+            Some("all-properties") => self.right_tab = RightTab::Properties,
             _ => {}
         }
         self.layout = Some(layout);
@@ -8215,6 +8252,7 @@ impl Workspace {
                 RightTab::Outgoing => "outgoing",
                 RightTab::Outline => "outline",
                 RightTab::Tags => "tags",
+                RightTab::Properties => "properties",
             }),
         );
         put_capped(
@@ -8239,6 +8277,15 @@ impl Workspace {
             &mut right,
             "tags",
             self.tags.iter().map(tag_json).collect(),
+            rows,
+        );
+        put_capped(
+            &mut right,
+            "properties",
+            self.properties
+                .iter()
+                .map(|r| json!({ "name": r.name, "count": r.count, "type": r.glyph }))
+                .collect(),
             rows,
         );
 
@@ -8847,6 +8894,65 @@ impl Workspace {
             .collect()
     }
 
+    /// All properties rows: the type's glyph, the key, and how many notes
+    /// carry it; a click searches for the key, as Obsidian's row does.
+    fn render_properties(
+        &mut self,
+        range: Range<usize>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<gpui::Stateful<gpui::Div>> {
+        let theme = cx.global::<Theme>().clone();
+        range
+            .filter_map(|ix| {
+                let row = self.properties.get(ix)?.clone();
+                let name = row.name.clone();
+                Some(
+                    div()
+                        .id(("property", ix))
+                        .w_full()
+                        .h(px(24.))
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(6.))
+                        .px_2()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .text_size(px(13.))
+                        .hover(|s| s.bg(theme.bg_alt))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.show_search(&format!("[\"{name}\"]"), None, cx);
+                        }))
+                        .child(
+                            div()
+                                .w(px(16.))
+                                .flex_shrink_0()
+                                .text_size(px(12.))
+                                .text_color(theme.text_muted)
+                                .text_center()
+                                .child(row.glyph),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_color(theme.text)
+                                .whitespace_nowrap()
+                                .text_ellipsis()
+                                .overflow_hidden()
+                                .child(row.name.clone()),
+                        )
+                        .child(
+                            div()
+                                .text_color(theme.text_muted)
+                                .text_size(px(11.))
+                                .child(SharedString::from(row.count.to_string())),
+                        ),
+                )
+            })
+            .collect()
+    }
+
     fn render_right_dock(&mut self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
         let tab = self.right_tab;
         let body: gpui::AnyElement = match tab {
@@ -8887,6 +8993,17 @@ impl Workspace {
                         .into_any_element()
                 }
             }
+            RightTab::Properties => {
+                let count = self.properties.len();
+                if count == 0 {
+                    empty_pane("No properties found.", theme)
+                } else {
+                    uniform_list("properties", count, cx.processor(Self::render_properties))
+                        .size_full()
+                        .px_1()
+                        .into_any_element()
+                }
+            }
         };
         let tab_button = |this: &mut Self,
                           label: &'static str,
@@ -8903,8 +9020,8 @@ impl Workspace {
             )
         };
         let frameless = self.frameless;
-        // Obsidian draws its own arrows for backlinks and outgoing links;
-        // Lucide's diagonal arrows say the same thing.
+        // Obsidian's tab order and icon names (`links-coming-in` and
+        // `links-going-out` are its own drawings; 's are in `assets`).
         div()
             .relative()
             .flex()
@@ -8932,19 +9049,26 @@ impl Workspace {
                     .child(tab_button(
                         self,
                         "Backlinks",
-                        "arrow-down-left",
+                        "links-coming-in",
                         RightTab::Backlinks,
                         cx,
                     ))
                     .child(tab_button(
                         self,
-                        "Outgoing",
-                        "arrow-up-right",
+                        "Outgoing links",
+                        "links-going-out",
                         RightTab::Outgoing,
                         cx,
                     ))
-                    .child(tab_button(self, "Outline", "list", RightTab::Outline, cx))
                     .child(tab_button(self, "Tags", "tags", RightTab::Tags, cx))
+                    .child(tab_button(
+                        self,
+                        "All properties",
+                        "archive",
+                        RightTab::Properties,
+                        cx,
+                    ))
+                    .child(tab_button(self, "Outline", "list", RightTab::Outline, cx))
                     .child(window_handle(
                         div().id("right-dock-space").flex_1().h_full(),
                         frameless,
