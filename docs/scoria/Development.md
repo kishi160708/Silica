@@ -2334,6 +2334,27 @@ at one scroll position vary with wrapping and widgets and would make it
 breathe. The part of the first line scrolled off the top moves the thumb
 between lines. Dragging it or clicking the track scrolls to that line.
 
+### The tab drop bar, 2026-10-22
+
+Obsidian shows where a dragged tab will land with an accent bar between the two
+tabs nearest the pointer, and the bar slides to each new boundary rather than
+jumping.  used to wash the tab under the pointer instead. The strip now
+listens to the drag's moves: each tab records its bounds on every move, and the
+strip picks the boundary nearest the pointer among the tabs' left edges and the
+last tab's right edge (the end). The bar is 3 px of accent, 25 px tall astride
+that boundary, painted deferred after the dividers and feet. A change of
+boundary starts a 120 ms ease-out slide from wherever the bar was drawn, which
+`render` keeps alive with `request_animation_frame` until it settles. A drop on
+the strip or on a tab lands at the bar's boundary; dropping on a group's content
+keeps the zone rules. The bar's width, height and timing are 's own
+guesses at Obsidian's, not probed values. The drag ghost used to be drawn where
+the tab sat under the pointer, which put it up and left of the cursor over the
+strip and hid the bar as it slid left; its top left corner now sits at the
+cursor's bottom right (8 px past the hotspot, where the grabbing hand's own
+corner falls in a 24 px Breeze cursor) like Obsidian's, clear of the strip, and the cursor is the
+grabbing hand for the drag: the ghost's view paints last and asks for the
+window cursor without a hitbox, which gpui lets win over the tab's pointer.
+
 ### Live Preview, 2026-10-16
 
 Live Preview is the same editor and buffer with a per-line display

@@ -1576,32 +1576,99 @@ impl DropZone {
 /// How much of a group's shorter side, from each edge, drops as a split.
 const DROP_EDGE_SHARE: f32 = 0.3;
 
+/// Where a tab dragged over a strip would land, and the accent bar that
+/// shows it: before tab `at` of `group`, at the tab boundary nearest the
+/// pointer. The bar slides from where it was (`from`) to the boundary
+/// (`x`, both window x) over `DROP_BAR_SLIDE` from `since`, so it is seen
+/// to move between the tabs rather than jump.
+#[derive(Debug, Clone, Copy)]
+struct DropBar {
+    group: u64,
+    at: usize,
+    x: f32,
+    from: f32,
+    since: Instant,
+    /// The strip's left edge, which the bar's position is drawn from.
+    strip_x: f32,
+}
+
+impl DropBar {
+    /// Where the bar is drawn at `now`: on its way from `from` to `x`,
+    /// easing out so it lands softly.
+    fn shown_x(&self, now: Instant) -> f32 {
+        let t =
+            now.saturating_duration_since(self.since).as_secs_f32() / DROP_BAR_SLIDE.as_secs_f32();
+        if t >= 1. {
+            return self.x;
+        }
+        let eased = 1. - (1. - t) * (1. - t);
+        self.from + (self.x - self.from) * eased
+    }
+
+    fn settled(&self, now: Instant) -> bool {
+        now.saturating_duration_since(self.since) >= DROP_BAR_SLIDE
+    }
+}
+
+/// How long the drop bar takes to slide to a new boundary.
+const DROP_BAR_SLIDE: Duration = Duration::from_millis(120);
+/// The drop bar's width; it straddles the boundary between two tabs.
+const DROP_BAR_WIDTH: f32 = 3.;
+
 /// The ghost that follows the pointer while a tab is dragged: the tab's
-/// title on a tab-shaped card.
+/// title on a tab-shaped card whose top left corner sits at the cursor's
+/// bottom right, as Obsidian's drag ghost does, so it never covers the
+/// strip or the drop bar. gpui draws a drag's view where the dragged
+/// element was under the pointer (the pointer less `grab`, the press's
+/// offset into the tab), so the card is pushed back by that offset and then
+/// past the cursor. The cursor itself is the grabbing hand for the drag.
 struct TabDragPreview {
     title: SharedString,
+    /// Where in the tab the press landed.
+    grab: gpui::Point<gpui::Pixels>,
 }
+
+/// From the pointer's hotspot to the drag ghost's top left corner. The
+/// grabbing hand's hotspot is at its centre, and the hand itself fills
+/// about the middle half of a 24 px cursor's box, so this is where its
+/// bottom right corner is.
+const DRAG_GHOST_GAP: f32 = 8.;
 
 impl Render for TabDragPreview {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.global::<Theme>().clone();
+        // The offset is padding on a wrapper rather than a margin on the
+        // card: the layout drops a root element's margin, and the card is
+        // the root of the drag's view.
         div()
-            .flex()
-            .items_center()
-            .h(px(34.))
-            .px(px(10.))
-            .max_w(px(200.))
-            .rounded(px(6.))
-            .bg(theme.bg)
-            .border_1()
-            .border_color(theme.border)
-            .shadow_md()
-            .text_size(px(FONT_UI_SMALL))
-            .text_color(theme.text)
-            .whitespace_nowrap()
-            .overflow_hidden()
-            .text_ellipsis()
-            .child(self.title.clone())
+            .pl(self.grab.x + px(DRAG_GHOST_GAP))
+            .pt(self.grab.y + px(DRAG_GHOST_GAP))
+            // The drag's view paints after everything else, and a cursor
+            // asked for without a hitbox wins over the pointer the tab under
+            // it asks for, so this is where the grabbing hand comes from.
+            .child(canvas(
+                |_, _, _| (),
+                |_, _, window, _| window.set_window_cursor_style(CursorStyle::ClosedHand),
+            ))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .h(px(34.))
+                    .px(px(10.))
+                    .max_w(px(200.))
+                    .rounded(px(6.))
+                    .bg(theme.bg)
+                    .border_1()
+                    .border_color(theme.border)
+                    .shadow_md()
+                    .text_size(px(FONT_UI_SMALL))
+                    .text_color(theme.text)
+                    .whitespace_nowrap()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .child(self.title.clone()),
+            )
     }
 }
 
@@ -2010,6 +2077,12 @@ pub struct Workspace {
     dragging_tab: bool,
     /// Which group's content the dragged tab is over, and where in it.
     tab_drop: Option<(u64, DropZone)>,
+    /// The accent bar between two tabs of the strip the dragged tab is
+    /// over, where it would land.
+    drop_bar: Option<DropBar>,
+    /// Where each tab was on the last drag move, by group and index: what
+    /// a strip measures the pointer against to find the nearest boundary.
+    tab_bounds: HashMap<(u64, usize), gpui::Bounds<gpui::Pixels>>,
     /// `workspace.json` as it was read at load, `None` when the vault has
     /// none; what the quit write is merged into.
     layout: Option<Value>,
@@ -2350,6 +2423,8 @@ impl Workspace {
             group_mru: vec![0],
             dragging_tab: false,
             tab_drop: None,
+            drop_bar: None,
+            tab_bounds: HashMap::new(),
             layout: None,
             layout_restored: false,
             last_open_files: Vec::new(),
@@ -6321,7 +6396,95 @@ impl Workspace {
     fn begin_tab_drag(&mut self, cx: &mut Context<Self>) {
         self.dragging_tab = true;
         self.tab_drop = None;
+        self.drop_bar = None;
+        self.tab_bounds.clear();
         cx.notify();
+    }
+
+    /// The dragged tab moved over (or off) group `group`'s strip: over it,
+    /// the drop bar goes to the tab boundary nearest the pointer, the left
+    /// edge of a tab or the right edge of the last one, sliding there from
+    /// wherever it was. Off it, the bar goes if it was this strip's.
+    fn strip_drag_moved(
+        &mut self,
+        group: u64,
+        bounds: gpui::Bounds<gpui::Pixels>,
+        position: gpui::Point<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        if !bounds.contains(&position) {
+            if self.drop_bar.is_some_and(|b| b.group == group) {
+                self.drop_bar = None;
+                cx.notify();
+            }
+            return;
+        }
+        let mut tabs: Vec<(usize, gpui::Bounds<gpui::Pixels>)> = self
+            .tab_bounds
+            .iter()
+            .filter(|((g, _), _)| *g == group)
+            .map(|((_, ix), b)| (*ix, *b))
+            .collect();
+        tabs.sort_by_key(|(ix, _)| *ix);
+        let Some((last_ix, last)) = tabs.last().copied() else {
+            return;
+        };
+        let pointer = f32::from(position.x);
+        let edges = tabs
+            .iter()
+            .map(|(ix, b)| (*ix, f32::from(b.origin.x)))
+            .chain(std::iter::once((last_ix + 1, f32::from(last.right()))));
+        let Some((at, x)) =
+            edges.min_by(|a, b| (a.1 - pointer).abs().total_cmp(&(b.1 - pointer).abs()))
+        else {
+            return;
+        };
+        let now = Instant::now();
+        let strip_x = f32::from(bounds.origin.x);
+        let next = match self.drop_bar {
+            Some(bar) if bar.group == group && bar.at == at => {
+                if bar.strip_x == strip_x {
+                    return;
+                }
+                DropBar { strip_x, ..bar }
+            }
+            // Within the strip the bar slides; arriving from elsewhere it
+            // appears where it is wanted.
+            Some(bar) if bar.group == group => DropBar {
+                group,
+                at,
+                x,
+                from: bar.shown_x(now),
+                since: now,
+                strip_x,
+            },
+            _ => DropBar {
+                group,
+                at,
+                x,
+                from: x,
+                since: now,
+                strip_x,
+            },
+        };
+        self.drop_bar = Some(next);
+        cx.notify();
+    }
+
+    /// A tab dropped on group `to`'s strip lands where the drop bar says,
+    /// or at `fallback` when the bar never found a boundary.
+    fn drop_tab_at_bar(
+        &mut self,
+        drag: &TabDrag,
+        to: u64,
+        fallback: Option<usize>,
+        cx: &mut Context<Self>,
+    ) {
+        let at = match self.drop_bar {
+            Some(bar) if bar.group == to => Some(bar.at),
+            _ => fallback,
+        };
+        self.drop_tab_on_strip(drag, to, at, cx);
     }
 
     /// The dragged tab moved: over group `id`'s content at `position` it
@@ -6362,6 +6525,8 @@ impl Workspace {
             _ => DropZone::Center,
         };
         self.dragging_tab = false;
+        self.drop_bar = None;
+        self.tab_bounds.clear();
         match zone.split() {
             None => self.move_tab(drag, id, None, cx),
             Some((direction, after)) => self.split_with_tab(drag, id, direction, after, window, cx),
@@ -6379,6 +6544,8 @@ impl Workspace {
     ) {
         self.tab_drop = None;
         self.dragging_tab = false;
+        self.drop_bar = None;
+        self.tab_bounds.clear();
         self.move_tab(drag, to, at, cx);
     }
 
@@ -7224,9 +7391,14 @@ impl Workspace {
             .bg(theme.bg_secondary)
             .relative()
             .overflow_hidden()
-            // A tab dropped on the strip's open space joins it at the end.
+            // A dragged tab over the strip moves the drop bar to the
+            // nearest tab boundary; dropped, it lands there (at the end,
+            // should the bar never have found one).
+            .on_drag_move(cx.listener(move |this, e: &DragMoveEvent<TabDrag>, _, cx| {
+                this.strip_drag_moved(group, e.bounds, e.event.position, cx)
+            }))
             .on_drop(cx.listener(move |this, drag: &TabDrag, _, cx| {
-                this.drop_tab_on_strip(drag, group, None, cx)
+                this.drop_tab_at_bar(drag, group, None, cx)
             }))
             // The strip's outline is a hairline along its bottom edge rather
             // than a border, so the active tab, which reaches the edge, paints
@@ -7256,7 +7428,6 @@ impl Workspace {
                     title: title.clone(),
                 };
                 let this = cx.weak_entity();
-                let drop_wash = theme.bg_active;
                 // Obsidian's tab: 34 px tall, 200 px wide, the active one
                 // in the content's colour, its top corners as round as its
                 // feet, its title in the small UI size and its close button a
@@ -7327,15 +7498,20 @@ impl Workspace {
                     }))
                     // Picking the tab up: the ghost is its title, and the
                     // workspace is told so every group shows its zones.
-                    .on_drag(drag, move |drag, _, _, cx| {
+                    .on_drag(drag, move |drag, grab, _, cx| {
                         this.update(cx, |w, cx| w.begin_tab_drag(cx)).ok();
                         let title = drag.title.clone();
-                        cx.new(|_| TabDragPreview { title })
+                        cx.new(|_| TabDragPreview { title, grab })
                     })
-                    // A tab dropped on another goes in front of it.
-                    .drag_over::<TabDrag>(move |s, _, _, _| s.bg(drop_wash))
+                    // Where the tab is, for the strip's drop bar; a tab
+                    // dropped on it lands at the bar, else in front of it.
+                    .on_drag_move(cx.listener(move |this, e: &DragMoveEvent<TabDrag>, _, _| {
+                        if this.dragging_tab {
+                            this.tab_bounds.insert((group, ix), e.bounds);
+                        }
+                    }))
                     .on_drop(cx.listener(move |this, drag: &TabDrag, _, cx| {
-                        this.drop_tab_on_strip(drag, group, Some(ix), cx)
+                        this.drop_tab_at_bar(drag, group, Some(ix), cx)
                     }))
                     .on_mouse_down(
                         gpui::MouseButton::Middle,
@@ -7457,6 +7633,22 @@ impl Workspace {
             // window buttons): it never moves into the sidebar's own header.
             .when(last, |d| {
                 d.child(self.sidebar_toggle(false, theme, cx).mb(px(8.)))
+            })
+            // The drop bar: an accent bar astride the boundary the dragged
+            // tab would land at, the height of the tabs' inner boxes.
+            // Deferred past the dividers and feet, which paint late too.
+            .when_some(self.drop_bar.filter(|b| b.group == group), |d, bar| {
+                let left = bar.shown_x(Instant::now()) - bar.strip_x - DROP_BAR_WIDTH / 2.;
+                d.child(deferred(
+                    div()
+                        .absolute()
+                        .left(px(left))
+                        .bottom(px(6.))
+                        .w(px(DROP_BAR_WIDTH))
+                        .h(px(25.))
+                        .rounded(px(DROP_BAR_WIDTH / 2.))
+                        .bg(theme.accent),
+                ))
             })
     }
 
@@ -9441,6 +9633,12 @@ impl Render for Workspace {
         if self.dragging_tab && !cx.has_active_drag() {
             self.dragging_tab = false;
             self.tab_drop = None;
+            self.drop_bar = None;
+            self.tab_bounds.clear();
+        }
+        // A sliding drop bar needs a frame per step until it lands.
+        if self.drop_bar.is_some_and(|b| !b.settled(Instant::now())) {
+            window.request_animation_frame();
         }
         let theme = cx.global::<Theme>().clone();
         let title: SharedString = match &self.current {
