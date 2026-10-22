@@ -2355,6 +2355,47 @@ corner falls in a 24 px Breeze cursor) like Obsidian's, clear of the strip, and 
 grabbing hand for the drag: the ghost's view paints last and asks for the
 window cursor without a hitbox, which gpui lets win over the tab's pointer.
 
+### Backlinks pane, 2026-10-22
+
+The Backlinks and Outgoing links panes were flat per-occurrence lists: forty rows all
+labelled "Development", each with a `line: text` detail and nothing marking the link.
+They now have Obsidian's shape, built in `crates//src/backlinks.rs` with no gpui
+in it: a `Section` ("Linked mentions", "Unlinked mentions", "Links") holds one
+collapsible `Group` per file with its count, and a group holds its `Match`es, each
+carrying its context and the matched text's byte range inside it, so the pane can paint
+the link or the mentioned name with the search highlight. The context is the match's
+line trimmed, with the range moved to fit; "Show more context" adds the non-blank line
+either side. Unlinked mentions are deduplicated per `(path, range)` (the old list
+carried every duplicate the regex produced and printed the 200-row cap as the count),
+grouped by file, and keep the mention's own range for the Link button, which writes
+`[[Name]]` — `[[Name|text]]` when the text is an alias or another case, a markdown link
+under `useMarkdownLinks` — through the editor's buffer when the note is the open one and
+straight to disk otherwise, after checking the file is still the bytes the mention was
+found in. A Links row carries the link as written and a click goes through
+`follow_link`, so the subpath, the alias and the "create the note" case all come for
+free; the Links section is flat, as Obsidian's is.
+
+The Backlinks header is Obsidian's four `nav-action-button`s — Collapse results
+(`list`), Show more context (`move-vertical`), Change sort order (the Files view's six
+orders, in a menu with a check) and Show search filter (an in-pane field that keeps
+groups whose name matches whole and other groups' matching lines) — and the leaf's
+seven keys (`collapseAll`, `extraContext`, `sortOrder`, `showSearch`, `searchQuery`,
+`backlinkCollapsed`, `unlinkedCollapsed`) plus the outgoing leaf's two are read from
+`workspace.json` at restore and written back in place, through a `leaf_state` /
+`set_leaf_state` pair that the Files leaf now uses too. Matches wrap, so the list is a
+scrolling column rather than a uniform list; every row and card is `flex_shrink_0`,
+because a flex column's children otherwise shrink to fit the viewport and a card of 21
+matches showed two.
+
+Seen working over the control socket on a scratch copy of this vault with
+Specification open: 43 linked mentions in five groups, Development's 21 in one card;
+more context, collapse results, the sort menu and the filter each change
+`backlinks_options` in the state dump and the list on screen; the Link button on an
+unlinked mention in the backlog note rewrote `Specification.md` to `[[Specification]].md`
+in that file alone, the status bar reported the change, and the row moved from
+Unlinked (14 to 13) to Linked (10 to 11). The dump's `backlinks` and `outgoing` are now
+flattened `section` / `file` / `match` rows with `collapsed`, `ranges` and `mention`.
+
 ### Live Preview, 2026-10-16
 
 Live Preview is the same editor and buffer with a per-line display

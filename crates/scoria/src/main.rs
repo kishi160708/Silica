@@ -14,6 +14,7 @@
 #![cfg_attr(not(unix), allow(dead_code))]
 
 mod assets;
+mod backlinks;
 mod bookmarks;
 mod canvas;
 mod chooser;

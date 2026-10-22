@@ -607,6 +607,9 @@ Land it with the chip-reset fix above.
 
 *medium, bug, small*
 
+**Landed 2026-10-22**: mentions are deduplicated per `(path, range)`, the section's count is the
+real total, and a capped list says so with a `+`.
+
 **.** A note named `the`: the Backlinks pane shows "Unlinked mentions (200)" over 202 entries,
 of which 60 distinct `(path, offset)` pairs are duplicated — `(Development.md, 4433)` three times,
 `(Development.md, 6061)` four times — every copy carrying the same line offset, so they all navigate
@@ -622,6 +625,10 @@ before `.take(MAX)` and build the header from `total`, marking it capped when it
 ### Outgoing links rows drop the subpath and the alias, and never carry an offset
 
 *low, bug, small*
+
+**Landed 2026-10-22**: a Links row is labelled with the link's display text (or the written
+`path#subpath`) and carries the link as written, and a click follows it through `follow_link`
+exactly as clicking it in the note does, subpath included.
 
 **.** `See [[Specification#Parser notes]] and [[GA#GA]].` gives two rows labelled
 "Specification" and "GA" with detail the target filename and `offset: null` on both — the subpath is
@@ -640,6 +647,9 @@ existing `scroll_to_subpath` resolver, so `pane_row`'s click handler reveals it.
 ### Unresolved rows in Outgoing links are inert
 
 *low, parity-gap, small*
+
+**Landed 2026-10-22**: an unresolved row carries the link as written too, so a click takes the
+same path a dangling link in the note takes and creates the note.
 
 **.** `pane_row` attaches cursor, hover and `on_click` only when `path.is_some()`, so an
 unresolved row has no pointer, no hover and no handler at all.
@@ -689,6 +699,11 @@ interlinks are off.
 ### Backlinks and Outgoing are flat per-occurrence lists
 
 *medium, parity-gap, large*
+
+**Landed 2026-10-22** ([[Development#Backlinks pane, 2026-10-22]]): both panes are now
+Section > FileGroup > Match with the matched range highlighted, a header row of the four
+actions, per-file collapse and a Link button on every unlinked mention. What is still open is
+keyboard navigation of the rows, which the search pane entry below also wants.
 
 **.** Development.md's Backlinks tab showed "Linked mentions (41)" followed by 41 rows all
 labelled "Development", each detail a `{line}: {trimmed source line}` string, with no grouping and

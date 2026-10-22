@@ -9,7 +9,9 @@
 //! re-indexed in place, link edges re-resolved, and every pane refreshed.
 
 use crate::assets::{icon, logo};
+use crate::backlinks::{self, Group, Match as PaneMatch, Section};
 use crate::bookmarks::{BookmarkEvent, BookmarksPane};
+use crate::canvas::menu::tooltip;
 use crate::canvas::{CanvasEvent, CanvasView};
 use crate::chooser::{Chooser, ChooserEvent, Row as ChooserRow};
 use crate::editor::{Editor, EditorEvent};
@@ -23,6 +25,7 @@ use crate::reading::{self, LinkTarget, ReadingEvent, ReadingView, TaskMarker, Ta
 use crate::search::{SearchEvent, SearchPane};
 use crate::settings::{self, SettingChange, SettingsEvent, SettingsView};
 use crate::switcher::{QuickSwitcher, SwitcherEvent};
+use crate::text_input::{InputEvent, TextInput};
 use crate::theme::{
     Theme, FONT_UI_SMALL, FONT_UI_SMALLER, HEADER_HEIGHT, ICON_SIZE, RIBBON_WIDTH, SIDEBAR_WIDTH,
     TAB_CURVE,
@@ -31,14 +34,13 @@ use crate::watch;
 use gpui::{
     actions, anchored, canvas, deferred, div, point, prelude::*, px, relative, rgb, rgba,
     transparent_black, uniform_list, Action, App, BoxShadow, Context, CursorStyle, Decorations,
-    DragMoveEvent, Entity, FocusHandle, Focusable, Global, HitboxBehavior, Hsla, KeyBinding,
-    MouseButton, PathBuilder, Pixels, ResizeEdge, SharedString, Subscription, Task, Tiling,
-    UniformListScrollHandle, Window, WindowControlArea,
+    DragMoveEvent, Entity, FocusHandle, Focusable, Global, HighlightStyle, HitboxBehavior, Hsla,
+    KeyBinding, MouseButton, PathBuilder, Pixels, ResizeEdge, SharedString, StyledText,
+    Subscription, Task, Tiling, UniformListScrollHandle, Window, WindowControlArea,
 };
 use rayon::prelude::*;
 use _cache::{
-    basename, frontmatter_aliases, index_markdown, Backlink, CachedMetadata, LinkFormat,
-    MetadataCache,
+    basename, frontmatter_aliases, index_markdown, CachedMetadata, LinkFormat, MetadataCache,
 };
 use _commands::{keystroke, CommandRegistry};
 use _formats::bookmarks::{Bookmark, Bookmarks};
@@ -54,7 +56,7 @@ use _text::table::TableCommand;
 use _text::{LinePrefix, LinkSyntax};
 use _vault::{FileChange, TrashOption, Vault, VaultRegistry};
 use serde_json::{json, Map, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, RwLock, RwLockReadGuard};
@@ -960,20 +962,6 @@ struct OutlineRow {
     offset: usize,
 }
 
-/// A row of the Backlinks or Outgoing links pane.
-#[derive(Clone)]
-enum PaneRow {
-    Header(SharedString),
-    Item {
-        /// File to open; `None` for an unresolved link.
-        path: Option<String>,
-        label: SharedString,
-        detail: SharedString,
-        /// Byte offset to scroll to after opening.
-        offset: Option<usize>,
-    },
-}
-
 /// The Outline pane's rows for one note's metadata, whether that metadata
 /// came from the index or from the buffer being typed into.
 fn outline_rows(meta: &CachedMetadata) -> Vec<OutlineRow> {
@@ -983,62 +971,6 @@ fn outline_rows(meta: &CachedMetadata) -> Vec<OutlineRow> {
             level: h.level,
             text: Workspace::heading_text(&h.heading).into(),
             offset: h.position.start.offset,
-        })
-        .collect()
-}
-
-/// The context a Linked mentions row shows: the property a link was written
-/// in, which is what Obsidian names for one, or else its line in the source.
-fn backlink_detail(b: &Backlink<'_>, source_text: Option<&str>) -> String {
-    match b.key {
-        Some(key) => key.to_string(),
-        None => {
-            let line = b.link.position.start.line;
-            let context = source_text
-                .and_then(|t| t.lines().nth(line as usize))
-                .map(str::trim)
-                .unwrap_or_default();
-            format!("{}: {}", line + 1, context)
-        }
-    }
-}
-
-/// Rows for the Outgoing links pane: every link, embed and property link of
-/// `path`. A link written in a property is a link like any other, so it is
-/// listed too, first and in file order, with its property as the context.
-fn outgoing_link_rows(cache: &MetadataCache, path: &str) -> Vec<PaneRow> {
-    let Some(meta) = cache.file(path) else {
-        return Vec::new();
-    };
-    let properties = meta
-        .frontmatter_links
-        .iter()
-        .map(|l| (l.link.as_str(), Some(l.key.as_str())));
-    let body = meta
-        .links
-        .iter()
-        .chain(meta.embeds.iter())
-        .map(|l| (l.link.as_str(), None));
-    properties
-        .chain(body)
-        .map(|(link, key)| match cache.resolve(link, path) {
-            Some(target) => PaneRow::Item {
-                path: Some(target.to_string()),
-                label: display_name(target.rsplit('/').next().unwrap_or(target))
-                    .to_string()
-                    .into(),
-                detail: key.unwrap_or(target).to_string().into(),
-                offset: None,
-            },
-            None => PaneRow::Item {
-                path: None,
-                label: _markdown::parse_linktext(link)
-                    .path
-                    .to_string()
-                    .into(),
-                detail: "Not created yet".into(),
-                offset: None,
-            },
         })
         .collect()
 }
@@ -1059,10 +991,56 @@ struct PropertyRow {
 }
 
 /// Mentions computed off the UI thread for one open note.
-struct MentionRows {
+struct MentionSections {
     path: String,
-    incoming: Vec<PaneRow>,
-    outgoing: Vec<PaneRow>,
+    incoming: Section,
+    outgoing: Section,
+}
+
+/// The Backlinks leaf's own state: the keys Obsidian keeps for it in
+/// `workspace.json`, plus which groups were toggled by hand.
+#[derive(Debug, Clone)]
+struct BacklinkState {
+    /// `collapseAll`: every group starts collapsed.
+    collapse_all: bool,
+    /// `extraContext`: a match shows the lines either side of its own.
+    extra_context: bool,
+    /// `sortOrder`, the Files view's six orders.
+    sort: SortOrder,
+    /// `showSearch`: the filter field is on screen.
+    show_search: bool,
+    /// `backlinkCollapsed`: the Linked mentions section is folded.
+    linked_collapsed: bool,
+    /// `unlinkedCollapsed`.
+    unlinked_collapsed: bool,
+    /// Groups toggled away from what `collapse_all` says, by
+    /// [`Section::group_key`].
+    toggled: HashSet<String>,
+    sort_menu_open: bool,
+}
+
+impl Default for BacklinkState {
+    fn default() -> BacklinkState {
+        BacklinkState {
+            collapse_all: false,
+            extra_context: false,
+            sort: SortOrder::Alphabetical,
+            show_search: false,
+            linked_collapsed: false,
+            unlinked_collapsed: false,
+            toggled: HashSet::new(),
+            sort_menu_open: false,
+        }
+    }
+}
+
+/// The Outgoing links leaf's state: `linksCollapsed` and
+/// `unlinkedCollapsed`, plus the groups folded by hand.
+#[derive(Debug, Clone, Default)]
+struct OutgoingState {
+    links_collapsed: bool,
+    unlinked_collapsed: bool,
+    toggled: HashSet<String>,
 }
 
 /// How long a transient message stays on screen. Obsidian reports what a
@@ -2110,11 +2088,15 @@ pub struct Workspace {
     link_in_new_tab: bool,
     right_tab: RightTab,
     outline: Vec<OutlineRow>,
-    backlink_rows: Vec<PaneRow>,
-    outgoing_rows: Vec<PaneRow>,
-    /// Linked mentions, kept apart so mentions can be appended when they arrive.
-    linked: Vec<PaneRow>,
-    outgoing_links: Vec<PaneRow>,
+    /// The Backlinks pane: Linked mentions, then Unlinked mentions, which
+    /// are filled in when the background search for them lands.
+    backlink_sections: Vec<Section>,
+    /// The Outgoing links pane: Links, then Unlinked mentions.
+    outgoing_sections: Vec<Section>,
+    backlink_state: BacklinkState,
+    outgoing_state: OutgoingState,
+    /// The Backlinks pane's search filter (`searchQuery`).
+    backlink_filter: Entity<TextInput>,
     tags: Vec<TagRow>,
     tag_scroll: UniformListScrollHandle,
     properties: Vec<PropertyRow>,
@@ -2202,6 +2184,7 @@ impl Workspace {
     pub fn new(root: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Workspace {
         let explorer = cx.new(FileExplorer::new);
         let search = cx.new(SearchPane::new);
+        let backlink_filter = cx.new(|cx| TextInput::new("Search...", cx));
         let bookmarks = cx.new(BookmarksPane::new);
         let switcher = cx.new(QuickSwitcher::new);
         let chooser = cx.new(Chooser::new);
@@ -2213,6 +2196,13 @@ impl Workspace {
         let canvas = cx.new(CanvasView::new);
         let graph = cx.new(GraphView::new);
         let subscriptions = vec![
+            // The filter is applied as the pane is drawn; a keystroke only
+            // has to ask for a draw.
+            cx.subscribe(&backlink_filter, |_, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Changed) {
+                    cx.notify();
+                }
+            }),
             cx.subscribe_in(
                 &graph,
                 window,
@@ -2445,10 +2435,11 @@ impl Workspace {
             link_in_new_tab: false,
             right_tab: RightTab::Backlinks,
             outline: Vec::new(),
-            backlink_rows: Vec::new(),
-            outgoing_rows: Vec::new(),
-            linked: Vec::new(),
-            outgoing_links: Vec::new(),
+            backlink_sections: Vec::new(),
+            outgoing_sections: Vec::new(),
+            backlink_state: BacklinkState::default(),
+            outgoing_state: OutgoingState::default(),
+            backlink_filter,
             tags: Vec::new(),
             tag_scroll: UniformListScrollHandle::new(),
             properties: Vec::new(),
@@ -4427,10 +4418,8 @@ impl Workspace {
     /// and stay clickable.
     fn clear_panes(&mut self, cx: &mut Context<Self>) {
         self.outline.clear();
-        self.linked.clear();
-        self.outgoing_links.clear();
-        self.backlink_rows.clear();
-        self.outgoing_rows.clear();
+        self.backlink_sections.clear();
+        self.outgoing_sections.clear();
         let current = self.current.clone();
         self.bookmarks.update(cx, |b, cx| b.set_active(current, cx));
         cx.notify();
@@ -4456,34 +4445,201 @@ impl Workspace {
         let texts = state.texts();
         self.outline = cache.file(&path).map(outline_rows).unwrap_or_default();
 
-        // Linked mentions: every link into this file, with its line as context.
-        let mut linked = Vec::new();
-        for b in cache.backlinks(&path) {
-            linked.push(PaneRow::Item {
-                path: Some(b.source.to_string()),
-                label: display_name(b.source.rsplit('/').next().unwrap_or(b.source))
-                    .to_string()
-                    .into(),
-                detail: backlink_detail(&b, texts.get(b.source).map(|t| t.as_str())).into(),
-                offset: Some(b.link.position.start.offset),
-            });
-        }
-        let n = linked.len();
-        linked.insert(0, PaneRow::Header(format!("Linked mentions ({n})").into()));
-        self.linked = linked;
-
-        // Outgoing: the links this file writes, properties included.
-        let mut out = outgoing_link_rows(&cache, &path);
-        let n = out.len();
-        out.insert(0, PaneRow::Header(format!("Links ({n})").into()));
-        self.outgoing_links = out;
+        // Linked mentions: every link into this file, grouped by the note
+        // it was written in; Links: the ones this file writes, properties
+        // included. Unlinked mentions take a search of every note and come
+        // in from the background executor.
+        let extra = self.backlink_state.extra_context;
+        let linked = backlinks::linked_mentions(&cache, &texts, &path, extra);
+        let links = backlinks::outgoing_links(&cache, &path);
         drop(cache);
         drop(texts);
-
-        self.backlink_rows = self.linked.clone();
-        self.outgoing_rows = self.outgoing_links.clone();
+        self.backlink_sections = vec![linked, Section::empty(backlinks::UNLINKED)];
+        self.outgoing_sections = vec![links, Section::empty(backlinks::UNLINKED)];
+        self.sort_backlink_sections(state);
         self.compute_mentions(&path, state, cx);
         cx.notify();
+    }
+
+    /// Puts the Backlinks pane's groups in its sort order. The time orders
+    /// need every file's stat, so those are only gathered for them.
+    fn sort_backlink_sections(&mut self, state: &VaultState) {
+        let order = self.backlink_state.sort;
+        let times: HashMap<String, (u64, u64)> = match order {
+            SortOrder::Alphabetical | SortOrder::AlphabeticalReverse => HashMap::new(),
+            _ => state
+                .vault()
+                .files()
+                .iter()
+                .map(|f| (f.path.clone(), (f.mtime, f.ctime)))
+                .collect(),
+        };
+        let stat = |p: &str| times.get(p).copied().unwrap_or((0, 0));
+        for section in &mut self.backlink_sections {
+            backlinks::sort_groups(section, order, &stat);
+        }
+    }
+
+    /// Toggles "Show more context", which changes every match's text, so
+    /// the panes are rebuilt.
+    fn toggle_backlink_context(&mut self, cx: &mut Context<Self>) {
+        self.backlink_state.extra_context = !self.backlink_state.extra_context;
+        if let Some(state) = self.state.clone() {
+            self.refresh_panes(&state, cx);
+        }
+        cx.notify();
+    }
+
+    /// Toggles "Collapse results": every group follows the flag again.
+    fn toggle_backlink_collapse_all(&mut self, cx: &mut Context<Self>) {
+        self.backlink_state.collapse_all = !self.backlink_state.collapse_all;
+        self.backlink_state.toggled.clear();
+        cx.notify();
+    }
+
+    /// Toggles the search filter; showing it puts the keyboard in it.
+    fn toggle_backlink_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.backlink_state.show_search = !self.backlink_state.show_search;
+        if self.backlink_state.show_search {
+            let handle = self.backlink_filter.focus_handle(cx);
+            window.focus(&handle, cx);
+        }
+        cx.notify();
+    }
+
+    fn set_backlink_sort(&mut self, order: SortOrder, cx: &mut Context<Self>) {
+        self.backlink_state.sort = order;
+        self.backlink_state.sort_menu_open = false;
+        if let Some(state) = self.state.clone() {
+            self.sort_backlink_sections(&state);
+        }
+        cx.notify();
+    }
+
+    /// A pane's rows for the state dump, folds included.
+    fn pane_rows_json(&self, which: RightTab) -> Vec<Value> {
+        let sections = match which {
+            RightTab::Outgoing => &self.outgoing_sections,
+            _ => &self.backlink_sections,
+        };
+        section_rows_json(sections, &|ix| self.section_collapsed(which, ix), &|key| {
+            self.group_collapsed(which, key)
+        })
+    }
+
+    /// Whether a pane's section is folded.
+    fn section_collapsed(&self, which: RightTab, ix: usize) -> bool {
+        match (which, ix) {
+            (RightTab::Outgoing, 0) => self.outgoing_state.links_collapsed,
+            (RightTab::Outgoing, _) => self.outgoing_state.unlinked_collapsed,
+            (_, 0) => self.backlink_state.linked_collapsed,
+            (_, _) => self.backlink_state.unlinked_collapsed,
+        }
+    }
+
+    fn toggle_section(&mut self, which: RightTab, ix: usize, cx: &mut Context<Self>) {
+        let flag = match (which, ix) {
+            (RightTab::Outgoing, 0) => &mut self.outgoing_state.links_collapsed,
+            (RightTab::Outgoing, _) => &mut self.outgoing_state.unlinked_collapsed,
+            (_, 0) => &mut self.backlink_state.linked_collapsed,
+            (_, _) => &mut self.backlink_state.unlinked_collapsed,
+        };
+        *flag = !*flag;
+        cx.notify();
+    }
+
+    /// Whether a group is folded: the Backlinks pane's "Collapse results"
+    /// sets the default and a click on the group inverts it.
+    fn group_collapsed(&self, which: RightTab, key: &str) -> bool {
+        match which {
+            RightTab::Outgoing => self.outgoing_state.toggled.contains(key),
+            _ => self.backlink_state.collapse_all ^ self.backlink_state.toggled.contains(key),
+        }
+    }
+
+    fn toggle_group(&mut self, which: RightTab, key: String, cx: &mut Context<Self>) {
+        let toggled = match which {
+            RightTab::Outgoing => &mut self.outgoing_state.toggled,
+            _ => &mut self.backlink_state.toggled,
+        };
+        if !toggled.remove(&key) {
+            toggled.insert(key);
+        }
+        cx.notify();
+    }
+
+    /// The Link button: rewrites the unlinked mention of `target` at
+    /// `mention` in `source` as a link.
+    ///
+    /// The open note is edited through its buffer, so the change is
+    /// undoable and saved like any other edit. Any other note is written
+    /// straight to disk, provided the file is still the text the mention
+    /// was found in: the range is into those bytes, and another app may
+    /// have saved since.
+    fn link_mention(
+        &mut self,
+        source: String,
+        target: String,
+        mention: Range<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let Some(text) = state.texts().get(&source).cloned() else {
+            return;
+        };
+        let Some(mentioned) = text.get(mention.clone()) else {
+            return;
+        };
+        let markdown = state.app().use_markdown_links.unwrap_or(false);
+        let link = backlinks::link_for_mention(
+            state.cache().resolver(),
+            &target,
+            &source,
+            mentioned,
+            state.link_format(),
+            markdown,
+        );
+        let in_buffer = self.current.as_deref() == Some(source.as_str())
+            && self.editor.read(cx).name.as_ref() == source.as_str();
+        if in_buffer {
+            if self.editor.read(cx).text() != text.as_str() {
+                self.report(format!("{source} has unsaved edits; not linked"), cx);
+                return;
+            }
+            self.editor.update(cx, |e, cx| {
+                e.set_selection_range(mention.start, mention.end, window, cx);
+                e.insert_at_cursors(&link, window, cx);
+            });
+            return;
+        }
+        let absolute = match state.vault().write_path(&source) {
+            Ok(path) => path,
+            Err(err) => {
+                self.report(format!("{source} not linked: {err}"), cx);
+                return;
+            }
+        };
+        match std::fs::read_to_string(&absolute) {
+            Ok(on_disk) if on_disk == *text => {}
+            Ok(_) => {
+                self.report(format!("{source} changed on disk; not linked"), cx);
+                return;
+            }
+            Err(err) => {
+                self.report(format!("Could not read {source}: {err}"), cx);
+                return;
+            }
+        }
+        let mut written = text.to_string();
+        written.replace_range(mention, &link);
+        if let Err(err) = _vault::write_no_follow(&absolute, written.as_bytes()) {
+            self.report(format!("Could not write {source}: {err}"), cx);
+            return;
+        }
+        self.files_changed(vec![absolute], cx);
     }
 
     /// Rebuilds the Outline from the editor's buffer instead of from the
@@ -4521,8 +4677,10 @@ impl Workspace {
         self.mention_generation += 1;
         let generation = self.mention_generation;
         let state = state.clone();
+        let on_ui = state.clone();
         let path = path.to_string();
         let finder = self.name_finder.clone();
+        let extra = self.backlink_state.extra_context;
         cx.spawn(async move |this, cx| {
             let (rows, finder) = cx
                 .background_executor()
@@ -4535,7 +4693,10 @@ impl Workspace {
                             .collect();
                         Finder::new(&refs).map(Arc::new)
                     });
-                    (mention_rows(&state, &path, finder.as_deref()), finder)
+                    (
+                        mention_sections(&state, &path, finder.as_deref(), extra),
+                        finder,
+                    )
                 })
                 .await;
             this.update(cx, |ws, cx| {
@@ -4544,12 +4705,13 @@ impl Workspace {
                 {
                     return;
                 }
-                let mut backlinks = ws.linked.clone();
-                backlinks.extend(rows.incoming);
-                ws.backlink_rows = backlinks;
-                let mut outgoing = ws.outgoing_links.clone();
-                outgoing.extend(rows.outgoing);
-                ws.outgoing_rows = outgoing;
+                if let Some(slot) = ws.backlink_sections.get_mut(1) {
+                    *slot = rows.incoming;
+                }
+                if let Some(slot) = ws.outgoing_sections.get_mut(1) {
+                    *slot = rows.outgoing;
+                }
+                ws.sort_backlink_sections(&on_ui);
                 cx.notify();
             })
             .ok();
@@ -7849,6 +8011,7 @@ impl Workspace {
             self.explorer
                 .update(cx, |e, cx| e.set_leaf_state(sort, auto_reveal, cx));
         }
+        self.restore_pane_states(&layout, cx);
         self.last_open_files = layout
             .get("lastOpenFiles")
             .and_then(Value::as_array)
@@ -8005,6 +8168,38 @@ impl Workspace {
         }
     }
 
+    /// The Backlinks and Outgoing links leaves' own state from
+    /// `workspace.json`'s right dock, each key at Obsidian's default when
+    /// it is missing or unreadable.
+    fn restore_pane_states(&mut self, layout: &Value, cx: &mut Context<Self>) {
+        let flag =
+            |state: &Value, key: &str| state.get(key).and_then(Value::as_bool).unwrap_or(false);
+        if let Some(state) = leaf_state(layout, "right", "backlink") {
+            let b = &mut self.backlink_state;
+            b.collapse_all = flag(state, "collapseAll");
+            b.extra_context = flag(state, "extraContext");
+            b.sort = state
+                .get("sortOrder")
+                .and_then(Value::as_str)
+                .and_then(SortOrder::parse)
+                .unwrap_or_default();
+            b.show_search = flag(state, "showSearch");
+            b.linked_collapsed = flag(state, "backlinkCollapsed");
+            b.unlinked_collapsed = flag(state, "unlinkedCollapsed");
+            let query = state
+                .get("searchQuery")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            self.backlink_filter
+                .update(cx, |input, cx| input.set_text(query, cx));
+        }
+        if let Some(state) = leaf_state(layout, "right", "outgoing-link") {
+            self.outgoing_state.links_collapsed = flag(state, "linksCollapsed");
+            self.outgoing_state.unlinked_collapsed = flag(state, "unlinkedCollapsed");
+        }
+    }
+
     /// `workspace.json` as this session would leave it: the file that was
     /// read with the tab groups, the active leaf, the sidebars' collapse
     /// state and `lastOpenFiles` brought up to date, and every other key as
@@ -8021,6 +8216,32 @@ impl Workspace {
             if let Some(left) = object.get_mut("left") {
                 set_explorer_leaf_state(left, sort, auto_reveal);
             }
+        }
+        // The Backlinks and Outgoing links leaves' own state, likewise.
+        if let Some(right) = object.get_mut("right") {
+            let b = &self.backlink_state;
+            set_leaf_state(
+                right,
+                "backlink",
+                &[
+                    ("collapseAll", json!(b.collapse_all)),
+                    ("extraContext", json!(b.extra_context)),
+                    ("sortOrder", json!(b.sort.as_str())),
+                    ("showSearch", json!(b.show_search)),
+                    ("searchQuery", json!(self.backlink_filter.read(cx).text())),
+                    ("backlinkCollapsed", json!(b.linked_collapsed)),
+                    ("unlinkedCollapsed", json!(b.unlinked_collapsed)),
+                ],
+            );
+            let o = &self.outgoing_state;
+            set_leaf_state(
+                right,
+                "outgoing-link",
+                &[
+                    ("linksCollapsed", json!(o.links_collapsed)),
+                    ("unlinkedCollapsed", json!(o.unlinked_collapsed)),
+                ],
+            );
         }
         let mut active_id = Value::Null;
         let main = self.layout_node_json(&self.layout_tree, &mut active_id);
@@ -8264,13 +8485,23 @@ impl Workspace {
         put_capped(
             &mut right,
             "backlinks",
-            self.backlink_rows.iter().map(pane_row_json).collect(),
+            self.pane_rows_json(RightTab::Backlinks),
             rows,
+        );
+        right.insert(
+            "backlinks_options".into(),
+            json!({
+                "collapse_all": self.backlink_state.collapse_all,
+                "extra_context": self.backlink_state.extra_context,
+                "sort": self.backlink_state.sort.as_str(),
+                "show_search": self.backlink_state.show_search,
+                "query": self.backlink_filter.read(cx).text(),
+            }),
         );
         put_capped(
             &mut right,
             "outgoing",
-            self.outgoing_rows.iter().map(pane_row_json).collect(),
+            self.pane_rows_json(RightTab::Outgoing),
             rows,
         );
         put_capped(
@@ -8744,107 +8975,499 @@ impl Workspace {
             .collect()
     }
 
-    fn pane_row(
+    /// A pane's own header button: Obsidian's `nav-action-button`, 28 by
+    /// 24 with a 4 px radius, the icon muted until the pointer is over it;
+    /// `active` is the wash and accent of an `is-active` one.
+    fn nav_button(
+        id: &'static str,
+        icon_name: &'static str,
+        label: &'static str,
+        active: bool,
+        theme: &Theme,
+    ) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id(id)
+            .flex_shrink_0()
+            .w(px(28.))
+            .h(px(24.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(4.))
+            .cursor_pointer()
+            .when(active, |d| d.bg(theme.bg_alt))
+            .hover(|s| s.bg(theme.bg_alt))
+            .tooltip(tooltip(label))
+            .child(icon(
+                icon_name,
+                ICON_SIZE,
+                if active {
+                    theme.accent
+                } else {
+                    theme.text_muted
+                },
+            ))
+    }
+
+    /// The Backlinks pane: Obsidian's four header actions (collapse,
+    /// more context, sort, filter), the filter field when it is shown,
+    /// then the two sections.
+    fn render_backlinks_pane(&mut self, theme: &Theme, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let (collapse_all, extra, show_search) = (
+            self.backlink_state.collapse_all,
+            self.backlink_state.extra_context,
+            self.backlink_state.show_search,
+        );
+        let sort_menu = self.render_backlink_sort_menu(theme, cx);
+        let header = div()
+            .flex_shrink_0()
+            .h(px(HEADER_HEIGHT))
+            .p(px(8.))
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_center()
+            .gap(px(2.))
+            .child(
+                Self::nav_button(
+                    "backlinks-collapse",
+                    "list",
+                    "Collapse results",
+                    collapse_all,
+                    theme,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_backlink_collapse_all(cx))),
+            )
+            .child(
+                Self::nav_button(
+                    "backlinks-context",
+                    "move-vertical",
+                    "Show more context",
+                    extra,
+                    theme,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_backlink_context(cx))),
+            )
+            .child(
+                // The menu hangs off this wrapper, so it opens under the
+                // button wherever the dock is.
+                div()
+                    .relative()
+                    .child(
+                        Self::nav_button(
+                            "backlinks-sort",
+                            "arrow-up-narrow-wide",
+                            "Change sort order",
+                            false,
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.backlink_state.sort_menu_open =
+                                !this.backlink_state.sort_menu_open;
+                            cx.notify();
+                        })),
+                    )
+                    .children(sort_menu),
+            )
+            .child(
+                Self::nav_button(
+                    "backlinks-search",
+                    "search",
+                    "Show search filter",
+                    show_search,
+                    theme,
+                )
+                .on_click(
+                    cx.listener(|this, _, window, cx| this.toggle_backlink_search(window, cx)),
+                ),
+            );
+        let query = self.backlink_filter.read(cx).text().to_string();
+        let filter = show_search.then(|| {
+            div()
+                .flex_shrink_0()
+                .px_2()
+                .pb_2()
+                .child(self.backlink_filter.clone())
+        });
+        let body = self.render_sections(RightTab::Backlinks, &query, theme, cx);
+        div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .child(header)
+            .children(filter)
+            .child(body)
+            .into_any_element()
+    }
+
+    /// The Outgoing links pane has no header of its own: Links, then
+    /// Unlinked mentions.
+    fn render_outgoing_pane(&mut self, theme: &Theme, cx: &mut Context<Self>) -> gpui::AnyElement {
+        self.render_sections(RightTab::Outgoing, "", theme, cx)
+    }
+
+    /// "Change sort order" for the Backlinks pane: the six orders in three
+    /// pairs, a check against the one in force.
+    fn render_backlink_sort_menu(
+        &mut self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        if !self.backlink_state.sort_menu_open {
+            return None;
+        }
+        let current = self.backlink_state.sort;
+        let mut list = div()
+            .id("backlinks-sort-menu")
+            .flex()
+            .flex_col()
+            .min_w(px(220.))
+            .py_1()
+            .bg(theme.bg_secondary)
+            .border_1()
+            .border_color(theme.border)
+            .rounded_md()
+            .shadow_lg()
+            .text_size(px(13.))
+            .text_color(theme.text)
+            // Keeps a click on an item from reaching the row under it.
+            .occlude()
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                this.backlink_state.sort_menu_open = false;
+                cx.notify();
+            }));
+        for (ix, order) in SortOrder::ALL.into_iter().enumerate() {
+            if ix > 0 && ix % 2 == 0 {
+                list = list.child(div().my_1().h(px(1.)).bg(theme.border));
+            }
+            let checked = order == current;
+            list = list.child(
+                div()
+                    .id(("backlinks-sort-item", ix))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .px_3()
+                    .py_1()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme.bg_alt))
+                    .on_click(cx.listener(move |this, _, _, cx| this.set_backlink_sort(order, cx)))
+                    .child(
+                        div()
+                            .w(px(16.))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .children(checked.then(|| icon("check", 14., theme.text_muted))),
+                    )
+                    .child(order.label()),
+            );
+        }
+        Some(
+            deferred(
+                anchored()
+                    .offset(point(px(0.), px(26.)))
+                    .snap_to_window_with_margin(px(8.))
+                    .child(list),
+            )
+            .with_priority(1)
+            .into_any_element(),
+        )
+    }
+
+    /// A pane's sections, drawn the way Obsidian's search results are: a
+    /// section row with its count, a collapsible row per file with its
+    /// count, and the file's matches in one card, each with the matched
+    /// text highlighted. The Links section's rows stand alone. A match
+    /// wraps, so this is a scrolling column rather than a uniform list.
+    fn render_sections(
+        &mut self,
+        which: RightTab,
+        query: &str,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let sections = match which {
+            RightTab::Outgoing => self.outgoing_sections.clone(),
+            _ => self.backlink_sections.clone(),
+        };
+        let prefix = match which {
+            RightTab::Outgoing => "outgoing",
+            _ => "backlinks",
+        };
+        let current = self.current.clone().unwrap_or_default();
+        let mut list = div()
+            .id(prefix)
+            .flex()
+            .flex_col()
+            .flex_1()
+            .overflow_y_scroll()
+            .px(px(8.))
+            .pb_2();
+        let mut ix = 0usize;
+        let mut next = || {
+            ix += 1;
+            ix
+        };
+        for (s_ix, section) in sections.iter().enumerate() {
+            let shown = if which == RightTab::Outgoing {
+                section.clone()
+            } else {
+                backlinks::filter(section, query)
+            };
+            let folded = self.section_collapsed(which, s_ix);
+            let count: SharedString = if section.capped {
+                format!("{}+", shown.count).into()
+            } else {
+                shown.count.to_string().into()
+            };
+            list = list.child(
+                div()
+                    .id(("pane-section", next()))
+                    .w_full()
+                    .flex_shrink_0()
+                    .h(px(28.))
+                    .px(px(4.))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(6.))
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme.bg_alt))
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.toggle_section(which, s_ix, cx)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_size(px(FONT_UI_SMALL))
+                            .text_color(theme.text)
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .child(section.label),
+                    )
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_size(px(FONT_UI_SMALLER))
+                            .text_color(theme.text_muted)
+                            .child(count),
+                    ),
+            );
+            if folded {
+                continue;
+            }
+            for group in &shown.groups {
+                let key = shown.group_key(group);
+                let flat = group.matches.is_empty();
+                let collapsed = !flat && self.group_collapsed(which, &key);
+                let path = group.path.clone();
+                let link = group.link.clone();
+                let resolved = path.is_some();
+                let chevron = (!flat).then(|| {
+                    let key = key.clone();
+                    div()
+                        .id(("pane-chevron", next()))
+                        .w(px(16.))
+                        .h(px(24.))
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.toggle_group(which, key.clone(), cx);
+                            cx.stop_propagation();
+                        }))
+                        .child(icon(
+                            if collapsed {
+                                "chevron-right"
+                            } else {
+                                "chevron-down"
+                            },
+                            14.,
+                            theme.text_muted,
+                        ))
+                });
+                let flair: Option<SharedString> =
+                    (!flat).then(|| group.matches.len().to_string().into());
+                list = list.child(
+                    div()
+                        .id(("pane-group", next()))
+                        .w_full()
+                        .flex_shrink_0()
+                        .h(px(24.))
+                        .pl(px(if flat { 8. } else { 2. }))
+                        .pr(px(4.))
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(2.))
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .hover(|s| s.bg(theme.bg_alt))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            // A Links row follows the link the way the note
+                            // would, subpath included, and creates the note
+                            // nothing stands behind; a mentions row opens
+                            // the file.
+                            if let Some(link) = link.clone() {
+                                this.follow_link(LinkTarget::Internal(link), cx);
+                            } else if let Some(path) = path.clone() {
+                                this.open_file(path, None, cx);
+                            }
+                        }))
+                        .children(chevron)
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_size(px(FONT_UI_SMALL))
+                                .text_color(if resolved {
+                                    theme.text
+                                } else {
+                                    theme.text_muted
+                                })
+                                .whitespace_nowrap()
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .child(SharedString::from(group.label.clone())),
+                        )
+                        .children(flair.map(|count| {
+                            div()
+                                .flex_shrink_0()
+                                .pr(px(4.))
+                                .text_size(px(FONT_UI_SMALLER))
+                                .text_color(theme.text_muted)
+                                .child(count)
+                        })),
+                );
+                if flat || collapsed {
+                    continue;
+                }
+                // Children of a scrolling column shrink to fit it unless
+                // told not to, and a card holds every match in full.
+                let mut card = div()
+                    .w_full()
+                    .flex_shrink_0()
+                    .mb(px(6.))
+                    .flex()
+                    .flex_col()
+                    .rounded(px(6.))
+                    .bg(theme.bg)
+                    .border_1()
+                    .border_color(theme.border)
+                    .overflow_hidden();
+                for (m_ix, m) in group.matches.iter().enumerate() {
+                    card = card.child(self.render_match(
+                        which,
+                        next(),
+                        m_ix > 0,
+                        &current,
+                        group,
+                        m,
+                        theme,
+                        cx,
+                    ));
+                }
+                list = list.child(card);
+            }
+        }
+        list.into_any_element()
+    }
+
+    /// One match in a file's card: its context with the matched text
+    /// highlighted, and for an unlinked mention the Link button that
+    /// turns the text into a link.
+    #[allow(clippy::too_many_arguments)]
+    fn render_match(
         &self,
-        id: (&'static str, usize),
-        row: PaneRow,
+        which: RightTab,
+        ix: usize,
+        divided: bool,
+        current: &str,
+        group: &Group,
+        m: &PaneMatch,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
-        match row {
-            PaneRow::Header(text) => div()
-                .id(id)
-                .w_full()
-                .h(px(40.))
+        let path = group.path.clone();
+        let offset = m.offset;
+        let highlights: Vec<(Range<usize>, HighlightStyle)> = m
+            .ranges
+            .iter()
+            .filter(|r| r.end <= m.text.len())
+            .map(|r| {
+                (
+                    r.clone(),
+                    HighlightStyle {
+                        background_color: Some(theme.highlight_bg),
+                        ..HighlightStyle::default()
+                    },
+                )
+            })
+            .collect();
+        let text = StyledText::new(SharedString::from(m.text.clone())).with_highlights(highlights);
+        // Which note the mention is in and which it names depend on the
+        // pane: the Backlinks pane lists other notes mentioning this one,
+        // the Outgoing pane this note mentioning others.
+        let link_button = m.mention.clone().zip(path.clone()).map(|(mention, other)| {
+            let (source, target) = match which {
+                RightTab::Outgoing => (current.to_string(), other),
+                _ => (other, current.to_string()),
+            };
+            div()
+                .id(("pane-link", ix))
+                .flex_shrink_0()
+                .h(px(22.))
+                .px(px(8.))
                 .flex()
-                .items_end()
-                .pb_1()
-                .px_2()
-                .text_size(px(10.))
-                .text_color(theme.text_muted)
-                .child(text.to_uppercase()),
-            PaneRow::Item {
-                path,
-                label,
-                detail,
-                offset,
-            } => {
-                let clickable = path.is_some();
+                .items_center()
+                .rounded(px(4.))
+                .bg(theme.bg_active)
+                .text_size(px(FONT_UI_SMALLER))
+                .text_color(theme.text)
+                .hover(|s| s.bg(theme.bg_alt))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.link_mention(source.clone(), target.clone(), mention.clone(), window, cx);
+                    cx.stop_propagation();
+                }))
+                .child("Link")
+        });
+        div()
+            .id(("pane-match", ix))
+            .w_full()
+            .flex_shrink_0()
+            .px(px(8.))
+            .py(px(6.))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(8.))
+            .cursor_pointer()
+            .when(divided, |d| d.border_t_1().border_color(theme.border))
+            .hover(|s| s.bg(theme.bg_alt))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if let Some(path) = path.clone() {
+                    this.open_file(path, None, cx);
+                    if let Some(offset) = offset {
+                        this.reveal_offset(offset, cx);
+                    }
+                }
+            }))
+            .child(
                 div()
-                    .id(id)
-                    .w_full()
-                    .h(px(40.))
-                    .flex()
-                    .flex_col()
-                    .justify_center()
-                    .px_2()
-                    .rounded_sm()
-                    .when(clickable, |d| {
-                        d.cursor_pointer()
-                            .hover(|s| s.bg(theme.bg_alt))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if let Some(path) = path.clone() {
-                                    this.open_file(path, None, cx);
-                                    if let Some(offset) = offset {
-                                        this.reveal_offset(offset, cx);
-                                    }
-                                }
-                            }))
-                    })
-                    .child(
-                        div()
-                            .text_size(px(13.))
-                            .text_color(if clickable {
-                                theme.text
-                            } else {
-                                theme.text_muted
-                            })
-                            .whitespace_nowrap()
-                            .text_ellipsis()
-                            .overflow_hidden()
-                            .child(label),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(theme.text_muted)
-                            .whitespace_nowrap()
-                            .text_ellipsis()
-                            .overflow_hidden()
-                            .child(detail),
-                    )
-            }
-        }
-    }
-
-    fn render_backlinks(
-        &mut self,
-        range: Range<usize>,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Vec<gpui::Stateful<gpui::Div>> {
-        let theme = cx.global::<Theme>().clone();
-        range
-            .filter_map(|ix| {
-                let row = self.backlink_rows.get(ix)?.clone();
-                Some(self.pane_row(("backlink", ix), row, &theme, cx))
-            })
-            .collect()
-    }
-
-    fn render_outgoing(
-        &mut self,
-        range: Range<usize>,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Vec<gpui::Stateful<gpui::Div>> {
-        let theme = cx.global::<Theme>().clone();
-        range
-            .filter_map(|ix| {
-                let row = self.outgoing_rows.get(ix)?.clone();
-                Some(self.pane_row(("outgoing", ix), row, &theme, cx))
-            })
-            .collect()
+                    .flex_1()
+                    .min_w_0()
+                    .text_size(px(FONT_UI_SMALLER))
+                    .text_color(theme.text)
+                    .line_height(relative(1.4))
+                    .child(text),
+            )
+            .children(link_button)
     }
 
     fn render_tags(
@@ -8956,20 +9579,8 @@ impl Workspace {
     fn render_right_dock(&mut self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
         let tab = self.right_tab;
         let body: gpui::AnyElement = match tab {
-            RightTab::Backlinks => {
-                let count = self.backlink_rows.len();
-                uniform_list("backlinks", count, cx.processor(Self::render_backlinks))
-                    .size_full()
-                    .px_1()
-                    .into_any_element()
-            }
-            RightTab::Outgoing => {
-                let count = self.outgoing_rows.len();
-                uniform_list("outgoing", count, cx.processor(Self::render_outgoing))
-                    .size_full()
-                    .px_1()
-                    .into_any_element()
-            }
+            RightTab::Backlinks => self.render_backlinks_pane(theme, cx),
+            RightTab::Outgoing => self.render_outgoing_pane(theme, cx),
             RightTab::Outline => {
                 let count = self.outline.len();
                 if count == 0 {
@@ -9081,8 +9692,12 @@ impl Workspace {
 
 /// Unlinked mentions for `path`: other notes mentioning its names (incoming)
 /// and names of other notes mentioned in it (outgoing).
-fn mention_rows(state: &VaultState, path: &str, finder: Option<&Finder>) -> MentionRows {
-    const MAX: usize = 200;
+fn mention_sections(
+    state: &VaultState,
+    path: &str,
+    finder: Option<&Finder>,
+    extra: bool,
+) -> MentionSections {
     let texts = state.texts();
     let cache = state.cache();
     let base = path
@@ -9097,77 +9712,12 @@ fn mention_rows(state: &VaultState, path: &str, finder: Option<&Finder>) -> Ment
     }
     let own_refs: Vec<Name<'_>> = own.iter().map(|t| Name { text: t, path }).collect();
     let own_finder = Finder::new(&own_refs);
-
-    let mut incoming: Vec<PaneRow> = Vec::new();
-    if let Some(f) = &own_finder {
-        let mut found: Vec<(String, usize, String)> = texts
-            .par_iter()
-            .filter(|(p, _)| p.as_str() != path)
-            .flat_map_iter(|(p, text)| {
-                f.find(text)
-                    .into_iter()
-                    .map(|m| {
-                        let line = text[m.line_offset..]
-                            .lines()
-                            .next()
-                            .unwrap_or("")
-                            .trim()
-                            .to_string();
-                        (p.clone(), m.line_offset, line)
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-        found.sort();
-        for (p, offset, line) in found.into_iter().take(MAX) {
-            incoming.push(PaneRow::Item {
-                path: Some(p.clone()),
-                label: display_name(p.rsplit('/').next().unwrap_or(&p))
-                    .to_string()
-                    .into(),
-                detail: line.into(),
-                offset: Some(offset),
-            });
-        }
-    }
-    let n = incoming.len();
-    incoming.insert(
-        0,
-        PaneRow::Header(format!("Unlinked mentions ({n})").into()),
-    );
-
-    let mut outgoing: Vec<PaneRow> = Vec::new();
-    if let (Some(f), Some(text)) = (finder, texts.get(path)) {
-        let mut seen = std::collections::HashSet::new();
-        for m in f.find(text) {
-            if m.path == path || !seen.insert(m.path.clone()) {
-                continue;
-            }
-            let line = text[m.line_offset..]
-                .lines()
-                .next()
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            outgoing.push(PaneRow::Item {
-                path: Some(m.path.clone()),
-                label: display_name(m.path.rsplit('/').next().unwrap_or(&m.path))
-                    .to_string()
-                    .into(),
-                detail: line.into(),
-                offset: Some(m.line_offset),
-            });
-            if outgoing.len() >= MAX {
-                break;
-            }
-        }
-    }
-    let n = outgoing.len();
-    outgoing.insert(
-        0,
-        PaneRow::Header(format!("Unlinked mentions ({n})").into()),
-    );
-    MentionRows {
+    let incoming = backlinks::unlinked_incoming(&texts, path, own_finder.as_ref(), extra);
+    let outgoing = match texts.get(path) {
+        Some(text) => backlinks::unlinked_outgoing(text, path, finder, extra),
+        None => Section::empty(backlinks::UNLINKED),
+    };
+    MentionSections {
         path: path.to_string(),
         incoming,
         outgoing,
@@ -9252,30 +9802,46 @@ fn outline_json(row: &OutlineRow) -> Value {
     json!({"level": row.level, "text": row.text.to_string(), "offset": row.offset})
 }
 
-/// A Backlinks or Outgoing links row. A header carries nothing but its
-/// label, and an unresolved link has no path to open.
-fn pane_row_json(row: &PaneRow) -> Value {
-    match row {
-        PaneRow::Header(label) => json!({
-            "kind": "header",
-            "label": label.to_string(),
-            "detail": Value::Null,
-            "path": Value::Null,
-            "offset": Value::Null,
-        }),
-        PaneRow::Item {
-            path,
-            label,
-            detail,
-            offset,
-        } => json!({
-            "kind": "item",
-            "label": label.to_string(),
-            "detail": detail.to_string(),
-            "path": path,
-            "offset": offset,
-        }),
+/// A Backlinks or Outgoing links pane flattened to the rows it draws: a
+/// section, then each of its files, then each file's matches.
+fn section_rows_json(
+    sections: &[Section],
+    section_folded: &dyn Fn(usize) -> bool,
+    group_folded: &dyn Fn(&str) -> bool,
+) -> Vec<Value> {
+    let mut out = Vec::new();
+    let span = |r: &Range<usize>| json!([r.start, r.end]);
+    for (ix, section) in sections.iter().enumerate() {
+        out.push(json!({
+            "kind": "section",
+            "label": section.label,
+            "count": section.count,
+            "capped": section.capped,
+            "collapsed": section_folded(ix),
+        }));
+        for group in &section.groups {
+            out.push(json!({
+                "kind": "file",
+                "label": group.label,
+                "path": group.path,
+                "link": group.link,
+                "count": group.matches.len(),
+                "collapsed": !group.matches.is_empty()
+                    && group_folded(&section.group_key(group)),
+            }));
+            for m in &group.matches {
+                out.push(json!({
+                    "kind": "match",
+                    "path": group.path,
+                    "text": m.text,
+                    "ranges": m.ranges.iter().map(span).collect::<Vec<_>>(),
+                    "offset": m.offset,
+                    "mention": m.mention.as_ref().map(span),
+                }));
+            }
+        }
     }
+    out
 }
 
 /// A tag row, with the `#` the pane paints in front of the name.
@@ -9477,33 +10043,66 @@ fn dock_current_view(layout: &Value, dock: &str) -> Option<String> {
     leaf.get("state")?.get("type")?.as_str().map(str::to_string)
 }
 
-/// The `file-explorer` leaf anywhere under a dock's tree, as the leaf node.
-fn explorer_leaf_mut(node: &mut Value) -> Option<&mut Map<String, Value>> {
-    let is_explorer = node.get("type").and_then(Value::as_str) == Some("leaf")
+/// The first leaf of view type `kind` anywhere under a dock's tree, as
+/// the leaf node.
+fn leaf_of_kind_mut<'a>(node: &'a mut Value, kind: &str) -> Option<&'a mut Map<String, Value>> {
+    let is_leaf = node.get("type").and_then(Value::as_str) == Some("leaf")
         && node
             .get("state")
             .and_then(|s| s.get("type"))
             .and_then(Value::as_str)
-            == Some("file-explorer");
-    if is_explorer {
+            == Some(kind);
+    if is_leaf {
         return node.as_object_mut();
     }
     let children = node.get_mut("children")?.as_array_mut()?;
-    children.iter_mut().find_map(explorer_leaf_mut)
+    children.iter_mut().find_map(|c| leaf_of_kind_mut(c, kind))
 }
 
-fn explorer_leaf(node: &Value) -> Option<&Map<String, Value>> {
-    let is_explorer = node.get("type").and_then(Value::as_str) == Some("leaf")
+fn leaf_of_kind<'a>(node: &'a Value, kind: &str) -> Option<&'a Map<String, Value>> {
+    let is_leaf = node.get("type").and_then(Value::as_str) == Some("leaf")
         && node
             .get("state")
             .and_then(|s| s.get("type"))
             .and_then(Value::as_str)
-            == Some("file-explorer");
-    if is_explorer {
+            == Some(kind);
+    if is_leaf {
         return node.as_object();
     }
     let children = node.get("children")?.as_array()?;
-    children.iter().find_map(explorer_leaf)
+    children.iter().find_map(|c| leaf_of_kind(c, kind))
+}
+
+/// The `state.state` object of the first `kind` leaf under `dock`.
+fn leaf_state<'a>(layout: &'a Value, dock: &str, kind: &str) -> Option<&'a Value> {
+    leaf_of_kind(layout.get(dock)?, kind)?
+        .get("state")?
+        .get("state")
+}
+
+/// Writes `keys` into the state of the first `kind` leaf under `dock`, in
+/// the place they had; a leaf without a state object gains one holding
+/// only them. A dock without the leaf is left alone.
+fn set_leaf_state(dock: &mut Value, kind: &str, keys: &[(&str, Value)]) {
+    let Some(leaf) = leaf_of_kind_mut(dock, kind) else {
+        return;
+    };
+    let Some(outer) = leaf.get_mut("state").and_then(Value::as_object_mut) else {
+        return;
+    };
+    if !outer.get("state").is_some_and(Value::is_object) {
+        outer.insert("state".into(), json!({}));
+    }
+    if let Some(state) = outer.get_mut("state").and_then(Value::as_object_mut) {
+        for (key, value) in keys {
+            state.insert((*key).into(), value.clone());
+        }
+    }
+}
+
+/// The `file-explorer` leaf anywhere under a dock's tree, as the leaf node.
+fn explorer_leaf(node: &Value) -> Option<&Map<String, Value>> {
+    leaf_of_kind(node, "file-explorer")
 }
 
 /// The Files leaf's `sortOrder` and `autoReveal` from `workspace.json`'s
@@ -9528,19 +10127,14 @@ fn explorer_leaf_state(layout: &Value) -> Option<(SortOrder, bool)> {
 /// place they had; a leaf without a state object gains one holding only
 /// them. A dock without the leaf is left alone.
 fn set_explorer_leaf_state(dock: &mut Value, sort: SortOrder, auto_reveal: bool) {
-    let Some(leaf) = explorer_leaf_mut(dock) else {
-        return;
-    };
-    let Some(outer) = leaf.get_mut("state").and_then(Value::as_object_mut) else {
-        return;
-    };
-    if !outer.get("state").is_some_and(Value::is_object) {
-        outer.insert("state".into(), json!({}));
-    }
-    if let Some(state) = outer.get_mut("state").and_then(Value::as_object_mut) {
-        state.insert("sortOrder".into(), json!(sort.as_str()));
-        state.insert("autoReveal".into(), json!(auto_reveal));
-    }
+    set_leaf_state(
+        dock,
+        "file-explorer",
+        &[
+            ("sortOrder", json!(sort.as_str())),
+            ("autoReveal", json!(auto_reveal)),
+        ],
+    );
 }
 
 /// A fresh leaf id in Obsidian's shape: sixteen hex digits.
@@ -10116,58 +10710,123 @@ mod tests {
         (dir, state)
     }
 
-    /// A pane row flattened to the three things a test cares about.
-    fn flat(r: &PaneRow) -> (Option<&str>, &str, &str) {
-        match r {
-            PaneRow::Header(h) => (None, h.as_ref(), ""),
-            PaneRow::Item {
-                path,
-                label,
-                detail,
-                ..
-            } => (path.as_deref(), label.as_ref(), detail.as_ref()),
-        }
-    }
-
-    /// A link written in a property is an outgoing link like any other, and
-    /// Obsidian gives it the property as its context. The properties come
-    /// first, which is the order the file writes them in.
+    /// A link written in a property is an outgoing link like any other,
+    /// listed first the way the file writes it; a body link is labelled as
+    /// it reads in the note and carries the link it was written with.
     #[test]
     fn outgoing_links_list_a_property_link_too() {
         let (_dir, state) = vault();
         let cache = state.cache();
-        let rows = outgoing_link_rows(&cache, "B.md");
+        let section = backlinks::outgoing_links(&cache, "B.md");
+        let rows: Vec<(Option<&str>, &str, Option<&str>)> = section
+            .groups
+            .iter()
+            .map(|g| (g.path.as_deref(), g.label.as_str(), g.link.as_deref()))
+            .collect();
         assert_eq!(
-            rows.iter().map(flat).collect::<Vec<_>>(),
+            rows,
             vec![
-                (Some("A.md"), "A", "related"),
-                (Some("A.md"), "A", "A.md"),
-                (Some("A.md"), "A", "A.md"),
+                (Some("A.md"), "A", Some("A")),
+                (Some("A.md"), "A", Some("A")),
+                (Some("A.md"), "the a", Some("A#A")),
             ],
             "the frontmatter link, then the two body links"
         );
+        assert_eq!(section.count, 3);
     }
 
-    /// The Linked mentions row for a property link is named by its property;
-    /// a body link keeps its line and the line's text.
+    /// The Linked mentions match for a property link is named by its
+    /// property; a body link shows its line with the link itself marked,
+    /// and the matches are grouped by the note they are in.
     #[test]
-    fn a_backlink_row_names_the_property_it_was_written_in() {
+    fn a_backlink_match_names_the_property_it_was_written_in() {
         let (_dir, state) = vault();
         let cache = state.cache();
         let texts = state.texts();
-        let details: Vec<String> = cache
-            .backlinks("A.md")
+        let section = backlinks::linked_mentions(&cache, &texts, "A.md", false);
+        let shown: Vec<(&str, &str, Vec<&str>)> = section
+            .groups
             .iter()
-            .map(|b| backlink_detail(b, texts.get(b.source).map(|t| t.as_str())))
+            .flat_map(|g| {
+                g.matches.iter().map(move |m| {
+                    (
+                        g.path.as_deref().unwrap(),
+                        m.text.as_str(),
+                        m.ranges.iter().map(|r| &m.text[r.clone()]).collect(),
+                    )
+                })
+            })
             .collect();
         assert_eq!(
-            details,
+            shown,
             vec![
-                "related",
-                "4: [[A]] and [[A#A|the a]] and `[[A]]`",
-                "4: [[A]] and [[A#A|the a]] and `[[A]]`",
-                "1: [A](../A.md) [[B]]",
+                ("B.md", "related", vec![]),
+                ("B.md", "[[A]] and [[A#A|the a]] and `[[A]]`", vec!["[[A]]"]),
+                (
+                    "B.md",
+                    "[[A]] and [[A#A|the a]] and `[[A]]`",
+                    vec!["[[A#A|the a]]"]
+                ),
+                ("Sub/S.md", "[A](../A.md) [[B]]", vec!["[A](../A.md)"]),
             ]
+        );
+        assert_eq!(section.groups.len(), 2);
+        assert_eq!(section.count, 4);
+    }
+
+    /// The Backlinks and Outgoing links leaves' state round trips: read
+    /// at Obsidian's defaults when missing, written in place.
+    #[test]
+    fn pane_leaf_state_is_read_and_written_in_place() {
+        let mut layout = json!({
+            "right": {"type": "split", "children": [{
+                "type": "tabs",
+                "children": [
+                    {"type": "leaf", "state": {"type": "backlink", "state": {
+                        "file": "A.md", "collapseAll": true, "sortOrder": "byModifiedTime",
+                        "unlinkedCollapsed": true
+                    }}},
+                    {"type": "leaf", "state": {"type": "outgoing-link"}},
+                ],
+            }]},
+        });
+        let state = leaf_state(&layout, "right", "backlink").unwrap();
+        assert_eq!(state["collapseAll"], true);
+        assert_eq!(state.get("extraContext"), None);
+        assert_eq!(leaf_state(&layout, "right", "outgoing-link"), None);
+        assert_eq!(leaf_state(&layout, "left", "backlink"), None);
+
+        set_leaf_state(
+            &mut layout["right"],
+            "backlink",
+            &[("collapseAll", json!(false)), ("showSearch", json!(true))],
+        );
+        set_leaf_state(
+            &mut layout["right"],
+            "outgoing-link",
+            &[("linksCollapsed", json!(true))],
+        );
+        let leaves = &layout["right"]["children"][0]["children"];
+        let keys: Vec<&String> = leaves[0]["state"]["state"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                "file",
+                "collapseAll",
+                "sortOrder",
+                "unlinkedCollapsed",
+                "showSearch"
+            ]
+        );
+        assert_eq!(leaves[0]["state"]["state"]["collapseAll"], false);
+        assert_eq!(
+            leaves[1]["state"]["state"],
+            json!({"linksCollapsed": true}),
+            "a leaf without a state gains one"
         );
     }
 

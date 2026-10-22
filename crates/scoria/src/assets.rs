@@ -72,6 +72,7 @@ icons!(
     "list",
     "maximize",
     "minus",
+    "move-vertical",
     "palette",
     "panel-left",
     "panel-right",
