@@ -13,3 +13,7 @@ crates/-markdown/tests/corpus/** -text
 site/build.mjs -text
 site/lib/** -text
 site/shared/** -text
+
+# The corpus's expected renderings are generated test data; without this Linguist
+# counts their HTML ahead of the Rust and GitHub files the repository as an HTML project.
+crates/-markdown/tests/corpus/expected/** linguist-generated
