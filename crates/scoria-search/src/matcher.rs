@@ -214,7 +214,71 @@ struct Scope<'a> {
 }
 
 /// Evaluates `node` in `scope`, appending the ranges it matched to `hits`.
+/// Evaluates `node`, and marks where a property hit is written: the key's
+/// line in the frontmatter, so a `[key]` result has a line to show and
+/// counts as a result, as a tag hit does.
 fn eval(
+    node: &Node,
+    file: &SearchFile<'_>,
+    scope: Scope<'_>,
+    case_sensitive: bool,
+    hits: &mut MatchSet,
+) -> bool {
+    let found = eval_inner(node, file, scope, case_sensitive, hits);
+    if found {
+        if let Some(name) = property_name(node) {
+            property_key_hit(name, scope.text, scope.base, &mut hits.content);
+        }
+    }
+    found
+}
+
+/// The property a node is about, for the five property node kinds.
+fn property_name(node: &Node) -> Option<&str> {
+    match node {
+        Node::HasProperty(n)
+        | Node::PropertyEmpty(n)
+        | Node::PropertyBool(n, _)
+        | Node::PropertyCompare(n, _, _)
+        | Node::PropertyMatch(n, _) => Some(n),
+        _ => None,
+    }
+}
+
+/// The key as written on its own frontmatter line (`status:`), or for a
+/// dotted name its last segment indented under its parent.
+fn property_key_hit(name: &str, text: &str, base: usize, out: &mut Vec<Range<usize>>) {
+    let Some(rest) = text.strip_prefix("---") else {
+        return;
+    };
+    let Some(end) = rest.find("\n---") else {
+        return;
+    };
+    let frontmatter = &text[..3 + end];
+    let whole = format!(r"(?im)^[ \t]*({})[ \t]*:", regex::escape(name));
+    let hit = Regex::new(&whole)
+        .ok()
+        .and_then(|re| {
+            re.captures(frontmatter)
+                .and_then(|c| c.get(1).map(|m| m.range()))
+        })
+        .or_else(|| {
+            let last = name.rsplit('.').next()?;
+            if last == name {
+                return None;
+            }
+            let nested = format!(r"(?im)^[ \t]+({})[ \t]*:", regex::escape(last));
+            Regex::new(&nested).ok().and_then(|re| {
+                re.captures(frontmatter)
+                    .and_then(|c| c.get(1).map(|m| m.range()))
+            })
+        });
+    if let Some(r) = hit {
+        out.push(base + r.start..base + r.end);
+    }
+}
+
+fn eval_inner(
     node: &Node,
     file: &SearchFile<'_>,
     scope: Scope<'_>,
@@ -265,10 +329,16 @@ fn eval(
             found || (re.as_str().is_empty())
         }
         Node::Case(sensitive, child) => eval(child, file, scope, *sensitive, hits),
-        Node::Tag(tag) => file
-            .tags
-            .iter()
-            .any(|t| t == tag || t.starts_with(&format!("{tag}/"))),
+        Node::Tag(tag) => {
+            let found = file
+                .tags
+                .iter()
+                .any(|t| t == tag || t.starts_with(&format!("{tag}/")));
+            if found {
+                tag_occurrences(tag, scope.text, scope.base, &mut hits.content);
+            }
+            found
+        }
         Node::Field(field, child) => match field {
             Field::Content => eval(
                 child,
@@ -414,6 +484,48 @@ fn eval(
 
 /// Appends every non-empty match of `re` in `text`, shifted by `base`, to
 /// `out`; true when the regex matched at all, empty match included.
+/// Where a matched tag is written, which is what Obsidian highlights for a
+/// `tag:` hit: `#tag` and `#tag/sub` in the text, and the bare name on the
+/// frontmatter's `tags:` line or the list items under it.
+fn tag_occurrences(tag: &str, text: &str, base: usize, out: &mut Vec<Range<usize>>) {
+    let escaped = regex::escape(tag);
+    let inline = format!(r"(?i)(?:^|[^\p{{L}}\p{{N}}_/#])(#{escaped}(?:/[\p{{L}}\p{{N}}_/-]*)?)");
+    if let Ok(re) = Regex::new(&inline) {
+        for c in re.captures_iter(text) {
+            if let Some(m) = c.get(1) {
+                out.push(base + m.start()..base + m.end());
+            }
+        }
+    }
+    let Some(rest) = text.strip_prefix("---") else {
+        return;
+    };
+    let Some(end) = rest.find("\n---") else {
+        return;
+    };
+    let frontmatter = &text[..3 + end];
+    let bare = format!(
+        r"(?i)(?:^|[^\p{{L}}\p{{N}}_/#-])(#?{escaped}(?:/[\p{{L}}\p{{N}}_/-]*)?)(?:[^\p{{L}}\p{{N}}_/-]|$)"
+    );
+    let Ok(re) = Regex::new(&bare) else {
+        return;
+    };
+    let mut at = 0;
+    for line in frontmatter.split_inclusive('\n') {
+        let body = line.trim_start();
+        let lead = line.len() - body.len();
+        if body.starts_with("tags:") || body.starts_with("tag:") || body.starts_with("- ") {
+            let mut from = 0;
+            while let Some(c) = re.captures_at(body, from) {
+                let Some(m) = c.get(1) else { break };
+                out.push(base + at + lead + m.start()..base + at + lead + m.end());
+                from = m.end();
+            }
+        }
+        at += line.len();
+    }
+}
+
 fn find_all(re: &Regex, text: &str, base: usize, out: &mut Vec<Range<usize>>) -> bool {
     let mut found = false;
     for m in re.find_iter(text) {
@@ -609,6 +721,45 @@ mod tests {
         assert!(Search::new("/(/").is_err());
     }
 
+    /// A `tag:` hit highlights where the tag is written: inline `#tag` and
+    /// `#tag/sub`, and the name on the frontmatter's tags line, but not the
+    /// word in prose, as Obsidian's result rows show.
+    #[test]
+    fn a_tag_hit_highlights_the_tags_occurrences() {
+        let text = "---\ntags: [work, other]\n---\nSee #work and #work/weekly; work itself and #network stay.\n";
+        let tags = vec!["work".to_string(), "work/weekly".into(), "other".into()];
+        let fm: serde_yaml::Value = serde_yaml::from_str("tags: [work, other]").unwrap();
+        let file = SearchFile {
+            path: "A.md",
+            content: text,
+            tags: &tags,
+            frontmatter: Some(&fm),
+            blocks: &[],
+            sections: &[],
+            tasks: &[],
+        };
+        let hits = Search::new("tag:#work").unwrap().matches(&file).unwrap();
+        let shown: Vec<&str> = hits.content.iter().map(|r| &text[r.clone()]).collect();
+        assert_eq!(shown, vec!["work", "#work", "#work/weekly"]);
+        assert!(Search::new("tag:#net").unwrap().matches(&file).is_none());
+    }
+
+    /// A property hit shows its key's line: the key is the highlight, so
+    /// the row counts as a result; the name is matched whatever its case,
+    /// and the quotes the All properties pane writes are not part of it.
+    #[test]
+    fn a_property_hit_highlights_the_key_in_the_frontmatter() {
+        let f = fixture();
+        let file = file(&f.tags, &f.fm, &f.blocks, &f.sections, &f.tasks);
+        let hits = Search::new("[\"Status\"]").unwrap().matches(&file).unwrap();
+        let shown: Vec<&str> = hits.content.iter().map(|r| &NOTE[r.clone()]).collect();
+        assert_eq!(shown, vec!["status"]);
+        let hits = Search::new("[rating:7]").unwrap().matches(&file).unwrap();
+        let shown: Vec<&str> = hits.content.iter().map(|r| &NOTE[r.clone()]).collect();
+        assert_eq!(shown, vec!["rating"]);
+        assert!(Search::new("[missing]").unwrap().matches(&file).is_none());
+    }
+
     #[test]
     fn file_path_and_tag_fields() {
         assert_eq!(run("file:fox"), Some(vec![]));
@@ -671,22 +822,23 @@ mod tests {
 
     #[test]
     fn property_queries() {
-        assert_eq!(run("[status]"), Some(vec![]));
-        assert_eq!(run("[Status]"), Some(vec![]));
+        // A property hit highlights its key's line in the frontmatter.
+        assert_eq!(run("[status]"), Some(vec!["status".into()]));
+        assert_eq!(run("[Status]"), Some(vec!["status".into()]));
         assert_eq!(run("[missing]"), None);
-        assert_eq!(run("[status:done]"), Some(vec![]));
-        assert_eq!(run("[status:open OR done]"), Some(vec![]));
+        assert_eq!(run("[status:done]"), Some(vec!["status".into()]));
+        assert_eq!(run("[status:open OR done]"), Some(vec!["status".into()]));
         assert_eq!(
             run("[status:don]"),
-            Some(vec![]),
+            Some(vec!["status".into()]),
             "substring like text terms"
         );
-        assert_eq!(run("[list:b]"), Some(vec![]));
-        assert_eq!(run("[empty:null]"), Some(vec![]));
+        assert_eq!(run("[list:b]"), Some(vec!["list".into()]));
+        assert_eq!(run("[empty:null]"), Some(vec!["empty".into()]));
         assert_eq!(run("[status:null]"), None);
-        assert_eq!(run("[rating:>5]"), Some(vec![]));
+        assert_eq!(run("[rating:>5]"), Some(vec!["rating".into()]));
         assert_eq!(run("[rating:<5]"), None);
-        assert_eq!(run("[when:>2026-01-01]"), Some(vec![]));
+        assert_eq!(run("[when:>2026-01-01]"), Some(vec!["when".into()]));
         assert_eq!(run("[when:<2026-01-01]"), None);
         assert_eq!(run("[rating:true]"), None);
     }

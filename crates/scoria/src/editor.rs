@@ -560,6 +560,10 @@ pub struct Editor {
     scroll_px: Pixels,
     /// Reveal the cursor in the next frame (set when no window was at hand).
     pending_reveal: bool,
+    /// The pending reveal puts the cursor's row at the vertical centre of
+    /// the view rather than scrolling the least that shows it: what an
+    /// Outline row's click does in Obsidian.
+    pending_center: bool,
     dragging: bool,
     /// Dragging the scrollbar thumb: the grab point's offset from its top.
     thumb_drag: Option<Pixels>,
@@ -672,6 +676,7 @@ impl Editor {
             scroll_line: 0,
             scroll_px: px(0.),
             pending_reveal: false,
+            pending_center: false,
             dragging: false,
             thumb_drag: None,
             highlights: Arc::new(vec![Vec::new()]),
@@ -1216,6 +1221,13 @@ impl Editor {
         cx.notify();
     }
 
+    /// [`Editor::reveal_offset`], with the cursor's row scrolled to the
+    /// vertical centre of the view.
+    pub fn reveal_offset_centered(&mut self, offset: usize, cx: &mut Context<Self>) {
+        self.reveal_offset(offset, cx);
+        self.pending_center = true;
+    }
+
     pub fn set_selection_range(
         &mut self,
         start: usize,
@@ -1549,6 +1561,11 @@ impl Editor {
         let (row, _) = shaped.row_and_x(c.col);
         let rh = shaped.row_height;
         let row_px = rh * row as f32;
+        let center = std::mem::take(&mut self.pending_center);
+        if center {
+            self.scroll_row_to(c.line, row_px, (h - rh) / 2., window);
+            return;
+        }
         if c.line < self.scroll_line || (c.line == self.scroll_line && row_px < self.scroll_px) {
             self.scroll_line = c.line;
             self.scroll_px = row_px;
@@ -1572,8 +1589,19 @@ impl Editor {
             }
         }
         // Put the cursor's row at the bottom of the view.
-        let mut need = h - rh;
-        let mut line = c.line;
+        self.scroll_row_to(c.line, row_px, h - rh, window);
+    }
+
+    /// Scrolls so the row `row_px` into `line` sits `need` pixels under the
+    /// top of the view, walking back over the lines above it.
+    fn scroll_row_to(
+        &mut self,
+        line: usize,
+        row_px: Pixels,
+        mut need: Pixels,
+        window: &mut Window,
+    ) {
+        let mut line = line;
         let mut px_in_line = row_px;
         loop {
             if px_in_line >= need {

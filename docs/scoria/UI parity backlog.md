@@ -734,7 +734,57 @@ Open in default app, Show in system explorer, Reveal file in navigation.
 **Fix.** Build the file menu once (the Files view needs the same one) on
 `canvas::menu::context_menu`, and hang it off every row that stands for a file.
 
+### Tags, All properties and Outline rows have no context menu and no keyboard
+
+*low, missing-feature, medium*
+
+**.** A right click on a tag, property or outline row does nothing, and the rows take no
+keys. Everything else these panes do landed on 2026-10-22
+([[Development#Tags, All properties and Outline panes, 2026-10-22]]).
+
+**Obsidian.** [[Specification#Observed all properties pane behavior, Obsidian 1.14.4 (installer build 1.13.7)]]:
+a property row's menu is Rename (`lucide-edit-3`), Property type (`lucide-menu`, with a submenu),
+a separator, Delete property (`is-warning`, `lucide-trash-2`). The tag and outline rows raised no
+menu over CDP and their keyboard was not probed, so those halves wait on a probe.
+
+**Fix.** The property menu on `canvas::menu::context_menu`, with Rename and Delete rewriting every
+note's frontmatter through the text crate and Property type writing `types.json`; probe the tag and
+outline rows before building theirs.
+
+### The tags pane's "Expand all" and the outline's search highlight are approximations
+
+*low, parity-gap, small*
+
+**.** "Expand all" folds every tag on its first click and opens them on the second, and the
+outline's search matches are drawn in the accent colour.
+
+**Obsidian.** [[Specification#Observed tags pane behavior, Obsidian 1.14.4 (installer build 1.13.7)]]:
+the first click did nothing, the second folded every row, the third opened them, and the label
+and icon never changed; the outline wraps a match in `span.suggestion-highlight`, whose computed
+colour and weight the probe did not read.
+
+**Fix.** Probe why the first click is inert (an internal flag that starts out of step with the
+rows, most likely) and read `suggestion-highlight`'s computed style, then match both.
+
 ## Search, switcher, palette and autocompletion
+
+### A property search is case-sensitive about the key
+
+*low, parity-gap, small*
+
+**Landed 2026-10-22**: the key was never case-sensitive; the query parser kept the quotes the pane
+writes (`["Status"]` searched for a key named `"Status"`). The quotes are stripped now, and a
+property hit highlights its key's line in the frontmatter so the row counts as a result — the
+highlight is an inference from the tag hit, not an observation of Obsidian's row.
+
+**.** The All properties row for `Status` (4 notes: `Status`, `status`, `STATUS`,
+`status`) searches `["Status"]` as Obsidian's does, and the search pane answers 0 files.
+
+**Obsidian.** [[Specification#Observed all properties pane behavior, Obsidian 1.14.4 (installer build 1.13.7)]]:
+`["status"]` returned all 4 notes, so the key is matched case-insensitively.
+
+**Fix.** Lowercase the key in `-search`'s property matcher the way the All properties pane
+merges its counts.
 
 ### Search results cannot be navigated or opened from the keyboard
 

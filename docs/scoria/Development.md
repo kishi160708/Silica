@@ -2429,6 +2429,98 @@ created an empty `Missing.md` and opened it; the `Heading` row opened Beta. Stil
 the row context menu (no file menu exists anywhere in the app yet) and the per-match
 "Show more context" chevrons.
 
+### Tags, All properties and Outline panes, 2026-10-22
+
+Probed first again: `tools/obsidian-probe/dock-panes.mjs` drove Obsidian through the three panes
+on an eight-note vault (raw run in `tools/obsidian-probe/results/2026-10-22-dock-panes.json`), and
+the findings are the three sections
+[[Specification#Observed tags pane behavior, Obsidian 1.14.4 (installer build 1.13.7)]],
+[[Specification#Observed all properties pane behavior, Obsidian 1.14.4 (installer build 1.13.7)]]
+and [[Specification#Observed outline pane behavior, Obsidian 1.14.4 (installer build 1.13.7)]].
+What that settled that the old panes had wrong: the three share one row — `tree-item-self`, 276 by
+25 at a 27 px pitch, 13 px muted text with the count a 12 px faint flair, an 8 px radius, the text
+indented 17 px per depth with a fold triangle 20 px before it and a hairline guide per level — and
+one header, four, two and three `nav-action-button`s centred 2 px apart with a tooltip each and a
+30 px search box that pushes the rows down 38 px. The tags pane shows no `#`, counts occurrences
+rather than notes and gives a parent its descendants' occurrences too (`project` 6 = `#Project` 1 +
+`alpha` 3 + `beta` 2), spells a tag as its first indexed occurrence (`#Project` folds into Alpha's
+`project`), nests `a/b` under `a` unless "Show nested tags" is off, when every tag is one flat row
+with its `project/` prefix, and sorts by name or frequency with ties A to Z at every level; its
+leaf keeps `sortOrder`, `useHierarchy`, `showSearch` and `searchQuery`, and Escape in its box is not
+its own (the editor takes the keyboard, the rows stay filtered). The All properties pane wears a
+Lucide icon per widget (`text`, `list`, `binary`, `check-square`, `calendar`, `clock`, `tags`,
+`forward`, `file-question` for a nested map), keeps `sortOrder`, `showSearch` and `searchQuery`,
+and Escape there does hide the box and clear the query. The Outline nests structurally — a heading
+under the nearest preceding heading of a smaller level, whatever the numbers — wraps long headings
+rather than cutting them, marks the heading whose section holds the cursor (or, in reading mode,
+the line at the top of the view) with the hover wash, scrolls that row into view only while
+"Auto-scroll to current section" is on, folds per heading with "Collapse all" swapping to "Expand
+all", filters to the matching rows and their ancestors with the match highlighted, says "No
+headings found." for a note without any, keeps `file`, `followCursor`, `showSearch` and
+`searchQuery`, and a click puts the cursor on the heading's line at column 0, centred.
+
+Built: `crates//src/panes.rs`, gpui-free with unit tests, holds the models — `PaneSort` with
+Obsidian's four stored values and menu labels, `tag_tree` / `sort_tags` / `tag_rows` (inclusive
+counts, the first-file spelling, hierarchy or flat, folds, the filter), `property_rows` with
+`property_icon`, and `outline_depths` / `heading_at` / `outline_rows` (structural nesting, folds,
+the cursor mark, the filter with its ranges). The workspace draws all three through one
+`tree_row`, one `pane_header`, one `render_pane_filter` (with the round clear button) and one
+`render_pane_sort_menu`; each pane has its own `TextInput` filter and its own state struct, read
+from and written to `workspace.json` in place through `leaf_state` / `set_leaf_state` (a `null`
+now removes a key, which is how the outline's `file` goes away for an empty tab). The Outline's
+mark follows the editor and the reading view through `cx.observe` on both and recomputes at draw
+time, so a mode or note switch cannot leave it stale; the editor gained `reveal_offset_centered`
+for the row click. Seven Lucide icons joined the assets: `folder-tree`, `text`, `binary`,
+`square-check` (Lucide's current name for Obsidian's `check-square`), `clock`, `forward` and
+`file-question`; the sort button reuses `arrow-up-narrow-wide`, which is what Lucide renamed
+`sort-asc` to. The dump's `tags`, `properties` and `outline` rows gained depth, fold, parent, icon,
+mark and highlight fields (the old `name`, `count`, `level`, `text` and `offset` keys stay), and
+each pane has an `_options` sibling with its sort, hierarchy, follow-cursor, search and query.
+
+Seen working over the control socket on a copy of the probe's vault: the tags in Obsidian's
+frequency order with the same counts and spelling (`common` 9, `project` 6 with `alpha` 3 and
+`beta` 2 holding `deep` 1, `Lambda`, `topic`, `a`, `Kappa`, `meta`, `single`), the nested toggle
+flattening them, a triangle folding `project` from 11 rows to 8, the sort menu, `proj` keeping the
+four `project` rows and Escape leaving them filtered, a row click searching `tag:#project` with
+four results; the fourteen property rows in Obsidian's order with their icons, `boo` keeping the two
+`book.` keys, Escape clearing it, a row click searching `["Status"]`; the 35 outline rows at
+Obsidian's depths, the mark moving with the cursor and with the reading view's scroll, the pane
+scrolling to `Extra 24` once auto-scroll was on, "Collapse all" leaving the three top-level rows
+and no mark, `second` keeping seven rows with their ranges, a row click landing the cursor at
+column 0 of line 79 with the line centred, "No headings found." for `NoHeadings.md`; and the
+probe's own `workspace.json` (flat, `frequencyReverse`, `com`; `alphabeticalReverse`, `st`;
+`followCursor` on) coming back exactly as Obsidian's restart had shown it, then written back with
+the same keys. Not replicated: the tags pane's "Expand all" quirk (Obsidian's first click did
+nothing and its label never changes; 's label never changes either but its first click folds
+everything), the search highlight's exact styling (the spec has no computed values for
+`suggestion-highlight`, so the accent colour stands in), and anything the spec lists as unprobed —
+whether the tag filter matches the whole path ( matches the whole path, case-insensitively),
+the row context menus, keyboard navigation, dragging a row. Kept on purpose: the Outline still
+rebuilds from the buffer as you type, where Obsidian waits for the file to reach disk, because
+stale offsets would land the row click in the wrong place. The screenshots came out of the
+desktop's active window, which was the user's browser for most of the run, so the sizes and
+colours above were checked once against the first capture of the tags pane and otherwise through
+`_state`.
+
+**After the verifier.** An independent agent compared the running app with the findings and
+found five things the build had missed; all landed the same day. A vault Obsidian never laid out
+got no dock in `workspace.json` at all, so every pane setting was lost on quit: `layout_json`
+now writes Obsidian's default docks (`default_dock_json`, the fresh file's own shape: one split
+of one tab group per side, the five right leaves and three left ones with their default state,
+`main` first) when the file has none, and the states go into them. The Outline's follow-cursor
+scroll put the marked row flush with the bottom edge, under the status bar; `scroll_outline_to`
+stops it 32 px short, the pane's own bottom padding, and takes the first row back to the very
+top. "Collapse all" folded every level; it folds the top level and leaves the deeper folds alone.
+A tag row's search listed its files with no match lines and "0 results": a `tag:` hit now
+highlights where the tag is written (`#tag`, `#tag/sub`, the name on the frontmatter's tags
+line), and a property row's search found nothing because the parser kept the quotes in
+`["Status"]`; a property hit now highlights its key's line too. The three panes' sort menus open
+at the pointer, top-right corner at the click, as measured; the filter boxes gained the
+magnifier and the 30 px inset; and the Backlinks and Outgoing links leaves start with Unlinked
+mentions folded, Obsidian's default. Still as the verifier left them: Escape in the Tags filter
+keeps the typed text where Obsidian drops it, the fold triangles are Lucide chevrons rather than
+Obsidian's `right-triangle`, and the search leaf's own `query` is not restored at launch.
+
 ### Live Preview, 2026-10-16
 
 Live Preview is the same editor and buffer with a per-line display

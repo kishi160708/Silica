@@ -3380,3 +3380,337 @@ what a link to an image or other non-note file looks like; whether the
 subtext under a note link is the written path's folder or the resolved file's
 (the fixture made them the same); the per-match "Show more context" buttons'
 effect; keyboard navigation of either pane.
+
+## Observed tags pane behavior, Obsidian 1.14.4 (installer build 1.13.7)
+
+Read from a running Obsidian on Linux over CDP on 2026-10-22 with
+`tools/obsidian-probe/dock-panes.mjs` (raw run in
+`tools/obsidian-probe/results/2026-10-22-dock-panes.json`; the same script
+also covers the All properties and Outline panes below), on a scratch vault
+of eight notes. The tags written: `project/alpha` and `common` in `Alpha.md`'s
+frontmatter and inline again in its body; `project/beta` and `common` in
+`Beta.md`'s frontmatter with `#Project`, `#common` and `#Lambda` inline;
+`#project/beta/deep`, `#topic`, `#lambda` and `#common` in `Gamma.md`;
+`#common` twice in `Delta.md`; `#Common`, `#common` and `#Kappa` in
+`Epsilon.md`; `project/alpha` and `meta` in `Props.md`'s frontmatter; `single`
+in `Outline.md`'s frontmatter plus `#topic` in one of its headings; and `#a` in
+`NoHeadings.md`. The right split was 300 px wide; the dark theme's values are
+quoted (`--text-normal` `#dadada`, `--text-muted` `#b3b3b3`, `--text-faint`
+`#666666`, `--background-modifier-hover` white at 6.7%,
+`--nav-indentation-guide-color` white at 12%).
+
+**The leaf.** `tag-pane:open` ("Tags view: Show tags") activates a leaf of
+type `tag` (tab icon `lucide-tags`, title "Tags") whose state is
+`{"sortOrder": "frequency", "useHierarchy": true, "showSearch": false,
+"searchQuery": ""}`. All four keys are written to `workspace.json` and read
+back on restart: a run that quit with
+`{"sortOrder": "frequencyReverse", "useHierarchy": false, "showSearch": true,
+"searchQuery": "com"}` came back with the flat list in that order, the search
+box shown with `com` in it and the rows already filtered to `common`. The
+pane's `.workspace-leaf-content[data-type="tag"]` holds a `div.nav-header`
+(40 px: `padding: 8px` around a `div.nav-buttons-container` 284 by 24,
+`display: flex`, `justify-content: center`, `gap: 2px`), the hidden
+`div.search-input-container`, and `div.tag-container` with
+`padding: 12px 12px 32px` and a 13 px font, so the first row starts 12 px
+under the header (y 92 with the header at y 40–80).
+
+**Header buttons**, left to right, each a
+`div.clickable-icon.nav-action-button` 28 by 24 (`padding: 4px 6px`, 4 px
+radius) holding a 16 px icon in `--text-muted` at opacity 0.85: "Change sort
+order" (`lucide-sort-asc`), "Show nested tags" (`lucide-folder-tree`,
+`is-active` while `useHierarchy` is true), "Expand all"
+(`lucide-chevrons-up-down`, `aria-disabled="false"`) and "Show search filter"
+(`lucide-search`, `is-active` while the box is shown). Hovering a button
+paints `--background-modifier-hover` and leaves the colour muted; an
+`is-active` button wears that wash permanently with the icon in
+`--text-normal` at opacity 1. About a second under the pointer a `div.tooltip`
+appears 8 px below the button, centred on it: the label at 13 px in
+`rgb(250, 250, 250)` on `oklch(0 0 0 / 0.9)`, `padding: 8px 12px`, 12 px
+radius.
+
+**Rows.** With `useHierarchy` on the default view listed `common` 9,
+`project` 6 (folder of `alpha` 3 and `beta` 2, which holds `deep` 1),
+`Lambda` 2, `topic` 2, `a` 1, `Kappa` 1, `meta` 1, `single` 1. Counts are
+occurrences, not notes (`common` is 9 for five notes: two each in Alpha, Beta,
+Delta and Epsilon), merged case-insensitively (`#Common` counts toward
+`common`), and a parent's count is its own occurrences plus every
+descendant's (`project` 6 = `#Project` 1 + `alpha` 3 + `beta` 2, `beta` 2
+including `deep` 1). The display casing is the first one indexed: `Kappa`
+(only ever capitalised) shows as `Kappa`, `Lambda` (capitalised in Beta,
+lower in Gamma) as `Lambda`, and `#Project` (Beta) folds into `project`
+(Alpha first). `app.metadataCache.getTags()` returns the same keys and
+counts, `#project` 6 included. Each row is `div.tree-item >
+div.tree-item-self.tag-pane-tag.is-clickable` (`mod-collapsible` when it has
+children), 276 by 25 (`padding: 4px 8px 4px 24px`, `margin-bottom: 2px`, so
+27 px pitch, 8 px radius, 13 px, `--text-muted`, `align-items: baseline`),
+holding `div.tree-item-inner > div.tree-item-inner-text` with a
+`span.tag-pane-tag-parent` (the path up to the last `/`, `display: none` in
+hierarchy mode) and a `span.tree-item-inner-text` with the last segment, no
+`#`; then `div.tree-item-flair-outer` (`padding-left: 4px`, `flex: 0 0 auto`,
+pushed to the right edge) holding `span.tag-pane-tag-count.tree-item-flair`
+with the count at 12 px, line height 12 px, `--text-faint`, no background.
+Children sit in `div.tree-item-children` (`margin-left: 12px`,
+`padding-left: 4px`, `border-left: 0.69px solid` the indentation guide
+colour) and each nested self carries inline
+`margin-inline-start: -17px !important; padding-inline-start: 41px !important`
+at depth 1, `-33px`/`57px` at depth 2 (`-50px`/`74px` would follow), so the
+hover wash spans the full 276 px while the text indents 17 px per level (x
+760, 777, 793). A `mod-collapsible` row has `div.tree-item-icon.collapse-icon`
+(16 by 17, `position: absolute`, `margin-left: -20px`, so at x 740, 757, 773
+by depth, opacity 0.85) holding a 10 px `right-triangle` in `--text-faint`,
+pointing down when open. Hovering a row paints `--background-modifier-hover`,
+turns the text `--text-normal`, the count and the triangle `--text-muted`;
+no tooltip appears on a row.
+
+**Sort menu.** A real click on "Change sort order" opens a `.menu` 204 by
+126 at the pointer (its top-right corner at the click, since the button sits
+near the window's right edge): "Tag name (A to Z)", "Tag name (Z to A)", a
+separator, "Frequency (high to low)", "Frequency (low to high)", each a
+`div.menu-item.tappable` 190 by 25 with the current one `mod-checked` and
+carrying a `lucide-check`. The stored values are `alphabetical`,
+`alphabeticalReverse`, `frequency` (default) and `frequencyReverse`. Orders
+read back: A to Z `a, common, Kappa, Lambda, meta, project, project/alpha,
+project/beta, project/beta/deep, single, topic` — case-insensitive, the
+tree kept, children sorted the same way; Z to A the exact reverse, children
+included (`project, project/beta, project/beta/deep, project/alpha`);
+frequency `common 9, project 6 (alpha 3, beta 2 (deep 1)), Lambda 2,
+topic 2, a 1, Kappa 1, meta 1, single 1` — ties by name A to Z,
+case-insensitive; low to high `a, Kappa, meta, single, Lambda, topic,
+project (beta (deep), alpha), common` — ascending by count with ties still A
+to Z, and the children ascending too. The menu is the same list in flat mode.
+
+**Nested tags toggle.** Clicking "Show nested tags" sets `useHierarchy`
+false, drops the button's `is-active` and redraws every tag as a depth-0 row:
+the parent span becomes `display: inline` so `project/alpha` reads as
+`project/` + `alpha` in one line (both spans `--text-muted`, 81 px wide
+together), the inline margin/padding return to `0px`/`24px`, no row has a
+triangle, and `project` is still listed with its inclusive 6. A click on the
+flat `project/alpha` row searched `tag:#project/alpha` as the nested row
+does. Clicking the button again restored the tree, every folder open.
+
+**Folding.** A click on `project`'s triangle gave its `tree-item`
+`is-collapsed`, removed its `tree-item-children` from the DOM (11 rows
+became 8) and left the count at 6; the state did not change and a fold is not
+in `workspace.json`. The "Expand all" button is odd: with every row open its
+label already read "Expand all" with `lucide-chevrons-up-down`; the first
+click changed nothing, the second gave every `tree-item` — leaves included —
+`is-collapsed` (8 rows), the third opened them all again, and the label and
+icon never changed across the three clicks (the Outline's twin does swap to
+"Collapse all" / `lucide-chevrons-down-up`).
+
+**Search filter.** "Show search filter" shows the `search-input-container`
+(284 by 30, `margin: 4px 0`, the header growing to 78 px and the rows moving
+down 38 px) and focuses its `input[type=search][enterkeyhint=search]
+[spellcheck=false][placeholder="Search..."]` (13 px, background
+`rgb(46, 46, 46)`, 0.69 px border `rgb(85, 85, 85)` while focused, 5 px
+radius, `padding: 4px 8px 4px 30px`, the right padding 28 px once the
+`div.search-input-clear-button[aria-label="Clear search"]` — 28 by 30, 50%
+radius, `right: 2px`, otherwise `display: none` — appears with text). State:
+`showSearch: true`, then `searchQuery` follows each keystroke. Typing `proj`
+left `project`, `project/alpha`, `project/beta` and `project/beta/deep` and
+gave every other `tree-item` `is-filtered-out` (zero rect); `zzz` filtered
+everything out with no empty-state text. Escape in the box is not handled by
+the pane: focus jumped to the editor's `.cm-content`, the native search
+input dropped its text, but the rows stayed filtered, `showSearch` stayed
+true and `searchQuery` was already `""` — the view had been told nothing. The
+clear button put the rows back; the header button hid the box, set
+`showSearch` false and left focus on `body`.
+
+**Clicks.** A left click on a row opens the global search: the search leaf
+became active (its input focused), `getViewState().state.query` and the
+input read `tag:#project/alpha` for the leaf row (2 results: Alpha with two
+matches, Props with one), `tag:#project` for the parent row (4 results, the
+search's `tag:` matching nested tags) and `tag:#project/beta/deep` for the
+depth-2 row; the tags pane kept no selected row and its state did not change.
+A click on the row `a` with focus then in the search input: ArrowDown and
+Enter did nothing to the pane. A right click raised no menu through CDP (as
+on the file-properties rows). The tags pane does not depend on the active
+note: switching notes left it unchanged.
+
+**Unprobed:** whether the search filter matches the full path or the last
+segment (`proj` cannot tell), and whether it is case-insensitive; why the
+"Expand all" label is stuck; the row context menu (if any); whether a tag
+with its first occurrence in a later-named file keeps that casing after a
+re-index; a vault without tags; drag of a tag row; what the tooltip of a
+truncated tag shows (no row showed one).
+
+## Observed all properties pane behavior, Obsidian 1.14.4 (installer build 1.13.7)
+
+Read in the same `dock-panes.mjs` run as the tags pane above (raw run in
+`tools/obsidian-probe/results/2026-10-22-dock-panes.json`). `Props.md`
+carried `title`, `summary` (text), `list` (two items), `count: 42`,
+`done: true`, `due: 2026-10-22`, `when: 2026-10-22T09:30:00`, `tags`,
+`aliases`, `cssclasses`, a nested map `shelf: {row: 1, label: top}`,
+`book.title: Dune`, `book.year: 1965` and `status: draft`; `Alpha.md` had
+`title` and `Status`, `Beta.md` `status` and `count`, `Gamma.md` `STATUS` and
+`title`; `.obsidian/types.json` named `summary` text, `list` multitext,
+`count` number, `done` checkbox, `due` date and `when` datetime. This extends
+the paragraphs above that start "The All properties pane holds one
+`div.tree-item` per registry key" and "The CDP run filled the pane in"; where
+this run differs it says so.
+
+**The leaf.** `properties:open` ("Properties view: Show all properties")
+activates the `all-properties` leaf (`lucide-archive`, "All properties")
+whose state is `{"sortOrder": "frequency", "showSearch": false,
+"searchQuery": ""}`; a run that quit with `alphabeticalReverse`, `showSearch`
+true and `searchQuery: "st"` came back with the box shown, `st` in it and the
+rows already filtered (`Status` 4, `list` 1). The leaf content holds the same
+`nav-header` (40 px, buttons centred: "Change sort order" `lucide-sort-asc`
+and "Show search filter" `lucide-search`, both 28 by 24 and styled as the
+tags pane's), the hidden search container, a hidden `div.view-header` (zero
+rect; "All properties" title, Bookmark and More options buttons in markup)
+and `div.view-content` with `padding: 4px 12px 32px`, so the first row is at
+y 84.
+
+**Rows** (14 at frequency): `status` 4, `tags` 4, `title` 3, `count` 2, then
+`aliases`, `book.title`, `book.year`, `cssclasses`, `done`, `due`, `list`,
+`shelf`, `summary`, `when` at 1 — counts are notes, merged case-insensitively
+(`Status`, `status`, `STATUS`, `status` → 4), ties A to Z, and `cssclasses`
+listed at 1 since a note carries it (the earlier run's 0 was a vault with
+none). The display casing was `status` in the session that indexed the vault
+fresh and `Status` (from `Alpha.md`, the first file) after the relaunch, as
+the paragraphs above found. Each row is `div.tree-item >
+div.tree-item-self.tappable.is-clickable` with the same geometry as a tags
+row (276 by 25 at 27 px pitch, `padding: 4px 8px 4px 24px`, 8 px radius,
+13 px `--text-muted`, inline `margin-inline-start: 0px !important;
+padding-inline-start: 24px !important`), holding `div.tree-item-icon` (16 by
+17, `position: absolute`, `margin-left: -20px`, at x 740, opacity 0.85, a
+14 px icon in `--text-muted`), `div.tree-item-inner > div.tree-item-inner-text`
+with the key, and `div.tree-item-flair-outer > span.tree-item-flair` with the
+count at 12 px `--text-faint`. The icon per widget: `lucide-text` for text
+(`status`, `title`, `summary`, `book.title`), `lucide-list` for multitext
+(`list`, `cssclasses`), `lucide-binary` for number (`count`, `book.year`),
+`lucide-check-square` for checkbox, `lucide-calendar` for date,
+`lucide-clock` for datetime, `lucide-tags` for `tags`, `lucide-forward` for
+`aliases`, and `lucide-file-question` for the nested map `shelf`, whose
+widget `app.metadataTypeManager` reports as `unknown`. Dotted keys are two
+flat rows. Hovering a row paints `--background-modifier-hover`, the key
+`--text-normal`, the count `--text-muted`, the icon unchanged.
+
+**Sort menu**, 196 by 126 at the pointer: "Property name (A to Z)",
+"Property name (Z to A)", separator, "Frequency (high to low)" (checked by
+default), "Frequency (low to high)"; values `alphabetical`,
+`alphabeticalReverse`, `frequency`, `frequencyReverse`. A to Z gave `aliases,
+book.title, book.year, count, cssclasses, done, due, list, shelf, status,
+summary, tags, title, when`; Z to A the reverse; low to high `aliases …
+when` (the 1s A to Z), `count` 2, `title` 3, `status` 4, `tags` 4 — ties
+ascending by name in both frequency orders.
+
+**Search filter and clicks.** The box is the tags pane's (284 by 30 in the
+header, the header growing to 78 px); typing `boo` left `book.title` and
+`book.year`; `zzz` left an empty list with no text; Escape here *is* handled:
+it hid the box, cleared the query, set `showSearch` false and put the 14 rows
+back. A click on a row opens the global search with the key quoted in
+brackets: `["book.title"]` (1 result), `["status"]` (4), `["tags"]` (4), the
+search leaf becoming active; the pane keeps no selected row. The row's
+right-click menu is Rename (`lucide-edit-3`), Property type (`lucide-menu`,
+`has-submenu`), a separator, Delete property (`is-warning`,
+`lucide-trash-2`), as recorded above — this run reached it through a CDP
+right click.
+
+**Unprobed:** keyboard navigation of the list; whether the filter matches
+beyond a prefix; the tooltip of a long key; a `types.json` type that
+contradicts a value's shape; the `file` and `folder` widgets' icons; what the
+pane shows in a vault with no properties.
+
+## Observed outline pane behavior, Obsidian 1.14.4 (installer build 1.13.7)
+
+Read in the same `dock-panes.mjs` run (raw run in
+`tools/obsidian-probe/results/2026-10-22-dock-panes.json`). `Outline.md` had
+frontmatter then `# Top heading`, `## Second level`, `### Third level under
+second`, `#### Fourth level`, `## Another second`, `#### Fourth under second,
+skipping third`, `# Second top`, `### Third under top, skipping second`,
+`## Heading with **bold**, *italic*, `code`, [[Alpha]] and a #topic tag`,
+a `##` heading of 160 characters, `# Last top`, then `## Extra 1` … `## Extra
+24`, with 14 (3 for the extras) filler lines under each heading;
+`NoHeadings.md` had none. The headings' lines were 4, 19, 34, 49, 64, 79, 94,
+109, 124, 139, 154.
+
+**The leaf.** `outline:open` ("Outline: Show outline") activates the
+`outline` leaf (`lucide-list`, title "Outline" — not the note's name) whose
+state is `{"file": "Outline.md", "followCursor": false, "showSearch": false,
+"searchQuery": ""}`; `file` follows the active markdown leaf and is absent
+while an empty tab is active. `followCursor` and `showSearch` round-tripped
+through `workspace.json` as `true`; folds are not in the state and did not
+survive the restart. The `searchQuery` typed two seconds before quitting came
+back in one run and as `""` in another (the tags and properties queries typed
+the same way always came back), and the restored query sat in the box
+without filtering the rows until the next keystroke. The leaf content is the
+nav header (buttons centred: "Show search filter" `lucide-search`,
+"Auto-scroll to current section" `lucide-gallery-vertical`, `is-active` while
+`followCursor` is true, and "Collapse all" `lucide-chevrons-down-up`), the
+hidden search container, a hidden `view-header`, and `div.view-content` with
+`padding: 4px 12px 32px`.
+
+**Rows.** One `div.tree-item` per heading, nested structurally: a heading
+is a child of the nearest preceding heading of a smaller level, whatever the
+numbers, so `#### Fourth under second, skipping third` sits at depth 2 under
+`## Another second` and `### Third under top` at depth 1 under `# Second
+top`; indentation is by depth, 17 px per level, with the same inline
+`margin-inline-start`/`padding-inline-start` pairs, `tree-item-children`
+guides and `collapse-icon` placement as the tags pane. The self is
+`div.tree-item-self.is-clickable` (`mod-collapsible` with children,
+`draggable="true"`) holding only `div.tree-item-inner` with the heading's
+plain text: `**bold**` → `bold`, `` `code` `` → `code`, `[[Alpha]]` →
+`Alpha`, `#topic` kept. No flair, no icon. The inner is `white-space:
+pre-wrap` with no ellipsis or line clamp, so long headings wrap at the
+227 px available at depth 1: the formatted heading took two lines (row 42
+px), the 160-character one four (row 92 px), at 16.9 px per line. The row
+for the heading that holds the cursor is `is-active`: the hover wash
+`--background-modifier-hover` and `--text-normal` text, regardless of
+`followCursor`. Hovering any row paints the same wash and colour and turns
+its triangle `--text-muted`.
+
+**Current heading** (source mode, cursor moved with `setCursor` and by a
+real click in the editor): the marked row is the heading whose section holds
+the cursor's line — `Top heading` at line 7, `Fourth level` at 51, `Another
+second` on its own line 64, `Fourth under second, skipping third` at 80 and
+81, `Extra 24` at the end — and no row is marked with the cursor in the
+frontmatter (line 1). With `followCursor` false the pane does not scroll:
+the `Extra 20` row was marked at y 992 under a 720 px tall `view-content`
+(scroll height 1079) that stayed at `scrollTop` 0. Clicking "Auto-scroll to
+current section" set `followCursor` true (button `is-active`); the same move
+then scrolled `view-content` to 239 so the row sat at y 753 — scrolled into
+view at the bottom edge, not centred — and moving back to the top scrolled
+it to 0. In reading mode the marking follows the scroll: after each wheel
+step (`previewMode.getScroll()` 23.4, 47.2, 71.0, 94.3) the marked row was
+the heading whose section holds the line at the top of the view (`Second
+level`, `Third level under second`, `Another second`, `Second top`), and with
+the view scrolled to 0 — the frontmatter at the top — nothing was marked.
+
+**Clicks.** In source mode a click on a row's text moved the cursor to the
+heading's line, column 0 (`#### Fourth level` → line 49, `# Second top` →
+94, the long heading → 139), focused the editor (`.cm-content`) and scrolled
+so the heading's line sat at 348 px (344, and 261 for the four-line
+heading) from the top of the 682 px tall scroller — centred. In reading mode
+a click scrolled the heading to the top edge of `.markdown-preview-view`
+(the `h1`/`h4` at 0 and −1 px, `getScroll()` 94.0 and 49.0, the heading's
+line) and focused the preview. A right click raised no menu through CDP.
+
+**Folding.** Clicking `Top heading`'s triangle gave its `tree-item`
+`is-collapsed` and removed its descendants from the DOM (35 rows became 30);
+with the cursor then in a hidden child's section no row was marked, the
+folded parent included. "Collapse all" folded every top-level item (3 rows
+stayed) and swapped the button to "Expand all" with `lucide-chevrons-up-down`;
+clicking that opened everything and swapped it back.
+
+**Search filter.** The same box; `second` kept every row whose text contains
+the query case-insensitively *and their ancestors* (`Top heading` stayed for
+its matching children), hid the rest with `is-filtered-out`, and wrapped each
+match in `span.suggestion-highlight` (`Second`, `second`); `zzz` emptied the
+list with no text; Escape hid the box, cleared the query and showed all rows.
+
+**Switching notes and edits.** Opening `NoHeadings.md` replaced the list
+with `div.pane-empty` "No headings found." (13 px, `--text-faint`,
+`padding: 24px 16px`, `margin: 8px 0`, centred); an empty tab shows the same
+text with no `file` in the state. Opening `Alpha.md` listed its one heading
+with nothing marked (cursor at line 0, inside the frontmatter); returning to
+`Outline.md` listed all 35 rows unfolded. Typing ` X` at the end of `# Top
+heading` changed the row to `Top heading X` 2.1 s later, at the moment the
+file reached disk — the outline follows the metadata cache, not the buffer.
+
+**Unprobed:** keyboard navigation; dragging a row (`draggable`); the
+`followCursor` scroll when the row is above the view (only a row below was
+tried); headings inside code fences or callouts; a heading with a trailing
+`#`; what the pane does for a canvas or base leaf; the reading-mode marking
+with `followCursor` true; the text of an HTML heading.

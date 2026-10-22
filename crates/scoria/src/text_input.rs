@@ -269,6 +269,7 @@ pub struct TextInput {
     content: Content,
     marked: Option<Range<usize>>,
     placeholder: SharedString,
+    pad_left: Pixels,
     layout: Layout,
     dragging: bool,
 }
@@ -288,6 +289,7 @@ impl TextInput {
             content: Content::default(),
             marked: None,
             placeholder: placeholder.into(),
+            pad_left: px(8.),
             layout: Layout::default(),
             dragging: false,
         }
@@ -299,6 +301,12 @@ impl TextInput {
 
     pub fn set_placeholder(&mut self, placeholder: impl Into<SharedString>) {
         self.placeholder = placeholder.into();
+    }
+
+    /// Room at the left for a glyph the owner draws over the field, the
+    /// 30 px Obsidian's pane filters leave for their magnifier.
+    pub fn set_pad_left(&mut self, pad: Pixels) {
+        self.pad_left = pad;
     }
 
     /// Replaces the text and puts the caret at its end with nothing selected;
@@ -691,7 +699,8 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::down))
             .w_full()
             .h(px(30.))
-            .px_2()
+            .pl(self.pad_left)
+            .pr_2()
             .flex()
             .items_center()
             .rounded_md()

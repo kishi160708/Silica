@@ -461,7 +461,9 @@ impl Parser {
             name.push(c);
             self.pos += 1;
         }
-        let name = name.trim().to_string();
+        // Obsidian writes `["Status"]` from the All properties pane: the
+        // quotes allow a space in the name and are not part of it.
+        let name = name.trim().trim_matches('"').trim().to_string();
         match self.peek() {
             Some(']') => {
                 self.pos += 1;
@@ -597,6 +599,11 @@ mod tests {
     #[test]
     fn properties() {
         assert_eq!(parse("[status]"), Query::HasProperty("status".into()));
+        assert_eq!(
+            parse("[\"Status\"]"),
+            Query::HasProperty("Status".into()),
+            "the quotes the All properties pane writes are not part of the name"
+        );
         assert_eq!(
             parse("[status:null]"),
             Query::PropertyEmpty("status".into())

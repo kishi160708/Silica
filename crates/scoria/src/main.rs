@@ -43,6 +43,7 @@ mod graph;
 mod help;
 mod mentions;
 mod palette;
+mod panes;
 mod preview;
 mod prompt;
 mod properties;

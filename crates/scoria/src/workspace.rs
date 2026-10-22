@@ -20,6 +20,7 @@ use crate::graph::{GraphEvent, GraphView};
 use crate::help::HelpWindow;
 use crate::mentions::{Finder, Name};
 use crate::palette::{CommandPalette, PaletteCommand, PaletteEvent};
+use crate::panes::{self, PaneSort};
 use crate::prompt::{Prompt, PromptEvent, PromptSpec};
 use crate::reading::{self, LinkTarget, ReadingEvent, ReadingView, TaskMarker, TaskToggled};
 use crate::search::{SearchEvent, SearchPane};
@@ -33,14 +34,15 @@ use crate::theme::{
 use crate::watch;
 use gpui::{
     actions, anchored, canvas, deferred, div, point, prelude::*, px, relative, rgb, rgba,
-    transparent_black, uniform_list, Action, App, BoxShadow, Context, CursorStyle, Decorations,
-    DragMoveEvent, Entity, FocusHandle, Focusable, FontWeight, Global, HighlightStyle,
-    HitboxBehavior, Hsla, KeyBinding, MouseButton, PathBuilder, Pixels, ResizeEdge, SharedString,
-    StyledText, Subscription, Task, Tiling, UniformListScrollHandle, Window, WindowControlArea,
+    transparent_black, Action, Anchor, App, BoxShadow, ClickEvent, Context, CursorStyle,
+    Decorations, DragMoveEvent, Entity, FocusHandle, Focusable, FontWeight, Global, HighlightStyle,
+    HitboxBehavior, Hsla, KeyBinding, MouseButton, PathBuilder, Pixels, ResizeEdge, ScrollHandle,
+    SharedString, StyledText, Subscription, Task, Tiling, Window, WindowControlArea,
 };
 use rayon::prelude::*;
 use _cache::{
     basename, frontmatter_aliases, index_markdown, CachedMetadata, LinkFormat, MetadataCache,
+    PropertyEntry,
 };
 use _commands::{keystroke, CommandRegistry};
 use _formats::bookmarks::{Bookmark, Bookmarks};
@@ -955,39 +957,78 @@ enum RightTab {
     Outline,
 }
 
-#[derive(Clone)]
-struct OutlineRow {
-    level: u8,
-    text: SharedString,
-    offset: usize,
-}
-
-/// The Outline pane's rows for one note's metadata, whether that metadata
-/// came from the index or from the buffer being typed into.
-fn outline_rows(meta: &CachedMetadata) -> Vec<OutlineRow> {
+/// The Outline pane's headings for one note's metadata, whether that
+/// metadata came from the index or from the buffer being typed into.
+fn outline_headings(meta: &CachedMetadata) -> Vec<panes::Heading> {
     meta.headings
         .iter()
-        .map(|h| OutlineRow {
+        .map(|h| panes::Heading {
+            text: Workspace::heading_text(&h.heading),
             level: h.level,
-            text: Workspace::heading_text(&h.heading).into(),
+            line: h.position.start.line as usize,
             offset: h.position.start.offset,
         })
         .collect()
 }
 
-#[derive(Clone)]
-struct TagRow {
-    name: SharedString,
-    count: usize,
+/// What a tree row's fold triangle does when clicked.
+type FoldAction = Box<dyn Fn(&mut Workspace, &mut Context<Workspace>) + 'static>;
+
+/// The Tags leaf's state: the four keys Obsidian keeps for it in
+/// `workspace.json`, plus the folds, which it does not save.
+#[derive(Debug, Clone)]
+struct TagPaneState {
+    /// `sortOrder`.
+    sort: PaneSort,
+    /// `useHierarchy`: `a/b` drawn as `b` under `a`, not as one flat row.
+    use_hierarchy: bool,
+    /// `showSearch`; the query itself lives in the filter field.
+    show_search: bool,
+    /// Folded tags by lowercased path.
+    collapsed: HashSet<String>,
+    sort_menu_open: bool,
 }
 
-/// A row of the All properties pane.
-#[derive(Clone)]
-struct PropertyRow {
-    name: SharedString,
-    count: usize,
-    /// The type's glyph, as the properties block draws it.
-    glyph: &'static str,
+impl Default for TagPaneState {
+    fn default() -> TagPaneState {
+        TagPaneState {
+            sort: PaneSort::Frequency,
+            use_hierarchy: true,
+            show_search: false,
+            collapsed: HashSet::new(),
+            sort_menu_open: false,
+        }
+    }
+}
+
+/// The All properties leaf's state: `sortOrder` and `showSearch` (the
+/// `searchQuery` is the filter field's text).
+#[derive(Debug, Clone, Default)]
+struct PropertyPaneState {
+    sort: PaneSort,
+    show_search: bool,
+    sort_menu_open: bool,
+}
+
+/// The Outline leaf's state: `followCursor` and `showSearch` from
+/// `workspace.json` (`file` is the open note), plus what it does not save:
+/// the folds, which go when the note changes, and the row marked as
+/// holding the cursor.
+#[derive(Default)]
+struct OutlinePaneState {
+    /// `followCursor`: the pane scrolls the marked row into view.
+    follow_cursor: bool,
+    show_search: bool,
+    /// Folded headings by index into the outline.
+    collapsed: HashSet<usize>,
+    /// The note the folds belong to.
+    file: Option<String>,
+    /// The heading whose section holds the cursor, as last computed.
+    active: Option<usize>,
+    /// The mark moved (or the note changed): the next draw scrolls to it
+    /// when `follow_cursor` is on.
+    scroll_pending: bool,
+    scroll: ScrollHandle,
 }
 
 /// Mentions computed off the UI thread for one open note.
@@ -1027,7 +1068,8 @@ impl Default for BacklinkState {
             sort: SortOrder::Alphabetical,
             show_search: false,
             linked_collapsed: false,
-            unlinked_collapsed: false,
+            // Obsidian's fresh leaf starts with the section folded.
+            unlinked_collapsed: true,
             toggled: HashSet::new(),
             sort_menu_open: false,
         }
@@ -1036,11 +1078,22 @@ impl Default for BacklinkState {
 
 /// The Outgoing links leaf's state: `linksCollapsed` and
 /// `unlinkedCollapsed`, plus the groups folded by hand.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct OutgoingState {
     links_collapsed: bool,
     unlinked_collapsed: bool,
     toggled: HashSet<String>,
+}
+
+impl Default for OutgoingState {
+    fn default() -> OutgoingState {
+        OutgoingState {
+            links_collapsed: false,
+            // Obsidian's fresh leaf starts with the section folded.
+            unlinked_collapsed: true,
+            toggled: HashSet::new(),
+        }
+    }
 }
 
 /// How long a transient message stays on screen. Obsidian reports what a
@@ -2087,7 +2140,10 @@ pub struct Workspace {
     /// `editor:open-link-in-new-leaf`. Taken by [`Workspace::follow_link`].
     link_in_new_tab: bool,
     right_tab: RightTab,
-    outline: Vec<OutlineRow>,
+    /// The open note's headings, which the Outline pane draws as a tree.
+    outline: Vec<panes::Heading>,
+    outline_state: OutlinePaneState,
+    outline_filter: Entity<TextInput>,
     /// The Backlinks pane: Linked mentions, then Unlinked mentions, which
     /// are filled in when the background search for them lands.
     backlink_sections: Vec<Section>,
@@ -2095,11 +2151,19 @@ pub struct Workspace {
     outgoing_sections: Vec<Section>,
     backlink_state: BacklinkState,
     outgoing_state: OutgoingState,
+    /// Where the pointer was when a pane's sort button was clicked: the
+    /// menu opens there, its top-right corner at the click, as Obsidian's does.
+    sort_menu_at: gpui::Point<Pixels>,
     /// The Backlinks pane's search filter (`searchQuery`).
     backlink_filter: Entity<TextInput>,
-    tags: Vec<TagRow>,
-    tag_scroll: UniformListScrollHandle,
-    properties: Vec<PropertyRow>,
+    /// Every tag in the vault as a tree, sorted the way the Tags pane is.
+    tag_tree: Vec<panes::TagNode>,
+    tag_state: TagPaneState,
+    tag_filter: Entity<TextInput>,
+    /// Every property key in the vault, at the cache's frequency order.
+    property_entries: Vec<PropertyEntry>,
+    property_state: PropertyPaneState,
+    property_filter: Entity<TextInput>,
     /// Matcher over every note name and alias, rebuilt when files change.
     name_finder: Option<Arc<Finder>>,
     mention_generation: u64,
@@ -2184,7 +2248,10 @@ impl Workspace {
     pub fn new(root: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Workspace {
         let explorer = cx.new(FileExplorer::new);
         let search = cx.new(SearchPane::new);
-        let backlink_filter = cx.new(|cx| TextInput::new("Search...", cx));
+        let backlink_filter = cx.new(pane_filter_input);
+        let tag_filter = cx.new(pane_filter_input);
+        let property_filter = cx.new(pane_filter_input);
+        let outline_filter = cx.new(pane_filter_input);
         let bookmarks = cx.new(BookmarksPane::new);
         let switcher = cx.new(QuickSwitcher::new);
         let chooser = cx.new(Chooser::new);
@@ -2203,6 +2270,40 @@ impl Workspace {
                     cx.notify();
                 }
             }),
+            // Escape in the Tags filter is not the pane's: Obsidian hands
+            // the keyboard to the editor and leaves the rows filtered.
+            cx.subscribe_in(
+                &tag_filter,
+                window,
+                |this, _, event: &InputEvent, window, cx| match event {
+                    InputEvent::Changed => cx.notify(),
+                    InputEvent::Cancel => this.focus_main(window, cx),
+                    _ => {}
+                },
+            ),
+            // Escape in the other two hides the box and clears the query.
+            cx.subscribe_in(
+                &property_filter,
+                window,
+                |this, _, event: &InputEvent, window, cx| match event {
+                    InputEvent::Changed => cx.notify(),
+                    InputEvent::Cancel => this.hide_pane_search(RightTab::Properties, window, cx),
+                    _ => {}
+                },
+            ),
+            cx.subscribe_in(
+                &outline_filter,
+                window,
+                |this, _, event: &InputEvent, window, cx| match event {
+                    InputEvent::Changed => cx.notify(),
+                    InputEvent::Cancel => this.hide_pane_search(RightTab::Outline, window, cx),
+                    _ => {}
+                },
+            ),
+            // The Outline marks the heading holding the cursor, or the one
+            // at the top of the reading view: it follows both views.
+            cx.observe(&editor, |this, _, cx| this.follow_heading(cx)),
+            cx.observe(&reading, |this, _, cx| this.follow_heading(cx)),
             cx.subscribe_in(
                 &graph,
                 window,
@@ -2435,14 +2536,20 @@ impl Workspace {
             link_in_new_tab: false,
             right_tab: RightTab::Backlinks,
             outline: Vec::new(),
+            outline_state: OutlinePaneState::default(),
+            outline_filter,
             backlink_sections: Vec::new(),
             outgoing_sections: Vec::new(),
             backlink_state: BacklinkState::default(),
             outgoing_state: OutgoingState::default(),
+            sort_menu_at: point(px(0.), px(0.)),
             backlink_filter,
-            tags: Vec::new(),
-            tag_scroll: UniformListScrollHandle::new(),
-            properties: Vec::new(),
+            tag_tree: Vec::new(),
+            tag_state: TagPaneState::default(),
+            tag_filter,
+            property_entries: Vec::new(),
+            property_state: PropertyPaneState::default(),
+            property_filter,
             name_finder: None,
             mention_generation: 0,
             status: "Pass a vault folder as the first argument".into(),
@@ -3022,14 +3129,14 @@ impl Workspace {
     fn refresh_property_rows(&mut self, state: &VaultState) {
         let cache = state.cache();
         let types = state.property_types();
-        self.properties = _cache::all_properties(&cache, &types)
-            .into_iter()
-            .map(|e| PropertyRow {
-                name: e.name.into(),
-                count: e.count,
-                glyph: e.ty.map_or("?", crate::properties::type_glyph),
-            })
-            .collect();
+        self.property_entries = _cache::all_properties(&cache, &types);
+    }
+
+    /// Rebuilds the Tags pane's tree from the cache, in the pane's order.
+    fn refresh_tag_tree(&mut self, state: &VaultState) {
+        let mut tree = panes::tag_tree(state.cache().tags());
+        panes::sort_tags(&mut tree, self.tag_state.sort);
+        self.tag_tree = tree;
     }
 
     /// Rebuilds everything that depends on the file list or the whole cache.
@@ -3043,15 +3150,7 @@ impl Workspace {
             FileTree::new(vault.files(), vault.folders(), show_unsupported)
         };
         self.explorer.update(cx, |e, cx| e.set_tree(tree, cx));
-        self.tags = state
-            .cache()
-            .tags()
-            .values()
-            .map(|t| TagRow {
-                name: t.name.clone().into(),
-                count: t.count,
-            })
-            .collect();
+        self.refresh_tag_tree(&state);
         self.refresh_property_rows(&state);
         self.switcher
             .update(cx, |s, cx| s.set_state(state.clone(), cx));
@@ -3125,15 +3224,7 @@ impl Workspace {
         if changes.structural() {
             self.refresh_vault_views(cx);
         } else {
-            self.tags = state
-                .cache()
-                .tags()
-                .values()
-                .map(|t| TagRow {
-                    name: t.name.clone().into(),
-                    count: t.count,
-                })
-                .collect();
+            self.refresh_tag_tree(&state);
             self.refresh_property_rows(&state);
             self.search.update(cx, |s, cx| s.rerun(cx));
         }
@@ -4418,6 +4509,9 @@ impl Workspace {
     /// and stay clickable.
     fn clear_panes(&mut self, cx: &mut Context<Self>) {
         self.outline.clear();
+        self.outline_state.collapsed.clear();
+        self.outline_state.file = None;
+        self.outline_state.active = None;
         self.backlink_sections.clear();
         self.outgoing_sections.clear();
         let current = self.current.clone();
@@ -4443,7 +4537,13 @@ impl Workspace {
             .update(cx, |b, cx| b.set_active(Some(path.clone()), cx));
         let cache = state.cache();
         let texts = state.texts();
-        self.outline = cache.file(&path).map(outline_rows).unwrap_or_default();
+        self.outline = cache.file(&path).map(outline_headings).unwrap_or_default();
+        // Folds belong to the note: another note's outline opens unfolded.
+        if self.outline_state.file.as_deref() != Some(path.as_str()) {
+            self.outline_state.collapsed.clear();
+            self.outline_state.file = Some(path.clone());
+            self.outline_state.scroll_pending = true;
+        }
 
         // Linked mentions: every link into this file, grouped by the note
         // it was written in; Links: the ones this file writes, properties
@@ -4666,7 +4766,7 @@ impl Workspace {
             if editor.name.as_ref() != path.as_str() || !editor.is_dirty() {
                 return;
             }
-            outline_rows(&index_markdown(editor.text()))
+            outline_headings(&index_markdown(editor.text()))
         };
         self.outline = rows;
         cx.notify();
@@ -8198,6 +8298,45 @@ impl Workspace {
             self.outgoing_state.links_collapsed = flag(state, "linksCollapsed");
             self.outgoing_state.unlinked_collapsed = flag(state, "unlinkedCollapsed");
         }
+        let sort = |state: &Value| {
+            state
+                .get("sortOrder")
+                .and_then(Value::as_str)
+                .and_then(PaneSort::parse)
+                .unwrap_or_default()
+        };
+        let query = |state: &Value| {
+            state
+                .get("searchQuery")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        };
+        if let Some(state) = leaf_state(layout, "right", "tag") {
+            self.tag_state.sort = sort(state);
+            self.tag_state.use_hierarchy = state
+                .get("useHierarchy")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
+            self.tag_state.show_search = flag(state, "showSearch");
+            let q = query(state);
+            self.tag_filter
+                .update(cx, |input, cx| input.set_text(q, cx));
+        }
+        if let Some(state) = leaf_state(layout, "right", "all-properties") {
+            self.property_state.sort = sort(state);
+            self.property_state.show_search = flag(state, "showSearch");
+            let q = query(state);
+            self.property_filter
+                .update(cx, |input, cx| input.set_text(q, cx));
+        }
+        if let Some(state) = leaf_state(layout, "right", "outline") {
+            self.outline_state.follow_cursor = flag(state, "followCursor");
+            self.outline_state.show_search = flag(state, "showSearch");
+            let q = query(state);
+            self.outline_filter
+                .update(cx, |input, cx| input.set_text(q, cx));
+        }
     }
 
     /// `workspace.json` as this session would leave it: the file that was
@@ -8209,6 +8348,22 @@ impl Workspace {
         let Some(object) = layout.as_object_mut() else {
             return layout;
         };
+        // A vault Obsidian never laid out has no docks in the file, or no
+        // file at all. Obsidian writes its default ones; so does , so
+        // the panes' own state has a leaf to live in rather than being
+        // lost, with `main` first the way Obsidian orders the keys.
+        if !object.contains_key("main") {
+            object.insert("main".into(), Value::Null);
+        }
+        let (left_tab, right_tab) = (self.left_tab as usize, self.right_tab as usize);
+        for (dock, tab) in [("left", left_tab), ("right", right_tab)] {
+            if !object.get(dock).is_some_and(Value::is_object) {
+                object.insert(
+                    dock.into(),
+                    default_dock_json(dock, self.current.as_deref(), tab),
+                );
+            }
+        }
         // The Files leaf's own state, where the file has that leaf.
         {
             let explorer = self.explorer.read(cx);
@@ -8240,6 +8395,41 @@ impl Workspace {
                 &[
                     ("linksCollapsed", json!(o.links_collapsed)),
                     ("unlinkedCollapsed", json!(o.unlinked_collapsed)),
+                ],
+            );
+            // The Tags, All properties and Outline leaves' own state.
+            let t = &self.tag_state;
+            set_leaf_state(
+                right,
+                "tag",
+                &[
+                    ("sortOrder", json!(t.sort.as_str())),
+                    ("useHierarchy", json!(t.use_hierarchy)),
+                    ("showSearch", json!(t.show_search)),
+                    ("searchQuery", json!(self.tag_filter.read(cx).text())),
+                ],
+            );
+            let p = &self.property_state;
+            set_leaf_state(
+                right,
+                "all-properties",
+                &[
+                    ("sortOrder", json!(p.sort.as_str())),
+                    ("showSearch", json!(p.show_search)),
+                    ("searchQuery", json!(self.property_filter.read(cx).text())),
+                ],
+            );
+            // `file` is the open note; Obsidian leaves the key out for an
+            // empty tab, and a `null` here removes it.
+            let o = &self.outline_state;
+            set_leaf_state(
+                right,
+                "outline",
+                &[
+                    ("file", json!(self.current)),
+                    ("followCursor", json!(o.follow_cursor)),
+                    ("showSearch", json!(o.show_search)),
+                    ("searchQuery", json!(self.outline_filter.read(cx).text())),
                 ],
             );
         }
@@ -8479,8 +8669,20 @@ impl Workspace {
         put_capped(
             &mut right,
             "outline",
-            self.outline.iter().map(outline_json).collect(),
+            self.outline_rows(cx).iter().map(outline_json).collect(),
             rows,
+        );
+        right.insert(
+            "outline_options".into(),
+            json!({
+                "file": self.outline_state.file,
+                "headings": self.outline.len(),
+                "follow_cursor": self.outline_state.follow_cursor,
+                "show_search": self.outline_state.show_search,
+                "query": self.outline_filter.read(cx).text(),
+                "active": self.outline_state.active,
+                "scroll": -f32::from(self.outline_state.scroll.offset().y),
+            }),
         );
         put_capped(
             &mut right,
@@ -8507,17 +8709,42 @@ impl Workspace {
         put_capped(
             &mut right,
             "tags",
-            self.tags.iter().map(tag_json).collect(),
+            self.tag_rows(cx).iter().map(tag_json).collect(),
             rows,
+        );
+        right.insert(
+            "tags_options".into(),
+            json!({
+                "sort": self.tag_state.sort.as_str(),
+                "use_hierarchy": self.tag_state.use_hierarchy,
+                "show_search": self.tag_state.show_search,
+                "query": self.tag_filter.read(cx).text(),
+                "collapsed": self.tag_state.collapsed.len(),
+            }),
         );
         put_capped(
             &mut right,
             "properties",
-            self.properties
+            self.property_rows(cx)
                 .iter()
-                .map(|r| json!({ "name": r.name, "count": r.count, "type": r.glyph }))
+                .map(|r| {
+                    json!({
+                        "name": r.name,
+                        "count": r.count,
+                        "type": r.ty.map_or("unknown", |t| t.as_str()),
+                        "icon": r.icon,
+                    })
+                })
                 .collect(),
             rows,
+        );
+        right.insert(
+            "properties_options".into(),
+            json!({
+                "sort": self.property_state.sort.as_str(),
+                "show_search": self.property_state.show_search,
+                "query": self.property_filter.read(cx).text(),
+            }),
         );
 
         // Whether the graph is on screen is the shell's to say; the view
@@ -8732,6 +8959,16 @@ impl Workspace {
         if self.search.focus_handle(cx).is_focused(window) {
             return "search-input";
         }
+        for (input, name) in [
+            (&self.backlink_filter, "backlinks-filter"),
+            (&self.tag_filter, "tags-filter"),
+            (&self.property_filter, "properties-filter"),
+            (&self.outline_filter, "outline-filter"),
+        ] {
+            if input.focus_handle(cx).is_focused(window) {
+                return name;
+            }
+        }
         if self.settings.focus_handle(cx).is_focused(window) {
             return "settings";
         }
@@ -8939,42 +9176,6 @@ impl Workspace {
             ))
     }
 
-    fn render_outline(
-        &mut self,
-        range: Range<usize>,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Vec<gpui::Stateful<gpui::Div>> {
-        let theme = cx.global::<Theme>().clone();
-        range
-            .filter_map(|ix| {
-                let row = self.outline.get(ix)?.clone();
-                let offset = row.offset;
-                Some(
-                    div()
-                        .id(("outline", ix))
-                        .w_full()
-                        .h(px(24.))
-                        .flex()
-                        .items_center()
-                        .pl(px(8. + (row.level.saturating_sub(1)) as f32 * 12.))
-                        .pr_2()
-                        .rounded_sm()
-                        .cursor_pointer()
-                        .text_size(px(13.))
-                        .whitespace_nowrap()
-                        .text_ellipsis()
-                        .overflow_hidden()
-                        .hover(|s| s.bg(theme.bg_alt))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.reveal_offset(offset, cx);
-                        }))
-                        .child(row.text),
-                )
-            })
-            .collect()
-    }
-
     /// A pane's own header button: Obsidian's `nav-action-button`, 28 by
     /// 24 with a 4 px radius, the icon muted until the pointer is over it;
     /// `active` is the wash and accent of an `is-active` one.
@@ -9061,11 +9262,14 @@ impl Workspace {
                             false,
                             theme,
                         )
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.backlink_state.sort_menu_open =
-                                !this.backlink_state.sort_menu_open;
-                            cx.notify();
-                        })),
+                        .on_click(cx.listener(
+                            |this, event: &ClickEvent, _, cx| {
+                                this.sort_menu_at = event.position();
+                                this.backlink_state.sort_menu_open =
+                                    !this.backlink_state.sort_menu_open;
+                                cx.notify();
+                            },
+                        )),
                     )
                     .children(sort_menu),
             )
@@ -9167,7 +9371,8 @@ impl Workspace {
         Some(
             deferred(
                 anchored()
-                    .offset(point(px(0.), px(26.)))
+                    .position(self.sort_menu_at)
+                    .anchor(Anchor::TopRight)
                     .snap_to_window_with_margin(px(8.))
                     .child(list),
             )
@@ -9610,110 +9815,862 @@ impl Workspace {
             .children(button)
     }
 
-    fn render_tags(
-        &mut self,
-        range: Range<usize>,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Vec<gpui::Stateful<gpui::Div>> {
-        let theme = cx.global::<Theme>().clone();
-        range
-            .filter_map(|ix| {
-                let row = self.tags.get(ix)?.clone();
-                let name = row.name.clone();
-                Some(
-                    div()
-                        .id(("tag", ix))
-                        .w_full()
-                        .h(px(24.))
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .justify_between()
-                        .px_2()
-                        .rounded_sm()
-                        .cursor_pointer()
-                        .text_size(px(13.))
-                        .hover(|s| s.bg(theme.bg_alt))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.show_search(&format!("tag:#{name}"), None, cx);
-                        }))
-                        .child(
-                            div()
-                                .text_color(theme.tag)
-                                .whitespace_nowrap()
-                                .text_ellipsis()
-                                .overflow_hidden()
-                                .child(SharedString::from(format!("#{}", row.name))),
-                        )
-                        .child(
-                            div()
-                                .text_color(theme.text_muted)
-                                .text_size(px(11.))
-                                .child(SharedString::from(row.count.to_string())),
-                        ),
-                )
-            })
+    // ----- the Tags, All properties and Outline panes ---------------------------
+
+    /// Obsidian's `nav-header`: 40 px, 8 px of padding, the buttons
+    /// centred 2 px apart.
+    fn pane_header() -> gpui::Div {
+        div()
+            .flex_shrink_0()
+            .h(px(HEADER_HEIGHT))
+            .p(px(8.))
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_center()
+            .gap(px(2.))
+    }
+
+    /// The filter field of a pane, by pane.
+    fn pane_filter(&self, which: RightTab) -> &Entity<TextInput> {
+        match which {
+            RightTab::Tags => &self.tag_filter,
+            RightTab::Properties => &self.property_filter,
+            RightTab::Outline => &self.outline_filter,
+            _ => &self.backlink_filter,
+        }
+    }
+
+    fn pane_show_search(&mut self, which: RightTab) -> &mut bool {
+        match which {
+            RightTab::Tags => &mut self.tag_state.show_search,
+            RightTab::Properties => &mut self.property_state.show_search,
+            RightTab::Outline => &mut self.outline_state.show_search,
+            _ => &mut self.backlink_state.show_search,
+        }
+    }
+
+    /// "Show search filter": shows the box and puts the keyboard in it, or
+    /// hides it again, leaving the query (and the rows) as they were.
+    fn toggle_pane_search(&mut self, which: RightTab, window: &mut Window, cx: &mut Context<Self>) {
+        let flag = self.pane_show_search(which);
+        *flag = !*flag;
+        if *flag {
+            let handle = self.pane_filter(which).focus_handle(cx);
+            window.focus(&handle, cx);
+        }
+        cx.notify();
+    }
+
+    /// Escape in the box: hides it and clears the query, so every row is
+    /// back, and the keyboard goes to the note.
+    fn hide_pane_search(&mut self, which: RightTab, window: &mut Window, cx: &mut Context<Self>) {
+        *self.pane_show_search(which) = false;
+        self.pane_filter(which)
+            .update(cx, |input, cx| input.set_text("", cx));
+        self.focus_main(window, cx);
+        cx.notify();
+    }
+
+    /// The box's clear button: empties it and keeps the keyboard there.
+    fn clear_pane_filter(&mut self, which: RightTab, window: &mut Window, cx: &mut Context<Self>) {
+        let input = self.pane_filter(which).clone();
+        input.update(cx, |input, cx| input.set_text("", cx));
+        window.focus(&input.focus_handle(cx), cx);
+        cx.notify();
+    }
+
+    fn toggle_tag_hierarchy(&mut self, cx: &mut Context<Self>) {
+        self.tag_state.use_hierarchy = !self.tag_state.use_hierarchy;
+        // Obsidian's tree comes back with every folder open.
+        self.tag_state.collapsed.clear();
+        cx.notify();
+    }
+
+    /// "Expand all" (whose label never changes in Obsidian): folds every
+    /// tag, leaves included, or opens them all again.
+    fn toggle_tag_folds(&mut self, cx: &mut Context<Self>) {
+        if self.tag_state.collapsed.is_empty() {
+            self.tag_state.collapsed = panes::tag_keys(&self.tag_tree).into_iter().collect();
+        } else {
+            self.tag_state.collapsed.clear();
+        }
+        cx.notify();
+    }
+
+    fn toggle_tag_fold(&mut self, key: String, cx: &mut Context<Self>) {
+        if !self.tag_state.collapsed.remove(&key) {
+            self.tag_state.collapsed.insert(key);
+        }
+        cx.notify();
+    }
+
+    fn set_pane_sort(&mut self, which: RightTab, order: PaneSort, cx: &mut Context<Self>) {
+        match which {
+            RightTab::Tags => {
+                self.tag_state.sort = order;
+                self.tag_state.sort_menu_open = false;
+                panes::sort_tags(&mut self.tag_tree, order);
+            }
+            _ => {
+                self.property_state.sort = order;
+                self.property_state.sort_menu_open = false;
+            }
+        }
+        cx.notify();
+    }
+
+    fn toggle_outline_fold(&mut self, ix: usize, cx: &mut Context<Self>) {
+        if !self.outline_state.collapsed.remove(&ix) {
+            self.outline_state.collapsed.insert(ix);
+        }
+        cx.notify();
+    }
+
+    /// The headings that have children: what "Collapse all" folds.
+    fn outline_parents(&self) -> Vec<usize> {
+        let depths = panes::outline_depths(&self.outline);
+        (0..depths.len())
+            .filter(|&ix| depths.get(ix + 1).is_some_and(|&d| d > depths[ix]))
             .collect()
     }
 
-    /// All properties rows: the type's glyph, the key, and how many notes
-    /// carry it; a click searches for the key, as Obsidian's row does.
-    fn render_properties(
-        &mut self,
-        range: Range<usize>,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Vec<gpui::Stateful<gpui::Div>> {
-        let theme = cx.global::<Theme>().clone();
-        range
-            .filter_map(|ix| {
-                let row = self.properties.get(ix)?.clone();
-                let name = row.name.clone();
-                Some(
-                    div()
-                        .id(("property", ix))
-                        .w_full()
-                        .h(px(24.))
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap(px(6.))
-                        .px_2()
-                        .rounded_sm()
-                        .cursor_pointer()
-                        .text_size(px(13.))
-                        .hover(|s| s.bg(theme.bg_alt))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.show_search(&format!("[\"{name}\"]"), None, cx);
-                        }))
-                        .child(
-                            div()
-                                .w(px(16.))
-                                .flex_shrink_0()
-                                .text_size(px(12.))
-                                .text_color(theme.text_muted)
-                                .text_center()
-                                .child(row.glyph),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .text_color(theme.text)
-                                .whitespace_nowrap()
-                                .text_ellipsis()
-                                .overflow_hidden()
-                                .child(row.name.clone()),
-                        )
-                        .child(
-                            div()
-                                .text_color(theme.text_muted)
-                                .text_size(px(11.))
-                                .child(SharedString::from(row.count.to_string())),
-                        ),
-                )
-            })
+    /// The top-level headings with children: what "Collapse all" folds,
+    /// leaving the folds under them as they were, and what "Expand all"
+    /// counts.
+    fn outline_top_parents(&self) -> Vec<usize> {
+        let depths = panes::outline_depths(&self.outline);
+        self.outline_parents()
+            .into_iter()
+            .filter(|&ix| depths[ix] == 0)
             .collect()
+    }
+
+    /// Whether every top-level heading with children is folded, which is
+    /// when the button reads "Expand all".
+    fn outline_all_folded(&self) -> bool {
+        let parents = self.outline_top_parents();
+        !parents.is_empty()
+            && parents
+                .iter()
+                .all(|ix| self.outline_state.collapsed.contains(ix))
+    }
+
+    /// "Collapse all" folds the top-level headings and leaves the deeper
+    /// folds alone; "Expand all" opens everything.
+    fn toggle_outline_folds(&mut self, cx: &mut Context<Self>) {
+        if self.outline_all_folded() {
+            self.outline_state.collapsed.clear();
+        } else {
+            let top = self.outline_top_parents();
+            self.outline_state.collapsed.extend(top);
+        }
+        cx.notify();
+    }
+
+    fn toggle_follow_cursor(&mut self, cx: &mut Context<Self>) {
+        self.outline_state.follow_cursor = !self.outline_state.follow_cursor;
+        self.outline_state.scroll_pending = true;
+        cx.notify();
+    }
+
+    /// An Outline row's click: in an editing mode the cursor goes to the
+    /// heading's line, column 0, scrolled to the vertical centre, and the
+    /// editor takes the keyboard; in reading mode the heading scrolls to
+    /// the top edge.
+    fn reveal_heading(&mut self, offset: usize, cx: &mut Context<Self>) {
+        self.reading
+            .update(cx, |r, cx| r.scroll_to_offset(offset, cx));
+        if self.mode.is_editing() {
+            self.editor
+                .update(cx, |e, cx| e.reveal_offset_centered(offset, cx));
+        } else {
+            self.editor.update(cx, |e, cx| e.reveal_offset(offset, cx));
+        }
+        self.request_focus_main(cx);
+    }
+
+    /// The heading whose section holds the cursor (editing) or the block at
+    /// the top of the view (reading); none above the first heading.
+    fn current_heading(&self, cx: &App) -> Option<usize> {
+        let path = self.current.as_deref()?;
+        let offset = match self.mode {
+            ViewMode::Reading => self.reading.read(cx).top_offset()?,
+            mode if mode.is_editing() => {
+                let editor = self.editor.read(cx);
+                if editor.name.as_ref() != path {
+                    return None;
+                }
+                editor.selection().start
+            }
+            _ => return None,
+        };
+        panes::heading_at(&self.outline, offset)
+    }
+
+    /// Brings the Outline's mark up to date when the cursor or the reading
+    /// view moved, and asks for a draw only when the mark moved.
+    fn follow_heading(&mut self, cx: &mut Context<Self>) {
+        if !self.right_visible || self.right_tab != RightTab::Outline {
+            return;
+        }
+        let active = self.current_heading(cx);
+        if active != self.outline_state.active {
+            self.outline_state.active = active;
+            self.outline_state.scroll_pending = true;
+            cx.notify();
+        }
+    }
+
+    /// The Tags pane's rows as drawn now.
+    fn tag_rows(&self, cx: &App) -> Vec<panes::TagRow> {
+        panes::tag_rows(
+            &self.tag_tree,
+            self.tag_state.sort,
+            self.tag_state.use_hierarchy,
+            &self.tag_state.collapsed,
+            self.tag_filter.read(cx).text(),
+        )
+    }
+
+    fn property_rows(&self, cx: &App) -> Vec<panes::PropertyRow> {
+        panes::property_rows(
+            &self.property_entries,
+            self.property_state.sort,
+            self.property_filter.read(cx).text(),
+        )
+    }
+
+    fn outline_rows(&self, cx: &App) -> Vec<panes::OutlineRow> {
+        panes::outline_rows(
+            &self.outline,
+            &self.outline_state.collapsed,
+            self.outline_filter.read(cx).text(),
+            self.outline_state.active,
+        )
+    }
+
+    /// The search box under a pane's header: Obsidian's
+    /// `search-input-container`, 30 px tall with 4 px above and below it
+    /// inside the header, so the rows move down 38 px, and a round clear
+    /// button at its right end once there is text.
+    fn render_pane_filter(
+        &self,
+        which: RightTab,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let input = self.pane_filter(which).clone();
+        let has_text = !input.read(cx).text().is_empty();
+        // Obsidian's `search-input-container`: the field's text starts
+        // 30 px in, behind a magnifier at the left.
+        div().flex_shrink_0().px(px(8.)).pb(px(8.)).child(
+            div()
+                .relative()
+                .w_full()
+                .h(px(30.))
+                .child(input)
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(8.))
+                        .top(px(0.))
+                        .h(px(30.))
+                        .flex()
+                        .items_center()
+                        .child(icon("search", 14., theme.text_muted)),
+                )
+                .children(has_text.then(|| {
+                    div()
+                        .id(("pane-filter-clear", which as usize))
+                        .absolute()
+                        .right(px(2.))
+                        .top(px(0.))
+                        .w(px(28.))
+                        .h(px(30.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .rounded_full()
+                        .tooltip(tooltip("Clear search"))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.clear_pane_filter(which, window, cx)
+                        }))
+                        .child(icon("x", 14., theme.text_muted))
+                })),
+        )
+    }
+
+    /// "Change sort order" for the Tags and All properties panes: the two
+    /// name orders, a separator, the two frequency orders, a check against
+    /// the one in force.
+    fn render_pane_sort_menu(
+        &mut self,
+        which: RightTab,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        let (open, current, noun, id) = match which {
+            RightTab::Tags => (
+                self.tag_state.sort_menu_open,
+                self.tag_state.sort,
+                "Tag name",
+                "tags-sort-menu",
+            ),
+            _ => (
+                self.property_state.sort_menu_open,
+                self.property_state.sort,
+                "Property name",
+                "properties-sort-menu",
+            ),
+        };
+        if !open {
+            return None;
+        }
+        let mut list = div()
+            .id(id)
+            .flex()
+            .flex_col()
+            .min_w(px(196.))
+            .py_1()
+            .bg(theme.bg_secondary)
+            .border_1()
+            .border_color(theme.border)
+            .rounded_md()
+            .shadow_lg()
+            .text_size(px(13.))
+            .text_color(theme.text)
+            .occlude()
+            .on_mouse_down_out(cx.listener(move |this, _, _, cx| {
+                match which {
+                    RightTab::Tags => this.tag_state.sort_menu_open = false,
+                    _ => this.property_state.sort_menu_open = false,
+                }
+                cx.notify();
+            }));
+        for (ix, order) in PaneSort::ALL.into_iter().enumerate() {
+            if ix == 2 {
+                list = list.child(div().my_1().h(px(1.)).bg(theme.border));
+            }
+            let checked = order == current;
+            list = list.child(
+                div()
+                    .id((id, ix))
+                    .h(px(25.))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .px_3()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme.bg_alt))
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.set_pane_sort(which, order, cx)),
+                    )
+                    .child(
+                        div()
+                            .w(px(16.))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .children(checked.then(|| icon("check", 14., theme.text_muted))),
+                    )
+                    .child(SharedString::from(order.label(noun))),
+            );
+        }
+        Some(
+            deferred(
+                anchored()
+                    .position(self.sort_menu_at)
+                    .anchor(Anchor::TopRight)
+                    .snap_to_window_with_margin(px(8.))
+                    .child(list),
+            )
+            .with_priority(1)
+            .into_any_element(),
+        )
+    }
+
+    /// Obsidian's `tree-item-self`: 25 px tall at a 27 px pitch,
+    /// `padding: 4px 8px 4px 24px` with 17 px more on the left per level of
+    /// depth, an 8 px radius, 13 px muted text that brightens under the
+    /// pointer (or when `active`, the Outline's `is-active` mark), a faint
+    /// flair at the right edge, a fold triangle or an icon in the gutter
+    /// 20 px before the text, and an indentation guide for every level.
+    /// A `wrap` label wraps at 17 px per line; the others are cut with an
+    /// ellipsis.
+    #[allow(clippy::too_many_arguments)]
+    fn tree_row(
+        id: (&'static str, usize),
+        depth: usize,
+        fold: Option<(bool, FoldAction)>,
+        icon_name: Option<&'static str>,
+        label: gpui::AnyElement,
+        flair: Option<SharedString>,
+        active: bool,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let text_x = 24. + 17. * depth as f32;
+        let gutter = match (fold, icon_name) {
+            (Some((collapsed, on_fold)), _) => Some(
+                div()
+                    .id((id.0, id.1 + 1_000_000))
+                    .absolute()
+                    .left(px(text_x - 20.))
+                    .top(px(4.))
+                    .w(px(16.))
+                    .h(px(17.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .opacity(0.85)
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        on_fold(this, cx);
+                        cx.stop_propagation();
+                    }))
+                    .child(
+                        div()
+                            .text_color(theme.text_faint)
+                            .group_hover("tree-row", |s| s.text_color(theme.text_muted))
+                            .child(icon(
+                                if collapsed {
+                                    "chevron-right"
+                                } else {
+                                    "chevron-down"
+                                },
+                                10.,
+                                theme.text_faint,
+                            )),
+                    ),
+            ),
+            (None, Some(name)) => Some(
+                div()
+                    .id((id.0, id.1 + 1_000_000))
+                    .absolute()
+                    .left(px(text_x - 20.))
+                    .top(px(4.))
+                    .w(px(16.))
+                    .h(px(17.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .opacity(0.85)
+                    .child(icon(name, 14., theme.text_muted)),
+            ),
+            (None, None) => None,
+        };
+        div()
+            .id(id)
+            .group("tree-row")
+            .relative()
+            .w_full()
+            .flex_shrink_0()
+            .min_h(px(25.))
+            .mb(px(2.))
+            .pl(px(text_x))
+            .pr(px(8.))
+            .py(px(4.))
+            .flex()
+            .flex_row()
+            .items_start()
+            .rounded(px(8.))
+            .cursor_pointer()
+            .when(active, |d| d.bg(theme.bg_alt))
+            .hover(|s| s.bg(theme.bg_alt))
+            // Obsidian's `tree-item-children` guides: a hairline 12 px in
+            // from each ancestor's text, the row's full pitch tall.
+            .children((1..=depth).map(|k| {
+                div()
+                    .absolute()
+                    .left(px(17. * k as f32 - 5.))
+                    .top(px(0.))
+                    .bottom(px(-2.))
+                    .w(px(1.))
+                    .bg(theme.border)
+            }))
+            .children(gutter)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_size(px(FONT_UI_SMALL))
+                    .line_height(px(17.))
+                    .text_color(if active { theme.text } else { theme.text_muted })
+                    .group_hover("tree-row", |s| s.text_color(theme.text))
+                    .child(label),
+            )
+            .children(flair.map(|count| {
+                div()
+                    .flex_shrink_0()
+                    .pl(px(4.))
+                    .pt(px(3.))
+                    .text_size(px(FONT_UI_SMALLER))
+                    .line_height(px(12.))
+                    .text_color(theme.text_faint)
+                    .group_hover("tree-row", |s| s.text_color(theme.text_muted))
+                    .child(count)
+            }))
+    }
+
+    /// A one-line label cut with an ellipsis.
+    fn tree_label(text: impl Into<SharedString>) -> gpui::AnyElement {
+        div()
+            .whitespace_nowrap()
+            .overflow_hidden()
+            .text_ellipsis()
+            .child(text.into())
+            .into_any_element()
+    }
+
+    /// The Tags pane: sort, nested, expand-all and search buttons, the
+    /// filter when shown, then the tags as a tree (or a flat list) with
+    /// their counts; a row's click searches `tag:#path`.
+    fn render_tags_pane(&mut self, theme: &Theme, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let (hierarchy, show_search) = (self.tag_state.use_hierarchy, self.tag_state.show_search);
+        let sort_menu = self.render_pane_sort_menu(RightTab::Tags, theme, cx);
+        let header = Self::pane_header()
+            .child(
+                div()
+                    .relative()
+                    .child(
+                        Self::nav_button(
+                            "tags-sort",
+                            "arrow-up-narrow-wide",
+                            "Change sort order",
+                            false,
+                            theme,
+                        )
+                        .on_click(cx.listener(
+                            |this, event: &ClickEvent, _, cx| {
+                                this.sort_menu_at = event.position();
+                                this.tag_state.sort_menu_open = !this.tag_state.sort_menu_open;
+                                cx.notify();
+                            },
+                        )),
+                    )
+                    .children(sort_menu),
+            )
+            .child(
+                Self::nav_button(
+                    "tags-nested",
+                    "folder-tree",
+                    "Show nested tags",
+                    hierarchy,
+                    theme,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_tag_hierarchy(cx))),
+            )
+            .child(
+                Self::nav_button(
+                    "tags-expand",
+                    "chevrons-up-down",
+                    "Expand all",
+                    false,
+                    theme,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_tag_folds(cx))),
+            )
+            .child(
+                Self::nav_button(
+                    "tags-search",
+                    "search",
+                    "Show search filter",
+                    show_search,
+                    theme,
+                )
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.toggle_pane_search(RightTab::Tags, window, cx)
+                })),
+            );
+        let filter = show_search.then(|| self.render_pane_filter(RightTab::Tags, theme, cx));
+        let rows = self.tag_rows(cx);
+        // Obsidian's `.tag-container`: padding 12px 12px 32px.
+        let mut list = div()
+            .id("tags")
+            .flex()
+            .flex_col()
+            .flex_1()
+            .overflow_y_scroll()
+            .px(px(12.))
+            .pt(px(12.))
+            .pb(px(32.));
+        for (ix, row) in rows.into_iter().enumerate() {
+            let path = row.path.clone();
+            let fold = row.has_children.then(|| {
+                let key = row.key.clone();
+                let on_fold: FoldAction =
+                    Box::new(move |this, cx| this.toggle_tag_fold(key.clone(), cx));
+                (row.collapsed, on_fold)
+            });
+            // The parent part shows only in flat mode, in the same colour.
+            let label = if hierarchy {
+                row.name.clone()
+            } else {
+                row.path.clone()
+            };
+            list = list.child(
+                Self::tree_row(
+                    ("tag-row", ix),
+                    row.depth,
+                    fold,
+                    None,
+                    Self::tree_label(label),
+                    Some(row.count.to_string().into()),
+                    false,
+                    theme,
+                    cx,
+                )
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.show_search(&format!("tag:#{path}"), Some(window), cx);
+                })),
+            );
+        }
+        div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .child(header)
+            .children(filter)
+            .child(list)
+            .into_any_element()
+    }
+
+    /// The All properties pane: sort and search buttons, the filter when
+    /// shown, then one row per key with its widget's icon and the notes
+    /// carrying it; a row's click searches `["key"]`.
+    fn render_properties_pane(
+        &mut self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let show_search = self.property_state.show_search;
+        let sort_menu = self.render_pane_sort_menu(RightTab::Properties, theme, cx);
+        let header = Self::pane_header()
+            .child(
+                div()
+                    .relative()
+                    .child(
+                        Self::nav_button(
+                            "properties-sort",
+                            "arrow-up-narrow-wide",
+                            "Change sort order",
+                            false,
+                            theme,
+                        )
+                        .on_click(cx.listener(
+                            |this, event: &ClickEvent, _, cx| {
+                                this.sort_menu_at = event.position();
+                                this.property_state.sort_menu_open =
+                                    !this.property_state.sort_menu_open;
+                                cx.notify();
+                            },
+                        )),
+                    )
+                    .children(sort_menu),
+            )
+            .child(
+                Self::nav_button(
+                    "properties-search",
+                    "search",
+                    "Show search filter",
+                    show_search,
+                    theme,
+                )
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.toggle_pane_search(RightTab::Properties, window, cx)
+                })),
+            );
+        let filter = show_search.then(|| self.render_pane_filter(RightTab::Properties, theme, cx));
+        let rows = self.property_rows(cx);
+        // Obsidian's `.view-content`: padding 4px 12px 32px.
+        let mut list = div()
+            .id("properties")
+            .flex()
+            .flex_col()
+            .flex_1()
+            .overflow_y_scroll()
+            .px(px(12.))
+            .pt(px(4.))
+            .pb(px(32.));
+        for (ix, row) in rows.into_iter().enumerate() {
+            let name = row.name.clone();
+            list = list.child(
+                Self::tree_row(
+                    ("property-row", ix),
+                    0,
+                    None,
+                    Some(row.icon),
+                    Self::tree_label(row.name.clone()),
+                    Some(row.count.to_string().into()),
+                    false,
+                    theme,
+                    cx,
+                )
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.show_search(&format!("[\"{name}\"]"), Some(window), cx);
+                })),
+            );
+        }
+        div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .child(header)
+            .children(filter)
+            .child(list)
+            .into_any_element()
+    }
+
+    /// The Outline pane: search, auto-scroll and collapse-all buttons, the
+    /// filter when shown, then the headings as a structural tree with the
+    /// one holding the cursor marked, or "No headings found.".
+    fn render_outline_pane(&mut self, theme: &Theme, cx: &mut Context<Self>) -> gpui::AnyElement {
+        // The mark follows the cursor and the reading view; a mode or note
+        // switch lands here before anything else can notice it.
+        let active = self.current_heading(cx);
+        if active != self.outline_state.active {
+            self.outline_state.active = active;
+            self.outline_state.scroll_pending = true;
+        }
+        let (follow, show_search) = (
+            self.outline_state.follow_cursor,
+            self.outline_state.show_search,
+        );
+        let all_folded = self.outline_all_folded();
+        let header = Self::pane_header()
+            .child(
+                Self::nav_button(
+                    "outline-search",
+                    "search",
+                    "Show search filter",
+                    show_search,
+                    theme,
+                )
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.toggle_pane_search(RightTab::Outline, window, cx)
+                })),
+            )
+            .child(
+                Self::nav_button(
+                    "outline-follow",
+                    "gallery-vertical",
+                    "Auto-scroll to current section",
+                    follow,
+                    theme,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_follow_cursor(cx))),
+            )
+            .child(
+                if all_folded {
+                    Self::nav_button(
+                        "outline-fold",
+                        "chevrons-up-down",
+                        "Expand all",
+                        false,
+                        theme,
+                    )
+                } else {
+                    Self::nav_button(
+                        "outline-fold",
+                        "chevrons-down-up",
+                        "Collapse all",
+                        false,
+                        theme,
+                    )
+                }
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_outline_folds(cx))),
+            );
+        let filter = show_search.then(|| self.render_pane_filter(RightTab::Outline, theme, cx));
+        let body: gpui::AnyElement = if self.outline.is_empty() {
+            // Obsidian's `.pane-empty`: 13 px faint, padding 24px 16px,
+            // margin 8px 0, centred.
+            div()
+                .flex_1()
+                .px(px(12.))
+                .child(
+                    div()
+                        .my(px(8.))
+                        .px(px(16.))
+                        .py(px(24.))
+                        .text_size(px(FONT_UI_SMALL))
+                        .text_color(theme.text_faint)
+                        .text_center()
+                        .child("No headings found."),
+                )
+                .into_any_element()
+        } else {
+            let rows = self.outline_rows(cx);
+            if follow && self.outline_state.scroll_pending {
+                self.outline_state.scroll_pending = match rows.iter().position(|r| r.active) {
+                    Some(ix) => !scroll_outline_to(&self.outline_state.scroll, ix),
+                    None => false,
+                };
+            }
+            let mut list = div()
+                .id("outline")
+                .flex()
+                .flex_col()
+                .flex_1()
+                .overflow_y_scroll()
+                .track_scroll(&self.outline_state.scroll)
+                .px(px(12.))
+                .pt(px(4.))
+                .pb(px(32.));
+            for row in rows {
+                let offset = row.offset;
+                let fold = row.has_children.then(|| {
+                    let ix = row.ix;
+                    let on_fold: FoldAction =
+                        Box::new(move |this, cx| this.toggle_outline_fold(ix, cx));
+                    (row.collapsed, on_fold)
+                });
+                // The text wraps; a search match is Obsidian's
+                // `suggestion-highlight`, drawn in the accent.
+                let highlights: Vec<(Range<usize>, HighlightStyle)> = row
+                    .highlights
+                    .iter()
+                    .filter(|r| r.end <= row.text.len())
+                    .map(|r| {
+                        (
+                            r.clone(),
+                            HighlightStyle {
+                                color: Some(theme.accent),
+                                ..HighlightStyle::default()
+                            },
+                        )
+                    })
+                    .collect();
+                let label = StyledText::new(SharedString::from(row.text.clone()))
+                    .with_highlights(highlights)
+                    .into_any_element();
+                list = list.child(
+                    Self::tree_row(
+                        ("outline-row", row.ix),
+                        row.depth,
+                        fold,
+                        None,
+                        label,
+                        None,
+                        row.active,
+                        theme,
+                        cx,
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| this.reveal_heading(offset, cx))),
+                );
+            }
+            list.into_any_element()
+        };
+        div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .child(header)
+            .children(filter)
+            .child(body)
+            .into_any_element()
     }
 
     fn render_right_dock(&mut self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
@@ -9721,40 +10678,9 @@ impl Workspace {
         let body: gpui::AnyElement = match tab {
             RightTab::Backlinks => self.render_backlinks_pane(theme, cx),
             RightTab::Outgoing => self.render_outgoing_pane(theme, cx),
-            RightTab::Outline => {
-                let count = self.outline.len();
-                if count == 0 {
-                    empty_pane("No headings.", theme)
-                } else {
-                    uniform_list("outline", count, cx.processor(Self::render_outline))
-                        .size_full()
-                        .px_1()
-                        .into_any_element()
-                }
-            }
-            RightTab::Tags => {
-                let count = self.tags.len();
-                if count == 0 {
-                    empty_pane("No tags.", theme)
-                } else {
-                    uniform_list("tags", count, cx.processor(Self::render_tags))
-                        .track_scroll(&self.tag_scroll)
-                        .size_full()
-                        .px_1()
-                        .into_any_element()
-                }
-            }
-            RightTab::Properties => {
-                let count = self.properties.len();
-                if count == 0 {
-                    empty_pane("No properties found.", theme)
-                } else {
-                    uniform_list("properties", count, cx.processor(Self::render_properties))
-                        .size_full()
-                        .px_1()
-                        .into_any_element()
-                }
-            }
+            RightTab::Outline => self.render_outline_pane(theme, cx),
+            RightTab::Tags => self.render_tags_pane(theme, cx),
+            RightTab::Properties => self.render_properties_pane(theme, cx),
         };
         let tab_button = |this: &mut Self,
                           label: &'static str,
@@ -9937,9 +10863,20 @@ fn put_capped(into: &mut Map<String, Value>, key: &str, list: Vec<Value>, rows: 
     );
 }
 
-/// An Outline row, with the offset the pane scrolls the note to.
-fn outline_json(row: &OutlineRow) -> Value {
-    json!({"level": row.level, "text": row.text.to_string(), "offset": row.offset})
+/// An Outline row as drawn, with the offset the pane scrolls the note to.
+fn outline_json(row: &panes::OutlineRow) -> Value {
+    json!({
+        "level": row.level,
+        "text": row.text,
+        "offset": row.offset,
+        "line": row.line,
+        "ix": row.ix,
+        "depth": row.depth,
+        "has_children": row.has_children,
+        "collapsed": row.collapsed,
+        "active": row.active,
+        "highlights": row.highlights.iter().map(|r| json!([r.start, r.end])).collect::<Vec<_>>(),
+    })
 }
 
 /// A Backlinks or Outgoing links pane flattened to the rows it draws: a
@@ -9987,9 +10924,19 @@ fn section_rows_json(
     out
 }
 
-/// A tag row, with the `#` the pane paints in front of the name.
-fn tag_json(row: &TagRow) -> Value {
-    json!({"name": format!("#{}", row.name), "count": row.count})
+/// A tag row as drawn: `name` keeps the `#` and the full path that earlier
+/// dumps had; the pane itself paints neither.
+fn tag_json(row: &panes::TagRow) -> Value {
+    json!({
+        "name": format!("#{}", row.path),
+        "path": row.path,
+        "parent": row.parent,
+        "label": row.name,
+        "count": row.count,
+        "depth": row.depth,
+        "has_children": row.has_children,
+        "collapsed": row.collapsed,
+    })
 }
 
 /// The key contexts of the focused element, outermost first: the names
@@ -10186,6 +11133,126 @@ fn dock_current_view(layout: &Value, dock: &str) -> Option<String> {
     leaf.get("state")?.get("type")?.as_str().map(str::to_string)
 }
 
+/// A pane's filter field: Obsidian's `search-input-container`, its text
+/// 30 px in to leave room for the magnifier drawn over it.
+fn pane_filter_input(cx: &mut Context<TextInput>) -> TextInput {
+    let mut input = TextInput::new("Search...", cx);
+    input.set_pad_left(px(30.));
+    input
+}
+
+/// Scrolls the Outline so the marked row is in view with Obsidian's
+/// margins: a row below the view stops 32 px above the bottom edge (the
+/// pane's own bottom padding, which keeps it clear of the status bar), a
+/// row above it goes to the top edge, and the first row takes the list
+/// back to the very top. `false` until the rows have been laid out, so the
+/// caller tries again next frame.
+fn scroll_outline_to(scroll: &ScrollHandle, ix: usize) -> bool {
+    let Some(row) = scroll.bounds_for_item(ix) else {
+        return false;
+    };
+    let view = scroll.bounds();
+    if view.size.height <= px(0.) {
+        return false;
+    }
+    let mut offset = scroll.offset();
+    let floor = view.bottom() - px(32.);
+    if ix == 0 {
+        offset.y = px(0.);
+    } else if row.bottom() > floor {
+        offset.y -= row.bottom() - floor;
+    } else if row.top() < view.top() {
+        offset.y += view.top() - row.top();
+    } else {
+        return true;
+    }
+    scroll.set_offset(offset);
+    true
+}
+
+/// Obsidian's default dock, as a fresh vault's `workspace.json` has it:
+/// a horizontal split, 300 wide, holding one tab group of the side's
+/// default leaves with their default state, `currentTab` at `tab`. The
+/// `file` keys name the open note and are left out when there is none.
+fn default_dock_json(dock: &str, current: Option<&str>, tab: usize) -> Value {
+    let leaf = |kind: &str, state: Value, icon: &str, title: &str| {
+        let mut state = state;
+        if current.is_none() {
+            if let Some(map) = state.as_object_mut() {
+                map.shift_remove("file");
+            }
+        }
+        json!({
+            "id": leaf_id(),
+            "type": "leaf",
+            "state": {"type": kind, "state": state, "icon": icon, "title": title},
+        })
+    };
+    let children = if dock == "left" {
+        vec![
+            leaf(
+                "file-explorer",
+                json!({"sortOrder": "alphabetical", "autoReveal": false, "showSearch": false, "searchQuery": ""}),
+                "lucide-folder-closed",
+                "Files",
+            ),
+            leaf(
+                "search",
+                json!({"query": "", "matchingCase": false, "explainSearch": false, "collapseAll": false, "extraContext": false, "sortOrder": "alphabetical"}),
+                "lucide-search",
+                "Search",
+            ),
+            leaf(
+                "bookmarks",
+                json!({"showSearch": false, "searchQuery": ""}),
+                "lucide-bookmark",
+                "Bookmarks",
+            ),
+        ]
+    } else {
+        vec![
+            leaf(
+                "backlink",
+                json!({"file": current, "collapseAll": false, "extraContext": false, "sortOrder": "alphabetical", "showSearch": false, "searchQuery": "", "backlinkCollapsed": false, "unlinkedCollapsed": true}),
+                "links-coming-in",
+                "Backlinks",
+            ),
+            leaf(
+                "outgoing-link",
+                json!({"file": current, "linksCollapsed": false, "unlinkedCollapsed": true}),
+                "links-going-out",
+                "Outgoing links",
+            ),
+            leaf(
+                "tag",
+                json!({"sortOrder": "frequency", "useHierarchy": true, "showSearch": false, "searchQuery": ""}),
+                "lucide-tags",
+                "Tags",
+            ),
+            leaf(
+                "all-properties",
+                json!({"sortOrder": "frequency", "showSearch": false, "searchQuery": ""}),
+                "lucide-archive",
+                "All properties",
+            ),
+            leaf(
+                "outline",
+                json!({"file": current, "followCursor": false, "showSearch": false, "searchQuery": ""}),
+                "lucide-list",
+                "Outline",
+            ),
+        ]
+    };
+    let tab = tab.min(children.len().saturating_sub(1));
+    json!({
+        "id": leaf_id(),
+        "type": "split",
+        "children": [{"id": leaf_id(), "type": "tabs", "children": children, "currentTab": tab}],
+        "direction": "horizontal",
+        "width": SIDEBAR_WIDTH as i64,
+    })
+}
+
 /// The first leaf of view type `kind` anywhere under a dock's tree, as
 /// the leaf node.
 fn leaf_of_kind_mut<'a>(node: &'a mut Value, kind: &str) -> Option<&'a mut Map<String, Value>> {
@@ -10225,7 +11292,8 @@ fn leaf_state<'a>(layout: &'a Value, dock: &str, kind: &str) -> Option<&'a Value
 
 /// Writes `keys` into the state of the first `kind` leaf under `dock`, in
 /// the place they had; a leaf without a state object gains one holding
-/// only them. A dock without the leaf is left alone.
+/// only them, and a `null` value removes its key. A dock without the leaf
+/// is left alone.
 fn set_leaf_state(dock: &mut Value, kind: &str, keys: &[(&str, Value)]) {
     let Some(leaf) = leaf_of_kind_mut(dock, kind) else {
         return;
@@ -10238,7 +11306,11 @@ fn set_leaf_state(dock: &mut Value, kind: &str, keys: &[(&str, Value)]) {
     }
     if let Some(state) = outer.get_mut("state").and_then(Value::as_object_mut) {
         for (key, value) in keys {
-            state.insert((*key).into(), value.clone());
+            if value.is_null() {
+                state.remove(*key);
+            } else {
+                state.insert((*key).into(), value.clone());
+            }
         }
     }
 }
@@ -10459,15 +11531,6 @@ fn leaf_view_type(path: &str) -> &'static str {
         FileKind::Video => "video",
         _ => "markdown",
     }
-}
-
-fn empty_pane(text: &'static str, theme: &Theme) -> gpui::AnyElement {
-    div()
-        .p_3()
-        .text_size(px(12.))
-        .text_color(theme.text_muted)
-        .child(text)
-        .into_any_element()
 }
 
 impl Render for Workspace {
@@ -10922,6 +11985,64 @@ mod tests {
         );
         assert_eq!(section.groups.len(), 2);
         assert_eq!(section.count, 4);
+    }
+
+    /// A side Obsidian never laid out gets its default dock: one split of
+    /// one tab group holding the side's leaves in Obsidian's order with
+    /// their default state, `currentTab` at the open tab, and no `file`
+    /// key when nothing is open.
+    #[test]
+    fn a_missing_dock_is_written_in_obsidians_default_shape() {
+        let right = default_dock_json("right", Some("A.md"), 4);
+        assert_eq!(right["type"], "split");
+        assert_eq!(right["direction"], "horizontal");
+        assert_eq!(right["width"], 300);
+        let group = &right["children"][0];
+        assert_eq!(group["type"], "tabs");
+        assert_eq!(group["currentTab"], 4);
+        let kinds: Vec<&str> = group["children"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|l| l["state"]["type"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                "backlink",
+                "outgoing-link",
+                "tag",
+                "all-properties",
+                "outline"
+            ]
+        );
+        let outline = &group["children"][4]["state"];
+        assert_eq!(outline["icon"], "lucide-list");
+        assert_eq!(outline["title"], "Outline");
+        assert_eq!(
+            outline["state"],
+            json!({"file": "A.md", "followCursor": false, "showSearch": false, "searchQuery": ""})
+        );
+        assert_eq!(
+            group["children"][2]["state"]["state"],
+            json!({"sortOrder": "frequency", "useHierarchy": true, "showSearch": false, "searchQuery": ""})
+        );
+        assert_eq!(group["children"][0]["id"].as_str().unwrap().len(), 16);
+
+        let bare = default_dock_json("right", None, 9);
+        let group = &bare["children"][0];
+        assert_eq!(group["currentTab"], 4, "clamped to the last tab");
+        assert!(group["children"][0]["state"]["state"].get("file").is_none());
+        assert!(group["children"][4]["state"]["state"].get("file").is_none());
+
+        let left = default_dock_json("left", None, 1);
+        let kinds: Vec<&str> = left["children"][0]["children"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|l| l["state"]["type"].as_str().unwrap())
+            .collect();
+        assert_eq!(kinds, ["file-explorer", "search", "bookmarks"]);
     }
 
     /// The Backlinks and Outgoing links leaves' state round trips: read
@@ -11911,20 +13032,20 @@ mod tests {
     fn outline_rows_carry_the_offsets_of_the_text_they_were_built_from() {
         let saved = "# A\n\n### B\n\n## C\n";
         let typed = "## Typed heading\n\n# A\n\n### B\n\n## C\n";
-        let flat = |rows: &[OutlineRow]| -> Vec<(u8, String, usize)> {
+        let flat = |rows: &[panes::Heading]| -> Vec<(u8, String, usize)> {
             rows.iter()
                 .map(|r| (r.level, r.text.to_string(), r.offset))
                 .collect()
         };
         assert_eq!(
-            flat(&outline_rows(&index_markdown(saved))),
+            flat(&outline_headings(&index_markdown(saved))),
             vec![
                 (1, "A".to_string(), saved.find("# A").unwrap()),
                 (3, "B".to_string(), saved.find("### B").unwrap()),
                 (2, "C".to_string(), saved.find("## C").unwrap()),
             ]
         );
-        let buffer = outline_rows(&index_markdown(typed));
+        let buffer = outline_headings(&index_markdown(typed));
         assert_eq!(
             flat(&buffer),
             vec![

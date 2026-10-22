@@ -231,6 +231,13 @@ impl ReadingView {
         }
     }
 
+    /// Byte offset of the top-level block at the top of the view, which
+    /// is what the Outline marks in reading mode.
+    pub fn top_offset(&self) -> Option<usize> {
+        let top = self.list.logical_scroll_top();
+        self.model.starts.get(top.item_ix).copied()
+    }
+
     pub fn scroll_to_end(&mut self, cx: &mut Context<Self>) {
         self.list.scroll_to_end();
         cx.notify();
