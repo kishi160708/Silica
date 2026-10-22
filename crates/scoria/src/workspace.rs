@@ -6002,13 +6002,15 @@ impl Workspace {
 
     /// `workspace:new-tab`: an empty tab to the right of the active one,
     /// in the mode "Default view for new tabs" names.
+    /// `workspace:new-tab` and the strip's `+`: the new tab goes on the
+    /// strip's right end, whichever tab was active, and becomes the active
+    /// one (probed 2026-10-22, `tools/obsidian-probe/new-tab.mjs`).
     pub fn new_tab(&mut self, cx: &mut Context<Self>) {
         self.flush_save(cx);
         self.stash_active_tab();
         let mode = self.default_mode();
-        let at = (self.active_tab + 1).min(self.tabs.len());
-        self.tabs.insert(at, Tab::empty(mode));
-        self.active_tab = at;
+        self.tabs.push(Tab::empty(mode));
+        self.active_tab = self.tabs.len() - 1;
         self.load_tab(cx);
     }
 

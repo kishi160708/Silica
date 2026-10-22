@@ -2890,7 +2890,11 @@ at the 4 px radius, the active one carries the same wash at rest.
 `tools/obsidian-probe/results/2026-10-22-tab-list.json`). After the last tab comes the new-tab
 button, `.workspace-tab-header-new-tab`: a 24 by 24 `clickable-icon` padded 4 px around the 16 px
 `lucide-plus`, at y 8.66 in the 40 px strip (so centred on the titles rather than on the 34 px
-tab), margin `0 4px 0 8px`. The last tab's own `::after` divider stays when the tab is inactive, so
+tab), margin `0 4px 0 8px`. Pressing it, or running `workspace:new-tab`, appends an empty "New
+tab" at the strip's right end whichever tab was active, and makes it the active tab; a second
+press appends another after it (`tools/obsidian-probe/results/2026-10-22-new-tab.json`, with the
+second of four tabs active). The empty tab's view offers "New note Ctrl + N", "New base", "New
+canvas" and "Go to file Ctrl + O". The last tab's own `::after` divider stays when the tab is inactive, so
 a hairline parts the tabs from the button. Then the spacer, then the tab-list button
 `.workspace-tab-header-tab-list`, the same 24 px `clickable-icon` around `lucide-chevron-down` at
 y 8.66 with margin `0 2px 0 0`, and, with the right sidebar collapsed, the sidebar toggle, a 28 by

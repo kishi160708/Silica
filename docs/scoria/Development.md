@@ -297,6 +297,12 @@ line astride the edge, and whether any sliver survived depended on where the edg
 between device pixels at 1.45x. One line showed, its neighbour did not. The divider is
 now `deferred`, like the active tab's feet, so it paints after every tab.
 
+New tab, probed the same day (`new-tab.mjs`, the second of four tabs active): Obsidian
+appends the new tab at the strip's right end and activates it, from the button and from
+`workspace:new-tab` alike, and a second press appends another after it.  had been
+inserting it right after the active tab; `new_tab` now pushes to the end, which
+`open_in_new_tab` inherits.
+
 ### Explorer keyboard, 2026-10-21
 
 Probed first again: `tools/obsidian-probe/explorer-keyboard.mjs` found that a click
