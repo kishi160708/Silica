@@ -66,7 +66,7 @@ Most of the 50 are the same large gaps the first pass had already filed — no t
 Hotkeys tab, the graph controls panel — and they are not duplicated below. What the triage added is
 twenty entries nobody had filed before and fresh evidence on a dozen more; both are folded into the
 sections that follow, so the sections held **61 open entries** in total; the five large builds of 2026-10-20 and the
-four small entries they carried closed nine of them, so **52 remain** — plus one filed after the frame work of the same evening, below; the Files header of 2026-10-21 closed one more and halved two.
+four small entries they carried closed nine of them, so **52 remain** — plus one filed after the frame work of the same evening, below; the Files header of 2026-10-21 closed one more and halved two, and the explorer keyboard the same day closed the halved header entry.
 
 ## Files view and file operations
 
@@ -181,23 +181,6 @@ about a file operation reaches the status bar.
 **Fix.** In `apply_rename`'s summary block, return without reporting when
 `outcome.rewritten_links == 0`, and otherwise emit exactly `Updated {n} link{s} in {m} file{s}.`
 with no "Renamed X to Y" prefix. Drop the "Deleted" and "Copied" reports.
-
-### The explorer takes no keyboard focus
-
-*low, missing-feature, medium*
-
-**.** After `file-explorer:open` and `file-explorer:reveal-active-file`, focus is still
-`{editor, [Workspace, Editor]}` and Down does nothing to the tree. `FileExplorer` holds no
-`FocusHandle` and registers no key context. (The header half of this entry — New note, New folder,
-Change sort order with the six `sortOrder` modes, Auto-reveal current file, Expand all — was built
-on 2026-10-21 against the `explorer-header` probe; see
-[[Specification#Observed file explorer header behavior, Obsidian 1.14.4 (installer build 1.13.7)]].)
-
-**Obsidian.** Clicking a row focuses the explorer (rows gain `has-focus`) and arrow keys walk the
-tree.
-
-**Fix.** A `FocusHandle` and an "Explorer" key context with Up/Down/Left/Right/Enter over a
-`selected` index, focused from `file-explorer:open`.
 
 ### Non-markdown rows show the extension inline instead of as a tag
 
@@ -976,11 +959,11 @@ toggle; the Files pane header has its five buttons (#24).
 **.** Since [[Development#The frame, the type and the icons, 2026-10-20]] the window draws
 Obsidian's hidden frame by default and `--frame native` / `SCORIA_FRAME=native` asks for the
 desktop's; the Interface tab shows the row with that value but cannot change it, since  has
-no per-user settings file to keep it in. The tab-list button, the bookmark action and the "More
-options" menu are not drawn.
+no per-user settings file to keep it in. The tab-list button and its menu are drawn since
+2026-10-22; the bookmark action and the "More options" menu are not.
 
 **Fix.** A per-user config file (XDG config dir on Linux) holding the frame style, read before the
-window opens; then the three controls, each after a probe of what its menu holds.
+window opens; then the two remaining controls, each after a probe of what its menu holds.
 
 
 ### History back and forward restore the file but not the mode or the scroll
@@ -1086,8 +1069,11 @@ flattened on disk. A ribbon runs down the left edge with the switcher, graph, da
 and palette, honouring `left-ribbon.hiddenItems`, and each sidebar has a toggle that
 outlives its collapse. The left sidebar ends in Obsidian 1.14's vault profile (2026-10-21): the
 vault's name behind a `chevrons-up-down` switcher, Help and the Settings gear, which is where the
-gear lives now rather than at the foot of the ribbon; the switcher and the vault commands open a
-folder picker and load the chosen vault in place, and Help opens . The Hotkeys tab binds a chord from a key capture, removes a chip, restores a
+gear lives now rather than at the foot of the ribbon; the switcher drops up a menu of every vault
+this machine has opened (kept in `.json` outside the vaults, Obsidian's `obsidian.json` shape)
+with "Open vault..." and "Open sandbox vault" under a hairline, switching puts the open vault away as
+quitting would before the next restores its own layout, and Help opens a window of Obsidian's shape
+(mark, name, version, four rows with buttons) rather than the browser. The Hotkeys tab binds a chord from a key capture, removes a chip, restores a
 default and marks duplicates; `hotkeys.json` is written whole in Obsidian's `{modifiers, key}`
 shape, and the registry and every key binding are rebuilt live. The graph has Obsidian's four-section
 controls panel with timelapse, restore and close, writing `graph.json` a third of a second after a

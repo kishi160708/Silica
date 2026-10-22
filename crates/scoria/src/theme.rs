@@ -20,6 +20,8 @@ pub const FONT_UI_SMALLER: f32 = 12.;
 pub const FONT_UI_SMALL: f32 = 13.;
 pub const FONT_UI_MEDIUM: f32 = 15.;
 pub const HEADER_HEIGHT: f32 = 40.;
+/// The radius of a tab's top corners and of the active tab's feet, where it curves into the view.
+pub const TAB_CURVE: f32 = 10.;
 pub const RIBBON_WIDTH: f32 = 44.;
 pub const ICON_SIZE: f32 = 16.;
 pub const SIDEBAR_WIDTH: f32 = 300.;
@@ -50,6 +52,13 @@ pub struct Theme {
     /// The active row, dock tab and explorer file: the same wash.
     pub bg_active: Hsla,
     pub border: Hsla,
+    /// `--tab-divider-color`: the hairline between two inactive root tabs,
+    /// read as a computed property on 2026-10-22 (#3f3f3f dark, #dadada
+    /// light), a step brighter than the strip's own `--background-modifier-border`.
+    pub tab_divider: Hsla,
+    /// `--background-modifier-border-focus`: the 2 px ring on the explorer
+    /// row the keyboard is on.
+    pub border_focus: Hsla,
     pub text: Hsla,
     pub text_muted: Hsla,
     pub text_faint: Hsla,
@@ -168,6 +177,8 @@ impl Theme {
             bg_alt: rgba(0xffffff11).into(),
             bg_active: rgba(0xffffff11).into(),
             border: rgb(0x333333).into(),
+            tab_divider: rgb(0x3f3f3f).into(),
+            border_focus: rgb(0x555555).into(),
             text: rgb(0xdadada).into(),
             text_muted: rgb(0xb3b3b3).into(),
             text_faint: rgb(0x666666).into(),
@@ -192,6 +203,8 @@ impl Theme {
             bg_alt: rgba(0x00000011).into(),
             bg_active: rgba(0x00000011).into(),
             border: rgb(0xe4e4e4).into(),
+            tab_divider: rgb(0xdadada).into(),
+            border_focus: rgb(0xc0c0c0).into(),
             text: rgb(0x222222).into(),
             text_muted: rgb(0x5c5c5c).into(),
             text_faint: rgb(0xababab).into(),

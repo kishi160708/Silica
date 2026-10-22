@@ -352,7 +352,7 @@ pub const METHODS: &[MethodSpec] = &[
             "set",
             ParamType::Str,
             false,
-            "View to focus: `workspace`, `editor`, `reading` or `graph`. Omit to only report.",
+            "View to focus: `workspace`, `editor`, `reading`, `graph`, `canvas` or `explorer` (the Files tree, shown first). Omit to only report.",
         )],
     ),
     m(

@@ -250,7 +250,7 @@ needs, and the hotkey _keys would press.",
 Report what has keyboard focus and the gpui key context stack above it, which \
 is what decides whether a hotkey fires at all — a key that does nothing is \
 usually a focus problem, and this is how you see it. `set` moves focus to \
-`workspace`, `editor`, `reading` or `graph`.",
+`workspace`, `editor`, `reading`, `graph`, `canvas` or `explorer` (the Files tree).",
         "focus",
     ),
 ];

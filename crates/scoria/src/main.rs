@@ -39,6 +39,7 @@ mod control {
 mod editor;
 mod explorer;
 mod graph;
+mod help;
 mod mentions;
 mod palette;
 mod preview;
@@ -313,7 +314,9 @@ pub fn bind_all_keys(cx: &mut App, registry: &CommandRegistry) {
     text_input::bind_keys(cx);
     graph::bind_keys(cx);
     canvas::view::bind_keys(cx);
+    explorer::bind_keys(cx);
     settings::bind_keys(cx);
+    help::bind_keys(cx);
     prompt::bind_keys(cx);
     cx.bind_keys([KeyBinding::new("ctrl-q", Quit, None)]);
 }

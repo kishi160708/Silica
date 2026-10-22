@@ -15,6 +15,7 @@ use crate::chooser::{Chooser, ChooserEvent, Row as ChooserRow};
 use crate::editor::{Editor, EditorEvent};
 use crate::explorer::{display_name, kind_name, ExplorerEvent, FileExplorer, FileTree, SortOrder};
 use crate::graph::{GraphEvent, GraphView};
+use crate::help::HelpWindow;
 use crate::mentions::{Finder, Name};
 use crate::palette::{CommandPalette, PaletteCommand, PaletteEvent};
 use crate::prompt::{Prompt, PromptEvent, PromptSpec};
@@ -24,14 +25,15 @@ use crate::settings::{self, SettingChange, SettingsEvent, SettingsView};
 use crate::switcher::{QuickSwitcher, SwitcherEvent};
 use crate::theme::{
     Theme, FONT_UI_SMALL, FONT_UI_SMALLER, HEADER_HEIGHT, ICON_SIZE, RIBBON_WIDTH, SIDEBAR_WIDTH,
+    TAB_CURVE,
 };
 use crate::watch;
 use gpui::{
-    actions, canvas, div, point, prelude::*, px, relative, rgb, rgba, transparent_black,
-    uniform_list, Action, App, BoxShadow, Context, CursorStyle, Decorations, DragMoveEvent, Entity,
-    FocusHandle, Focusable, Global, HitboxBehavior, Hsla, KeyBinding, MouseButton, Pixels,
-    ResizeEdge, SharedString, Subscription, Task, Tiling, UniformListScrollHandle, Window,
-    WindowControlArea,
+    actions, anchored, canvas, deferred, div, point, prelude::*, px, relative, rgb, rgba,
+    transparent_black, uniform_list, Action, App, BoxShadow, Context, CursorStyle, Decorations,
+    DragMoveEvent, Entity, FocusHandle, Focusable, Global, HitboxBehavior, Hsla, KeyBinding,
+    MouseButton, PathBuilder, Pixels, ResizeEdge, SharedString, Subscription, Task, Tiling,
+    UniformListScrollHandle, Window, WindowControlArea,
 };
 use rayon::prelude::*;
 use _cache::{
@@ -50,7 +52,7 @@ use _markdown::Subpath;
 use _templates as templates;
 use _text::table::TableCommand;
 use _text::{LinePrefix, LinkSyntax};
-use _vault::{FileChange, TrashOption, Vault};
+use _vault::{FileChange, TrashOption, Vault, VaultRegistry};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::ops::Range;
@@ -1600,9 +1602,6 @@ struct DockDrag {
     left: bool,
 }
 
-/// Where "Open help" goes: Obsidian opens its help site,  its manual.
-const HELP_URL: &str = "https://";
-
 /// The narrowest a sidebar can be dragged, and the narrowest `width`
 /// `workspace.json` is believed about.
 const MIN_SIDEBAR_WIDTH: f64 = 150.;
@@ -1697,6 +1696,25 @@ impl WindowCorners {
 /// A 28 by 24 icon button of the kind Obsidian calls a clickable icon:
 /// 4 px above and below the icon, 6 px either side, a 4 px radius and a
 /// wash behind it on hover.
+/// Makes the sandbox vault at `root`: a welcome note that links to a
+/// second, so the editor, the links and the graph have something to show.
+/// The folder is new each time, so nothing already there is written over.
+fn write_sandbox(root: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(root)?;
+    std::fs::write(
+        root.join("Welcome.md"),
+        "---\ntags:\n  - sandbox\n---\n# Welcome to the sandbox\n\nThis vault is a scratch folder: try things here and nothing you keep is \
+touched. Link to [[Another note]], press Ctrl+O to switch notes, Ctrl+P \
+for the command palette, and Ctrl+E to flip between editing and reading.\n\n\
+- [ ] A task to tick\n- A list item with **bold** and *italic* text\n\n\
+> [!tip] Callouts\n> Obsidian's callouts render here too.\n",
+    )?;
+    std::fs::write(
+        root.join("Another note.md"),
+        "# Another note\n\nIt links back to [[Welcome]], which the backlinks pane shows.\n",
+    )
+}
+
 fn icon_button(id: &'static str, name: &str, theme: &Theme) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id)
@@ -1897,6 +1915,15 @@ pub struct Workspace {
     refocus_main: bool,
     state: Option<Arc<VaultState>>,
     vault_name: SharedString,
+    /// Whether the vault being loaded goes on the switcher's list: a
+    /// sandbox does not.
+    record_vault: bool,
+    /// The vault switcher's menu, dropped up from the sidebar's footer.
+    vault_menu_open: bool,
+    /// The group whose tab-list menu (the strip's `chevron-down`) is open.
+    tab_list_menu: Option<u64>,
+    /// The Help window while one is up; a stale handle means it was closed.
+    help_window: Option<gpui::WindowHandle<HelpWindow>>,
     loading: Option<SharedString>,
     explorer: Entity<FileExplorer>,
     search: Entity<SearchPane>,
@@ -2097,7 +2124,13 @@ impl Workspace {
                 &explorer,
                 window,
                 |this, _, event: &ExplorerEvent, window, cx| match event {
-                    ExplorerEvent::Open(path) => this.open_file(path.clone(), None, cx),
+                    ExplorerEvent::Open(path) => {
+                        // A row's click or Enter hands the keyboard to the
+                        // note it opened, as Obsidian's does; the tree
+                        // keeps its ring for the next reveal.
+                        this.open_file(path.clone(), None, cx);
+                        this.focus_main(window, cx);
+                    }
                     ExplorerEvent::OpenInNewTab(path) => {
                         this.open_in_new_tab(path.clone(), None, cx)
                     }
@@ -2113,6 +2146,7 @@ impl Workspace {
                     ExplorerEvent::Duplicate(path) => this.duplicate(path, cx),
                     ExplorerEvent::Delete(path) => this.start_delete(path, window, cx),
                     ExplorerEvent::Bookmark(path) => this.start_bookmark_path(path, window, cx),
+                    ExplorerEvent::LeaveFocus => this.focus_main(window, cx),
                 },
             ),
             cx.subscribe_in(
@@ -2253,6 +2287,10 @@ impl Workspace {
             refocus_main: false,
             state: None,
             vault_name: "No vault".into(),
+            record_vault: true,
+            vault_menu_open: false,
+            tab_list_menu: None,
+            help_window: None,
             loading: None,
             explorer,
             search,
@@ -2325,6 +2363,20 @@ impl Workspace {
     }
 
     fn load_vault(&mut self, root: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        self.load_vault_with(root, true, window, cx);
+    }
+
+    /// [`Self::load_vault`], saying whether the vault goes on the
+    /// switcher's list once it is open.
+    fn load_vault_with(
+        &mut self,
+        root: PathBuf,
+        record: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.leave_vault(cx);
+        self.record_vault = record;
         self.vault_name = root
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -2350,6 +2402,30 @@ impl Workspace {
             .ok();
         })
         .detach();
+    }
+
+    /// Puts the vault that is open away before another loads: the note's
+    /// edits and the layout reach its disk as they would on quit, every
+    /// group but one closes and that one is left with an empty tab, and
+    /// what was read from its `workspace.json` is forgotten, so the next
+    /// vault restores into a blank main area the way a fresh launch does.
+    /// With no vault open there is nothing to do.
+    fn leave_vault(&mut self, cx: &mut Context<Self>) {
+        if self.state.is_none() {
+            return;
+        }
+        self.on_quit(cx);
+        let ids: Vec<u64> = self.groups.iter().map(|g| g.id).collect();
+        for id in ids {
+            self.close_group(id, false, cx);
+        }
+        self.closed_tabs.clear();
+        self.detached = None;
+        self.layout = None;
+        self.layout_restored = false;
+        self.last_open_files.clear();
+        self._watcher = None;
+        self.state = None;
     }
 
     /// Records a property type in the vault's `types.json` and redraws the
@@ -2450,6 +2526,10 @@ impl Workspace {
         .into();
         let state = Arc::new(state);
         self.state = Some(state.clone());
+        if self.record_vault {
+            let root = state.root.clone();
+            self.remember_vault(&root, cx);
+        }
         for group in &self.groups {
             Self::give_editor_the_vault(&group.editor, &state, cx);
         }
@@ -3369,14 +3449,18 @@ impl Workspace {
                 self.leave_search_field(window, cx);
                 self.left_visible = true;
                 self.left_tab = LeftTab::Files;
+                self.explorer.update(cx, |e, cx| e.focus_tree(window, cx));
                 cx.notify();
             }
             "file-explorer:reveal-active-file" => {
                 self.leave_search_field(window, cx);
                 self.left_visible = true;
                 self.left_tab = LeftTab::Files;
-                if let Some(current) = self.current.clone() {
-                    self.explorer.update(cx, |e, cx| e.reveal(&current, cx));
+                match self.current.clone() {
+                    Some(current) => self
+                        .explorer
+                        .update(cx, |e, cx| e.reveal_and_focus(&current, window, cx)),
+                    None => self.explorer.update(cx, |e, cx| e.focus_tree(window, cx)),
                 }
                 cx.notify();
             }
@@ -3576,10 +3660,10 @@ impl Workspace {
                 self.right_visible = true;
                 self.show_right_tab("tags", cx);
             }
-            "app:open-help" => cx.open_url(HELP_URL),
-            "app:open-vault" | "app:switch-vault" | "app:open-another-vault" => {
-                self.open_another_vault(window, cx)
-            }
+            "app:open-help" => self.open_help(window, cx),
+            "app:open-vault" | "app:switch-vault" => self.toggle_vault_menu(cx),
+            "app:open-another-vault" => self.open_another_vault(window, cx),
+            "app:open-sandbox-vault" => self.open_sandbox_vault(window, cx),
             _ => {
                 let name = self.command_name(id, cx);
                 self.report(format!("{name}: not available in  yet"), cx);
@@ -3587,10 +3671,68 @@ impl Workspace {
         }
     }
 
-    /// Obsidian's vault commands all lead to its vault manager;  has no
-    /// manager, so each asks the desktop for a folder and opens it as the
+    /// "Manage vaults" and "Switch vault": the switcher's menu, up from the
+    /// sidebar's footer, listing every vault this machine has opened.
+    fn toggle_vault_menu(&mut self, cx: &mut Context<Self>) {
+        self.vault_menu_open = !self.vault_menu_open;
+        cx.notify();
+    }
+
+    /// "Open help": the Help window, brought forward if it is already up.
+    fn open_help(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if let Some(handle) = self.help_window {
+            let up = handle
+                .update(cx, |_, window, _| window.activate_window())
+                .is_ok();
+            if up {
+                return;
+            }
+        }
+        let main = window.window_handle();
+        match HelpWindow::open(cx.weak_entity(), main, cx) {
+            Ok(handle) => self.help_window = Some(handle),
+            Err(err) => self.report(format!("Could not open the Help window: {err}"), cx),
+        }
+    }
+
+    /// "Open sandbox vault": a fresh folder under the temporary directory
+    /// with a note or two in it, loaded as the vault in this window and
+    /// left off the switcher's list. Obsidian's sandbox is its help vault
+    /// copied somewhere disposable; 's starts nearly empty.
+    pub(crate) fn open_sandbox_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.vault_menu_open = false;
+        let root = std::env::temp_dir().join(format!(" Sandbox {}", now_millis()));
+        if let Err(err) = write_sandbox(&root) {
+            self.report(format!("Could not make the sandbox vault: {err}"), cx);
+            return;
+        }
+        self.load_vault_with(root, false, window, cx);
+        // Opened once the vault is in, the way `--note` is.
+        self.current = Some("Welcome.md".into());
+    }
+
+    /// Puts `root` at the head of the switcher's list. The list lives
+    /// outside every vault; a machine with nowhere to keep it has no list.
+    fn remember_vault(&mut self, root: &Path, cx: &mut Context<Self>) {
+        let outcome = (|| -> std::io::Result<()> {
+            let Some(mut registry) = VaultRegistry::open()? else {
+                return Ok(());
+            };
+            registry.record_open(root, now_millis());
+            registry.save()
+        })();
+        if let Err(err) = outcome {
+            self.report(
+                format!("Could not record the vault for the switcher: {err}"),
+                cx,
+            );
+        }
+    }
+
+    /// "Open vault...": asks the desktop for a folder and opens it as the
     /// vault in this window. Cancelling the dialog changes nothing.
     fn open_another_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.vault_menu_open = false;
         let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
             files: false,
             directories: true,
@@ -6827,6 +6969,7 @@ impl Workspace {
     /// Settings on the right, above a hairline. It is part of the sidebar,
     /// so it collapses with it, and it stays whether the ribbon shows or not.
     fn render_vault_profile(&self, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
+        let menu = self.render_vault_menu(theme, cx);
         let button = |id: &'static str, name: &'static str, command: &'static str| {
             icon_button(id, name, theme).on_click(
                 cx.listener(move |this, _, window, cx| this.run_command(command, window, cx)),
@@ -6855,9 +6998,12 @@ impl Workspace {
                     .rounded(px(4.))
                     .cursor_pointer()
                     .hover(|s| s.bg(theme.bg_alt))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.run_command("app:open-vault", window, cx)
-                    }))
+                    .when(self.vault_menu_open, |d| d.bg(theme.bg_alt))
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_vault_menu(cx)))
+                    // The menu's anchor is this box, pinned at the row's
+                    // top-left corner: an absolute element left to the
+                    // row's own centring would hang from its middle.
+                    .child(div().absolute().top_0().left_0().size_0().children(menu))
                     .child(
                         div()
                             .flex_shrink_0()
@@ -6884,6 +7030,135 @@ impl Workspace {
             .child(button("vault-settings", "settings", "app:open-settings"))
     }
 
+    /// The vault switcher's menu, dropped up from the footer: every vault
+    /// this machine has opened, most recent first with a check on the one
+    /// showing, then "Open vault..." and "Open sandbox vault". A folder
+    /// that is gone is listed faint rather than dropped, since the list is
+    /// the user's. A click outside closes it.
+    fn render_vault_menu(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        if !self.vault_menu_open {
+            return None;
+        }
+        let current = self.state.as_ref().map(|s| s.root.clone());
+        let registry = VaultRegistry::open().ok().flatten();
+        let known: Vec<(String, PathBuf, bool)> = registry
+            .as_ref()
+            .map(|r| {
+                r.vaults()
+                    .into_iter()
+                    .map(|(_, e)| (e.name(), e.path.clone(), e.path.is_dir()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let item = |id: gpui::ElementId, theme: &Theme| {
+            div()
+                .id(id)
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .px_3()
+                .py(px(5.))
+                .rounded(px(4.))
+                .mx_1()
+                .cursor_pointer()
+                .hover(|s| s.bg(theme.bg_alt))
+        };
+        let check = |on: bool, theme: &Theme| {
+            div()
+                .w(px(16.))
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .children(on.then(|| icon("check", 14., theme.text_muted)))
+        };
+        let mut list = div()
+            .id("vault-menu")
+            .flex()
+            .flex_col()
+            .min_w(px(240.))
+            .max_w(px(360.))
+            .py_1()
+            .bg(theme.bg_secondary)
+            .border_1()
+            .border_color(theme.border)
+            .rounded_md()
+            .shadow_lg()
+            .text_size(px(FONT_UI_SMALL))
+            .text_color(theme.text)
+            .occlude()
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                this.vault_menu_open = false;
+                cx.notify();
+            }));
+        if known.is_empty() {
+            list = list.child(
+                div()
+                    .px_3()
+                    .py(px(5.))
+                    .text_color(theme.text_faint)
+                    .child("No vaults opened yet"),
+            );
+        }
+        for (ix, (name, path, present)) in known.into_iter().enumerate() {
+            let showing = current.as_deref() == Some(path.as_path());
+            let tooltip = crate::canvas::menu::tooltip(path.display().to_string());
+            list = list.child(
+                item(("vault-menu-item", ix).into(), theme)
+                    .when(!present, |d| d.text_color(theme.text_faint))
+                    .tooltip(tooltip)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.vault_menu_open = false;
+                        if showing {
+                            cx.notify();
+                        } else if present {
+                            this.load_vault(path.clone(), window, cx);
+                        } else {
+                            this.report(format!("{} is not a folder any more", path.display()), cx);
+                        }
+                    }))
+                    .child(check(showing, theme))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .child(name),
+                    ),
+            );
+        }
+        list = list
+            .child(div().my_1().h(px(1.)).bg(theme.border))
+            .child(
+                item("vault-menu-open".into(), theme)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.run_command("app:open-another-vault", window, cx)
+                    }))
+                    .child(check(false, theme))
+                    .child("Open vault..."),
+            )
+            .child(
+                item("vault-menu-sandbox".into(), theme)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.run_command("app:open-sandbox-vault", window, cx)
+                    }))
+                    .child(check(false, theme))
+                    .child("Open sandbox vault"),
+            );
+        Some(
+            deferred(
+                anchored()
+                    .anchor(gpui::Anchor::BottomLeft)
+                    .offset(point(px(0.), px(-6.)))
+                    .snap_to_window_with_margin(px(8.))
+                    .child(list),
+            )
+            .with_priority(1)
+            .into_any_element(),
+        )
+    }
+
     /// A group's tab strip. The sidebar toggles sit at the window's edges:
     /// the left one in the first group's strip, the right one in the last's.
     fn render_tab_strip(
@@ -6904,6 +7179,7 @@ impl Workspace {
         // in the window's top right corner: this strip's, when the right
         // sidebar is collapsed and this is the last group.
         let under_controls = frameless && last && !self.right_visible;
+        let menu_open = self.tab_list_menu == Some(group);
         let at_left = first && !self.show_ribbon() && !self.left_visible;
         let at_right = last && !self.right_visible;
         div()
@@ -6920,22 +7196,34 @@ impl Workspace {
             } else {
                 px(8.)
             })
-            .gap(px(2.))
             .bg(theme.bg_secondary)
-            .border_b_1()
-            .border_color(theme.border)
+            .relative()
             .overflow_hidden()
             // A tab dropped on the strip's open space joins it at the end.
             .on_drop(cx.listener(move |this, drag: &TabDrag, _, cx| {
                 this.drop_tab_on_strip(drag, group, None, cx)
             }))
+            // The strip's outline is a hairline along its bottom edge rather
+            // than a border, so the active tab, which reaches the edge, paints
+            // over it and joins the view header below without a seam. The
+            // other tabs stop a pixel short and keep the line under them.
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .bottom_0()
+                    .h(px(1.))
+                    .bg(theme.border),
+            )
             // Without the ribbon a collapsed left sidebar would have no
             // way back from the window.
             .when(first && !show_ribbon && !self.left_visible, |d| {
-                d.child(self.sidebar_toggle(true, theme, cx).mb(px(5.)))
+                d.child(self.sidebar_toggle(true, theme, cx).mb(px(8.)).mr(px(2.)))
             })
             .children(tabs.iter().enumerate().map(|(ix, tab)| {
                 let active = ix == active_ix;
+                let divider = !active && ix + 1 != active_ix;
                 let title = tab.title();
                 let drag = TabDrag {
                     group,
@@ -6945,22 +7233,58 @@ impl Workspace {
                 let this = cx.weak_entity();
                 let drop_wash = theme.bg_active;
                 // Obsidian's tab: 34 px tall, 200 px wide, the active one
-                // in the content's colour with 10 px top corners, its title
-                // in the small UI size and its close button a 20 px disc.
+                // in the content's colour, its top corners as round as its
+                // feet, its title in the small UI size and its close button a
+                // 20 px disc. It is padded `1px 4px 4px` around an inner box
+                // with a 4 px radius, and that inner box, not the tab, is
+                // what the hover wash paints.
                 div()
                     .id(("tab", ix))
                     .group("tab")
                     .flex()
                     .flex_row()
-                    .items_center()
-                    .gap(px(2.))
                     .h(px(34.))
                     .w(px(200.))
                     .min_w(px(60.))
                     .flex_shrink()
-                    .pl(px(10.))
-                    .pr(px(6.))
-                    .rounded_t(px(10.))
+                    .pt(px(1.))
+                    .px(px(4.))
+                    .pb(px(4.))
+                    .rounded_t(px(TAB_CURVE))
+                    .relative()
+                    .when(!active, |d| d.mb(px(1.)))
+                    // The divider on an inactive tab's right edge, as
+                    // Obsidian's `::after`: a 1 px line, 15 px tall and 8 px
+                    // down, astride the edge (the tabs touch, so it is
+                    // centred between two inner boxes, 3.5 px from each),
+                    // and after the last tab it parts the strip from the
+                    // new-tab button. The active tab has none and paints
+                    // over its left neighbour's, so the gaps around it are
+                    // bare. Hover leaves it alone: the wash stops 4 px short
+                    // of the edge, so the line stays beside the hovered box.
+                    // Deferred, like the feet: the next tab paints after
+                    // this one with an opaque background, and the half of
+                    // the line astride its edge would otherwise be lost
+                    // under it, whole or in part depending on where the
+                    // edge falls between device pixels.
+                    .when(divider, |d| {
+                        d.child(deferred(
+                            div()
+                                .absolute()
+                                .right(px(-0.5))
+                                .top(px(8.))
+                                .w(px(1.))
+                                .h(px(15.))
+                                .bg(theme.tab_divider),
+                        ))
+                    })
+                    // The active tab's feet: the concave curves that carry
+                    // its bottom corners out into the view header. Painted
+                    // late so a neighbour's hover wash stays underneath.
+                    .when(active, |d| {
+                        d.child(deferred(tab_foot(true, theme)))
+                            .child(deferred(tab_foot(false, theme)))
+                    })
                     .cursor_pointer()
                     .text_size(px(FONT_UI_SMALL))
                     .bg(if active { theme.bg } else { theme.bg_secondary })
@@ -6971,9 +7295,7 @@ impl Workspace {
                     } else {
                         theme.text_faint
                     })
-                    .when(!active, |d| {
-                        d.hover(|s| s.bg(theme.bg_alt).text_color(theme.text_muted))
-                    })
+                    .when(!active, |d| d.hover(|s| s.text_color(theme.text_muted)))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.activate_group(group, cx);
                         this.activate_tab(ix, cx)
@@ -6997,43 +7319,66 @@ impl Workspace {
                             this.close_tab(ix, cx)
                         }),
                     )
+                    // The inner box: the title and the close button, padded
+                    // `0 3px 0 6px`, washed on hover when the tab is not the
+                    // active one (the active tab shows nothing on hover).
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
-                            .whitespace_nowrap()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .child(title),
-                    )
-                    .child(
-                        div()
-                            .id(("tab-close", ix))
-                            .flex_shrink_0()
-                            .w(px(20.))
-                            .h(px(20.))
+                            .h_full()
                             .flex()
+                            .flex_row()
                             .items_center()
-                            .justify_center()
-                            .rounded(px(8.))
-                            .when(!active, |d| {
-                                d.invisible().group_hover("tab", |s| s.visible())
-                            })
-                            .hover(|s| s.bg(theme.bg_active))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                cx.stop_propagation();
-                                this.activate_group(group, cx);
-                                this.close_tab(ix, cx);
-                            }))
-                            .child(icon("x", 14., theme.text_muted)),
+                            .gap(px(2.))
+                            .pl(px(6.))
+                            .pr(px(3.))
+                            .rounded(px(4.))
+                            .when(!active, |d| d.group_hover("tab", |s| s.bg(theme.bg_alt)))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .whitespace_nowrap()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .child(title),
+                            )
+                            // The close button: no wash of its own, its cross
+                            // brightens from muted to normal under the pointer.
+                            .child(
+                                div()
+                                    .id(("tab-close", ix))
+                                    .group("tab-close")
+                                    .flex_shrink_0()
+                                    .w(px(20.))
+                                    .h(px(20.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(px(8.))
+                                    .when(!active, |d| {
+                                        d.invisible().group_hover("tab", |s| s.visible())
+                                    })
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        cx.stop_propagation();
+                                        this.activate_group(group, cx);
+                                        this.close_tab(ix, cx);
+                                    }))
+                                    .child(
+                                        icon("x", 14., theme.text_muted)
+                                            .group_hover("tab-close", |s| s.text_color(theme.text)),
+                                    ),
+                            ),
                     )
             }))
             .child(
                 div()
                     .id("new-tab")
                     .flex_shrink_0()
-                    .ml(px(6.))
-                    .mb(px(5.))
+                    .ml(px(8.))
+                    .mr(px(4.))
+                    .mb(px(7.))
                     .w(px(24.))
                     .h(px(24.))
                     .flex()
@@ -7052,11 +7397,170 @@ impl Workspace {
                 div().id(("tab-strip-space", group)).flex_1().h_full(),
                 frameless,
             ))
+            // The tab-list button at the strip's right end: Obsidian's
+            // `chevron-down`, 24 px square at y 8.66 with a 2 px right
+            // margin. The menu hangs off the wrapper, so it opens under
+            // the button's top-left corner, 2 px below the button.
+            .child(
+                div()
+                    .relative()
+                    .flex_shrink_0()
+                    .mr(px(2.))
+                    .mb(px(7.))
+                    .child(
+                        div()
+                            .id(("tab-list", group))
+                            .w(px(24.))
+                            .h(px(24.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(4.))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme.bg_alt))
+                            .when(menu_open, |d| d.bg(theme.bg_alt))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.toggle_tab_list_menu(group, cx)
+                            }))
+                            .child(icon("chevron-down", ICON_SIZE, theme.text)),
+                    )
+                    .children(self.render_tab_list_menu(view, theme, cx)),
+            )
             // The right sidebar's toggle lives in its own header while it
             // is open, and comes here, at the window's edge, when it is not.
             .when(last && !self.right_visible, |d| {
-                d.child(self.sidebar_toggle(false, theme, cx).mb(px(5.)))
+                d.child(self.sidebar_toggle(false, theme, cx).mb(px(8.)))
             })
+    }
+
+    fn toggle_tab_list_menu(&mut self, group: u64, cx: &mut Context<Self>) {
+        self.tab_list_menu = if self.tab_list_menu == Some(group) {
+            None
+        } else {
+            Some(group)
+        };
+        cx.notify();
+    }
+
+    /// The tab-list menu, as Obsidian 1.14 drops it from the strip's
+    /// `chevron-down` (probed 2026-10-22): "Stack tabs" (`layers`), "Bookmark
+    /// N tabs..." (`bookmark`, only when a tab has a file), a separator,
+    /// "Close all" (`x`), a separator, then one row per tab (`file`) with a
+    /// check on the active one. Rows are 25 px, padded `4px 8px` with an
+    /// 8 px gap, in a menu padded 6 px whose separators run its full width.
+    fn render_tab_list_menu(
+        &self,
+        view: &GroupView,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        if self.tab_list_menu != Some(view.id) {
+            return None;
+        }
+        let group = view.id;
+        let active_ix = view.active_tab;
+        let paths: Vec<String> = view.tabs.iter().filter_map(|t| t.path.clone()).collect();
+        let row = |id: gpui::ElementId, name: &'static str, theme: &Theme| {
+            div()
+                .id(id)
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(8.))
+                .px(px(8.))
+                .h(px(25.))
+                .rounded(px(4.))
+                .cursor_pointer()
+                .hover(|s| s.bg(theme.bg_alt))
+                .child(icon(name, ICON_SIZE, theme.text_muted))
+        };
+        let separator = |theme: &Theme| div().my(px(6.)).mx(px(-6.)).h(px(1.)).bg(theme.border);
+        let mut list = div()
+            .id(("tab-list-menu", group))
+            .flex()
+            .flex_col()
+            .min_w(px(167.))
+            .max_w(px(360.))
+            .p(px(6.))
+            .bg(theme.bg_secondary)
+            .border_1()
+            .border_color(theme.border)
+            .rounded(px(8.))
+            .shadow_lg()
+            .text_size(px(FONT_UI_SMALL))
+            .text_color(theme.text)
+            .occlude()
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                this.tab_list_menu = None;
+                cx.notify();
+            }))
+            .child(
+                row("tab-list-stack".into(), "layers", theme)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.tab_list_menu = None;
+                        this.run_command("workspace:toggle-stacked-tabs", window, cx);
+                    }))
+                    .child("Stack tabs"),
+            );
+        if !paths.is_empty() {
+            let label = if paths.len() == 1 {
+                "Bookmark 1 tab...".to_string()
+            } else {
+                format!("Bookmark {} tabs...", paths.len())
+            };
+            list = list.child(
+                row("tab-list-bookmark".into(), "bookmark", theme)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.tab_list_menu = None;
+                        this.start_bookmark(BookmarkDraft::Tabs(paths.clone()), window, cx);
+                    }))
+                    .child(label),
+            );
+        }
+        list = list
+            .child(separator(theme))
+            .child(
+                row("tab-list-close-all".into(), "x", theme)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.tab_list_menu = None;
+                        this.close_group(group, true, cx);
+                    }))
+                    .child("Close all"),
+            )
+            .child(separator(theme));
+        for (ix, tab) in view.tabs.iter().enumerate() {
+            let checked = ix == active_ix;
+            list = list.child(
+                row(("tab-list-tab", ix).into(), "file", theme)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.tab_list_menu = None;
+                        this.activate_group(group, cx);
+                        this.activate_tab(ix, cx);
+                    }))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .child(tab.title()),
+                    )
+                    .children(checked.then(|| icon("check", ICON_SIZE, theme.text_muted))),
+            );
+        }
+        // The wrapper lays the menu out below the button, so the offset
+        // is the gap under it.
+        Some(
+            deferred(
+                anchored()
+                    .offset(point(px(0.), px(2.)))
+                    .snap_to_window_with_margin(px(8.))
+                    .child(list),
+            )
+            .with_priority(1)
+            .into_any_element(),
+        )
     }
 
     // ----- workspace.json --------------------------------------------------------
@@ -7418,6 +7922,7 @@ impl Workspace {
         );
         vault.insert("name".into(), json!(self.vault_name.to_string()));
         vault.insert("loaded".into(), json!(self.state.is_some()));
+        vault.insert("menu_open".into(), json!(self.vault_menu_open));
         vault.insert(
             "loading".into(),
             json!(self.loading.as_ref().map(|l| l.to_string())),
@@ -7733,6 +8238,9 @@ impl Workspace {
         if self.settings.focus_handle(cx).is_focused(window) {
             return "settings";
         }
+        if self.explorer.focus_handle(cx).is_focused(window) {
+            return "explorer";
+        }
         if self.focus_handle.is_focused(window) {
             return "workspace";
         }
@@ -7756,6 +8264,16 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
+        // The tree is in the left dock, not the main area: showing the
+        // dock's Files tab is what puts its handle on screen.
+        if name == "explorer" {
+            self.leave_search_field(window, cx);
+            self.left_visible = true;
+            self.left_tab = LeftTab::Files;
+            self.explorer.update(cx, |e, cx| e.focus_tree(window, cx));
+            cx.notify();
+            return Ok(());
+        }
         match Self::focus_target(name, self.main_view(cx))? {
             // The root div paints in every frame, so its handle is always
             // somewhere the keyboard can sit.
@@ -8793,6 +9311,53 @@ fn leaf_icon(path: &str) -> &'static str {
         FileKind::Canvas => "lucide-layout-dashboard",
         _ => "lucide-file",
     }
+}
+
+/// One foot of the active tab: the region just outside its bottom corner
+/// that lies between the tab's edge, the strip's bottom and a quarter-circle
+/// centred on the strip side, painted in the tab's colour. Only that region
+/// is painted, so a neighbouring tab's hover wash shows through the curve.
+/// What shows is the tab's edge curving down into the view header; the
+/// outline hairline stops where the curve begins.
+fn tab_foot(left: bool, theme: &Theme) -> impl IntoElement {
+    let r = px(TAB_CURVE);
+    let color = theme.bg;
+    canvas(
+        |_, _, _| (),
+        move |bounds, _, window, _| {
+            let o = bounds.origin;
+            let mut path = PathBuilder::fill();
+            if left {
+                // The arc is centred on the top-left corner: from the
+                // bottom-left point round to the top-right one.
+                path.move_to(point(o.x + r, o.y));
+                path.line_to(point(o.x + r, o.y + r));
+                path.line_to(point(o.x, o.y + r));
+                path.arc_to(point(r, r), px(0.), false, false, point(o.x + r, o.y));
+            } else {
+                // Mirrored: the arc is centred on the top-right corner.
+                path.move_to(point(o.x, o.y));
+                path.line_to(point(o.x, o.y + r));
+                path.line_to(point(o.x + r, o.y + r));
+                path.arc_to(point(r, r), px(0.), false, true, point(o.x, o.y));
+            }
+            path.close();
+            if let Ok(built) = path.build() {
+                window.paint_path(built, color);
+            }
+        },
+    )
+    .absolute()
+    .bottom_0()
+    .w(r)
+    .h(r)
+    .map(|d| {
+        if left {
+            d.left(px(-TAB_CURVE))
+        } else {
+            d.right(px(-TAB_CURVE))
+        }
+    })
 }
 
 /// The tab strip's name for a file: a note's name without `.md`, and a

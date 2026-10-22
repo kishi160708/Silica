@@ -73,8 +73,9 @@ impl Render for Tooltip {
 }
 
 /// A tooltip builder for `.tooltip(..)`.
-pub fn tooltip(text: &'static str) -> impl Fn(&mut Window, &mut App) -> AnyView {
-    move |_, cx| cx.new(|_| Tooltip { text: text.into() }).into()
+pub fn tooltip(text: impl Into<SharedString>) -> impl Fn(&mut Window, &mut App) -> AnyView {
+    let text: SharedString = text.into();
+    move |_, cx| cx.new(|_| Tooltip { text: text.clone() }).into()
 }
 
 /// A row of icon buttons; the caller positions it. `prefix` keys the

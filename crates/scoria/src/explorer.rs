@@ -11,14 +11,21 @@
 //! Obsidian's `nav-header`: New note, New folder, Change sort order,
 //! Auto-reveal current file, and Expand all (Collapse all once a folder is
 //! open).
+//!
+//! The tree takes the keyboard too, under the "Explorer" key context: one
+//! row carries the focus ring, Up and Down walk the visible rows, Right
+//! opens a folder or steps into it, Left closes one or climbs to the parent,
+//! Enter opens a file or toggles a folder, F2 and Delete act on the row,
+//! and Escape hands the keyboard back to the main area — what the
+//! 2026-10-21 `explorer-keyboard` probe saw Obsidian do.
 
 use crate::assets::icon;
 use crate::canvas::menu::tooltip;
 use crate::theme::{Theme, ICON_SIZE};
 use gpui::{
-    anchored, deferred, div, point, prelude::*, px, uniform_list, ClickEvent, Context,
-    EventEmitter, FontWeight, MouseButton, Pixels, Point, ScrollStrategy, SharedString,
-    UniformListScrollHandle, Window,
+    actions, anchored, deferred, div, point, prelude::*, px, uniform_list, App, ClickEvent,
+    Context, EventEmitter, FocusHandle, Focusable, FontWeight, KeyBinding, MouseButton, Pixels,
+    Point, ScrollStrategy, SharedString, UniformListScrollHandle, Window,
 };
 use _formats::FileKind;
 use _search::natural_cmp;
@@ -30,6 +37,38 @@ use std::ops::Range;
 
 /// The font size of a row's extension tag.
 const TAG_SIZE: f32 = 10.0;
+
+actions!(
+    explorer,
+    [
+        FocusUp,
+        FocusDown,
+        FocusLeft,
+        FocusRight,
+        Activate,
+        ToggleFolder,
+        LeaveTree,
+        RenameFocused,
+        DeleteFocused
+    ]
+);
+
+/// Key bindings for the tree; called once at startup. The context is the
+/// explorer's own, beneath the workspace's.
+pub fn bind_keys(cx: &mut App) {
+    let ctx = Some("Explorer");
+    cx.bind_keys([
+        KeyBinding::new("up", FocusUp, ctx),
+        KeyBinding::new("down", FocusDown, ctx),
+        KeyBinding::new("left", FocusLeft, ctx),
+        KeyBinding::new("right", FocusRight, ctx),
+        KeyBinding::new("enter", Activate, ctx),
+        KeyBinding::new("space", ToggleFolder, ctx),
+        KeyBinding::new("escape", LeaveTree, ctx),
+        KeyBinding::new("f2", RenameFocused, ctx),
+        KeyBinding::new("delete", DeleteFocused, ctx),
+    ]);
+}
 
 /// The header row: Obsidian's `.nav-header` is 40 px, 8 px of padding
 /// around a centred row of 28 by 24 buttons 2 px apart.
@@ -421,6 +460,8 @@ pub enum ExplorerEvent {
     Delete(String),
     /// "Bookmark...": a file or folder for the Bookmarks pane.
     Bookmark(String),
+    /// Escape in the tree: the keyboard goes back to the main area.
+    LeaveFocus,
 }
 
 /// The right-click menu over a row.
@@ -440,12 +481,23 @@ pub struct FileExplorer {
     menu: Option<Menu>,
     /// The sort menu is open under its header button.
     sort_menu_open: bool,
+    focus_handle: FocusHandle,
+    /// The row the keyboard is on (Obsidian's `has-focus`), by path so it
+    /// survives a re-sort; it may be hidden under a collapsed folder, and
+    /// then the next key starts over from the open file.
+    focused: Option<String>,
+}
+
+impl Focusable for FileExplorer {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
 }
 
 impl EventEmitter<ExplorerEvent> for FileExplorer {}
 
 impl FileExplorer {
-    pub fn new(_cx: &mut Context<Self>) -> FileExplorer {
+    pub fn new(cx: &mut Context<Self>) -> FileExplorer {
         FileExplorer {
             tree: FileTree::default(),
             active: None,
@@ -453,6 +505,149 @@ impl FileExplorer {
             scroll: UniformListScrollHandle::new(),
             menu: None,
             sort_menu_open: false,
+            focus_handle: cx.focus_handle(),
+            focused: None,
+        }
+    }
+
+    /// Gives the tree the keyboard, on the row it had or none: what
+    /// `file-explorer:open` does.
+    pub fn focus_tree(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.focus_handle, cx);
+        cx.notify();
+    }
+
+    /// Expands to `path`, puts the focus ring on its row and gives the tree
+    /// the keyboard: `file-explorer:reveal-active-file`.
+    pub fn reveal_and_focus(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.reveal(path, cx);
+        self.focused = Some(path.to_string());
+        window.focus(&self.focus_handle, cx);
+        cx.notify();
+    }
+
+    /// The visible index of the focused row, if it is on a visible row.
+    fn focused_ix(&self) -> Option<usize> {
+        self.tree.visible_index(self.focused.as_deref()?)
+    }
+
+    fn set_focused_ix(&mut self, ix: usize, cx: &mut Context<Self>) {
+        if let Some(row) = self.tree.row(ix) {
+            self.focused = Some(row.path.clone());
+            self.scroll.scroll_to_item(ix, ScrollStrategy::Nearest);
+            cx.notify();
+        }
+    }
+
+    /// Where Up and Down start from when no visible row has the ring: the
+    /// open file's row if a folder is not hiding it, else the first row.
+    fn start_ix(&self) -> usize {
+        self.active
+            .as_deref()
+            .and_then(|p| self.tree.visible_index(p))
+            .unwrap_or(0)
+    }
+
+    fn focus_down(&mut self, _: &FocusDown, _: &mut Window, cx: &mut Context<Self>) {
+        let next = match self.focused_ix() {
+            Some(ix) => (ix + 1).min(self.tree.len().saturating_sub(1)),
+            None => self.start_ix(),
+        };
+        self.set_focused_ix(next, cx);
+    }
+
+    fn focus_up(&mut self, _: &FocusUp, _: &mut Window, cx: &mut Context<Self>) {
+        let next = match self.focused_ix() {
+            Some(ix) => ix.saturating_sub(1),
+            None => self.start_ix(),
+        };
+        self.set_focused_ix(next, cx);
+    }
+
+    /// Right opens a collapsed folder, steps into an open one, and does
+    /// nothing on a file.
+    fn focus_right(&mut self, _: &FocusRight, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(ix) = self.focused_ix() else {
+            return;
+        };
+        let Some(row) = self.tree.row(ix).cloned() else {
+            return;
+        };
+        if !row.is_folder {
+            return;
+        }
+        if self.tree.is_collapsed(&row.path) {
+            self.tree.toggle(&row.path);
+            cx.notify();
+        } else if self.tree.row(ix + 1).is_some_and(|r| r.depth > row.depth) {
+            self.set_focused_ix(ix + 1, cx);
+        }
+    }
+
+    /// Left closes an open folder; on a file or a closed folder it climbs
+    /// to the parent and closes that, or does nothing at the root.
+    fn focus_left(&mut self, _: &FocusLeft, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(ix) = self.focused_ix() else {
+            return;
+        };
+        let Some(row) = self.tree.row(ix).cloned() else {
+            return;
+        };
+        if row.is_folder && !self.tree.is_collapsed(&row.path) {
+            self.tree.toggle(&row.path);
+            cx.notify();
+            return;
+        }
+        let Some((parent, _)) = row.path.rsplit_once('/') else {
+            return;
+        };
+        let parent = parent.to_string();
+        if !self.tree.is_collapsed(&parent) {
+            self.tree.toggle(&parent);
+        }
+        if let Some(parent_ix) = self.tree.visible_index(&parent) {
+            self.set_focused_ix(parent_ix, cx);
+        }
+        cx.notify();
+    }
+
+    /// Enter opens the file or toggles the folder under the ring.
+    fn activate(&mut self, _: &Activate, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(row) = self.focused_ix().and_then(|ix| self.tree.row(ix).cloned()) else {
+            return;
+        };
+        if row.is_folder {
+            self.tree.toggle(&row.path);
+            cx.notify();
+        } else {
+            cx.emit(ExplorerEvent::Open(row.path));
+        }
+    }
+
+    /// Space toggles a folder and leaves a file alone.
+    fn toggle_folder(&mut self, _: &ToggleFolder, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(row) = self.focused_ix().and_then(|ix| self.tree.row(ix).cloned()) else {
+            return;
+        };
+        if row.is_folder {
+            self.tree.toggle(&row.path);
+            cx.notify();
+        }
+    }
+
+    fn leave_tree(&mut self, _: &LeaveTree, _: &mut Window, cx: &mut Context<Self>) {
+        cx.emit(ExplorerEvent::LeaveFocus);
+    }
+
+    fn rename_focused(&mut self, _: &RenameFocused, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(row) = self.focused_ix().and_then(|ix| self.tree.row(ix).cloned()) {
+            cx.emit(ExplorerEvent::Rename(row.path));
+        }
+    }
+
+    fn delete_focused(&mut self, _: &DeleteFocused, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(row) = self.focused_ix().and_then(|ix| self.tree.row(ix).cloned()) {
+            cx.emit(ExplorerEvent::Delete(row.path));
         }
     }
 
@@ -568,6 +763,7 @@ impl FileExplorer {
             .collect();
         json!({
             "active": self.active,
+            "focused": self.focused,
             "sort_order": self.tree.sort().as_str(),
             "auto_reveal": self.auto_reveal,
             "any_expanded": self.tree.any_expanded(),
@@ -576,16 +772,26 @@ impl FileExplorer {
         })
     }
 
-    fn click(&mut self, ix: usize, new_tab: bool, cx: &mut Context<Self>) {
+    /// A click on a folder toggles it and puts the keyboard on it; a click
+    /// on the open file's row puts the keyboard on that row; a click that
+    /// opens a file hands the keyboard to the editor, as Obsidian's does.
+    fn click(&mut self, ix: usize, new_tab: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(row) = self.tree.row(ix).cloned() else {
             return;
         };
         if row.is_folder {
             self.tree.toggle(&row.path);
+            self.focused = Some(row.path);
+            window.focus(&self.focus_handle, cx);
             cx.notify();
         } else if new_tab {
             cx.emit(ExplorerEvent::OpenInNewTab(row.path));
+        } else if self.active.as_deref() == Some(row.path.as_str()) {
+            self.focused = Some(row.path);
+            window.focus(&self.focus_handle, cx);
+            cx.notify();
         } else {
+            self.focused = Some(row.path.clone());
             cx.emit(ExplorerEvent::Open(row.path));
         }
     }
@@ -885,10 +1091,12 @@ impl FileExplorer {
         cx: &mut Context<Self>,
     ) -> Vec<gpui::Stateful<gpui::Div>> {
         let theme = cx.global::<Theme>().clone();
+        let focused_ix = self.focused_ix();
         range
             .filter_map(|ix| {
                 let row = self.tree.row(ix)?;
                 let active = self.active.as_deref() == Some(row.path.as_str());
+                let focused = focused_ix == Some(ix);
                 let marker = row.is_folder.then(|| {
                     if self.tree.is_collapsed(&row.path) {
                         "chevron-right"
@@ -912,8 +1120,17 @@ impl FileExplorer {
                         .flex()
                         .flex_row()
                         .items_center()
-                        .pl(px(8. + row.depth as f32 * 14.))
-                        .pr_2()
+                        // The 2 px border is the keyboard's ring (Obsidian's
+                        // `has-focus`), transparent on every other row so the
+                        // text does not move when the ring arrives.
+                        .border_2()
+                        .border_color(if focused {
+                            theme.border_focus
+                        } else {
+                            gpui::transparent_black()
+                        })
+                        .pl(px(6. + row.depth as f32 * 14.))
+                        .pr(px(6.))
                         .rounded(px(8.))
                         .cursor_pointer()
                         .text_size(px(13.))
@@ -926,10 +1143,12 @@ impl FileExplorer {
                         })
                         .when(active, |d| d.bg(theme.bg_active))
                         .hover(|s| s.bg(theme.bg_alt).text_color(theme.text))
-                        .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
-                            let modifiers = event.modifiers();
-                            this.click(ix, modifiers.control || modifiers.platform, cx)
-                        }))
+                        .on_click(
+                            cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                                let modifiers = event.modifiers();
+                                this.click(ix, modifiers.control || modifiers.platform, window, cx)
+                            }),
+                        )
                         .on_mouse_down(
                             MouseButton::Right,
                             cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
@@ -984,6 +1203,17 @@ impl Render for FileExplorer {
             .size_full()
             .flex()
             .flex_col()
+            .key_context("Explorer")
+            .track_focus(&self.focus_handle)
+            .on_action(cx.listener(Self::focus_up))
+            .on_action(cx.listener(Self::focus_down))
+            .on_action(cx.listener(Self::focus_left))
+            .on_action(cx.listener(Self::focus_right))
+            .on_action(cx.listener(Self::activate))
+            .on_action(cx.listener(Self::toggle_folder))
+            .on_action(cx.listener(Self::leave_tree))
+            .on_action(cx.listener(Self::rename_focused))
+            .on_action(cx.listener(Self::delete_focused))
             .child(header)
             .child(
                 uniform_list("file-explorer", count, cx.processor(Self::render_rows))

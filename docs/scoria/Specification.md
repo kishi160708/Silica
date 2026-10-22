@@ -2867,6 +2867,46 @@ The root tab: `.workspace-tab-header` 200 by 34.3 (`--tab-width` 200, `--tab-max
 padded `1px 4px 4px`, radius `10px 10px 0 0`, the active one in `--background-primary`; its title
 13 px; its close button 20 by 20 padded 2 px with an 8 px radius (`lucide-x`); the new-tab button
 24 wide (`lucide-plus`) with margin `0 4px 0 8px`; the tab list button `lucide-chevron-down`.
+Inside the tab, `.workspace-tab-header-inner` is the box the 1/4/4 padding leaves: 192 by 29.3,
+padded `0 3px 0 6px` with a 2 px gap, radius 4 px (`--tab-radius`). **Hover** paints that inner
+box, not the tab: `--background-modifier-hover` (white at 6.7 percent in dark, black at 6.7 percent
+in light) on the 4 px-rounded inner box, so the wash sits 1 px below the tab's top and 4 px in from
+its sides and bottom, while the tab's own 10 px top corners stay unpainted. The title's colour does
+not change on hover (`--tab-text-color-focused`, #b3b3b3, before and after), the close button
+appears (`display: none` → `flex`) and, under the pointer itself, draws no wash of its own, only
+its cross going from `--text-muted` to `--text-normal`. The active tab shows nothing on hover: its
+inner box stays transparent. Between two inactive tabs a divider: the inner box's `::after`, a 1 px
+line 15 px tall 8 px below the tab's top, at the tab's **right** edge straddling the gap
+(`right: -0.5px`), in `--tab-divider-color` (#3f3f3f dark, #dadada light). The active tab's is
+`opacity: 0`, and the one on the tab before the active tab is painted over by the active tab, so
+the first gap and the two around the active tab are bare. Hover changes no divider: both lines
+beside a hovered tab stay, the wash stopping 4 px short of them. (Read over CDP on 2026-10-22,
+`tools/obsidian-probe/results/2026-10-22-tab-hover.json`, both themes; the earlier note here that a
+hovered tab hides its divider, and the #555555 measured off a screenshot, were wrong.) The dock
+tabs hover the same way: the hovered 28 by 25 tab's inner box takes `--background-modifier-hover`
+at the 4 px radius, the active one carries the same wash at rest.
+
+**The strip's right end** (read over CDP on 2026-10-22,
+`tools/obsidian-probe/results/2026-10-22-tab-list.json`). After the last tab comes the new-tab
+button, `.workspace-tab-header-new-tab`: a 24 by 24 `clickable-icon` padded 4 px around the 16 px
+`lucide-plus`, at y 8.66 in the 40 px strip (so centred on the titles rather than on the 34 px
+tab), margin `0 4px 0 8px`. The last tab's own `::after` divider stays when the tab is inactive, so
+a hairline parts the tabs from the button. Then the spacer, then the tab-list button
+`.workspace-tab-header-tab-list`, the same 24 px `clickable-icon` around `lucide-chevron-down` at
+y 8.66 with margin `0 2px 0 0`, and, with the right sidebar collapsed, the sidebar toggle, a 28 by
+24 `clickable-icon` padded `4px 6px` at y 8. Clicking the chevron opens `.menu.mod-tab-list` at the
+pointer: `--background-secondary`, 8 px radius, a 0.69 px `--background-modifier-border` border,
+three shadows, padded 6 px; rows 24.9 px tall padded `4px 8px`, 4 px radius, an 8 px gap between
+the 16 px icon and the 13 px `--text-normal` title, `--background-modifier-hover` under the pointer;
+separators 0.69 px with margin `6px -6px`, so they run the menu's full width. The rows: **Stack
+tabs** (`lucide-layers`, section `action`; reads **Unstack tabs** once the group is stacked,
+`mod-stacked` on `.workspace-tabs`), **Bookmark N tabs...** (`lucide-bookmark`, N the tabs with a
+file, absent when none has one; opens the "Add N bookmarks" modal with a Title field whose
+placeholder is the current date and time, and Cancel / Save), a separator, **Close all**
+(`lucide-x`, section `close`; every tab in the group closes and, in the window's only group, one
+empty "New tab" is left active), a separator, then one row per tab (`lucide-file`, section
+`tablist`, the tab's title) with `mod-checked` and a trailing check on the group's active tab;
+picking a row activates that tab. Escape closes the menu.
 Explorer rows: `.nav-file-title` 24.9 px tall padded `4px 8px 4px 24px`, margin-bottom 2 px, radius
 8 px, 13 px text, muted until active (then `--text-normal` on the hover wash); `.nav-header` 40 px
 padded 8 px with a 2 px gap of 28 by 24 buttons. The status bar is a tab in the window's bottom right
@@ -2886,6 +2926,29 @@ so it goes with it when the sidebar collapses, and it is there whether or not th
 Its exact padding and the switcher's hover shape are still to be read over CDP;  draws the row
 40 px tall, padded 8 px, its buttons the ribbon's 28 by 24, and runs `app:open-vault` from the name,
 `app:open-help` from Help and `app:open-settings` from the gear.
+
+**The vault switcher.** `app:open-vault` ("Manage vaults") and `app:switch-vault` drop a menu up from
+the name: every vault this machine has opened, most recent first with a check on the one showing (a
+folder that is gone is listed faint and says so when clicked), a hairline, then "Open vault..."
+(`app:open-another-vault`, the desktop's folder picker) and "Open sandbox vault"
+(`app:open-sandbox-vault`). A click outside closes it. The list is Obsidian's `obsidian.json`
+document — `{"vaults": {<16 hex digits>: {"path", "ts", "open"}}}`, `ts` in Unix milliseconds,
+`open` on the vault a window shows — written as `.json` under `~/.config/` (Linux),
+`%APPDATA%\` (Windows) or `~/Library/Application Support/` (macOS), or
+`$SCORIA_CONFIG_DIR`; unknown keys survive a rewrite. Every vault loaded goes on the list except the
+sandbox, which is a fresh ` Sandbox <ms>` folder under the temporary directory holding a
+`Welcome.md` and an `Another note.md`, opened on `Welcome`. Switching puts the vault that was open
+away as quitting would (the note's edits and `workspace.json` written if the session changed them),
+closes every tab group, and restores the next vault from its own `workspace.json`. The menu's rows
+are 's reading of the screenshot; Obsidian's own vault switcher is still to be probed.
+
+**The Help window.** `app:open-help` and the footer's Help open a window of Obsidian's shape rather
+than the browser (seen in a screenshot of 1.14.4, 2026-10-21): the mark, the name, "Version x.y.z",
+then a card of rows, each an icon on the left, a title over a line of explanation, and a button on
+the right — Obsidian's are the help site (an accent "Visit"), Discord ("Join"), the forum ("Visit")
+and the sandbox vault ("Open"). 's four are the manual (, accent "Visit"), the source,
+the issue tracker and the sandbox vault; the window is 700 by 860 with the desktop's own frame,
+Escape closes it, and opening help again brings the one up forward.
 
 **Icons named in the DOM** (`svg.lucide-*`, so  draws the same Lucide drawings from Lucide's
 own repository): ribbon `file-search` (switcher), `git-fork` (graph), `layout-dashboard` (canvas),
@@ -3143,3 +3206,54 @@ than inline rename, and the search filter is not built.
 ( paints the accent on the hover wash); whether a visible row of the
 open file is `is-active` with auto-reveal off ( highlights it); the
 menu's position relative to the button.
+
+## Observed file explorer keyboard behavior, Obsidian 1.14.4 (installer build 1.13.7)
+
+Read from a running Obsidian on Linux over CDP on 2026-10-21 with
+`tools/obsidian-probe/explorer-keyboard.mjs` (raw run in
+`tools/obsidian-probe/results/2026-10-21-explorer-keyboard.json`), on a scratch
+vault of seven notes in three folders. The pane's `tree` object exposes
+`focusedItem`, and one `.tree-item-self` carries `has-focus` for it.
+
+**Getting the keyboard into the tree.** `file-explorer:reveal-active-file`
+expands to the open file, marks its row `has-focus` and makes the explorer
+the active leaf; `file-explorer:open` makes the explorer the active leaf and
+leaves `has-focus` where it was (or nowhere). A click on a row that opens a
+file gives the keyboard to the editor (`cm-content` is the active element,
+the explorer is not the active leaf, and the arrows then move the caret); a
+click on the row of the file that is already open puts `has-focus` on it with
+the explorer active; a click on a folder toggles it, makes the explorer
+active and sets no `has-focus` — but the keyboard position is that folder:
+Down then lands on the row under it.
+
+**The keys**, with `has-focus` on a row and the explorer active:
+
+| Key | On a file | On a folder |
+| --- | --- | --- |
+| Down / Up | the next / previous visible row, clamped at both ends; the file does not open | the same |
+| Enter | opens the file; the keyboard goes to the editor; the row keeps `has-focus` and gains `is-active` | toggles the folder |
+| Space | nothing | toggles the folder |
+| Right | — (not probed) | collapsed: expands it, ring stays; open: the ring moves to its first child |
+| Left | the ring moves to the parent folder, which collapses | open: collapses it, ring stays; collapsed at the root: nothing |
+| Home / End / PageUp | nothing | nothing |
+| Escape | the keyboard goes to the editor; the row keeps `has-focus` | — |
+| F2 | inline rename of the row (`tree-item-inner` becomes the active element, contenteditable) | — |
+| Delete | the "Delete file" dialog: "Are you sure you want to delete “Alpha.md”? It will be moved to your system trash." — Cancel / Delete, Delete focused | — |
+| a letter, Tab | nothing | — |
+
+Ctrl+Enter on the already-open file put the keyboard in the editor, like Enter.
+
+**The ring.** `.tree-item-self.has-focus`: `box-shadow: 0 0 0 2px rgb(85, 85, 85)`
+in the dark theme (`--background-modifier-border-focus`), the text at
+`--text-normal`; with `is-active` as well, the hover wash behind it.
+
+ implements this since 2026-10-21 ([[Development#Explorer keyboard, 2026-10-21]]):
+an "Explorer" key context on the tree with Up, Down, Left, Right, Enter,
+Space, Escape, F2 (the rename prompt) and Delete (the delete prompt); the
+ring is a 2 px border; the two commands and the three kinds of click focus as
+above; with no ring on a visible row, Down and Up start from the open file's
+row, or the first. The socket's `focus` method takes `explorer`.
+
+**Unprobed:** Right on a file; where Down starts with no `focusedItem` at
+all; the light theme's ring colour ( uses `#c0c0c0`); whether Up or
+Down from a hidden `focusedItem` (its folder since collapsed) starts over.

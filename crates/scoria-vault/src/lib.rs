@@ -2,8 +2,10 @@
 //! reads `.obsidian` configuration without ever owning data outside the folder.
 
 pub mod ops;
+pub mod registry;
 
 pub use ops::{OpError, TrashOption};
+pub use registry::{VaultEntry, VaultRegistry};
 use _cache::LinkResolver;
 use _formats::bookmarks::Bookmarks;
 use _formats::config::{

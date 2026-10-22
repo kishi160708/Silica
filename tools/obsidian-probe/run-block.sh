@@ -19,8 +19,11 @@ LOG=$(mktemp)
 # is swallowed by the single-instance lock of the survivor.
 PGREP='^/nix/store/[^ ]*electron( --[^ ]*)* /nix/store/[^ ]*obsidian'
 
+# Only an Obsidian this run launched is killed on the way out: refusing to
+# start because one was already running must not close that one.
+LAUNCHED=0
 restore() {
-  if pgrep -f "$PGREP" >/dev/null; then pkill -f "$PGREP" || true; sleep 2; fi
+  if [ "$LAUNCHED" = 1 ] && pgrep -f "$PGREP" >/dev/null; then pkill -f "$PGREP" || true; sleep 2; fi
   command cp -f "$BACKUP" "$CFG"; rm -f "$BACKUP"
   echo "[run-block] obsidian.json restored; vault left at $VAULT; obsidian log $LOG" >&2
 }
@@ -50,6 +53,7 @@ PY
 
 # Launch, wait for a booted vault window, and refuse to proceed unless it is OUR vault.
 launch_once() {
+  LAUNCHED=1
   nohup obsidian --remote-debugging-port=9222 >>"$LOG" 2>&1 &
   node -e "
     import('$(dirname "$SCRIPT")/cdp.mjs').then(async (m) => {

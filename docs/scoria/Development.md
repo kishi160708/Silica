@@ -228,10 +228,100 @@ of mixed use in both apps. The gate run opened on 2026-10-18, see
 | Round-trip harness | done, see [[#Round-trip harness, 2026-10-18]] |
 | Canvas writer | done: the bytes Obsidian writes on an edited save, see [[#Canvas writer, 2026-10-19]]; the canvas view saves through it |
 | Canvas view | done: a `.canvas` opens in the main area, pans, zooms, selects, moves, resizes, draws edges, colours, groups, copies, pastes and undoes, cards are typed into, the menus, controls and commands are Obsidian's, and it autosaves in Obsidian's bytes, see [[#Canvas view, 2026-10-21]] and [[#Canvas view, measured, 2026-10-21]] |
-| Tab groups | done: Split right, Split down, the four focus commands, draggable dividers and `workspace.json`'s `main` tree, see [[#Tab groups, 2026-10-20]]; tabs drag between groups and onto split edges, see [[#Dragging tabs, 2026-10-21]] |
+| Tab groups | done: Split right, Split down, the four focus commands, draggable dividers and `workspace.json`'s `main` tree, see [[#Tab groups, 2026-10-20]]; tabs drag between groups and onto split edges, see [[#Dragging tabs, 2026-10-21]]; the strip's hover is Obsidian's inner box, see [[#Tab hover, 2026-10-22]] |
 | Bookmarks | done: the pane, the seven commands and `bookmarks.json` in Obsidian's bytes, see [[#Bookmarks, 2026-10-20]] |
-| Files header | done: New note, New folder, the six sort orders, Auto-reveal current file and Expand all / Collapse all, see [[#Files header, 2026-10-21]] |
+| Files header | done: New note, New folder, the six sort orders, Auto-reveal current file and Expand all / Collapse all, see [[#Files header, 2026-10-21]]; the tree takes the keyboard, see [[#Explorer keyboard, 2026-10-21]] |
 | The gate itself | open: the harness passes on the real vault, the week of mixed use has not run, see [[#The gate run opens, 2026-10-18]] |
+
+### The active tab joins the view, 2026-10-22
+
+The tab strip drew its outline as a bottom border, which ran under the active tab
+too and cut it off from the view header. The outline is now a 1 px hairline laid
+along the strip's bottom edge: the active tab reaches that edge and paints over it,
+so it joins the header below in one colour, and the other tabs stop a pixel short
+and keep the line under them, as Obsidian's root tabs do. The join has Obsidian's
+feet too: outside each bottom corner a 10 px region (the top radius again) between the
+tab's edge, the strip's bottom and a quarter-circle, painted as a path in the tab's
+colour so the tab's edge curves out into the header. Only that region is painted: a
+first cut covered the square with a strip-coloured rounded block, which showed as a
+square whenever the neighbouring tab's hover wash lit up under it. They are painted
+deferred so that wash stays underneath the curve.
+
+### Tab hover, 2026-10-22
+
+ washed the whole 34 px tab outline on hover; Obsidian washes a smaller rounded
+box inside it. Probed over CDP first (`tools/obsidian-probe/tab-hover.mjs`, four tabs,
+each hovered in turn, the close button, the active tab and a dock tab, both themes,
+with a screenshot of the strip per state): the tab is padded `1px 4px 4px` around
+`.workspace-tab-header-inner`, a 4 px-rounded box padded `0 3px 0 6px`, and hover
+paints `--background-modifier-hover` on that inner box only. The title keeps its
+colour, the close button appears and brightens its cross under the pointer without a
+wash of its own, the active tab shows nothing, and no divider hides: the divider is
+the inner box's `::after` at the tab's right edge in `--tab-divider-color` (#3f3f3f
+dark, #dadada light), bare only around the active tab. Two earlier notes fell: the
+spec's "a hovered tab hides its own divider" and its #555555, both read off a
+screenshot. Findings in [[Specification#Observed shell typography and chrome, Obsidian 1.14.4 (installer build 1.13.7)]]'s "Chrome"
+paragraph; raw data in `results/2026-10-22-tab-hover.json`.
+
+Built: `render_tab_strip` pads the tab 1/4/4 and puts the title and close button in
+an inner box that takes `bg_alt` through `group_hover("tab")` when the tab is not
+active; the divider no longer hides on hover; the close button lost its hover disc
+and its cross goes `text_muted` → `text` through a `tab-close` group; `tab_divider`
+is now the measured token in both themes. Seen over the control socket at 1.45x:
+the hovered tab's wash is a box inset from its outline, measured at gray 54 over the
+strip's gray 40, which is 6.7 percent white, the lines on both sides of it still
+there, nothing on the active tab. The strip's 2 px gap between tabs went the same day:
+Obsidian's tabs touch, and with the gap the divider on a tab's left edge sat 6 px from
+the box on its left and 3 px from the one on its right. The tabs now touch, the line
+straddles the edge (`left(-0.5)`), and at 1.45x it measured 6 device pixels from the
+hovered box on either side; the new-tab button keeps its 8 px by margin.
+
+The strip's right end followed (`tools/obsidian-probe/tab-list.mjs`, findings in the
+spec's "The strip's right end"). Three changes: the divider moved to each inactive tab's
+right edge, Obsidian's `::after`, so a hairline now parts the last inactive tab from the
+new-tab button; the new-tab button, the tab-list button and the sidebar toggles sit at
+Obsidian's y 8.66 and y 8 (margins 7 and 8 under the strip's bottom) instead of 5, which
+puts them on the titles' line, measured at 1.45x as plus, chevron and titles all centred
+on logical y 45.5; and the strip gained the tab-list button, `chevron-down`, whose menu
+is Obsidian's: Stack tabs (runs `workspace:toggle-stacked-tabs`, which  still
+reports as not available), Bookmark N tabs... (the group's tabs with a file, through
+`BookmarkDraft::Tabs`), Close all (`close_group`), then a row per tab with a check on the
+active one. Two more Lucide icons came in for it, `layers` and `file`. The menu hangs off
+a `relative` wrapper around the button like the explorer's sort menu; a wrapper lays the
+anchored menu out *below* the button, so the offset is the 2 px gap, not the button's
+height.
+
+A regression on the way, caught by the user: once the divider moved to the tab's right
+edge, the next tab, painted later with an opaque background, covered the half of the
+line astride the edge, and whether any sliver survived depended on where the edge fell
+between device pixels at 1.45x. One line showed, its neighbour did not. The divider is
+now `deferred`, like the active tab's feet, so it paints after every tab.
+
+### Explorer keyboard, 2026-10-21
+
+Probed first again: `tools/obsidian-probe/explorer-keyboard.mjs` found that a click
+which opens a file hands the keyboard to the editor — so the first run's arrow keys
+all landed in the editor — and the second run entered the tree through
+`reveal-active-file` instead. The findings are
+[[Specification#Observed file explorer keyboard behavior, Obsidian 1.14.4 (installer build 1.13.7)]]:
+arrows walk the visible rows without opening anything, Enter opens, Right opens a
+folder or steps into it, Left climbs to the parent and closes it, Escape goes back
+to the editor, F2 renames and Delete asks.
+
+Built: `FileExplorer` holds a `FocusHandle` under an "Explorer" key context, with
+the row the keyboard is on kept by path (`focused`, a 2 px border in
+`border_focus`, the new theme colour). `file-explorer:open` focuses the tree where
+it was, `reveal-active-file` puts the ring on the open file; a folder click or a
+click on the open file's row focuses the tree, and an `Open` from a row or Enter
+hands the keyboard to the main area through `focus_main`, since `request_focus_main`
+only moves a parked keyboard. The socket's `focus` method and the MCP tool take
+`explorer`, and the state dump's `explorer` carries `focused`. Seen over the control
+socket: six Ups from Alpha to a folder, Right opening it and Right again ringing its
+first child, Escape back to the editor, Enter opening the next row with the editor
+focused, Left at the root doing nothing and F2 opening the rename prompt.
+
+Also on the way: `run-block.sh` killed whatever Obsidian was running when it refused
+to start because one was running. It now only kills the one it launched.
 
 ### Files header, 2026-10-21
 
