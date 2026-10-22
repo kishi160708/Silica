@@ -486,35 +486,42 @@ struct Layout {
 
 /// Vertical scrollbar geometry in window coordinates. Positions are
 /// line-based: the thumb sits at the first visible line's share of the
-/// note and is as tall as the visible lines' share, so no full layout pass
-/// is ever needed.
+/// lines the view can start at, and is as tall as the share of lines the
+/// last screenful holds, so no full layout pass is ever needed. Both are
+/// fixed for a given note and view, so the thumb keeps its size as it
+/// moves; the lines on screen at any one scroll position are not (wrapped
+/// lines and widgets come and go) and must not drive it.
 #[derive(Debug, Clone, Copy)]
 struct Scrollbar {
     track: Bounds<Pixels>,
     thumb: Bounds<Pixels>,
-    /// Lines the thumb can be dragged across: the count minus the visible ones.
+    /// Lines the thumb can be dragged across: the last line the view can
+    /// start at before the note's end reaches its bottom.
     scrollable_lines: usize,
 }
 
 impl Scrollbar {
-    /// Lays the thumb out for `first` as the first visible of `count`
-    /// lines with `visible` of them on screen; `None` when everything fits.
+    /// Lays the thumb out for a view starting `first` lines (fractional,
+    /// for the part of a line scrolled off the top) into `count` lines,
+    /// where `last_top` is the last line the view can start at; `None`
+    /// when everything fits.
     fn layout(
         track: Bounds<Pixels>,
         count: usize,
-        first: usize,
-        visible: usize,
+        first: f32,
+        last_top: usize,
         fits: bool,
     ) -> Option<Scrollbar> {
-        if fits || count <= visible || track.size.height <= px(0.) {
+        if fits || last_top == 0 || count <= last_top || track.size.height <= px(0.) {
             return None;
         }
         let track_h = track.size.height;
-        let thumb_h = (track_h * (visible as f32 / count as f32))
+        let end_lines = count - last_top;
+        let thumb_h = (track_h * (end_lines as f32 / count as f32))
             .max(px(SCROLLBAR_MIN_THUMB))
             .min(track_h);
-        let scrollable_lines = count - visible;
-        let frac = (first as f32 / scrollable_lines as f32).clamp(0., 1.);
+        let scrollable_lines = last_top;
+        let frac = (first / scrollable_lines as f32).clamp(0., 1.);
         let top = track.origin.y + (track_h - thumb_h) * frac;
         let inset = px(3.);
         Some(Scrollbar {
@@ -1395,6 +1402,27 @@ impl Editor {
         } else {
             40
         }
+    }
+
+    /// The last line the view can start at: scrolled there, the note's end
+    /// sits at the bottom of the view (what `clamp_scroll_end` enforces).
+    /// Zero when the whole note fits. Walks back from the end over one
+    /// screenful of lines, so it costs what the visible lines do.
+    fn last_top_line(&self, window: &mut Window) -> usize {
+        let h = self.layout.bounds.size.height;
+        if h <= px(0.) {
+            return 0;
+        }
+        let mut filled = px(0.);
+        let mut line = self.line_count();
+        while line > 0 {
+            line -= 1;
+            filled += self.height_of(window, line);
+            if filled >= h {
+                return line;
+            }
+        }
+        0
     }
 
     // ----- scrolling -----------------------------------------------------------
@@ -4552,7 +4580,6 @@ impl Element for EditorElement {
                 y += height;
                 line += 1;
             }
-            let visible_lines = line - scroll_line;
             for w in &widgets {
                 let height = w.bounds.size.height;
                 let previous = editor.widget_heights.insert(w.lines.start, height);
@@ -4597,7 +4624,24 @@ impl Element for EditorElement {
                 ),
                 size(px(SCROLLBAR_WIDTH), bounds.size.height),
             );
-            let scrollbar = Scrollbar::layout(track, count, scroll_line, visible_lines, fits);
+            // The part of the first line scrolled off the top moves the
+            // thumb between lines, so it does not step.
+            let first = lines
+                .first()
+                .filter(|(v, _)| v.line == scroll_line)
+                .map(|(v, _)| v.row_height * v.rows as f32)
+                .or_else(|| {
+                    widgets
+                        .first()
+                        .filter(|w| w.visible.line == scroll_line)
+                        .map(|w| w.bounds.size.height)
+                })
+                .filter(|height| *height > px(0.))
+                .map_or(scroll_line as f32, |height| {
+                    scroll_line as f32 + (scroll_px / height).clamp(0., 1.)
+                });
+            let last_top = editor.last_top_line(window);
+            let scrollbar = Scrollbar::layout(track, count, first, last_top, fits);
             Prepaint {
                 lines,
                 hitbox,

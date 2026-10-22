@@ -2325,9 +2325,14 @@ item (or every selected line) by one step, a tab or `tabSize` spaces per
 prefix parser and the rules as pure functions with tests.
 
 The vertical scrollbar is line-based like the scroll position: the thumb
-sits at the first visible line's share of the note and is as tall as the
-visible lines' share, so it never needs the height of every line. Dragging
-it or clicking the track scrolls to that line.
+sits at the first visible line's share of the lines the view can start at
+(the last of them is found by walking one screenful back from the end) and
+is as tall as the share of lines that last screenful holds, so it never
+needs the height of every line. Both shares are fixed for a note and a
+view, which keeps the thumb the same size as it moves; the lines on screen
+at one scroll position vary with wrapping and widgets and would make it
+breathe. The part of the first line scrolled off the top moves the thumb
+between lines. Dragging it or clicking the track scrolls to that line.
 
 ### Live Preview, 2026-10-16
 
