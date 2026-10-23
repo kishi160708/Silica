@@ -42,7 +42,8 @@ lib/template.mjs       the page shell: top bar, sidebar, on-this-page, pager, fo
 shared/                copied into /assets — site.css, site.js, Fira fonts
 sites//site.json host, nav, sidebar order, footer, the CTA button
 sites//content/  the pages; .md is rendered, .html is passed through
-sites//assets/   logo.svg, favicon.svg, .css and Inter, over shared/
+sites//assets/   logo.svg, favicon.svg, .css, platform.js and Inter, over shared/
+sites//assets/img/app/  the README's recordings, copied by `just site-media`
 dist//           the output to deploy (gitignored)
 ```
 
@@ -99,6 +100,26 @@ pyftsubset ../crates//assets/fonts/Inter-Regular.ttf --unicodes="$U" \
   --layout-features=kern,liga,calt,tnum,ccmp,mark,mkmk \
   --flavor=woff2 --output-file=sites//assets/fonts/inter-400.woff2
 ```
+
+## The recordings
+
+`assets/img/app/` is a copy of `docs/img/app/` in this repository — the GIFs and screenshots
+the README is illustrated with, made by `tools/readme-recording` over the control socket. The
+builder publishes what is under `assets/`, so they have to live here too; `just site-media`
+from the repository root re-cuts the copy, the way the logo's copies are re-cut from the
+master. Change a recording at the source, not here.
+
+They are 3.5 MB together and every one is `loading="lazy"` with its intrinsic `width` and
+`height` in the markup, so a page costs its text until the reader scrolls to the figure, and
+nothing reflows when the bytes land. `figure.shot` in `.css` is what styles them.
+
+## The one script
+
+`assets/platform.js` (listed in `site.json`'s `scripts`) points the download buttons at the
+visitor's platform: it rewrites the `[data-dl-main]` button's href and label, and marks the
+matching `.dl-grid` card `[data-you]`. Every address in the markup is already a working direct
+download and Linux is what ships in the HTML, so with JavaScript off the pages stand as
+written. Android and iOS deliberately match nothing — there is no build for either.
 
 ## The marks
 

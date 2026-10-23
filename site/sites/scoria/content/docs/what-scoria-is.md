@@ -25,9 +25,10 @@ are actually relying on:
    Delete  and the vault is untouched.
 
 2. **It never writes a file it did not change.** Opening a vault writes nothing. Browsing
-   writes nothing. Reading your settings writes nothing — Settings is deliberately
-   read-only at present, because Obsidian rewrites an entire settings file on every change
-   and that is a thing to get right rather than quickly.
+   writes nothing. Opening Settings writes nothing — a setting is written only when you
+   change it, and then  writes the file the way Obsidian writes it, because Obsidian
+   rewrites an entire settings file on every change and that was a thing to get right
+   rather than quickly.
 
 3. **When it does write, it changes only what you changed.** A file's byte-order mark and
    its line endings are remembered at load and restored on save. Unknown keys in a JSON or
@@ -65,7 +66,7 @@ live in your notes, that difference is felt hourly.
 
 ## Who it is for, today
 
-At version 0.2.1, honestly:
+At version 0.3.2, honestly:
 
 - **Good fit now:** reading and searching a vault you maintain in Obsidian; browsing a large
   vault where a native reader is simply nicer; anyone who wants a second implementation to
@@ -73,8 +74,8 @@ At version 0.2.1, honestly:
 - **Workable with care:** editing notes, with a backup and preferably after a round-trip
   test on a scratch copy. The editor is real — Live Preview, Source mode, find and replace,
   multiple cursors, link-rewriting renames — but it is the newest code in the project.
-- **Not yet:** anyone who needs Canvas, Bases, rendered math, community plugins, themes, or
-  settings they can change from inside the app.
+- **Not yet:** anyone who needs Bases, rendered math, Mermaid diagrams, PDFs, community
+  plugins or CSS themes.
 
 ## Where to go next
 

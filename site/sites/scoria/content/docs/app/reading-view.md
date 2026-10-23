@@ -34,6 +34,16 @@ use, so what you read and what the cache believes cannot disagree.
 | Frontmatter | As a properties block at the top of the note |
 | Footnotes | Numbered by order of first reference, collected at the end |
 
+<figure class="shot">
+  <img src="/assets/img/app/media.gif" width="1000" height="667" loading="lazy" decoding="async"
+       alt="Notes with embedded photographs and SVG charts, an image file opened in its own tab, a canvas zoomed in from the whole diagram to its text cards, note embeds and image nodes joined by labelled edges, then the graph view settling.">
+  <figcaption>
+    Photographs and SVG charts embedded with <code>![[file|width]]</code>, an image opened as
+    its own tab, a <code>.canvas</code> with text cards, note cards and image nodes joined by
+    labelled edges, and the graph view laying the vault out.
+  </figcaption>
+</figure>
+
 ## Clicking things
 
 - **A wikilink or Markdown link to a note** opens it.
@@ -75,7 +85,7 @@ The gaps, honestly — none of these are in reading view today:
 | Math (`$x$`, `$$x$$`) | The source text, unrendered |
 | HTML in a note | The tags as literal text |
 | Remote images (`https://…`) | Nothing; local images work |
-| Canvas and Bases files | The file is recognized but does not open |
+| Bases (`.base`) | The format round-trips on disk, but there is no base view. A `.canvas` does open, in a canvas view of its own |
 | Heading folding | Headings do not collapse |
 | Toggling a task checkbox | Checkboxes render but are not clickable here — toggle them in [Live Preview](/docs/app/editing/) |
 | Copy buttons on code blocks | Select and copy |

@@ -28,7 +28,25 @@ operators (`line:`, `block:`, `section:`, `task:`) are where the grammar earns i
 because they let you ask for two words *in the same line* rather than merely in the same
 note.
 
+<figure class="shot">
+  <img src="/assets/img/app/search.gif" width="1000" height="667" loading="lazy" decoding="async"
+       alt="The quick switcher matching a note as its name is typed, then the Search pane filling with grouped, highlighted results as a query is typed, a result opening at its match, then the Tags and Backlinks panes.">
+  <figcaption>
+    The quick switcher's fuzzy match, then Search grouping hits by note with every match
+    highlighted and opening one at its line, the Tags pane with nested tags and counts, and a
+    note's backlinks.
+  </figcaption>
+</figure>
+
 ## Reading the results
+
+<figure class="shot">
+  <img src="/assets/img/app/search.png" width="1600" height="1067" loading="lazy" decoding="async"
+       alt="The Search pane with a one-word query, showing results grouped by note with the matches highlighted.">
+  <figcaption>
+    One query, grouped by note with a count per file and every match highlighted in its line.
+  </figcaption>
+</figure>
 
 Results are grouped per file: a row with the file's name and its match count, and under it a
 card of the matching lines with the matched text highlighted. Click a line and the note opens

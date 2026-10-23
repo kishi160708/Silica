@@ -8,12 +8,15 @@
   "mark": "/assets/logo.svg",
   "cta": { "text": "Download", "url": "/download/" },
   "styles": ["/assets/.css"],
+  "scripts": ["/assets/platform.js"],
   "nav": [
     { "text": "Manual", "url": "/docs/" },
+    { "text": "Releases", "url": "/releases/" },
     { "text": "Download", "url": "/download/" }
   ],
   "footerLinks": [
     { "text": "Manual", "url": "/docs/" },
+    { "text": "Releases", "url": "/releases/" },
     { "text": "Download", "url": "/download/" },
     { "text": "Source", "url": "https://github.com/lw-xiong/" },
     { "text": "Legal", "url": "/legal/" },

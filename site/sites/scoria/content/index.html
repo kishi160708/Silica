@@ -5,7 +5,7 @@ description:  is a native knowledge base written in Rust that opens Obsidian vau
 ---
 <section class="hero">
   <img class="mark" src="/assets/logo.svg" alt="" width="189" height="156">
-  <span class="badge pre">Early days · v0.2.1 · reading is solid, writing is young</span>
+  <span class="badge pre">Early days · v0.3.2 · reading is solid, writing is young</span>
   <h1>Your vault, opened natively.</h1>
   <p class="lede">
      is a knowledge base written in Rust that opens an
@@ -15,15 +15,69 @@ description:  is a native knowledge base written in Rust that opens Obsidian vau
     of anything. It is an independent implementation, and it is not affiliated with Obsidian.
   </p>
   <div class="btn-row">
-    <a class="btn primary" href="/download/">Download for Linux, Windows, macOS</a>
-    <a class="btn" href="/docs/install/">Install and run</a>
+    <a class="btn primary" id="dl-main" href="https://github.com/lw-xiong//releases/latest/download/-linux-x86_64.tar.gz"
+       data-dl-main>Download for Linux</a>
+    <a class="btn" href="/download/">Windows and macOS</a>
     <a class="btn" href="/docs/">Read the manual</a>
   </div>
   <p class="dim small" style="margin-top:22px">
-    Free software under the MIT license, with the
+    Version 0.3.2, free software under the MIT license, with the
     <a href="https://github.com/lw-xiong/">source on GitHub</a>. Only the Linux build has
     been run on real hardware so far, and nothing is code signed — see
     <a href="#where-it-is">where it is</a> before you point it at a vault you care about.
+  </p>
+  <figure class="shot">
+    <img src="/assets/img/app/workspace.png" width="1600" height="1067" loading="lazy" decoding="async"
+         alt="The  window: the Files pane on the left, a note in Live Preview in the middle with a typed properties table and a photograph of a  sample, the Backlinks pane on the right, all inside a frameless window.">
+    <figcaption>
+      The three-pane shell on the field guide that ships with the repository: a typed properties
+      table, a photograph embedded with a width, and the note's backlinks. Obsidian's hidden
+      window frame, its palette, its type scale and its Lucide icons, read off a running copy
+      rather than guessed at.
+    </figcaption>
+  </figure>
+</section>
+
+<section class="band" id="get-it">
+  <h2>Get it</h2>
+  <p class="lede">
+    One archive per platform, built from the <code>v0.3.2</code> tag with a
+    <code>SHA256SUMS</code> file over all three. There is no installer and nothing to configure:
+    the archive holds a single binary, and the binary takes the path to your vault.
+  </p>
+  <div class="dl-grid">
+    <div class="dl" data-platform="linux">
+      <h3>Linux <span class="tag now">Tested</span></h3>
+      <p class="os">x86-64 · tar.gz · about 13 MB</p>
+      <a class="btn primary" href="https://github.com/lw-xiong//releases/latest/download/-linux-x86_64.tar.gz">Download</a>
+      <ul>
+        <li>The platform  is developed on, and the only one run on real hardware</li>
+        <li>Needs a Vulkan-capable driver; Wayland and X11 both work</li>
+      </ul>
+    </div>
+    <div class="dl" data-platform="windows">
+      <h3>Windows <span class="tag soon">Barely run</span></h3>
+      <p class="os">x86-64 · zip · about 9 MB</p>
+      <a class="btn" href="https://github.com/lw-xiong//releases/latest/download/-windows-x86_64.zip">Download</a>
+      <ul>
+        <li>Opens a vault and draws the hidden frame on Windows 11, but is not used daily</li>
+        <li>Unsigned: SmartScreen warns once — <em>More info › Run anyway</em></li>
+      </ul>
+    </div>
+    <div class="dl" data-platform="macos">
+      <h3>macOS <span class="tag soon">Unproven</span></h3>
+      <p class="os">Apple silicon · tar.gz · about 7 MB</p>
+      <a class="btn" href="https://github.com/lw-xiong//releases/latest/download/-macos-aarch64.tar.gz">Download</a>
+      <ul>
+        <li>Compiled and linked by CI, never started on real hardware</li>
+        <li>Not notarized: open it the first time with <em>right-click › Open</em></li>
+      </ul>
+    </div>
+  </div>
+  <p class="dim small" style="margin-top:18px">
+    Those three addresses always point at the newest release.
+    <a href="/releases/">What is in 0.3.2, and every release before it →</a> ·
+    <a href="/download/">Checksums, signatures and building from source →</a>
   </p>
 </section>
 
@@ -67,6 +121,15 @@ description:  is a native knowledge base written in Rust that opens Obsidian vau
     rewrite the links in a thousand notes and change nothing else in them, and why what you
     see while editing and what you see while reading cannot drift apart.
   </p>
+  <figure class="shot">
+    <img src="/assets/img/app/tour.gif" width="1000" height="667" loading="lazy" decoding="async"
+         alt="Scrolling a note in reading view past a table, a code block, a callout and a task list, expanding a folder in the Files pane, opening a note with an embedded photograph, then opening the Outline pane and jumping to a heading from it.">
+    <figcaption>
+      Reading view on the vault's home note — a table, a code block, a callout, tasks — then a
+      folder expanded in the Files pane, a rock's note with its photograph and an embedded
+      glossary entry, and the Outline pane jumping to a heading.
+    </figcaption>
+  </figure>
   <div class="stats">
     <div class="stat"><b>652/652</b><span>CommonMark 0.31.2 spec examples, byte-identical HTML</span></div>
     <div class="stat"><b>1007/1009</b><span>corpus notes rendering as Obsidian 1.13.7 renders them</span></div>
@@ -103,17 +166,20 @@ description:  is a native knowledge base written in Rust that opens Obsidian vau
       <h3>Editing, and notes that move</h3>
       <p>Live Preview and Source mode with soft wrap, find and replace, multiple cursors, smart
       lists and autosave. New note, rename, move, copy and delete all rewrite the links in the
-      rest of the vault the way Obsidian does, keeping each link's style and alias. Table
-      editing, properties, autocompletion and templates are next.</p>
+      rest of the vault the way Obsidian does, keeping each link's style and alias. Frontmatter
+      is a typed properties table, <code>[[</code> and <code>#</code> complete against the vault,
+      the sixteen table commands edit a table cell by cell, and templates, daily notes, tab
+      groups and bookmarks are in. What is left is the gate itself: a week of mixed use in both
+      apps with the vault still byte-identical.</p>
       <p style="margin-top:.8em"><a href="/docs/app/editing/">Editing a note →</a></p>
     </div>
     <div class="card">
-      <span class="k">Parity <span class="tag soon">Not started</span></span>
+      <span class="k">Parity <span class="tag soon">Started</span></span>
       <h3>Canvas, Bases, math, themes</h3>
-      <p>The on-disk formats for Canvas and Bases are implemented and round-trip, but nothing
-      draws them yet. MathJax, HTML in notes, remote images and PDF export are also still
-      ahead, as is the variable-level subset of Obsidian's CSS custom properties that makes
-      themes work.</p>
+      <p>A <code>.canvas</code> opens in the main area and pans, zooms, selects, moves, resizes,
+      draws edges and autosaves in Obsidian's bytes. Bases round-trip on disk but have no view
+      yet, and MathJax, HTML in notes, remote images and PDF export are still ahead, as is the
+      variable-level subset of Obsidian's CSS custom properties that makes themes work.</p>
       <p style="margin-top:.8em"><a href="/docs/reference/differences/">What differs →</a></p>
     </div>
     <div class="card">
@@ -167,7 +233,7 @@ description:  is a native knowledge base written in Rust that opens Obsidian vau
 <section class="band" id="where-it-is">
   <h2>Where it is, plainly</h2>
   <p class="notice">
-    <strong> is v0.2.1 and the writing half is mid-flight.</strong> Keep a backup of any
+    <strong> is v0.3.2 and the writing half is mid-flight.</strong> Keep a backup of any
     vault you open with it, and if the vault matters, let  read it and let Obsidian write
     it until the round-trip gate is met. Reading a vault is well covered; editing is newer code
     against files you cannot get back.
@@ -189,13 +255,14 @@ description:  is a native knowledge base written in Rust that opens Obsidian vau
     <div class="card">
       <span class="k">Not yet</span>
       <h3>Known gaps</h3>
-      <p>Math renders as its source, HTML in a note shows as text, remote images do not load,
-      Canvas and Bases files do not open, and Settings is read-only — Obsidian rewrites a whole
-      settings file on every change, so writing them waits for the round-trip gate.</p>
+      <p>Math renders as its source, HTML in a note shows as text, remote images and Mermaid
+      diagrams do not load, a <code>.base</code> file does not open, and there is no PDF
+      viewer or export.</p>
     </div>
   </div>
   <div class="btn-row" style="margin-top:26px">
-    <a class="btn primary" href="/download/">Download </a>
+    <a class="btn primary" href="#get-it">Download </a>
+    <a class="btn" href="/releases/">Release notes</a>
     <a class="btn" href="/docs/from-obsidian/">Coming from Obsidian</a>
     <a class="btn" href="https://github.com/lw-xiong/">Source and issues</a>
   </div>

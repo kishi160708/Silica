@@ -314,6 +314,33 @@ html[data-layout="doc"] main { padding-top:38px; }
 .tier.featured { box-shadow:none; border-color:var(--accent); }
 .tier .price { letter-spacing:-.04em; font-variant-numeric:tabular-nums; }
 
+/* ---------- screenshots and recordings ----------
+   The README's own captures (docs/img/app, copied in by `just site-media`).
+   A figure is the full column width with its caption under it in the small
+   dim face, and the image carries its intrinsic size in the markup so the
+   page does not reflow when a 900 KB recording finally arrives. */
+figure.shot { margin:40px 0 0; }
+.hero figure.shot { margin-top:52px; }
+figure.shot img {
+  display:block; width:100%; height:auto;
+  border:1px solid var(--border); border-radius:var(--r); background:var(--panel);
+}
+figure.shot figcaption {
+  margin-top:14px; max-width:68ch;
+  font-size:13.5px; line-height:1.6; color:var(--dim);
+}
+
+/* The visitor's own platform, marked by platform.js: the accent border a
+   download card gets on hover, kept lit, and a chip in the heading. Entirely
+   additive — the card reads the same without it. */
+.dl[data-you] { border-color:var(--accent); }
+.dl[data-you] h3::after {
+  content:'Yours'; margin-left:.6em; vertical-align:.18em;
+  font-family:var(--mono); font-size:9.5px; letter-spacing:.12em;
+  color:var(--accent); border:1px solid color-mix(in srgb, var(--accent) 42%, transparent);
+  border-radius:var(--r); padding:2px 7px; font-weight:400;
+}
+
 /* ---------- the status note ---------- */
 .notice {
   border-radius:0; border:0; border-left:2px solid var(--accent);

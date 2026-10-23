@@ -17,6 +17,16 @@ differ in how much of the Markdown they show you.
 view](/docs/app/reading-view/). Which editing mode you get is your vault's `livePreview`
 setting; which of editing or reading a note opens in is `defaultViewMode`.
 
+<figure class="shot">
+  <img src="/assets/img/app/editing.gif" width="1000" height="667" loading="lazy" decoding="async"
+       alt="Typing a task at the end of a note in Live Preview, two square brackets opening the completion popup which narrows as letters are typed, the accepted link written, find highlighting a word, then Split right and a second note opened beside the first.">
+  <figcaption>
+    Live Preview: a task typed at the end of a note, <code>[[</code> opening the completion
+    popup and the accepted row writing the link, find highlighting every hit, then Split right
+    and a second note beside the first.
+  </figcaption>
+</figure>
+
 ## Live Preview
 
 The rule is Obsidian's: a construct renders unless your cursor is in it, and then it shows
@@ -94,6 +104,33 @@ cleared rather than continued; an empty *nested* item outdents instead.
 depending on `useTab`, and any ordered items this unsettles renumber: an item follows its
 previous sibling at its own depth, and one with no previous sibling restarts at 1.
 
+## Autocompletion
+
+`[[` and `![[` offer the vault's files, their aliases, their headings and their block
+references; `#` offers its tags. The list narrows as you type and the rows carry the file's
+folder, so two notes with the same name are told apart.
+
+<figure class="shot">
+  <img src="/assets/img/app/autocomplete.png" width="1600" height="1067" loading="lazy" decoding="async"
+       alt="Typing two square brackets in Live Preview opens a completion popup listing matching notes.">
+  <figcaption>
+    The popup as <code>[[</code> opens it, listing the vault's notes, images and diagrams
+    before a letter narrows it.
+  </figcaption>
+</figure>
+
+Three keys accept a row, and the difference between them is the point:
+
+| Key | What it writes |
+|---|---|
+| `Enter` | The whole link, cursor after it |
+| `Tab` | The same link with the cursor left inside the brackets, so a `#heading` can follow |
+| `Shift + Enter` | The query as you typed it, ignoring the highlighted row |
+
+`↑` and `↓` — or `Ctrl + N` and `Ctrl + P` — move through the list, and `Escape` closes it.
+The link itself is written in your vault's own style: `newLinkFormat` decides how much of the
+path appears, and `useMarkdownLinks` decides whether you get `[[wiki]]` or `[markdown](…)`.
+
 ## Multiple cursors
 
 | To add a cursor | |
@@ -140,12 +177,9 @@ will not throw away your typing to take the disk's version.
 
 - **Auto-pairing** of brackets and Markdown markers (`autoPairBrackets`,
   `autoPairMarkdown` are read but not acted on).
-- **Table cell editing.** A table renders as a widget in Live Preview, but you edit it as
-  text.
-- **Properties editing.** Frontmatter is text here, not a property editor.
-- **Autocompletion** of links, tags and headings as you type `[[` or `#`.
-- **Templates, daily notes, file recovery.**
 - **Vim mode** (`vimMode` is read, not implemented).
+- **File recovery.** Obsidian keeps its snapshots outside the vault, so this is deliberately
+  out of the round-trip work rather than next in it.
 - **`Ctrl + click` page previews**, heading folding, indent guides, line numbers.
 
 ## Next

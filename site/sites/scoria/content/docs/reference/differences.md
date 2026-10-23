@@ -8,7 +8,9 @@ description: The honest list — everything Obsidian does that  does not do yet,
 Three kinds of difference, kept apart because they mean different things: **not yet**,
 **deliberately different**, and **not ever**.
 
-If you are deciding whether  can be your daily editor, this is the page to read.
+If you are deciding whether  can be your daily editor, this is the page to read. It is
+written against 0.3.2; the [release notes](/releases/) say what each version moved out of the
+first list.
 
 ## Not yet
 
@@ -32,9 +34,7 @@ Things Obsidian does that  intends to do and does not.
 
 | | |
 |---|---|
-| **Canvas** | The JSON Canvas 1.0 format is implemented and round-trips; there is no canvas view |
 | **Bases** | The Bases YAML format is implemented and round-trips; there is no base view |
-| **Tabs and split panes** | One note at a time, with back and forward history |
 | **Popout windows** | — |
 | **Multiple vaults in one window** | Run  once per vault |
 | **Local graph depth beyond 1**, arrows, timelapse, screenshot export | See [the graph](/docs/app/graph/) |
@@ -44,12 +44,9 @@ Things Obsidian does that  intends to do and does not.
 
 | | |
 |---|---|
-| **Table cell editing** | A table is a widget in Live Preview; edit the Markdown as text |
-| **Properties editor** | Frontmatter is YAML text |
-| **Autocompletion** | No suggestions when you type `[[`, `#` or `![[` |
 | **Auto-pairing** | `autoPairBrackets` and `autoPairMarkdown` are read, not acted on |
 | **Bold/italic toggles** | `Ctrl + B` and `Ctrl + I` are registered ids with no behavior — type the asterisks |
-| **Templates, daily notes, file recovery** | — |
+| **File recovery** | Obsidian keeps its snapshots in IndexedDB outside the vault, so it is out of the round-trip work rather than next in it |
 | **Vim mode** | `vimMode` is read, not implemented |
 | **Line numbers, indent guides, inline title, right-to-left** | Read and shown in Settings, not acted on |
 | **Spellcheck** | — |
@@ -59,14 +56,13 @@ Things Obsidian does that  intends to do and does not.
 
 | | |
 |---|---|
-| **Writing settings** | [Settings is read-only](/docs/settings/). Change settings in Obsidian or edit the JSON |
 | **Writing `graph.json`** | Graph forces and filters are read, not written back |
 | **Drag and drop in Files** | Use `file-explorer:move-file` |
 | **Inline title editing** | Use `F2` |
 | **Pasting or dropping attachments** | Put the file in the folder yourself |
 | **System trash on Windows and macOS** | Implemented on Linux (freedesktop trash with a `.trashinfo` record); elsewhere it falls back to the vault's `.trash/` |
 | **Themes (`cssTheme`)** | Base theme, accent color and fonts are honored; a CSS theme is not. Tier 3 |
-| **Workspace layout** | `workspace.json` is read but not applied;  opens its own default layout and never writes the file |
+| **Restoring the workspace on launch** | The `main` tree of tab groups is written to `workspace.json` the way Obsidian writes it, but  still opens its own default layout rather than restoring the one it saved |
 | **Search result context menu** | Sorting, copying, collapsing and the keyboard are in; a result has no right-click menu yet. See [search](/docs/app/search/) |
 | **Vault-wide search and replace** | Replace works within one note |
 
@@ -86,18 +82,13 @@ block list, changing bytes you did not touch.  replaces the link text and leaves
 other byte alone. This is a difference in 's favor and it is not going to be
 "fixed".
 
-**Settings is read-only.** Not an omission so much as a sequencing choice: Obsidian rewrites
-an entire settings file on every change, and doing that without dropping keys  does not
-recognize is exactly the kind of thing the round-trip gate exists to guarantee. Writing
-settings comes after that gate, not before it.
-
 **The command palette lists only runnable commands.** This matches how Obsidian hides a
 command whose check callback fails, but the effect is more visible here because more commands
 are unimplemented. The [Hotkeys tab](/docs/hotkeys/) still lists all 244 ids so your
 bindings are visible.
 
-**No window-layout restore.**  opens its own three-pane layout every time, which is
-also why it starts instantly.
+**No window-layout restore.**  writes `workspace.json` but opens its own default
+layout every time rather than reading one back, which is also why it starts instantly.
 
 **The default font is Liberation Sans.** Not a taste decision: the pinned GPUI cannot select
 weights from a variable font, so with a single-file variable font nothing renders bold.

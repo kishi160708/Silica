@@ -113,3 +113,11 @@ site-serve:
 # Serve  and rebuild on change
 site-watch:
     cd site && npm install && npm run watch
+
+# Re-cut the site's copy of the README recordings from docs/img/app.
+# The builder only publishes what is under sites//assets, so the GIFs and
+# screenshots live there as well as in docs/img/app; this is the copy step, the
+# way the logo's three copies are re-cut from the master.
+site-media:
+    cp -f docs/img/app/*.gif docs/img/app/*.png site/sites//assets/img/app/
+    @echo "site/sites//assets/img/app refreshed from docs/img/app"

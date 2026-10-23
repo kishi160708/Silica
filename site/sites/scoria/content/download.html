@@ -1,10 +1,10 @@
 ---
 title: Download
 layout: page
-description:  for Linux, Windows and macOS — one archive per platform with a SHA256SUMS file, published on GitHub and on git. with every release. There is no installer: unpack it and run it against a vault. Free software under the MIT license.
+description: Download  0.3.2 for Linux, Windows or macOS — one archive per platform with a SHA256SUMS file, on a permanent address that always resolves to the newest release. There is no installer: unpack it and run it against a vault. Free software under the MIT license.
 ---
 <section class="hero" style="padding-bottom:24px">
-  <span class="badge pre">v0.2.1 · MIT · no installer, no account</span>
+  <span class="badge pre">v0.3.2 · MIT · no installer, no account</span>
   <h1>Unpack it and point it at a vault.</h1>
   <p class="lede">
     Every release builds one archive per platform and a <code>SHA256SUMS</code> file over all of
@@ -12,13 +12,17 @@ description:  for Linux, Windows and macOS — one archive per platform with a S
     archive holds a single binary, and the binary takes the path to your vault.
   </p>
   <div class="btn-row">
-    <a class="btn primary" href="https://github.com/lw-xiong//releases/latest">Latest release on GitHub</a>
-    <a class="btn" href="https://git.///releases">Releases on git.</a>
+    <a class="btn primary" id="dl-main" data-dl-main
+       href="https://github.com/lw-xiong//releases/latest/download/-linux-x86_64.tar.gz">Download for Linux</a>
+    <a class="btn" href="/releases/">What is in 0.3.2</a>
     <a class="btn" href="/docs/install/">Installing, in the manual</a>
   </div>
   <p class="dim small" style="margin-top:22px">
-    GitHub carries all three platforms. The homelab Forgejo runner has only a Linux container,
-    so <code>git.</code> carries the Linux archive — the same build from the same tag.
+    That address has no version in it and always resolves to the newest release; each release
+    also carries the same archives named for their tag. GitHub carries all three platforms, and
+    because the homelab Forgejo runner has only a Linux container,
+    <a href="https://git.///releases">git.</a> carries the Linux
+    archive — the same build from the same tag.
   </p>
 </section>
 
@@ -32,10 +36,10 @@ description:  for Linux, Windows and macOS — one archive per platform with a S
     the first person to see it.
   </p>
   <div class="dl-grid">
-    <div class="dl">
+    <div class="dl" data-platform="linux">
       <h3>Linux</h3>
-      <p class="os">x86-64 · <code>.tar.gz</code></p>
-      <a class="btn" href="https://github.com/lw-xiong//releases/latest">Latest release →</a>
+      <p class="os">x86-64 · <code>.tar.gz</code> · about 13 MB</p>
+      <a class="btn primary" href="https://github.com/lw-xiong//releases/latest/download/-linux-x86_64.tar.gz">Download 0.3.2</a>
       <ul>
         <li>Needs a Vulkan-capable driver; Wayland and X11 both work</li>
         <li>The reference machine: NixOS on Wayland with an NVIDIA GPU</li>
@@ -43,10 +47,10 @@ description:  for Linux, Windows and macOS — one archive per platform with a S
         X11, Wayland and Vulkan libraries GPUI loads at run time</li>
       </ul>
     </div>
-    <div class="dl">
+    <div class="dl" data-platform="windows">
       <h3>Windows</h3>
-      <p class="os">x86-64 · <code>.zip</code></p>
-      <a class="btn" href="https://github.com/lw-xiong//releases/latest">Latest release →</a>
+      <p class="os">x86-64 · <code>.zip</code> · about 9 MB</p>
+      <a class="btn" href="https://github.com/lw-xiong//releases/latest/download/-windows-x86_64.zip">Download 0.3.2</a>
       <ul>
         <li>Starts, opens a vault and draws the hidden frame on Windows 11, but is not
         exercised daily</li>
@@ -54,10 +58,10 @@ description:  for Linux, Windows and macOS — one archive per platform with a S
         <em>More info › Run anyway</em></li>
       </ul>
     </div>
-    <div class="dl">
+    <div class="dl" data-platform="macos">
       <h3>macOS</h3>
-      <p class="os">Apple silicon (arm64) · <code>.tar.gz</code></p>
-      <a class="btn" href="https://github.com/lw-xiong//releases/latest">Latest release →</a>
+      <p class="os">Apple silicon (arm64) · <code>.tar.gz</code> · about 7 MB</p>
+      <a class="btn" href="https://github.com/lw-xiong//releases/latest/download/-macos-aarch64.tar.gz">Download 0.3.2</a>
       <ul>
         <li>Untested on real hardware; there is no Intel build</li>
         <li>Not notarized: open it the first time with <em>right-click › Open</em>, or clear the
@@ -66,9 +70,13 @@ description:  for Linux, Windows and macOS — one archive per platform with a S
     </div>
   </div>
   <p class="dim small" style="margin-top:18px">
-    Check what you downloaded against the <code>SHA256SUMS</code> file in the same release:
-    <code>sha256sum -c SHA256SUMS</code> on Linux, <code>shasum -a 256 -c SHA256SUMS</code> on
-    macOS, <code>Get-FileHash</code> on Windows.
+    Check what you downloaded against
+    <a href="https://github.com/lw-xiong//releases/latest/download/SHA256SUMS"><code>SHA256SUMS</code></a> from the same release:
+    <code>sha256sum -c --ignore-missing SHA256SUMS</code> on Linux,
+    <code>shasum -a 256 -c --ignore-missing SHA256SUMS</code> on macOS,
+    <code>Get-FileHash</code> on Windows. It lists both names of every archive, so the check
+    works whichever address you took.
+    <a href="/releases/">Build provenance and the signing key →</a>
   </p>
 </section>
 
@@ -79,7 +87,7 @@ description:  for Linux, Windows and macOS — one archive per platform with a S
     opens it,  opens it, and it does not matter whether the folder has an
     <code>.obsidian</code> directory in it yet.
   </p>
-  <figure class="code"><span class="code-lang">shell</span><pre><code>tar xf -x86_64-unknown-linux-gnu.tar.gz
+  <figure class="code"><span class="code-lang">shell</span><pre><code>tar xf -linux-x86_64.tar.gz
 ./ ~/notes                      # open a vault
 ./ ~/notes --note "Welcome"     # open it on a note
 ./ ~/notes --note "Spec#Parser" # open it scrolled to a heading</code></pre></figure>
@@ -125,7 +133,7 @@ cargo test --workspace                      # the library suites, including the 
   <h2>Before you open a vault you care about</h2>
   <p class="lede">
      reads a vault well and writes one carefully, but writing is the newer half and this
-    is v0.2.1. Two habits cost nothing and remove the whole risk:
+    is v0.3.2. Two habits cost nothing and remove the whole risk:
   </p>
   <ul>
     <li><strong>Have a backup.</strong> A copy of the folder, or a git repository in it, or
@@ -137,6 +145,7 @@ cargo test --workspace                      # the library suites, including the 
   </ul>
   <div class="btn-row" style="margin-top:12px">
     <a class="btn primary" href="/docs/">Read the manual</a>
+    <a class="btn" href="/releases/">Releases</a>
     <a class="btn" href="/docs/from-obsidian/">Coming from Obsidian</a>
     <a class="btn" href="/docs/reference/troubleshooting/">Troubleshooting</a>
   </div>
