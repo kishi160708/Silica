@@ -98,12 +98,12 @@ cargo run --release -p  -- "/path/to/vault" --frame native   # the desktop's own
 cargo test --workspace
 ```
 
-`--control` exposes the running app on a Unix socket speaking newline-delimited
-JSON: open a note, run a command id, send keystrokes or clicks, and read back a
-dump of the window's whole state. `-mcp` wraps that protocol as a Model
-Context Protocol server over stdio, so an agent can launch , drive it and
-screenshot it — the screenshots and the recording above were made that way. Both
-are described in `docs//Development.md`.
+`--control` exposes the running app on a Unix socket (on Windows too) speaking
+newline-delimited JSON: open a note, run a command id, send keystrokes or
+clicks, and read back a dump of the window's whole state. `-mcp` wraps
+that protocol as a Model Context Protocol server over stdio, so an agent can
+launch , drive it and screenshot it — the screenshots and the recording
+above were made that way. Both are described in `docs//Development.md`.
 
 ## Compatibility tiers
 

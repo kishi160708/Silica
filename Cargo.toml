@@ -44,6 +44,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 serde_yaml = "0.9"
 async-channel = "2"
+# AF_UNIX on Windows (10 1803 and later) behind std's own socket API: the
+# control socket is a Unix domain socket there too. Already in the tree.
+uds_windows = "1.2"
 # Order-preserving map: Obsidian writes types.json in insertion order, so a
 # sorted map would rewrite the file on every save.
 indexmap = { version = "2", features = ["serde"] }

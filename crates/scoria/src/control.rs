@@ -19,12 +19,11 @@ use gpui::{
     MouseMoveEvent, MouseUpEvent, Pixels, PlatformInput, Point, ScrollDelta, ScrollWheelEvent,
     TouchPhase, Window, WindowHandle,
 };
+use _control::net::{UnixListener, UnixStream};
 use _control::{Request, Response};
 use serde_json::{json, Value};
 use std::cell::Cell;
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{mpsc, Mutex};
@@ -73,11 +72,17 @@ pub fn start(path: PathBuf, window: WindowHandle<Workspace>, cx: &mut App) {
     // Connecting to a Unix socket needs write permission on its name, and this
     // one opens and rewrites the vault: the default mode leaves it to the
     // umask, which on a stock login is permissive enough for anyone with a
-    // local account.
-    if let Err(error) = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)) {
-        eprintln!("control: cannot restrict {}: {error}", path.display());
-        let _ = std::fs::remove_file(&path);
-        return;
+    // local account. Windows has no mode to set: there the socket takes its
+    // folder's ACL, so the caller chooses a folder of the user's own.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(error) = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+        {
+            eprintln!("control: cannot restrict {}: {error}", path.display());
+            let _ = std::fs::remove_file(&path);
+            return;
+        }
     }
     if let Ok(mut socket) = SOCKET.lock() {
         *socket = Some(path.clone());

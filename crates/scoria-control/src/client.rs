@@ -5,10 +5,10 @@
 //! have settled before the next assertion, so a request that has not been
 //! answered is exactly the thing they should be waiting on.
 
+use crate::net::UnixStream;
 use crate::{Request, Response};
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -84,7 +84,11 @@ impl Client {
     }
 
     fn set_timeout(&self, timeout: Option<Duration>) -> Result<(), String> {
-        self.stream
+        // The handle that is read from. On Unix a clone shares the socket
+        // and its options; on Windows a duplicated handle keeps a receive
+        // timeout of its own, and one set on the writer never fires.
+        self.reader
+            .get_ref()
             .set_read_timeout(timeout)
             .map_err(|e| format!("control socket: cannot set read timeout: {e}"))
     }
@@ -157,9 +161,9 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::UnixListener;
     use serde_json::json;
     use std::io::BufWriter;
-    use std::os::unix::net::UnixListener;
     use std::path::PathBuf;
 
     /// A socket path of our own. `tempfile` is not a dependency here, and a
@@ -178,8 +182,9 @@ mod tests {
         let (stream, _) = listener.accept().expect("a connection");
         let reader = BufReader::new(stream.try_clone().expect("clone"));
         let mut writer = BufWriter::new(stream);
-        for line in reader.lines() {
-            let line = line.expect("a request line");
+        // A client that hung up ends the stream; on Windows it can also
+        // reset it, which is the same thing to a server.
+        for line in reader.lines().map_while(Result::ok) {
             let request: Request = serde_json::from_str(&line).expect("parses");
             let response = match request.method.as_str() {
                 "ping" => Response::ok(request.id, json!({"ok": true, "protocol": 1})),
@@ -257,7 +262,14 @@ mod tests {
     fn connect_gives_up_when_nothing_ever_binds() {
         let path = socket_path("nobody-home");
         let e = Client::connect(&path, Duration::from_millis(50)).expect_err("no socket");
-        assert_eq!(e.kind(), std::io::ErrorKind::NotFound);
+        // A missing socket file is not found on Unix; WinSock calls it refused.
+        assert!(
+            matches!(
+                e.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+            ),
+            "{e:?}"
+        );
     }
 
     #[test]

@@ -10,6 +10,7 @@
 use _control::Client;
 use serde_json::{json, Value};
 use std::io::ErrorKind;
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -25,6 +26,33 @@ const LOAD_WAIT: Duration = Duration::from_secs(30);
 const ATTACH_WAIT: Duration = Duration::from_millis(300);
 /// How long a polite `quit` has to land before the child is killed.
 const QUIT_GRACE: Duration = Duration::from_secs(3);
+
+/// What `_screenshot` runs without `SCORIA_MCP_SCREENSHOT`: KDE's
+/// spectacle capturing the active window.
+#[cfg(unix)]
+const DEFAULT_SCREENSHOT: &str = "spectacle -b -n -a -o {path}";
+/// What `_screenshot` runs without `SCORIA_MCP_SCREENSHOT` on Windows:
+/// PowerShell copying the foreground window off the screen. The process is
+/// made per-monitor DPI aware first so the rectangle and the pixels agree,
+/// and the rectangle is DWM's visible frame rather than `GetWindowRect`'s,
+/// which includes the invisible resize border.
+#[cfg(windows)]
+const DEFAULT_SCREENSHOT: &str = "\
+Add-Type -AssemblyName System.Drawing; \
+Add-Type -Namespace  -Name Shot -MemberDefinition '\
+[DllImport(\"user32.dll\")] public static extern bool SetProcessDpiAwarenessContext(IntPtr context); \
+[DllImport(\"user32.dll\")] public static extern IntPtr GetForegroundWindow(); \
+[DllImport(\"user32.dll\")] public static extern bool GetWindowRect(IntPtr window, out RECT rect); \
+[DllImport(\"dwmapi.dll\")] public static extern int DwmGetWindowAttribute(IntPtr window, int attribute, out RECT rect, int size); \
+[StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }'; \
+[.Shot]::SetProcessDpiAwarenessContext([IntPtr](-4)) | Out-Null; \
+$window = [.Shot]::GetForegroundWindow(); \
+$rect = New-Object .Shot+RECT; \
+if ([.Shot]::DwmGetWindowAttribute($window, 9, [ref]$rect, 16) -ne 0) { [.Shot]::GetWindowRect($window, [ref]$rect) | Out-Null }; \
+$bitmap = New-Object System.Drawing.Bitmap ($rect.Right - $rect.Left), ($rect.Bottom - $rect.Top); \
+$graphics = [System.Drawing.Graphics]::FromImage($bitmap); \
+$graphics.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bitmap.Size); \
+$bitmap.Save('{path}', [System.Drawing.Imaging.ImageFormat]::Png)";
 
 /// Everything read from the environment, once, at startup.
 pub struct Config {
@@ -48,12 +76,13 @@ impl Config {
         Config {
             socket: env_path("SCORIA_MCP_SOCKET").unwrap_or_else(default_socket),
             bin: env_text("SCORIA_MCP_BIN").unwrap_or_else(|| {
-                repo.join("target/release/")
+                repo.join("target/release")
+                    .join(format!("{}", std::env::consts::EXE_SUFFIX))
                     .to_string_lossy()
                     .into_owned()
             }),
             screenshot: env_text("SCORIA_MCP_SCREENSHOT")
-                .unwrap_or_else(|| "spectacle -b -n -a -o {path}".to_string()),
+                .unwrap_or_else(|| DEFAULT_SCREENSHOT.to_string()),
             timeout: Duration::from_millis(
                 env_text("SCORIA_MCP_TIMEOUT_MS")
                     .and_then(|ms| ms.parse().ok())
@@ -94,7 +123,7 @@ fn default_socket() -> PathBuf {
 
 /// A directory only this user can enter, for the socket and the screenshots.
 ///
-/// `XDG_RUNTIME_DIR` is already one. The fallback is the shared temp dir,
+/// `XDG_RUNTIME_DIR` is already one. On Unix the fallback is the shared temp dir,
 /// where both names are predictable: another local user who creates them first
 /// owns the socket this server would then connect to — feeding the model a
 /// fabricated `state` and collecting the vault paths and text the tools send —
@@ -107,6 +136,7 @@ fn runtime_dir() -> PathBuf {
     }
 }
 
+#[cfg(unix)]
 fn private_dir() -> PathBuf {
     let base = std::env::temp_dir();
     let uid = our_uid();
@@ -140,8 +170,20 @@ fn private_dir() -> PathBuf {
     base.join(&names[names.len() - 1])
 }
 
+/// On Windows the user's temp directory is already theirs alone — its ACL
+/// names the user, SYSTEM and Administrators — and a socket there has no
+/// mode bits to set anyway, so a folder of ours inside it is as private as
+/// the platform gets. It is also short: `sun_path` holds 108 bytes.
+#[cfg(windows)]
+fn private_dir() -> PathBuf {
+    let dir = std::env::temp_dir().join("");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
 /// Nanoseconds of the current second: enough to make a name nobody watching
 /// the temp dir can create in advance.
+#[cfg(unix)]
 fn nanos() -> u32 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -150,6 +192,7 @@ fn nanos() -> u32 {
 }
 
 /// Whether `path` is a directory of ours that nobody else can enter.
+#[cfg(unix)]
 fn is_ours(path: &Path, uid: Option<u32>) -> bool {
     let Some(uid) = uid else {
         // Without a uid to compare against, only a directory we just created
@@ -166,6 +209,7 @@ fn is_ours(path: &Path, uid: Option<u32>) -> bool {
 /// Linux the kernel names the owner of `/proc/self` for us; where there is no
 /// procfs (macOS, the BSDs) a directory we create is owned by us, so its
 /// owner is the answer.
+#[cfg(unix)]
 fn our_uid() -> Option<u32> {
     if let Ok(meta) = std::fs::metadata("/proc/self") {
         return Some(meta.uid());
@@ -224,6 +268,7 @@ impl App {
             .and_then(Value::as_str)
             .ok_or("_launch needs `vault`: an absolute path to a vault folder")?;
         let root = std::fs::canonicalize(vault)
+            .map(plain)
             .map_err(|e| format!("vault {vault}: {e}"))
             .and_then(|root| {
                 if root.is_dir() {
@@ -364,9 +409,7 @@ impl App {
         let path = runtime_dir().join(format!("-mcp-{}.png", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let command = command.replace("{path}", &path.display().to_string());
-        let output = Command::new("sh")
-            .arg("-c")
-            .arg(&command)
+        let output = shell_command(&command)
             .current_dir(&self.config.repo)
             .stdin(Stdio::null())
             .output()
@@ -426,11 +469,7 @@ impl App {
             } else {
                 format!("{} {}", self.config.bin, quoted.join(" "))
             };
-            let mut command = Command::new("sh");
-            // `exec` keeps the pid we hold pointing at the process to kill,
-            // instead of a shell that has forgotten about it.
-            command.arg("-c").arg(format!("exec {line}"));
-            command
+            shell_command(&exec(&line))
         } else {
             let mut command = Command::new(&self.config.bin);
             command.args(argv);
@@ -520,9 +559,65 @@ impl Drop for App {
     }
 }
 
-/// Shell-quote one argument for the `sh -c` form of `SCORIA_MCP_BIN`.
+/// The platform's shell, given one command line: `sh -c` where there is one,
+/// Windows PowerShell on Windows.
+fn shell_command(line: &str) -> Command {
+    #[cfg(unix)]
+    {
+        let mut command = Command::new("sh");
+        command.arg("-c").arg(line);
+        command
+    }
+    #[cfg(windows)]
+    {
+        let mut command = Command::new("powershell.exe");
+        command.args(["-NoProfile", "-NonInteractive", "-Command", line]);
+        command
+    }
+}
+
+/// `line` as the shell's last act. `exec` keeps the pid we hold pointing at
+/// the process to kill, instead of a shell that has forgotten about it.
+/// PowerShell has no exec: there the pid is the shell's, which waits for the
+/// app and ends with it, and a `kill` ends the shell alone — which is why
+/// `quit` goes over the socket first, and why a plain path is the better
+/// `SCORIA_MCP_BIN` on Windows.
+fn exec(line: &str) -> String {
+    if cfg!(unix) {
+        format!("exec {line}")
+    } else {
+        line.to_string()
+    }
+}
+
+/// Quote one argument for the shell form of `SCORIA_MCP_BIN`: `sh`'s single
+/// quotes, or PowerShell's, which double a quote rather than escape it.
 fn quote(argument: &str) -> String {
-    format!("'{}'", argument.replace('\'', r#"'\''"#))
+    if cfg!(unix) {
+        format!("'{}'", argument.replace('\'', r#"'\''"#))
+    } else {
+        format!("'{}'", argument.replace('\'', "''"))
+    }
+}
+
+/// A canonical path the way a user would write it. On Windows `canonicalize`
+/// answers in the verbatim form, `\\?\C:\...`, which the app would show in
+/// its title and write into its vault registry as a folder other than the
+/// same one opened by hand; the prefix goes, for a drive path and a UNC one.
+fn plain(path: PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let text = path.to_string_lossy();
+        if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+            return PathBuf::from(format!(r"\\{rest}"));
+        }
+        if let Some(rest) = text.strip_prefix(r"\\?\") {
+            if rest.as_bytes().get(1) == Some(&b':') {
+                return PathBuf::from(rest);
+            }
+        }
+    }
+    path
 }
 
 /// ImageMagick geometry: digits, `x`, offsets, and the `%`/`!` modifiers.
@@ -582,8 +677,8 @@ fn text_of(value: &Value) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use _control::net::UnixListener;
     use std::io::{BufRead, BufReader, Write};
-    use std::os::unix::net::UnixListener;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
@@ -649,6 +744,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn only_a_directory_of_ours_is_private_enough_for_the_socket() {
         let uid = our_uid();
@@ -683,6 +779,28 @@ mod tests {
         assert!(!is_ours(&private, None));
 
         std::fs::remove_dir_all(&base).expect("cleans up");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_verbatim_path_is_written_the_way_a_user_would() {
+        assert_eq!(
+            plain(PathBuf::from(r"\\?\C:\Users\me\vault")),
+            PathBuf::from(r"C:\Users\me\vault")
+        );
+        assert_eq!(
+            plain(PathBuf::from(r"\\?\UNC\nas\share\vault")),
+            PathBuf::from(r"\\nas\share\vault")
+        );
+        // Anything else is left alone, including a device path.
+        assert_eq!(
+            plain(PathBuf::from(r"\\?\Volume{guid}\vault")),
+            PathBuf::from(r"\\?\Volume{guid}\vault")
+        );
+        assert_eq!(
+            plain(PathBuf::from(r"D:\vault")),
+            PathBuf::from(r"D:\vault")
+        );
     }
 
     #[test]

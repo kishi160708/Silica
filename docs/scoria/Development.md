@@ -141,7 +141,9 @@ stderr.
 
 One thing to know before trusting it: only the opening frame was checked. There is no control
 socket on Windows — it is a Unix domain socket, and `--control` says so and carries on — so the
-keyboard, editing and saving paths have not been driven there the way the Linux ones are.
+keyboard, editing and saving paths have not been driven there the way the Linux ones are. (Both
+were put right two days later: [[#Windows smoke test, 2026-10-22]] and
+[[#The control socket on Windows, 2026-10-22]].)
 
 The window wore the desktop's own title bar on the day; see
 [[#The hidden frame on Windows, 2026-10-20]] for the fix.
@@ -208,8 +210,55 @@ does not count as absolute and so resolved against the current drive. Both are t
 on the day; the symlink half of `vault_paths_cannot_leave_the_vault` skips on Windows without
 Developer Mode (`CreateSymbolicLink` wants a privilege, error 1314). All 620 tests pass there now.
 
-Still missing on Windows: the control socket, so the MCP server and the Linux screenshot tooling
-do not reach the app there; the PowerShell driver was a one-off in the session's scratch folder.
+The control socket was ported the same day, see [[#The control socket on Windows, 2026-10-22]];
+the PowerShell driver was a one-off in the session's scratch folder, and `-mcp` now does its
+job there.
+
+### The control socket on Windows, 2026-10-22
+
+Windows has had `AF_UNIX` since Windows 10 1803; what it lacks is the standard library's wrapper,
+which only exists under `std::os::unix`. `uds_windows` is that wrapper over WinSock with std's own
+API, and it was already in `Cargo.lock`. `-control` now has a `net` module that re-exports
+`UnixListener` and `UnixStream` from std or from `uds_windows`, and the app's `control.rs`, the
+client and the MCP server's test fakes all take the two types from there, so nothing else about
+the protocol changed: `--control <path>` is still a path, `bind` still refuses an existing file,
+a stale one is still unlinked first, and a live one is still left alone.
+
+Three things WinSock does differently, each caught by the client's own tests the first time they
+ran there:
+
+- Connecting to a socket file that does not exist is `ConnectionRefused`, not `NotFound`. The
+  client hands back whichever it got; `-mcp` already read both as "nothing is listening".
+- A duplicated handle (`try_clone` is `WSADuplicateSocket`) keeps a receive timeout of its own.
+  The client set the timeout on the writer and read from the clone, so `call_timeout` never fired
+  on Windows; it now sets it on the handle it reads from, which on Unix is the same socket anyway.
+- Reading from a connection whose peer hung up can fail with `ConnectionReset` instead of ending
+  the stream. The app's server loop already returned on any read error; the test fakes now do too.
+
+There are no mode bits to set on the socket, so the `0o600` step is Unix-only and the folder's
+ACL is the whole protection: `-mcp` keeps the socket in `%TEMP%\\`, and the user's
+temp directory is already theirs alone. `sun_path` is 108 bytes there as well, so the path has to
+stay short.
+
+In `-mcp`, the shell form of `SCORIA_MCP_BIN` and the screenshot command run through
+`powershell.exe -NoProfile -NonInteractive -Command`. There is no `exec`, so the pid the server
+holds is the shell's, which waits for the app and ends with it; `quit` goes over the socket before
+any kill, and a plain `.exe` path is the better setting on Windows. The default binary is
+`target\release\.exe`; the default screenshot is a PowerShell capture of the foreground
+window inside DWM's visible frame (the process made per-monitor DPI aware first, so the rectangle
+and the pixels agree); and `canonicalize`'s verbatim `\\?\C:\` answer is stripped before the vault
+path reaches the app, or the app would title the window with it and write it into the vault
+registry as a second entry for the same folder.
+
+Driven on `w11` by piping a batch of JSON-RPC lines into `-mcp.exe`: `_launch` on a
+copy of `docs/` (the socket bound under `%TEMP%\`, the index loaded), `_state`,
+`_keys` with `ctrl-o`, `_type` with `spec` landing in the switcher's input,
+`_screenshot` returning the window's pixels with the switcher open, and `_quit`
+exiting 0 and removing the socket file. The repository's `.mcp.json` wraps the binary in
+`nix-shell` for the NixOS development machine, which Windows cannot run. Claude Code's local scope
+outranks the project file, so on Windows the server is registered there instead, with no
+environment at all so the `.exe` defaults apply:
+`claude mcp add --scope local  -- Z:\repos\\target\release\-mcp.exe`.
 
 ## Reader (phase 2)
 
@@ -741,7 +790,8 @@ drives a real Obsidian over CDP to learn what Obsidian does
 what  does against it. Two apps, the same shape of harness, and neither
 belongs in CI.
 
-**The protocol.** `--control <path>` binds a Unix domain socket and speaks
+**The protocol.** `--control <path>` binds a Unix domain socket (on Windows too, see
+[[#The control socket on Windows, 2026-10-22]]) and speaks
 newline-delimited JSON over it: one request per line, one response line per
 request, in order.
 

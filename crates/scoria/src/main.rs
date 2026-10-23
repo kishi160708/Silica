@@ -8,36 +8,13 @@
 //! tests, and `--control <socket>` lets a test or the MCP server drive the
 //! running app instead (see `docs//Development.md`).
 
-// The `describe` and `rows` methods across the views exist to be read over the
-// control socket; where there is no socket they have no caller, and that is
-// not a defect to deny the build over.
-#![cfg_attr(not(unix), allow(dead_code))]
-
 mod assets;
 mod backlinks;
 mod bookmarks;
 mod canvas;
 mod chooser;
-#[cfg(unix)]
 mod control;
 mod copy_results;
-/// `--control` binds a Unix domain socket; on a platform without one the
-/// flag says so and the app runs without it.
-#[cfg(not(unix))]
-mod control {
-    use crate::workspace::Workspace;
-    use gpui::{App, WindowHandle};
-    use std::path::PathBuf;
-
-    pub fn start(path: PathBuf, _window: WindowHandle<Workspace>, _cx: &mut App) {
-        eprintln!(
-            "--control {}: the control socket is a Unix domain socket; there is none on this platform",
-            path.display()
-        );
-    }
-
-    pub fn cleanup() {}
-}
 mod editor;
 mod explorer;
 mod graph;

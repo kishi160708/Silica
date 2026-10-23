@@ -107,7 +107,8 @@ Activate the window, let it settle, and return a PNG of it. Use it when the \
 question is visual — layout, colors, what a popup looks like, whether \
 something overlaps. For anything readable as data, _state is cheaper and \
 precise. The capture command comes from `SCORIA_MCP_SCREENSHOT` (default \
-`spectacle -b -n -a -o {path}`). `crop` is an ImageMagick geometry such as \
+`spectacle -b -n -a -o {path}`; on Windows, a PowerShell capture of the \
+foreground window). `crop` is an ImageMagick geometry such as \
 `800x600+0+0`, and works only if that template has a `{crop}` placeholder for \
 it, since this server does not decode the image itself.",
         run: Run::Screenshot,
@@ -415,8 +416,8 @@ mod tests {
     use super::*;
     use crate::app::Config;
     use crate::rpc;
+    use _control::net::UnixListener;
     use std::io::{BufRead, BufReader, Write};
-    use std::os::unix::net::UnixListener;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
 
