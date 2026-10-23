@@ -36,7 +36,7 @@ mod watch;
 mod workspace;
 
 use gpui::{
-    actions, prelude::*, px, size, App, Bounds, Focusable, KeyBinding, TitlebarOptions,
+    actions, point, prelude::*, px, size, App, Bounds, Focusable, KeyBinding, TitlebarOptions,
     WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowDecorations, WindowOptions,
 };
 use _commands::CommandRegistry;
@@ -357,16 +357,20 @@ fn main() {
                         window_bounds: Some(WindowBounds::Windowed(bounds)),
                         titlebar: Some(TitlebarOptions {
                             title: Some("".into()),
-                            // What hides the caption on Windows, where
-                            // `window_decorations` is not read at all: the
-                            // window keeps the system's shadow and resize
+                            // What hides the caption on Windows and macOS,
+                            // where `window_decorations` is not read at all:
+                            // the window keeps the system's shadow and resize
                             // border and loses only the title bar, which is
-                            // the frame Obsidian draws there. macOS would
-                            // need its traffic lights placed over the tab
-                            // strip first, so it keeps its own frame until
-                            // somebody can run it.
-                            appears_transparent: cfg!(target_os = "windows") && frame != "native",
-                            ..Default::default()
+                            // the frame Obsidian draws there. macOS keeps its
+                            // traffic lights, at the point Obsidian's window
+                            // options put them; the workspace pads the header
+                            // under them (see `frame_left_space`).
+                            appears_transparent: (cfg!(target_os = "windows")
+                                || cfg!(target_os = "macos"))
+                                && frame != "native",
+                            traffic_light_position: (cfg!(target_os = "macos")
+                                && frame != "native")
+                                .then(|| point(px(19.), px(12.))),
                         }),
                         // KWin only honours the xdg-activation token that
                         // `activate_window` asks for when it can tie it to an

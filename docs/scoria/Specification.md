@@ -2887,6 +2887,29 @@ opacity 0.85 and reads "New tab - <vault> - Obsidian 1.14.4"; the hidden frame g
 nevertheless rounded, about 10 px on all four in a screenshot of 2026-10-21 (KDE Wayland, 2x),
 so the rounding is the hidden frame's own rather than a theme's.
 
+**The macOS frame.** Read from Obsidian 1.14.5's bundle on macOS on 2026-10-23 (its stylesheet
+and main-process script; not yet a vault probe): the window is opened with `titleBarStyle` hidden
+and `trafficLightPosition: {x: 19, y: 12}`, and `.mod-macos.is-hidden-frameless` sets `.titlebar`
+to `display: none`, so the title row has no text and no window buttons of Obsidian's.
+`--frame-left-space` is `calc(80px - var(--frame-ribbon-left))` (36 px beside the 44 px ribbon,
+80 px without it) and `--frame-right-space` is 0; `.is-fullscreen` zeroes both. The tab header
+container in the top-left corner (`mod-top-left-space`: the left dock's while the sidebar is
+open, else the root's first) is padded `calc(var(--size-4-2) + var(--frame-left-space))` on the
+left. The ribbon's corner is its usual header-height `::before` drag region, which on every
+platform carries the headers' bottom line (`border-bottom: var(--tab-outline-width) solid
+var(--tab-outline-color)`) and no divider: `.workspace-ribbon.mod-primary` itself starts under the
+title row (`margin-top: var(--header-height)`), so its `border-inline-end` begins there too and
+never crosses the corner. On macOS the workspace does not prepend `leftSidebarToggleButtonEl` to the ribbon: it is appended to the left
+dock's tab header container while the sidebar is open, so it sits at that header's right end against
+the dock's edge, and is prepended to the root's top-left one while the sidebar is collapsed. The
+same two placements apply on every platform while the ribbon is hidden. `rightSidebarToggleButtonEl` goes into the right dock's own tab header container
+while that sidebar is open (unlike Linux), and the stylesheet fixes `.sidebar-toggle-button.mod-secondary`
+at `top: 0; inset-inline-end: var(--frame-right-space)` with the top-right header padded
+`calc(38px + var(--frame-right-space))`, so it sits in the window's top-right corner either way.
+'s `--frame hidden` on macOS asks gpui for a transparent title bar with the traffic lights at
+(19, 12), pads the top-left header by the same 80 px less the ribbon, keeps the left toggle in the
+headers and the right one in the corner, and draws no window buttons.
+
 **The hidden frame's shadow.** A window capture at scale 1 on 2026-10-21 (KDE Wayland, the
 surface's own pixels with alpha) shows the content in a transparent margin of **23 px at the left
 and right, 15 px above and 46 px below**. The margin holds a shadow that is pure black at a

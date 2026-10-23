@@ -1763,6 +1763,12 @@ const FRAME_SHADOW_COLOR: u32 = 0x00000052;
 /// frame is rounded the same way on this desktop, about 10 px.
 const WINDOW_RADIUS: Pixels = px(10.);
 
+/// Obsidian's `--frame-left-space` on macOS: the traffic lights, which its
+/// window options place at (19, 12), own the first 80 px of the title row,
+/// less the ribbon's width while the ribbon shows. The header in the
+/// window's top-left corner is padded by that past its usual 8 px.
+const MAC_FRAME_LEFT_SPACE: f32 = 80.;
+
 /// Which of the window's corners are rounded: each one that meets no tiled
 /// or maximised edge, when the frame is 's. gpui clips children to
 /// rectangles, so the frame's rounding alone is painted over by whatever
@@ -1872,12 +1878,42 @@ fn icon_button(id: &'static str, name: &str, theme: &Theme) -> gpui::Stateful<gp
 /// would be worse than asking for one — `start_window_move` is a no-op
 /// there, and a listener that swallowed the press would stop the system
 /// dragging at all.
+/// A press on a macOS drag area that has not moved yet; one window, one
+/// pointer, so a flag is enough.
+static MAC_DRAG_PENDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 fn window_handle(area: gpui::Stateful<gpui::Div>, frameless: bool) -> gpui::Stateful<gpui::Div> {
     if !frameless {
         return area;
     }
     if cfg!(target_os = "windows") {
         return area.window_control_area(WindowControlArea::Drag);
+    }
+    if cfg!(target_os = "macos") {
+        // AppKit's drag session swallows the click it starts from, so the
+        // drag begins on the first move after a press and a double click
+        // still arrives as one: it does what the desktop's "Double-click a
+        // window's title bar to" setting says. macOS has no window menu.
+        return area
+            .on_mouse_down(MouseButton::Left, |_, _, _| {
+                MAC_DRAG_PENDING.store(true, std::sync::atomic::Ordering::Relaxed)
+            })
+            .on_mouse_up(MouseButton::Left, |_, _, _| {
+                MAC_DRAG_PENDING.store(false, std::sync::atomic::Ordering::Relaxed)
+            })
+            .on_mouse_down_out(|_, _, _| {
+                MAC_DRAG_PENDING.store(false, std::sync::atomic::Ordering::Relaxed)
+            })
+            .on_mouse_move(|_, window, _| {
+                if MAC_DRAG_PENDING.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                    window.start_window_move();
+                }
+            })
+            .on_click(|e, window, _| {
+                if e.click_count() == 2 {
+                    window.titlebar_double_click();
+                }
+            });
     }
     area.on_mouse_down(MouseButton::Left, |_, window, _| window.start_window_move())
         .on_click(|e, window, _| {
@@ -1920,11 +1956,13 @@ fn resize_edge(
 ///
 /// On Linux this is what the compositor granted, which is not always what
 /// was asked for: `Decorations::Client` means the frame is ours. Windows
-/// answers `Server` either way — it has no notion of handing the frame over
-/// — and the caption is instead gone whenever the window was opened with a
-/// transparent title bar, so there the answer is what was asked for.
+/// and macOS answer `Server` either way — neither has a notion of handing
+/// the frame over — and the title bar is instead gone whenever the window
+/// was opened with a transparent one, so there the answer is what was
+/// asked for. On macOS the title row then holds the desktop's own traffic
+/// lights rather than window buttons of 's; see `mac_frame`.
 fn frameless(window: &Window) -> bool {
-    if cfg!(target_os = "windows") {
+    if cfg!(target_os = "windows") || cfg!(target_os = "macos") {
         crate::hidden_frame()
     } else {
         matches!(window.window_decorations(), Decorations::Client { .. })
@@ -2084,6 +2122,9 @@ pub struct Workspace {
     /// read from the window at each render for the renderers that place the
     /// window buttons and the drag areas.
     frameless: bool,
+    /// Whether the window fills the screen, read with `frameless`: the
+    /// macOS frame drops the traffic lights' space then.
+    fullscreen: bool,
     /// The window corners rounded this frame, read at the top of `render`.
     corners: WindowCorners,
     left_tab: LeftTab,
@@ -2534,6 +2575,7 @@ impl Workspace {
             left_width: SIDEBAR_WIDTH as f64,
             right_width: SIDEBAR_WIDTH as f64,
             frameless: false,
+            fullscreen: false,
             corners: WindowCorners::default(),
             left_tab: LeftTab::Files,
             reading,
@@ -7275,6 +7317,28 @@ impl Workspace {
             .unwrap_or(true)
     }
 
+    /// Whether the window has macOS's hidden frame: the desktop's traffic
+    /// lights in the title row's top-left corner, no title and no window
+    /// buttons of 's. Obsidian keeps the sidebar toggles in the
+    /// headers there — the left one in the left dock's header, or at the
+    /// head of the root tab strip while that dock is collapsed, never above
+    /// the ribbon — and the right one in the window's top-right corner,
+    /// inside the right dock's own header while that dock is open.
+    fn mac_frame(&self) -> bool {
+        cfg!(target_os = "macos") && self.frameless
+    }
+
+    /// What the header in the window's top-left corner is padded by past
+    /// its usual 8 px: Obsidian's `--frame-left-space`, room for the
+    /// traffic lights on macOS and nothing elsewhere or in fullscreen,
+    /// where the lights are gone.
+    fn frame_left_space(&self) -> f32 {
+        if !self.mac_frame() || self.fullscreen {
+            return 0.;
+        }
+        MAC_FRAME_LEFT_SPACE - if self.show_ribbon() { RIBBON_WIDTH } else { 0. }
+    }
+
     /// A sidebar's resize handle: the 3 px strip on its inner edge, which
     /// Obsidian colours with the accent while the pointer is over it.
     fn dock_handle(&self, left: bool, theme: &Theme) -> gpui::Stateful<gpui::Div> {
@@ -7423,15 +7487,36 @@ impl Workspace {
                 .as_ref()
                 .is_some_and(|s| settings::plugin_enabled(s, plugin))
         };
-        // The left sidebar's toggle sits above the ribbon, in the title
-        // row, which is where Obsidian's hidden frame puts it.
-        let toggle = div()
-            .w(px(RIBBON_WIDTH))
-            .h(px(HEADER_HEIGHT))
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(self.sidebar_toggle(true, theme, cx));
+        // The corner above the ribbon is part of the title row: it carries
+        // the headers' bottom line across, and the ribbon's own divider
+        // starts below it, since Obsidian's ribbon begins under the title
+        // row. The left sidebar's toggle sits in the corner, which is where
+        // Obsidian's hidden frame puts it on Linux and Windows. On macOS the
+        // corner is the traffic lights' and only drags the window; the
+        // toggle is in the headers instead.
+        let toggle: gpui::AnyElement = if self.mac_frame() {
+            window_handle(
+                div()
+                    .id("ribbon-corner")
+                    .w(px(RIBBON_WIDTH))
+                    .h(px(HEADER_HEIGHT))
+                    .border_b_1()
+                    .border_color(theme.border),
+                true,
+            )
+            .into_any_element()
+        } else {
+            div()
+                .w(px(RIBBON_WIDTH))
+                .h(px(HEADER_HEIGHT))
+                .flex()
+                .items_center()
+                .justify_center()
+                .border_b_1()
+                .border_color(theme.border)
+                .child(self.sidebar_toggle(true, theme, cx))
+                .into_any_element()
+        };
         let button = |id: &'static str, name: &'static str, command: &'static str| {
             icon_button(id, name, theme).on_click(
                 cx.listener(move |this, _, window, cx| this.run_command(command, window, cx)),
@@ -7477,8 +7562,6 @@ impl Workspace {
             .w(px(RIBBON_WIDTH))
             .h_full()
             .bg(theme.bg_secondary)
-            .border_r_1()
-            .border_color(theme.border)
             .map(|d| self.corners.left().apply(d))
             .child(toggle)
             .child(
@@ -7487,6 +7570,9 @@ impl Workspace {
                     .flex_col()
                     .items_center()
                     .flex_1()
+                    .w_full()
+                    .border_r_1()
+                    .border_color(theme.border)
                     .pt(px(8.))
                     .pb(px(12.))
                     .gap(px(6.))
@@ -7708,10 +7794,18 @@ impl Workspace {
         let group_active = view.active;
         let show_ribbon = self.show_ribbon();
         let frameless = self.frameless;
+        let mac = self.mac_frame();
         // The window buttons overlay the right end of whichever header is
         // in the window's top right corner: this strip's, when the right
-        // sidebar is collapsed and this is the last group.
-        let under_controls = frameless && last && !self.right_visible;
+        // sidebar is collapsed and this is the last group. macOS has none.
+        let under_controls = frameless && !mac && last && !self.right_visible;
+        // The strip in the window's top-left corner, with the left sidebar
+        // collapsed, keeps clear of the traffic lights on macOS.
+        let left_space = if first && !self.left_visible {
+            self.frame_left_space()
+        } else {
+            0.
+        };
         let menu_open = self.tab_list_menu == Some(group);
         let at_left = first && !self.show_ribbon() && !self.left_visible;
         let at_right = last && !self.right_visible;
@@ -7723,7 +7817,7 @@ impl Workspace {
             .when(at_right && self.corners.tr, |d| d.rounded_tr(WINDOW_RADIUS))
             .h(px(HEADER_HEIGHT))
             .pt(px(6.))
-            .pl(px(8.))
+            .pl(px(8. + left_space))
             .pr(if under_controls {
                 px(3. * RIBBON_WIDTH)
             } else {
@@ -7755,8 +7849,9 @@ impl Workspace {
                     .bg(theme.border),
             )
             // Without the ribbon a collapsed left sidebar would have no
-            // way back from the window.
-            .when(first && !show_ribbon && !self.left_visible, |d| {
+            // way back from the window; macOS keeps the toggle here, after
+            // the traffic lights, ribbon or not.
+            .when(first && !self.left_visible && (!show_ribbon || mac), |d| {
                 d.child(self.sidebar_toggle(true, theme, cx).mb(px(8.)).mr(px(2.)))
             })
             .children(tabs.iter().enumerate().map(|(ix, tab)| {
@@ -7972,7 +8067,9 @@ impl Workspace {
             // end in Obsidian's title row whether the sidebar is open (left
             // of its header) or collapsed (at the window's edge, before the
             // window buttons): it never moves into the sidebar's own header.
-            .when(last, |d| {
+            // On macOS it keeps to the window's top-right corner, which is
+            // the right dock's own header while that dock is open.
+            .when(last && !(mac && self.right_visible), |d| {
                 d.child(self.sidebar_toggle(false, theme, cx).mb(px(8.)))
             })
             // The drop bar: an accent bar astride the boundary the dragged
@@ -10746,6 +10843,7 @@ impl Workspace {
             )
         };
         let frameless = self.frameless;
+        let mac = self.mac_frame();
         // Obsidian's tab order and icon names (`links-coming-in` and
         // `links-going-out` are its own drawings; 's are in `assets`).
         div()
@@ -10764,7 +10862,7 @@ impl Workspace {
                     .items_center()
                     .h(px(HEADER_HEIGHT))
                     .pl(px(8.))
-                    .pr(if frameless {
+                    .pr(if frameless && !mac {
                         px(3. * RIBBON_WIDTH)
                     } else {
                         px(8.)
@@ -10798,7 +10896,10 @@ impl Workspace {
                     .child(window_handle(
                         div().id("right-dock-space").flex_1().h_full(),
                         frameless,
-                    )),
+                    ))
+                    // The window's top-right corner on macOS: the right
+                    // sidebar's toggle, which Obsidian fixes there.
+                    .when(mac, |d| d.child(self.sidebar_toggle(false, theme, cx))),
             )
             .child(div().flex_1().overflow_hidden().child(body))
             .child(self.dock_handle(false, theme))
@@ -11653,6 +11754,8 @@ impl Render for Workspace {
         let show_ribbon = self.show_ribbon();
         let frameless = frameless(window);
         self.frameless = frameless;
+        self.fullscreen = window.is_fullscreen();
+        let mac = self.mac_frame();
         let ribbon = show_ribbon.then(|| self.render_ribbon(&theme, cx));
         let left_tab = self.left_tab;
         let left_body: gpui::AnyElement = match left_tab {
@@ -11676,15 +11779,13 @@ impl Render for Workspace {
                     .flex_row()
                     .items_center()
                     .h(px(HEADER_HEIGHT))
-                    .px(px(8.))
+                    // Past the traffic lights on macOS, where this header
+                    // is the window's top-left corner.
+                    .pl(px(8. + self.frame_left_space()))
+                    .pr(px(8.))
                     .gap(px(3.))
                     .border_b_1()
                     .border_color(theme.border)
-                    // With the ribbon hidden the toggle moves to the head
-                    // of this row, where Obsidian keeps it then.
-                    .when(!show_ribbon, |d| {
-                        d.child(self.sidebar_toggle(true, &theme, cx))
-                    })
                     .child(self.dock_tab(
                         "Files",
                         "folder-closed",
@@ -11725,7 +11826,13 @@ impl Render for Workspace {
                     .child(window_handle(
                         div().id("left-dock-space").flex_1().h_full(),
                         frameless,
-                    )),
+                    ))
+                    // With the ribbon hidden, and on macOS whenever this
+                    // sidebar is open, Obsidian appends the toggle to this
+                    // row: it sits at the right end, against the dock's edge.
+                    .when(!show_ribbon || mac, |d| {
+                        d.child(self.sidebar_toggle(true, &theme, cx))
+                    }),
             )
             .child(div().flex_1().overflow_hidden().child(left_body))
             .child(self.render_vault_profile(&theme, cx))
@@ -11897,7 +12004,8 @@ impl Render for Workspace {
         // instead: without them a hotkey can no longer focus a pane behind
         // the modal, or swap the modal out from under its own Escape.
         let hotkeys_live = self.modal == Modal::None;
-        let controls = frameless.then(|| self.render_window_controls(&theme, window));
+        // macOS has the desktop's traffic lights instead.
+        let controls = (frameless && !mac).then(|| self.render_window_controls(&theme, window));
 
         let content = div()
             .key_context("Workspace")
