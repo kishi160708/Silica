@@ -139,7 +139,7 @@ impl Query {
                 line(out, "Excluding");
                 child.explain_into(out, depth + 1);
             }
-            Query::Text(t) => line(out, &format!("Matches text: {t}")),
+            Query::Text(t) => line(out, &format!("Matches text: \"{t}\"")),
             Query::Exact(t) => line(out, &format!("Contains exact text: {t}")),
             Query::Regex { pattern, flags } => {
                 line(out, &format!("Matches regex: /{pattern}/{flags}"))
@@ -636,7 +636,7 @@ mod tests {
         let q = parse(r#"-file:draft (tag:#work OR "exact one") match-case:Case /re/ [p:>3]"#);
         assert_eq!(
             q.explain(),
-            "Match all of\n  Excluding\n    Match file name\n      Matches text: draft\n  Match any of\n    Match tag\n      Matches text: #work\n    Contains exact text: exact one\n  Case sensitive\n    Matches text: Case\n  Matches regex: /re/\n  Greater than: p > 3\n"
+            "Match all of\n  Excluding\n    Match file name\n      Matches text: \"draft\"\n  Match any of\n    Match tag\n      Matches text: \"#work\"\n    Contains exact text: exact one\n  Case sensitive\n    Matches text: \"Case\"\n  Matches regex: /re/\n  Greater than: p > 3\n"
         );
     }
 

@@ -35,6 +35,7 @@ Scripts, each one checklist block of `docs//Interaction probes.md`:
 | --- | --- | --- |
 | `search.mjs` | the search pane: sort orders, persistence, menus, toggles, keyboard | fixtures, run, after-restart |
 | `search-copy-modal.mjs` | the "Copy search results" modal and its 24 format variants; supersedes `search.mjs` step 09 | fixtures, run |
+| `search-shots.mjs` | the search pane's look: `Page.captureScreenshot` PNGs of the pane with results, a hovered match, a keyboard-focused row, a collapsed row, the settings section, Explain search terms, Show more context, Collapse results, Match case, the count menu and the light theme (`SHOTS` names the folder), plus the computed styles and markup of every part | fixtures, run |
 | `properties.mjs` | properties in the reading view: the editing path, Add property, remove, type change, fold, propertiesInDocument, All properties | fixtures, run, after-restart |
 | `canvas.mjs` | canvas write-back: what an edited save, an unedited close and `canvas:new-file` write; key order per node and edge type, the formatter's one-line rule, unknown keys, group ordering | fixtures, run |
 | `splits-bookmarks.mjs` | tab groups: what "Split right" and "Split down" put in `workspace.json`, the `dimension` a dragged divider writes, the four focus commands, closing a group and its last tab, "Open link under cursor to the right", restart fidelity; and the Bookmarks plugin: every item type's bytes, each command's modal, the block id `bookmark-current-section` writes, the pane's header and rows | fixtures, run, after-restart |

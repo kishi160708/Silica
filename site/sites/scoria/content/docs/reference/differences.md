@@ -67,7 +67,7 @@ Things Obsidian does that  intends to do and does not.
 | **System trash on Windows and macOS** | Implemented on Linux (freedesktop trash with a `.trashinfo` record); elsewhere it falls back to the vault's `.trash/` |
 | **Themes (`cssTheme`)** | Base theme, accent color and fonts are honored; a CSS theme is not. Tier 3 |
 | **Workspace layout** | `workspace.json` is read but not applied;  opens its own default layout and never writes the file |
-| **Search result sorting, copying, collapsing** | See [search](/docs/app/search/) |
+| **Search result context menu** | Sorting, copying, collapsing and the keyboard are in; a result has no right-click menu yet. See [search](/docs/app/search/) |
 | **Vault-wide search and replace** | Replace works within one note |
 
 ### Markdown edge cases

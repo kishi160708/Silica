@@ -20,6 +20,7 @@ mod canvas;
 mod chooser;
 #[cfg(unix)]
 mod control;
+mod copy_results;
 /// `--control` binds a Unix domain socket; on a platform without one the
 /// flag says so and the app runs without it.
 #[cfg(not(unix))]
@@ -320,6 +321,7 @@ pub fn bind_all_keys(cx: &mut App, registry: &CommandRegistry) {
     settings::bind_keys(cx);
     help::bind_keys(cx);
     prompt::bind_keys(cx);
+    copy_results::bind_keys(cx);
     cx.bind_keys([KeyBinding::new("ctrl-q", Quit, None)]);
 }
 

@@ -14,6 +14,7 @@ use crate::bookmarks::{BookmarkEvent, BookmarksPane};
 use crate::canvas::menu::tooltip;
 use crate::canvas::{CanvasEvent, CanvasView};
 use crate::chooser::{Chooser, ChooserEvent, Row as ChooserRow};
+use crate::copy_results::{CopyResults, CopyResultsEvent};
 use crate::editor::{Editor, EditorEvent};
 use crate::explorer::{display_name, kind_name, ExplorerEvent, FileExplorer, FileTree, SortOrder};
 use crate::graph::{GraphEvent, GraphView};
@@ -23,7 +24,7 @@ use crate::palette::{CommandPalette, PaletteCommand, PaletteEvent};
 use crate::panes::{self, PaneSort};
 use crate::prompt::{Prompt, PromptEvent, PromptSpec};
 use crate::reading::{self, LinkTarget, ReadingEvent, ReadingView, TaskMarker, TaskToggled};
-use crate::search::{SearchEvent, SearchPane};
+use crate::search::{CopyEntry, SearchEvent, SearchPane};
 use crate::settings::{self, SettingChange, SettingsEvent, SettingsView};
 use crate::switcher::{QuickSwitcher, SwitcherEvent};
 use crate::text_input::{InputEvent, TextInput};
@@ -34,10 +35,10 @@ use crate::theme::{
 use crate::watch;
 use gpui::{
     actions, anchored, canvas, deferred, div, point, prelude::*, px, relative, rgb, rgba,
-    transparent_black, Action, Anchor, App, BoxShadow, ClickEvent, Context, CursorStyle,
-    Decorations, DragMoveEvent, Entity, FocusHandle, Focusable, FontWeight, Global, HighlightStyle,
-    HitboxBehavior, Hsla, KeyBinding, MouseButton, PathBuilder, Pixels, ResizeEdge, ScrollHandle,
-    SharedString, StyledText, Subscription, Task, Tiling, Window, WindowControlArea,
+    transparent_black, Action, Anchor, App, BoxShadow, ClickEvent, ClipboardItem, Context,
+    CursorStyle, Decorations, DragMoveEvent, Entity, FocusHandle, Focusable, FontWeight, Global,
+    HighlightStyle, HitboxBehavior, Hsla, KeyBinding, MouseButton, PathBuilder, Pixels, ResizeEdge,
+    ScrollHandle, SharedString, StyledText, Subscription, Task, Tiling, Window, WindowControlArea,
 };
 use rayon::prelude::*;
 use _cache::{
@@ -1159,6 +1160,8 @@ enum Modal {
     Prompt,
     /// The template chooser.
     Chooser,
+    /// The Search pane's "Copy search results".
+    CopyResults,
 }
 
 /// The file operation the open prompt will finish.
@@ -2066,6 +2069,7 @@ pub struct Workspace {
     palette: Entity<CommandPalette>,
     settings: Entity<SettingsView>,
     prompt: Entity<Prompt>,
+    copy_results: Entity<CopyResults>,
     pending: Option<PendingOp>,
     modal: Modal,
     /// Command ids run this session, most recent first.
@@ -2258,6 +2262,7 @@ impl Workspace {
         let palette = cx.new(CommandPalette::new);
         let settings = cx.new(SettingsView::new);
         let prompt = cx.new(Prompt::new);
+        let copy_results = cx.new(CopyResults::new);
         let reading = cx.new(ReadingView::new);
         let editor = cx.new(|cx| Editor::new(window, cx));
         let canvas = cx.new(CanvasView::new);
@@ -2384,14 +2389,37 @@ impl Workspace {
                     }
                 },
             ),
-            cx.subscribe(&search, |this, _, event: &SearchEvent, cx| match event {
-                SearchEvent::Open(path, offset) => {
-                    this.open_file(path.clone(), None, cx);
-                    if let Some(offset) = *offset {
-                        this.reveal_offset(offset, cx);
+            cx.subscribe_in(
+                &copy_results,
+                window,
+                |this, _, event: &CopyResultsEvent, window, cx| match event {
+                    CopyResultsEvent::Copy(text) => {
+                        cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                        this.report("Results copied to your clipboard.", cx);
                     }
-                }
-            }),
+                    CopyResultsEvent::Close => this.close_modal(window, cx),
+                },
+            ),
+            cx.subscribe_in(
+                &search,
+                window,
+                |this, _, event: &SearchEvent, window, cx| match event {
+                    SearchEvent::Open(path, offset) => {
+                        this.open_file(path.clone(), None, cx);
+                        if let Some(offset) = *offset {
+                            this.reveal_offset(offset, cx);
+                        }
+                    }
+                    SearchEvent::Bookmark(query) => {
+                        this.start_bookmark(BookmarkDraft::Search(query.clone()), window, cx);
+                    }
+                    SearchEvent::CopyResults(entries) => {
+                        this.open_copy_results(entries.clone(), window, cx);
+                    }
+                    SearchEvent::Dismiss => this.focus_main(window, cx),
+                    SearchEvent::StateChanged => {}
+                },
+            ),
             cx.subscribe_in(
                 &switcher,
                 window,
@@ -2497,6 +2525,7 @@ impl Workspace {
             palette,
             settings,
             prompt,
+            copy_results,
             pending: None,
             modal: Modal::None,
             recent_commands: Vec::new(),
@@ -5048,6 +5077,20 @@ impl Workspace {
                 self.report(format!("Could not save {name}: {err}"), cx);
             }
         }
+        cx.notify();
+    }
+
+    /// "Copy search results" from the Search pane's count menu.
+    fn open_copy_results(
+        &mut self,
+        entries: Vec<CopyEntry>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_editor_suggest(cx);
+        self.copy_results.update(cx, |m, cx| m.open(entries, cx));
+        self.modal = Modal::CopyResults;
+        window.focus(&self.copy_results.focus_handle(cx), cx);
         cx.notify();
     }
 
@@ -8274,6 +8317,9 @@ impl Workspace {
     fn restore_pane_states(&mut self, layout: &Value, cx: &mut Context<Self>) {
         let flag =
             |state: &Value, key: &str| state.get(key).and_then(Value::as_bool).unwrap_or(false);
+        if let Some(state) = leaf_state(layout, "left", "search") {
+            self.search.update(cx, |s, cx| s.restore(state, cx));
+        }
         if let Some(state) = leaf_state(layout, "right", "backlink") {
             let b = &mut self.backlink_state;
             b.collapse_all = flag(state, "collapseAll");
@@ -8370,6 +8416,7 @@ impl Workspace {
             let (sort, auto_reveal) = (explorer.sort_order(), explorer.auto_reveal());
             if let Some(left) = object.get_mut("left") {
                 set_explorer_leaf_state(left, sort, auto_reveal);
+                set_leaf_state(left, "search", &self.search.read(cx).leaf_state(cx));
             }
         }
         // The Backlinks and Outgoing links leaves' own state, likewise.
@@ -8792,6 +8839,7 @@ impl Workspace {
                 Modal::Palette => "palette",
                 Modal::Settings => "settings",
                 Modal::Prompt => "prompt",
+                Modal::CopyResults => "copy-results",
                 Modal::Chooser => "chooser",
             }),
         );
@@ -8805,6 +8853,7 @@ impl Workspace {
             Modal::Switcher => Some(self.switcher.read(cx).describe(rows, cx)),
             Modal::Palette => Some(self.palette.read(cx).describe(rows, cx)),
             Modal::Prompt => Some(self.prompt.read(cx).describe(rows, cx)),
+            Modal::CopyResults => Some(self.copy_results.read(cx).describe()),
             Modal::Chooser => Some(self.chooser.read(cx).describe(rows, cx)),
             Modal::Settings => Some(self.settings.read(cx).describe(cx)),
             Modal::None => None,
@@ -11761,11 +11810,16 @@ impl Render for Workspace {
         // backdrop click.
         let overlay: Option<gpui::AnyElement> = match self.modal {
             Modal::None => None,
-            Modal::Switcher | Modal::Palette | Modal::Prompt | Modal::Chooser => {
+            Modal::Switcher
+            | Modal::Palette
+            | Modal::Prompt
+            | Modal::Chooser
+            | Modal::CopyResults => {
                 let child: gpui::AnyElement = match self.modal {
                     Modal::Switcher => self.switcher.clone().into_any_element(),
                     Modal::Palette => self.palette.clone().into_any_element(),
                     Modal::Chooser => self.chooser.clone().into_any_element(),
+                    Modal::CopyResults => self.copy_results.clone().into_any_element(),
                     _ => self.prompt.clone().into_any_element(),
                 };
                 Some(

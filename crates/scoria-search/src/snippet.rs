@@ -115,6 +115,77 @@ pub fn match_lines(text: &str, ranges: &[Range<usize>]) -> Vec<MatchLine> {
     out
 }
 
+/// The line at `line_offset` with up to `before` lines above and `after`
+/// lines below it, each trimmed and joined with `\n`, the way a result row
+/// reads with "Show more context" on or after its chevrons were pressed.
+/// A blank line ends the context in its direction, as the Backlinks pane's
+/// does. `hits` are the note's hit ranges; the ones on the shown lines come
+/// back mapped into the snippet. The matched line is never windowed here:
+/// context shows whole lines.
+pub fn context_window(
+    text: &str,
+    line_offset: usize,
+    before: usize,
+    after: usize,
+    hits: &[Range<usize>],
+) -> MatchLine {
+    let len = text.len();
+    let at = floor(text, line_offset);
+    let line_start = |p: usize| text[..p].rfind('\n').map_or(0, |i| i + 1);
+    let line_end = |p: usize| text[p..].find('\n').map_or(len, |i| p + i);
+    let mut start = line_start(at);
+    let mut end = line_end(at);
+    for _ in 0..before {
+        if start == 0 {
+            break;
+        }
+        let prev = line_start(start - 1);
+        if text[prev..start].trim().is_empty() {
+            break;
+        }
+        start = prev;
+    }
+    for _ in 0..after {
+        if end >= len {
+            break;
+        }
+        let next = line_end((end + 1).min(len));
+        if text[end..next].trim().is_empty() {
+            break;
+        }
+        end = next;
+    }
+    let mut snippet = String::new();
+    let mut ranges = Vec::new();
+    let mut pos = start;
+    for (i, line) in text[start..end].split('\n').enumerate() {
+        let body = line.trim_end_matches('\r');
+        let lead = body.len() - body.trim_start().len();
+        let trimmed = body.trim();
+        if i > 0 {
+            snippet.push('\n');
+        }
+        let base = snippet.len();
+        let (tstart, tend) = (pos + lead, pos + lead + trimmed.len());
+        for h in hits {
+            let s = h.start.max(tstart);
+            let e = h.end.min(tend);
+            if e > s {
+                let s = floor(trimmed, s - tstart) + base;
+                let e = ceil(trimmed, e - tstart) + base;
+                ranges.push(s..e);
+            }
+        }
+        snippet.push_str(trimmed);
+        pos += line.len() + 1;
+    }
+    MatchLine {
+        offset: line_start(at),
+        snippet,
+        ranges,
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::single_range_in_vec_init)]
 mod tests {
@@ -204,5 +275,32 @@ mod tests {
         let lines = match_lines(text, &[1..5]);
         assert_eq!(lines[0].snippet, text);
         assert_eq!(&lines[0].snippet[lines[0].ranges[0].clone()], "日本");
+    }
+
+    #[test]
+    fn context_window_adds_whole_neighbour_lines_and_stops_at_a_blank() {
+        let text = "line before first\nmango needle first\nline after first\n\nmiddle\n\nmango needle second\n";
+        let hits: Vec<Range<usize>> = ["needle"]
+            .iter()
+            .flat_map(|n| text.match_indices(n).map(|(i, _)| i..i + 6))
+            .collect();
+        let first = text.find("mango needle first").unwrap();
+        let m = context_window(text, first, 1, 1, &hits);
+        assert_eq!(
+            m.snippet,
+            "line before first\nmango needle first\nline after first"
+        );
+        assert_eq!(m.offset, first);
+        assert_eq!(&m.snippet[m.ranges[0].clone()], "needle");
+        // The blank line above "mango needle second" ends the context.
+        let second = text.find("mango needle second").unwrap();
+        let m = context_window(text, second, 3, 3, &hits);
+        assert_eq!(m.snippet, "mango needle second");
+        assert_eq!(m.ranges.len(), 1);
+        // No context asked for: the trimmed line alone, indentation gone.
+        let text = "   indented needle here\nnext\n";
+        let m = context_window(text, 0, 0, 0, &[12..18]);
+        assert_eq!(m.snippet, "indented needle here");
+        assert_eq!(&m.snippet[m.ranges[0].clone()], "needle");
     }
 }

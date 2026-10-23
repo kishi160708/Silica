@@ -270,6 +270,7 @@ pub struct TextInput {
     marked: Option<Range<usize>>,
     placeholder: SharedString,
     pad_left: Pixels,
+    pad_right: Pixels,
     layout: Layout,
     dragging: bool,
 }
@@ -290,6 +291,7 @@ impl TextInput {
             marked: None,
             placeholder: placeholder.into(),
             pad_left: px(8.),
+            pad_right: px(8.),
             layout: Layout::default(),
             dragging: false,
         }
@@ -307,6 +309,13 @@ impl TextInput {
     /// 30 px Obsidian's pane filters leave for their magnifier.
     pub fn set_pad_left(&mut self, pad: Pixels) {
         self.pad_left = pad;
+    }
+
+    /// Room at the right for controls drawn over the field, like the
+    /// Match case and clear buttons of the Search pane. Takes effect at the
+    /// next paint; no redraw is requested, since the caller is painting.
+    pub fn set_pad_right(&mut self, pad: Pixels) {
+        self.pad_right = pad;
     }
 
     /// Replaces the text and puts the caret at its end with nothing selected;
@@ -700,7 +709,7 @@ impl Render for TextInput {
             .w_full()
             .h(px(30.))
             .pl(self.pad_left)
-            .pr_2()
+            .pr(self.pad_right)
             .flex()
             .items_center()
             .rounded_md()

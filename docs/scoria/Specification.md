@@ -2792,6 +2792,69 @@ never opened — every switch was a synthetic `change` event. Whether a second
 click on a row's collapse icon re-expands it, and whether clicking a row's
 title collapses or opens.
 
+**Driven again on 2026-10-22, for the pane's look** (`tools/obsidian-probe/search-shots.mjs`,
+results in `results/2026-10-22-search-shots.json`; the same Obsidian 1.14.4 on installer build
+1.13.7, a fresh scratch vault of eight notes holding `needle`, real clicks and keystrokes over
+CDP, `Page.captureScreenshot` for the pictures and `getComputedStyle` for the numbers; a 300 px
+dock). What the pane is made of, top to bottom, in the dark theme unless said otherwise:
+
+- `search-row`: margin 12px 12px 8px, 30 px tall, a flex row with a 4 px gap. Inside it the
+  `search-input-container` fills the width; the `<input>` is 30 px tall, 13 px text, padding
+  `4px 8px 4px 30px` (62 px at the right once the decorators show), background `rgb(46,46,46)`,
+  a hairline border `rgb(51,51,51)`, radius 5. Over its right end sit the Match case decorator
+  (`input-right-decorator clickable-icon`, 24 by 20, padding 2px 4px, radius 4, a 16 px icon at
+  85 % opacity, muted) and then the clear button (`search-input-clear-button`, 28 by 30, shown
+  only with text: a filled disc in the muted colour with a dark cross). The Search settings
+  button stands after the container: 28 by 24, padding 4px 6px, radius 4.
+- `is-active` on either button is the accent as text (`rgb(166,138,249)`) over the accent at a
+  tenth as background.
+- `search-info-container` (Explain search terms): padding 4px 16px 8px, 12 px muted text, one
+  `<div>` per line. For `needle` it read exactly `Matches text: "needle"` — the term in double
+  quotes, which the 2026-10-18 label dump had not recorded.
+- `search-params`: margin 4px 16px, a flex column with an 8 px gap; each `setting-item
+  mod-toggle` is 19 px tall with 8 px of margin below (so rows sit 35 px apart), the name 13 px
+  in the normal text colour, the `checkbox-container` 34 by 19 with an 18 px radius, background
+  `rgb(63,63,63)` off and the accent on. With the section open the results bar moved from y 90
+  to y 195.
+- `search-results-info`: padding 0 12px 8px, a flex row, the two controls 24 px tall. The count
+  (`clickable-icon search-results-result-count`) is padding 4px 6px, radius 4, 12 px muted
+  text, and ends in `more-options-icon`: a filled disc the colour of muted text carrying three
+  dark dots; under the pointer the control takes a white wash at 6.7 %. The sort control is the
+  native `<select class="dropdown">`, 24 px tall, 12 px muted text, no border or background at
+  rest, padding `0 28.8px 0 9.6px`, a chevron pair at its right.
+- `search-result-container`: padding 12 on every side; the list scrolls inside it.
+- A result's title row (`tree-item-self search-result-file-title`): 24.9 px tall (13 px text on
+  a 16.9 px line, padding 4px 8px 4px 24px), margin-bottom 2, radius 8. The collapse icon is 16
+  by 17 at `margin-left: -20px` (so it sits 4 px in), a 10 px `right-triangle` in the faint text
+  colour at 85 % opacity, pointing down; collapsed it points right. The flair is 12 px faint text
+  at the right. A name hit is `search-result-file-matched-text` inside the title, same weight.
+- The card (`search-result-file-matches`): the note background `rgb(28,28,28)`, radius 4,
+  margin 4px 0 8px, no border in the dark theme; in the light theme white with a 1 px ring of
+  `rgb(228,228,228)` drawn as a box shadow. Each `search-result-file-match` is padding
+  `8px 20px 8px 12px`, 12 px muted text on a 15.6 px line, `white-space: pre-wrap` — a long line
+  wraps to three lines and the snippet itself ends in `...`. A hairline separates one match from
+  the next.
+- `search-result-file-matched-text`: background `oklch(0.88 0.132 107.9 / 0.3)` (a yellow at
+  30 %) in the dark theme, `oklch(0.771 0.158 86.6 / 0.3)` in the light one; weight 400, the
+  text colour unchanged in a title and the normal text colour in a match row.
+- A match row under the pointer: background the accent at 33 % (`oklch(0.603 0.217 292.5 /
+  0.33)`), its text the normal colour, and its `search-result-hover-button`s shown — each a 16
+  px chevron in the faint colour with padding 1px 3px and radius 4, `mod-top` at the top right
+  and `mod-bottom` at the bottom right. On a note's first line only the bottom one appeared.
+- Keyboard, now driven against a populated list: with the keyboard in the input, ArrowDown put
+  `has-focus` on the first result and drew a 2 px ring around its title row; ArrowLeft then
+  collapsed that result (`is-collapsed`, its card gone, the ring staying on the title row) and
+  ArrowRight re-opened it. So the "nothing while the input is the active element" reading of
+  the ArrowLeft source above does not describe what happens once a row has focus.
+- Toggles on a populated list: Collapse results folded every row and left the count at
+  12 results; Show more context turned mango's first row into three lines, `line before first`
+  / `mango needle first` / `line after first`, in one row; Match case dropped `kiwi` (its only
+  hit is `Needle`) and the count read 11 results. Enabling Explain search terms put the
+  `Matches text` line above the three toggles.
+- The count's menu: 171 by 63, background `rgb(40,40,40)`, radius 8, a hairline border
+  `rgb(63,63,63)`, three box shadows; each `menu-item` 24.9 px tall, padding 4px 8px, radius 4,
+  a 16 px muted icon, an 8 px gap, 13 px text.
+
 ## Observed shell typography and chrome, Obsidian 1.14.4 (installer build 1.13.7)
 
 Read from a running Obsidian on Linux over CDP on 2026-10-20 with

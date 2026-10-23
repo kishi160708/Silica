@@ -6,14 +6,10 @@ tags:
 
 ## Environment
 
-The reference development machine runs NixOS on Wayland with an NVIDIA GPU. The GPUI app links
-libxcb and libxkbcommon and loads Wayland, Vulkan, and GL at run time, so run cargo commands that
-touch the `` crate inside `nix-shell` (see `shell.nix` at the repository root).
+The reference development machine runs NixOS on Wayland with an NVIDIA GPU. The GPUI app links libxcb and libxkbcommon and loads Wayland, Vulkan, and GL at run time, so run cargo commands that touch the `` crate inside `nix-shell` (see `shell.nix` at the repository root).
 
-> [!warning] Pinned dependencies
-> `gpui` and `gpui_platform` are git dependencies pinned to a Zed release commit; the crates.io
-> release crashes on NVIDIA. `libc` is pinned in `Cargo.lock` because an old `xattr` in gpui's tree
-> needs a constant newer libc removed. Both pins are explained in the root `Cargo.toml`.
+>[!warning] Pinned dependencies
+> `gpui` and `gpui_platform` are git dependencies pinned to a Zed release commit; the crates.io release crashes on NVIDIA. `libc` is pinned in `Cargo.lock` because an old `xattr` in gpui's tree needs a constant newer libc removed. Both pins are explained in the root `Cargo.toml`.
 
 ## Commands
 
@@ -2520,6 +2516,47 @@ magnifier and the 30 px inset; and the Backlinks and Outgoing links leaves start
 mentions folded, Obsidian's default. Still as the verifier left them: Escape in the Tags filter
 keeps the typed text where Obsidian drops it, the fold triangles are Lucide chevrons rather than
 Obsidian's `right-triangle`, and the search leaf's own `query` is not restored at launch.
+
+### Search pane, 2026-10-22
+
+The Search pane was a field, a count line and a uniform list of one-line rows with a text
+triangle per file. It now has Obsidian's shape, measured off a CDP run that captured the
+pane itself (`tools/obsidian-probe/search-shots.mjs`, written up under
+[[Specification#Observed search pane behavior, Obsidian 1.14.4]]): the `search-row` with
+the magnifier, the Match case decorator and the clear button inside the field and the
+Search settings button after it; the Explain search terms block; the three toggles; the
+results bar with the count (its menu: Copy search results, Bookmark...) and the sort
+control; and the list — a 25 px title row per file with the chevron, the name and the
+match count, over a card of its matches, each padded 8/20/8/12, wrapping, the matched
+text on the yellow wash with its weight unchanged, the accent wash and the two "Show
+more context" chevrons under the pointer. Matches wrap, so the uniform list became
+gpui's `list` with a `ListState`: a new result set resets it to the top (a splice of the
+whole range left it at the end), and a fold or a change of context splices so the scroll
+position holds.
+
+The leaf's six keys — `query`, `matchingCase`, `explainSearch`, `collapseAll`,
+`extraContext`, `sortOrder` — are read from the left dock's `search` leaf at restore and
+written back in place, so a query survives a restart as Obsidian's does. Match case
+wraps the parsed query in `Query::CaseSensitive`; the sort control re-sorts the list it
+has without running the query again, the name orders through `natural_cmp` and the time
+orders by the time alone with a stable sort, which is what kept Obsidian's tie groups in
+their previous order; Show more context and a match's chevrons go through
+`_search::context_window`, whole trimmed lines around the match that stop at a
+blank line, like the Backlinks pane's. Explain now quotes the term (`Matches text:
+"needle"`), which the live DOM shows and the earlier label dump had not.
+
+Keyboard: Down and Up move the focus ring (Obsidian's `has-focus`) over file rows and
+match rows alike, Enter opens the focused row at its match, Left folds and Right unfolds
+the file, Escape drops the ring and then returns the keyboard to the main view. gpui
+dispatches a matched action before any key listener sees the key, so the pane takes the
+field's own Left and Right actions in the capture phase rather than listening for keys.
+
+"Copy search results" is a modal of its own (`crates//src/copy_results.rs`): the
+preview, Show path, Link style and List prefix, Copy results (which writes the clipboard,
+shows "Results copied to your clipboard." and leaves the modal open) and Done. Its text
+comes from `search::copy_text`, pinned by a test to the 24 lines the spec recorded and to
+the exact bytes the probe read off the clipboard. The modal's two selects are menus and
+its preview is read-only, where Obsidian's are a native `<select>` and a textarea.
 
 ### Live Preview, 2026-10-16
 

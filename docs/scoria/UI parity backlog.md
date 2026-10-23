@@ -790,6 +790,12 @@ merges its counts.
 
 *medium, parity-gap, medium*
 
+**Landed 2026-10-22** ([[Development#Search pane, 2026-10-22]]): Down and Up move a focus
+ring over the rows (file rows and match rows both), Enter opens the focused row, Left folds
+and Right unfolds its file (taken from the field's own actions in the capture phase, since
+gpui dispatches a key's action before any key listener sees it), and Escape clears the ring,
+then hands the keyboard back to the main view. The dump carries `focused`.
+
 **.** With results on screen and focus on the query field, Down, Down and Enter each answer
 `handled: true` — the `TextInput` consumed them — and change nothing: no row becomes focused,
 `file.path` does not move, and Escape is swallowed with the query intact. The pane's state dump
@@ -809,6 +815,14 @@ clear the query and return focus to the editor.
 
 *medium, missing-feature, large*
 
+**Landed 2026-10-22** ([[Development#Search pane, 2026-10-22]]): the `search-row` with the
+Match case decorator and clear button, the Search settings button and its three toggles, the
+Explain block, the results bar with the count's menu (Copy search results opens the modal
+with its toggle, two selects and two buttons; Bookmark... goes to the bookmarks prompt) and
+the sort control, and the six leaf keys in `workspace.json`. What remains unlike Obsidian's:
+the sort control and the modal's two selects are menus, not native `<select>`s, and the
+modal's text is a read-only preview rather than a textarea.
+
 **.** `SearchPane::render` emits exactly three things: the input, an optional summary line and
 the list. `Search::new` is always called without a case flag, `run_search` always sorts one way, and
 `Query::explain` is never called. A grep for `matchingCase`, `sortOrder`, `explainSearch` or
@@ -827,6 +841,9 @@ case wrapping the parsed tree in `Query::CaseSensitive`, and `sort_order` thread
 ### The result summary disappears when the query is emptied
 
 *low, parity-gap, small*
+
+**Landed 2026-10-22**: a `has_run` flag, and the count reads "0 results" once a query has
+run in the session.
 
 **.** Search `kiwi`, then Ctrl+A and Backspace: the pane reports
 `{query:"", files:0, matches:0, results:[]}` and the summary line is suppressed entirely, because
