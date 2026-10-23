@@ -6,3 +6,13 @@
 /.idea
 /docs//.obsidian/workspace.json
 __pycache__/
+
+# Obsidian scratch in the dogfooded vaults: the trash it moves deletions to,
+# and the files it names for you when you make one from the ribbon.
+.trash/
+Untitled.md
+Untitled.canvas
+Untitled.base
+Untitled [0-9]*.md
+Untitled [0-9]*.canvas
+Untitled [0-9]*.base
