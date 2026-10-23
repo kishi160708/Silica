@@ -264,29 +264,39 @@ mod tests {
         assert_eq!(reg.vaults().len(), 1);
     }
 
+    /// The fixture's vault folders are absolute on the platform the test
+    /// runs on: a rootless path is relative on Windows and would be
+    /// resolved against the current drive.
+    const V: &str = if cfg!(windows) { "C:/v" } else { "/v" };
+
     #[test]
     fn obsidians_document_round_trips_with_its_unknown_keys() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(".json");
         std::fs::write(
             &path,
-            r#"{"vaults":{"d9bdd8d517a88dd3":{"path":"/v/one","ts":1792091578741,"open":true,"color":"red"},"0260ef8a33e2e677":{"path":"/v/two","ts":1792369318734}},"updateChannel":"insider"}"#,
+            format!(
+                r#"{{"vaults":{{"d9bdd8d517a88dd3":{{"path":"{V}/one","ts":1792091578741,"open":true,"color":"red"}},"0260ef8a33e2e677":{{"path":"{V}/two","ts":1792369318734}}}},"updateChannel":"insider"}}"#
+            ),
         )
         .unwrap();
         let mut reg = VaultRegistry::load(&path).unwrap();
-        assert_eq!(reg.vaults()[0].1.path, Path::new("/v/two"));
-        assert_eq!(reg.find(Path::new("/v/one")).unwrap().0, "d9bdd8d517a88dd3");
-        reg.record_open(Path::new("/v/two"), 1792400000000);
+        let (one, two) = (format!("{V}/one"), format!("{V}/two"));
+        assert_eq!(reg.vaults()[0].1.path, Path::new(&two));
+        assert_eq!(reg.find(Path::new(&one)).unwrap().0, "d9bdd8d517a88dd3");
+        reg.record_open(Path::new(&two), 1792400000000);
         reg.save().unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains(r#""color":"red""#), "{text}");
         assert!(text.contains(r#""updateChannel":"insider""#), "{text}");
         assert!(
-            text.contains(r#""0260ef8a33e2e677":{"path":"/v/two","ts":1792400000000,"open":true}"#),
+            text.contains(&format!(
+                r#""0260ef8a33e2e677":{{"path":"{two}","ts":1792400000000,"open":true}}"#
+            )),
             "{text}"
         );
         assert!(
-            !text.contains(r#""/v/one","ts":1792091578741,"open""#),
+            !text.contains(&format!(r#""{one}","ts":1792091578741,"open""#)),
             "one lost open: {text}"
         );
     }

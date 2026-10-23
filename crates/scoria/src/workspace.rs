@@ -11951,7 +11951,29 @@ impl Render for Workspace {
 mod tests {
     use super::*;
     use std::fs;
-    use std::os::unix::fs::symlink;
+    use std::path::Path;
+
+    /// A symlink to a folder or a file on either platform. Windows refuses
+    /// to make one without Developer Mode or elevation, so a test that
+    /// needs one skips that part when creation is denied there.
+    fn symlink(target: &Path, link: &Path) -> Option<()> {
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(target, link);
+        #[cfg(windows)]
+        let made = if target.is_dir() {
+            std::os::windows::fs::symlink_dir(target, link)
+        } else {
+            std::os::windows::fs::symlink_file(target, link)
+        };
+        match made {
+            Ok(()) => Some(()),
+            Err(e) if cfg!(windows) => {
+                eprintln!("symlinks are not permitted here, skipping: {e}");
+                None
+            }
+            Err(e) => panic!("symlink {}: {e}", link.display()),
+        }
+    }
 
     fn vault() -> (tempfile::TempDir, VaultState) {
         let dir = tempfile::tempdir().unwrap();
@@ -12927,13 +12949,17 @@ mod tests {
         // it goes through is not.
         let outside = tempfile::tempdir().unwrap();
         fs::write(outside.path().join("there.md"), "o").unwrap();
-        symlink(outside.path(), root.join("linked")).unwrap();
+        if symlink(outside.path(), &root.join("linked")).is_none() {
+            return;
+        }
         assert!(vault_path_in(&root, "linked/new.md").is_err());
         assert!(vault_path_in(&root, "linked/there.md").is_err());
 
         // A dangling link resolves to nothing, and a write through it would
         // create the file wherever it points.
-        symlink(outside.path().join("gone.md"), root.join("dangling.md")).unwrap();
+        if symlink(&outside.path().join("gone.md"), &root.join("dangling.md")).is_none() {
+            return;
+        }
         assert!(vault_path_in(&root, "dangling.md").is_err());
     }
 

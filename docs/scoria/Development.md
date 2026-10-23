@@ -126,7 +126,8 @@ enabled on the GitHub repository, and `SECURITY.md` at the root is the policy.
 > CI runs `cargo check -p ` on both and the release job is the first thing that links them.
 > Nothing is code-signed or notarized, so macOS Gatekeeper and Windows SmartScreen will both
 > object. Linux x86_64 is the build that runs on the reference machine; see
-> [[#Windows smoke test, 2026-10-20]] for what the Windows one was seen to do.
+> [[#Windows smoke test, 2026-10-20]] and [[#Windows smoke test, 2026-10-22]] for what the Windows one was
+> seen to do.
 
 ### Windows smoke test, 2026-10-20
 
@@ -180,6 +181,35 @@ underneath wins the hit test and pressing a button drags the window.
 Verified on `w11` by clicking the buttons through `SetCursorPos` and `mouse_event` from the
 logged-on session: the window minimised, then maximised to the full work area, and the title row
 holds the three buttons with no caption above it.
+
+### Windows smoke test, 2026-10-22
+
+Cut from `main` at bb888c1 (0.3.0) on `w11`, the same toolchain as above. A cold
+`cargo build --release --locked -p ` took 14m50s this time, with no warning of ours. The
+keyboard, editing and saving paths the 2026-10-20 run left untouched were driven from the logged-on
+session with a PowerShell script: `SendKeys` for the keyboard, `SetCursorPos` and `mouse_event` for
+the mouse, `CopyFromScreen` for the screenshots, and the script set per-monitor-v2 DPI aware with
+`SetProcessDpiAwarenessContext` so `GetWindowRect` and the bitmap agree in real pixels — which is
+the fix for the measuring-tape confusion above. The vault was a copy of `docs/`, at 1400x900
+logical and 150%.
+
+Seen to work: the hidden frame with its three buttons, maximise to the full work area (3840x2088)
+and restore; Ctrl+E between live preview and reading view; typing in live preview, which rendered a
+wikilink and bold as typed and autosaved with the "saved" notice, keeping an LF file LF; a CRLF
+file written from PowerShell kept CRLF, including the line  inserted; Ctrl+O, Ctrl+P with its
+hotkey labels, Ctrl+Shift+F with a click on a result opening the note at its line, a canvas with
+cards and an edge, and the Settings modal on Ctrl+,; the watcher, which listed a note created
+outside the app and reloaded an open tab whose file was replaced outside; Alt+F4, which exited
+with nothing on stderr.
+
+`cargo test --workspace` had never been run on Windows and did not compile: the workspace tests
+imported the Unix `symlink`, and the registry round trip's fixture used `/v/two`, which Windows
+does not count as absolute and so resolved against the current drive. Both are test-side and fixed
+on the day; the symlink half of `vault_paths_cannot_leave_the_vault` skips on Windows without
+Developer Mode (`CreateSymbolicLink` wants a privilege, error 1314). All 620 tests pass there now.
+
+Still missing on Windows: the control socket, so the MCP server and the Linux screenshot tooling
+do not reach the app there; the PowerShell driver was a one-off in the session's scratch folder.
 
 ## Reader (phase 2)
 
