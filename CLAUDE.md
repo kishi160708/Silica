@@ -38,6 +38,9 @@ site                    : the informational site and the manual (static, node)
 ## Commands
 
 On NixOS run these inside `nix-shell` (`shell.nix` supplies gpui's X11, Wayland, and Vulkan libraries).
+The `justfile` wraps every command below (`just` lists them); on macOS it points `CARGO_TARGET_DIR` at
+`~/.cache/cargo-target/`, because a repo on a quarantined network share makes Gatekeeper prompt
+for every build script written there.
 gpui is a git dependency pinned to a Zed release commit (see the note in `Cargo.toml`); the crates.io
 release is stale and crashes on NVIDIA. Bump the pin on its own, one release at a time, and run the
 app on a real GPU before committing.
