@@ -17,8 +17,10 @@
 <p align="center">
   <a href="#status">Status</a> ·
   <a href="#the-window">The window</a> ·
-  <a href="#tabs-splits-and-panes">Tabs and splits</a> ·
-  <a href="#search-and-writing">Search and writing</a> ·
+  <a href="#reading-a-vault">Reading</a> ·
+  <a href="#images-diagrams-canvas-and-graph">Canvas and graph</a> ·
+  <a href="#search-the-switcher-and-the-panes">Search</a> ·
+  <a href="#writing-tabs-and-splits">Writing</a> ·
   <a href="#compatibility-tiers">Compatibility</a> ·
   <a href="#roadmap">Roadmap</a> ·
   <a href="#releases">Releases</a> ·
@@ -31,12 +33,12 @@ same Markdown dialect, same `.canvas` and `.base` files. There is no import step
 and no second copy of anything. It is an independent implementation and is not affiliated with
 Obsidian.
 
-<img src="docs/img/app/workspace.png" alt="The  window: the Files pane on the left, a note in reading view in the middle with a properties table, a callout and a code block, the Outline pane on the right, all inside a frameless window.">
+<img src="docs/img/app/workspace.png" alt="The  window on the -demo vault: the Files pane on the left, a note in Live Preview in the middle with a typed properties table and a photograph of a  sample, the Backlinks pane on the right, all inside a frameless window on a desktop wallpaper.">
 
-*The three-pane shell on this repository's own vault, `docs/`, where the specification lives:
-a typed properties table, a callout, a code block and the note's outline. Obsidian's hidden window
-frame, its palette, its type scale and its Lucide icons, all read off a running copy rather than
-guessed at.*
+*The three-pane shell on `docs/-demo`, a small field guide to  and the volcanic rocks
+around it that ships with the repository for exactly this purpose: a typed properties table, a
+photograph embedded with a width, and the note's backlinks. Obsidian's hidden window frame, its
+palette, its type scale and its Lucide icons, all read off a running copy rather than guessed at.*
 
 ## Status
 
@@ -69,24 +71,46 @@ sidebars are the values Obsidian computes for its own shell, read over CDP from 
 written down in the specification; the icons are Lucide's own drawings, which is what Obsidian names
 in its DOM.
 
-## Tabs, splits and panes
+## Reading a vault
 
-<img src="docs/img/app/tabs.gif" alt="Opening notes in new tabs with the quick switcher, then splitting the main area right so two notes sit side by side.">
+<img src="docs/img/app/tour.gif" alt="Scrolling a note in reading view past a table, a code block, a callout and a task list, expanding a folder in the Files pane, opening a note with an embedded photograph, then opening the Outline pane and jumping to a heading from it.">
 
-*A new tab, the quick switcher's fuzzy match, then Split right — two tab groups with their own tab
-strips. The tree is written back to `workspace.json` in the shape Obsidian writes.*
+*Reading view on the vault's home note — a table, a code block, a callout, tasks — then a folder
+expanded in the Files pane, a rock's note with its photograph and an embedded glossary entry, and
+the Outline pane jumping to a heading.*
 
-## Search and writing
+## Images, diagrams, canvas and graph
 
-<img src="docs/img/app/search.png" alt="The Search pane with the query 'line endings', showing 341 results grouped by note with the matches highlighted.">
+<img src="docs/img/app/media.gif" alt="Notes with embedded photographs and SVG charts, an image file opened in its own tab, a canvas zoomed in from the whole diagram to its text cards, note embeds and image nodes joined by labelled edges, then the graph view settling.">
+
+*Photographs and SVG charts embedded with `![[file|width]]`, an image opened as its own tab, a
+`.canvas` file with text cards, note cards and image nodes joined by labelled edges, and the graph
+view laying the vault out.*
+
+## Search, the switcher and the panes
+
+<img src="docs/img/app/search.gif" alt="The quick switcher matching a note as its name is typed, then the Search pane filling with grouped, highlighted results as a query is typed, a result opening at its match, then the Tags and Backlinks panes.">
+
+*The quick switcher's fuzzy match, Search grouping hits by note with every match highlighted and
+opening one at its line, the Tags pane with nested tags and counts, and a note's Backlinks.*
+
+## Writing, tabs and splits
+
+<img src="docs/img/app/editing.gif" alt="Typing a task at the end of a note in Live Preview, two square brackets opening the completion popup which narrows as letters are typed, the accepted link written, find highlighting a word, then Split right and a second note opened beside the first.">
+
+*Live Preview: `[[` completes against the vault's files, aliases, headings, tags and block
+references and the accepted row writes the link; find highlights every hit; then Split right and
+a second note beside the first. The tab-group tree is written back to `workspace.json` in the
+shape Obsidian writes.*
+
+<img src="docs/img/app/search.png" alt="The Search pane with the query 'vesicularity', showing results grouped by note with the matches highlighted.">
 
 *Search takes Obsidian's query grammar, groups hits by note with a count, and highlights every
 match in context.*
 
 <img src="docs/img/app/autocomplete.png" alt="Typing two square brackets in Live Preview opens a completion popup listing matching notes.">
 
-*`[[` in Live Preview completes against the vault's files, aliases, headings, tags and block
-references; the accepted row writes the link in the style the vault already uses.*
+*The completion popup as `[[` opens it, listing the vault's notes, images and diagrams before a letter narrows it.*
 
 ## Running it
 
@@ -102,8 +126,9 @@ cargo test --workspace
 newline-delimited JSON: open a note, run a command id, send keystrokes or
 clicks, and read back a dump of the window's whole state. `-mcp` wraps
 that protocol as a Model Context Protocol server over stdio, so an agent can
-launch , drive it and screenshot it — the screenshots and the recording
-above were made that way. Both are described in `docs//Development.md`.
+launch , drive it and screenshot it. The recordings above were made that way:
+`tools/readme-recording` drives the app over the socket inside a headless Wayland session whose
+background is the desktop wallpaper, captures each step, and assembles the GIFs. Both are described in `docs//Development.md`.
 
 ## Compatibility tiers
 

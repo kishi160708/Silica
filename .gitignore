@@ -5,3 +5,4 @@
 /.vscode
 /.idea
 /docs//.obsidian/workspace.json
+__pycache__/

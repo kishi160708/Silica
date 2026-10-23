@@ -30,8 +30,9 @@ crates/-suggest   autocompletion: triggers, candidates, the link an accepted row
 crates/-canvas    canvas model: viewport math, edge geometry, hit tests, selection, edits with undo (no gpui)
 crates/-bench     spike benchmarks: synthetic vault generator, index timer (bin)
 docs/             Obsidian vault: spec and design notes (dogfooded by )
+docs/-demo        Obsidian vault: the geology field guide the README recordings are made on
 docs/img                brand art; _v3_fixed.svg is the logo every other copy is cut from
-docs/img/app            README screenshots and the tab recording, captured over the control socket
+docs/img/app            README screenshots and recordings, made by tools/readme-recording over the control socket
 site                    : the informational site and the manual (static, node)
 ```
 
