@@ -123,7 +123,25 @@ jobs:
           path: dist
           merge-multiple: true
 
-      # Name the inputs explicitly so SHA256SUMS can never list itself.
+      # A versionless copy of each archive. GitHub resolves
+      # /releases/latest/download/<name> by exact file name, so an address that
+      # survives the next tag needs a name with no version in it; these three are
+      # what 's download buttons point at. The versioned names stay
+      # beside them, because a file sitting in a downloads folder should still say
+      # which release it came from.
+      - name: Stable download names
+        run: |
+          set -euo pipefail
+          cd dist
+          tag="$GITHUB_REF_NAME"
+          cp "-$tag-x86_64-unknown-linux-gnu.tar.gz" -linux-x86_64.tar.gz
+          cp "-$tag-x86_64-pc-windows-msvc.zip"      -windows-x86_64.zip
+          cp "-$tag-aarch64-apple-darwin.tar.gz"     -macos-aarch64.tar.gz
+          ls -l
+
+      # Name the inputs explicitly so SHA256SUMS can never list itself. Both
+      # names of each archive are listed, so `sha256sum -c --ignore-missing`
+      # checks out whichever of the two the reader downloaded.
       - name: Checksums
         run: |
           set -euo pipefail
@@ -138,9 +156,12 @@ jobs:
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v2
         with:
+          # The versioned archives alone: the stable-named copies above are
+          # byte-identical, and an attestation is looked up by digest, so
+          # `gh attestation verify` accepts either name against this one subject.
           subject-path: |
-            dist/*.tar.gz
-            dist/*.zip
+            dist/-${{ github.ref_name }}-*.tar.gz
+            dist/-${{ github.ref_name }}-*.zip
 
       # A detached GPG signature over SHA256SUMS when the maintainer's key is
       # in the repository secrets (GPG_SIGNING_KEY: the armored private key,
@@ -184,6 +205,15 @@ jobs:
             echo "## Binaries"
             echo
             echo "Builds of the \`\` binary, not code-signed for macOS or Windows."
+            echo
+            echo "Each archive is here twice: once named for this tag, and once under a"
+            echo "name with no version in it, which is the address that always points at"
+            echo "the newest release and the one <https:///download/> links:"
+            echo
+            echo "- <https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/-linux-x86_64.tar.gz>"
+            echo "- <https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/-windows-x86_64.zip>"
+            echo "- <https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/-macos-aarch64.tar.gz>"
+            echo
             echo "Verify with \`sha256sum -c SHA256SUMS\` and"
             echo "\`gh attestation verify <archive> --repo ${GITHUB_REPOSITORY}\`."
             if [ "${{ steps.sign.outputs.signed }}" = "true" ]; then

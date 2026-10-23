@@ -10,7 +10,7 @@
   <img alt="100% Rust" src="https://img.shields.io/badge/100%25-Rust-E8590C?style=flat-square&logo=rust&logoColor=white">
   <img alt="Linux, Windows, macOS" src="https://img.shields.io/badge/Linux%20%7C%20Windows%20%7C%20macOS-2b2b2b?style=flat-square">
   <img alt="MIT licensed" src="https://img.shields.io/badge/license-MIT-2b2b2b?style=flat-square">
-  <img alt="Early alpha, v0.3.1" src="https://img.shields.io/badge/status-early%20alpha%20·%20v0.3.1-f2545b?style=flat-square">
+  <img alt="Early alpha, v0.3.2" src="https://img.shields.io/badge/status-early%20alpha%20·%20v0.3.2-f2545b?style=flat-square">
   <a href="https://github.com/lw-xiong//actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status///ci.yml?branch=main&style=flat-square&label=CI"></a>
 </p>
 
@@ -175,6 +175,14 @@ Pushing a `v*` tag builds the `` binary on both forges and attaches the archives
 
 - [GitHub releases](https://github.com/lw-xiong//releases) — Linux x86_64, Windows x86_64, macOS arm64
 - [git. releases](https://git.///releases) — Linux x86_64
+
+Each release carries every archive twice: once named for its tag, and once under a name with no
+version in it, which is the address that always resolves to the newest release and the one
+[](https:///download/) links:
+
+- `https://github.com/lw-xiong//releases/latest/download/-linux-x86_64.tar.gz`
+- `https://github.com/lw-xiong//releases/latest/download/-windows-x86_64.zip`
+- `https://github.com/lw-xiong//releases/latest/download/-macos-aarch64.tar.gz`
 
 There is no installer: unpack the archive and run ` /path/to/vault`. Linux x86_64 is the
 build that runs on the reference machine; the Windows build opens a vault on Windows 11 and draws
