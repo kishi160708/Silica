@@ -65,7 +65,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 # Cargo.lock also pins libc to 0.2.189: gpui -> http_client -> async-tar -> xattr 0.2.3 reads
 # `libc::ENOATTR`, which libc 0.2.190 removed on Linux. Drop the pin once async-tar moves to xattr 1.x.
 gpui = { git = "https://github.com/zed-industries/zed", rev = "4ce18741ad2ea007cb20a1dd96d2a170d224cc01" }
-gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "4ce18741ad2ea007cb20a1dd96d2a170d224cc01", features = ["wayland", "x11"] }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "4ce18741ad2ea007cb20a1dd96d2a170d224cc01", features = ["font-kit", "wayland", "x11"] }
 
 [profile.dev]
 opt-level = 0

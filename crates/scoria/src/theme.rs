@@ -26,6 +26,19 @@ pub const RIBBON_WIDTH: f32 = 44.;
 pub const ICON_SIZE: f32 = 16.;
 pub const SIDEBAR_WIDTH: f32 = 300.;
 
+/// The monospace family a vault with no `monospaceFontFamily` renders code
+/// in: the first entry of Obsidian's `--font-monospace` stack (see the
+/// Specification's Fonts note) that ships with the platform. gpui names a
+/// concrete family, not a generic one, and a family the platform lacks
+/// falls back to its sans, so each platform gets a face it has.
+pub const DEFAULT_MONO_FONT: &str = if cfg!(target_os = "macos") {
+    "Menlo"
+} else if cfg!(target_os = "windows") {
+    "Consolas"
+} else {
+    "DejaVu Sans Mono"
+};
+
 /// The body font size's multiplier for each heading level, and the weight
 /// and line height Obsidian gives it (`--h1-size`, `--h1-weight`,
 /// `--h1-line-height`; the fourth level down share the third's line height).
@@ -188,7 +201,7 @@ impl Theme {
             highlight_bg: rgba(0xffd70066).into(),
             ui_font: crate::assets::FONT_FAMILY.into(),
             text_font: crate::assets::FONT_FAMILY.into(),
-            mono_font: "DejaVu Sans Mono".into(),
+            mono_font: DEFAULT_MONO_FONT.into(),
             base_font_size: 16.0,
             canvas: CanvasColors::dark(),
         }
@@ -214,7 +227,7 @@ impl Theme {
             highlight_bg: rgba(0xffd70080).into(),
             ui_font: crate::assets::FONT_FAMILY.into(),
             text_font: crate::assets::FONT_FAMILY.into(),
-            mono_font: "DejaVu Sans Mono".into(),
+            mono_font: DEFAULT_MONO_FONT.into(),
             base_font_size: 16.0,
             canvas: CanvasColors::light(),
         }
