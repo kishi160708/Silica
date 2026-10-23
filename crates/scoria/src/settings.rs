@@ -2514,8 +2514,10 @@ impl Render for SettingsView {
 
 /// The chord a key press names, in `hotkeys.json`'s terms: Obsidian's
 /// `KeyboardEvent.key` spelling (`P`, `ArrowLeft`, `Enter`, ` ` for space)
-/// and modifiers in alphabetical order, with Ctrl written as `Mod` and the
-/// Super key as `Meta`, which is how Obsidian records them on Linux. A
+/// and modifiers in alphabetical order. `Mod` is the platform's primary
+/// modifier: on Linux and Windows Obsidian records Ctrl as `Mod` and the
+/// Super key as `Meta`; on macOS it records Cmd as `Mod` and Ctrl as
+/// `Ctrl`, which is what `_commands::keystroke` reads back. A
 /// modifier on its own is not a chord.
 fn hotkey_from_keystroke(stroke: &Keystroke) -> Option<Hotkey> {
     let key = match stroke.key.as_str() {
@@ -2544,13 +2546,17 @@ fn hotkey_from_keystroke(stroke: &Keystroke) -> Option<Hotkey> {
     };
     let m = stroke.modifiers;
     let mut modifiers: Vec<String> = Vec::new();
+    let macos = cfg!(target_os = "macos");
     if m.alt {
         modifiers.push("Alt".into());
     }
-    if m.platform {
+    if m.control && macos {
+        modifiers.push("Ctrl".into());
+    }
+    if m.platform && !macos {
         modifiers.push("Meta".into());
     }
-    if m.control {
+    if (m.control && !macos) || (m.platform && macos) {
         modifiers.push("Mod".into());
     }
     if m.shift {
@@ -2567,19 +2573,28 @@ mod tests {
         Keystroke::parse(s).unwrap()
     }
 
+    /// The primary modifier is `Mod` on every platform: Ctrl on Linux and
+    /// Windows, Cmd on macOS, where Ctrl stays `Ctrl`.
     #[test]
     fn a_chord_is_written_the_way_obsidian_spells_it() {
-        let hk = hotkey_from_keystroke(&stroke("ctrl-shift-f")).unwrap();
+        let (primary, other, other_name) = if cfg!(target_os = "macos") {
+            ("cmd", "ctrl", "Ctrl")
+        } else {
+            ("ctrl", "cmd", "Meta")
+        };
+        let hk = hotkey_from_keystroke(&stroke(&format!("{primary}-shift-f"))).unwrap();
         assert_eq!(hk.modifiers, ["Mod", "Shift"]);
         assert_eq!(hk.key, "F");
-        let hk = hotkey_from_keystroke(&stroke("alt-ctrl-left")).unwrap();
+        let hk = hotkey_from_keystroke(&stroke(&format!("alt-{primary}-left"))).unwrap();
         assert_eq!(hk.modifiers, ["Alt", "Mod"]);
         assert_eq!(hk.key, "ArrowLeft");
         assert_eq!(hotkey_from_keystroke(&stroke("f5")).unwrap().key, "F5");
         assert_eq!(hotkey_from_keystroke(&stroke("space")).unwrap().key, " ");
         assert_eq!(
-            hotkey_from_keystroke(&stroke("cmd-k")).unwrap().modifiers,
-            ["Meta"]
+            hotkey_from_keystroke(&stroke(&format!("{other}-k")))
+                .unwrap()
+                .modifiers,
+            [other_name]
         );
         assert!(hotkey_from_keystroke(&stroke("shift")).is_none());
     }
@@ -2593,6 +2608,8 @@ mod tests {
             "f2",
             "ctrl-alt-right",
             "ctrl-,",
+            "cmd-p",
+            "cmd-shift-f",
         ] {
             let hk = hotkey_from_keystroke(&stroke(name)).unwrap();
             let back = keystroke(&hk).unwrap();
