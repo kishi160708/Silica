@@ -1097,13 +1097,10 @@ impl<'a> Renderer<'a> {
                 // the DOM element itself is not yet available to a native
                 // renderer, so the callback receives no element.
                 let _ = live::run_all_post_processors();
-                div()
-                    .mb(gap)
-                    .font_family(t.mono_font.clone())
-                    .text_size(px(base * 0.875))
-                    .text_color(t.text_muted)
-                    .child(SharedString::from(text.clone()))
-                    .into_any_element()
+                // Tags the renderer drew are prose now; a fragment it kept
+                // as source carries the `html` style on its run, which is
+                // what still paints it mono and muted.
+                div().mb(gap).child(self.rich(text)).into_any_element()
             }
             RBlock::Quote(children) => div()
                 .mb(gap)
@@ -2520,6 +2517,13 @@ impl<'a> Renderer<'a> {
         }
         if s.italic {
             h.font_style = Some(FontStyle::Italic);
+        }
+        if s.underline {
+            h.underline = Some(UnderlineStyle {
+                thickness: px(1.),
+                color: None,
+                wavy: false,
+            });
         }
         if s.strike {
             h.strikethrough = Some(StrikethroughStyle {

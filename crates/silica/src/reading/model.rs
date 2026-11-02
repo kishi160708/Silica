@@ -18,6 +18,8 @@ use std::cell::RefCell;
 use std::ops::Range;
 use std::path::PathBuf;
 
+mod raw_html;
+
 /// Embedded notes nest at most this deep; Obsidian stops at a similar depth.
 pub const MAX_EMBED_DEPTH: usize = 4;
 
@@ -87,6 +89,7 @@ pub trait EmbedSource {
 pub struct InlineStyle {
     pub bold: bool,
     pub italic: bool,
+    pub underline: bool,
     pub strike: bool,
     pub highlight: bool,
     /// One of the six colours a `==🔴word==` highlight names, or none for
@@ -267,7 +270,7 @@ pub enum RBlock {
         /// exactly one trailing newline removed, as Obsidian's copies.
         copy: String,
     },
-    Html(String),
+    Html(RichText),
     Quote(Vec<RBlock>),
     Callout {
         /// Canonical type, one of Obsidian's built-ins.
@@ -674,7 +677,21 @@ impl<'v> Builder<'v> {
                     }
                     RBlock::Paragraph(segments)
                 }
-                None => RBlock::Html(content.trim_end().to_string()),
+                // Drawn when every tag in it is one the renderer knows; a
+                // fragment that holds anything else keeps its source, which
+                // is what this block has always shown.
+                None => {
+                    let src = content.trim_end();
+                    match raw_html::block(src, self.id()) {
+                        Some(rich) => RBlock::Html(rich),
+                        None => RBlock::Html(RichText {
+                            id: self.id(),
+                            text: src.to_string(),
+                            runs: vec![(0..src.len(), InlineStyle { html: true, ..Default::default() })],
+                            links: Vec::new(),
+                        }),
+                    }
+                }
             },
             BlockKind::BlockQuote { children } => RBlock::Quote(self.blocks(children, false)),
             BlockKind::Callout {
@@ -889,7 +906,7 @@ impl<'v> Builder<'v> {
             InlineKind::SoftBreak if self.opts.strict_line_breaks => acc.push(" "),
             InlineKind::SoftBreak | InlineKind::HardBreak => acc.push("\n"),
             InlineKind::Code(c) => acc.styled(|s| s.code = true, |a| a.push(c)),
-            InlineKind::Html(h) => acc.styled(|s| s.html = true, |a| a.push(h)),
+            InlineKind::Html(h) => raw_html::inline(acc, h),
             InlineKind::Emphasis(c) => self.wrap(acc, c, |s| s.italic = true),
             InlineKind::Strong(c) => self.wrap(acc, c, |s| s.bold = true),
             InlineKind::Strikethrough(c) => self.wrap(acc, c, |s| s.strike = true),
@@ -1218,6 +1235,9 @@ struct RichBuilder {
     style: InlineStyle,
     runs: Vec<(Range<usize>, InlineStyle)>,
     links: Vec<(Range<usize>, LinkTarget)>,
+    /// The raw HTML tags open at this point, outermost first. They outlive a
+    /// single inline span: a `<b>` in one span styles the text in the next.
+    html_stack: Vec<raw_html::Open>,
 }
 
 impl RichBuilder {
@@ -1229,19 +1249,29 @@ impl RichBuilder {
         if s.is_empty() {
             return;
         }
+        let style = self.html_style();
         let start = self.text.len();
         self.text.push_str(s);
         let end = self.text.len();
-        if self.style.is_plain() {
+        if style.is_plain() {
             return;
         }
-        if let Some((range, style)) = self.runs.last_mut() {
-            if *style == self.style && range.end == start {
+        if let Some((range, open)) = self.runs.last_mut() {
+            if *open == style && range.end == start {
                 range.end = end;
                 return;
             }
         }
-        self.runs.push((start..end, self.style));
+        self.runs.push((start..end, style));
+    }
+
+    /// Raw source this pass does not draw, which keeps the mono, muted look
+    /// every tag had before it was drawn.
+    pub(super) fn push_html_source(&mut self, s: &str) {
+        let saved = self.style;
+        self.style.html = true;
+        self.push(s);
+        self.style = saved;
     }
 
     fn styled(&mut self, f: impl FnOnce(&mut InlineStyle), body: impl FnOnce(&mut RichBuilder)) {
