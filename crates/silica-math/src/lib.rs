@@ -19,6 +19,8 @@ use ratex_types::{DisplayItem, MathStyle};
 
 pub use ratex_types::PathCommand;
 
+mod mathjax;
+
 /// A typeset formula. Coordinates are in em: multiply by the font size of
 /// the surrounding text to get pixels. The origin is the top left corner of
 /// the box; the baseline is at `y = height`.
@@ -148,6 +150,11 @@ fn cache() -> &'static Mutex<HashMap<(String, bool), Result>> {
 }
 
 fn typeset_uncached(tex: &str, display: bool) -> Result {
+    // MathJax-only commands (`\require`, `\label`/`\ref`, `\bbox`,
+    // `\class`/`\style`/`\cssId`, `\unicode`) and user macros are handled
+    // here; see `mathjax`. RaTeX sets the rest.
+    let tex = mathjax::normalize(tex);
+    let tex = if tex.trim().is_empty() { "{}" } else { tex.as_str() };
     let nodes = ratex_parser::parse(tex).map_err(|e| MathError { message: e.message })?;
     let options = LayoutOptions {
         style: if display {
