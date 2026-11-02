@@ -413,6 +413,7 @@ pub const RUNNABLE: &[&str] = &[
     "workspace:new-tab",
     "workspace:close",
     "workspace:close-others",
+    "workspace:toggle-stacked-tabs",
     "workspace:next-tab",
     "workspace:previous-tab",
     "workspace:goto-tab-1",
@@ -1796,6 +1797,9 @@ struct TabGroup {
     canvas: Entity<CanvasView>,
     bases: Entity<BasesView>,
     pdf: Entity<PdfView>,
+    /// When set, the group's tabs are stacked: only the active tab shows
+    /// in the strip, and a badge beside it cycles through the rest.
+    stacked: bool,
     /// The `tabs` node this group was restored from, less its children:
     /// `id`, a `dimension` from a dragged divider, and anything unknown.
     node: Map<String, Value>,
@@ -1827,6 +1831,7 @@ impl TabGroup {
             canvas,
             bases,
             pdf,
+            stacked: false,
             node,
         }
     }
@@ -1870,6 +1875,8 @@ struct GroupView {
     active: bool,
     tabs: Vec<Tab>,
     active_tab: usize,
+    /// When set, the group's tabs are stacked.
+    stacked: bool,
     current: Option<String>,
     mode: ViewMode,
     history_len: usize,
@@ -2643,6 +2650,9 @@ pub struct Workspace {
     /// The main area's tabs; the active one's fields are the live ones above.
     tabs: Vec<Tab>,
     active_tab: usize,
+    /// When set, the active group's tabs are stacked. Only tracked for
+    /// the active group; inactive groups keep theirs on their `TabGroup`.
+    stacked: bool,
     /// Tabs closed this session with the index they had, oldest first.
     closed_tabs: Vec<(usize, Tab)>,
     /// Every tab group, the active one's slot holding what it last stashed.
@@ -3191,6 +3201,7 @@ impl Workspace {
             history_ix: 0,
             tabs: vec![Tab::empty(ViewMode::Reading)],
             active_tab: 0,
+            stacked: false,
             closed_tabs: Vec::new(),
             groups,
             active_group: 0,
@@ -4859,6 +4870,7 @@ impl Workspace {
             "workspace:new-tab" => self.new_tab(cx),
             "workspace:close" => self.close_tab(self.active_tab, cx),
             "workspace:close-others" => self.close_other_tabs(cx),
+            "workspace:toggle-stacked-tabs" => self.toggle_stacked_tabs(cx),
             "workspace:split-vertical" => self.split(SplitDirection::Vertical, window, cx),
             "workspace:split-horizontal" => self.split(SplitDirection::Horizontal, window, cx),
             "workspace:close-tab-group" => {
@@ -7902,6 +7914,7 @@ impl Workspace {
                 active: true,
                 tabs: self.tab_snapshots(),
                 active_tab: self.active_tab,
+                stacked: self.stacked,
                 current: self.current.clone(),
                 mode: self.mode,
                 history_len: self.history.len(),
@@ -7930,6 +7943,7 @@ impl Workspace {
             canvas: g.canvas.clone(),
             bases: g.bases.clone(),
             pdf: g.pdf.clone(),
+            stacked: g.stacked,
         }
     }
 
@@ -8891,6 +8905,22 @@ impl Workspace {
         }
     }
 
+    /// `workspace:toggle-stacked-tabs`: stack the group's tabs into one
+    /// slot, so only the active tab shows in the strip, or unstack them.
+    fn toggle_stacked_tabs(&mut self, cx: &mut Context<Self>) {
+        self.stacked = !self.stacked;
+        cx.notify();
+    }
+
+    /// The stacked-tabs badge: step to the next tab, which becomes the one
+    /// the stack shows. A no-op unless the group is stacked and has more
+    /// than one tab.
+    fn cycle_stack(&mut self, cx: &mut Context<Self>) {
+        if self.stacked && self.tabs.len() > 1 {
+            self.activate_tab((self.active_tab + 1) % self.tabs.len(), cx);
+        }
+    }
+
     /// `workspace:close`: the last close leaves the empty tab, as Obsidian's
     /// does; the tab to the right takes over, or the one to the left at the
     /// end of the strip.
@@ -8980,6 +9010,7 @@ impl Workspace {
         let group = &mut self.groups[ix];
         group.tabs = self.tabs.clone();
         group.active_tab = self.active_tab;
+        group.stacked = self.stacked;
         group.mode_before_graph = self.mode_before_graph;
         group.detached = self.detached.clone();
         group.words = self.words;
@@ -8997,6 +9028,7 @@ impl Workspace {
         let id = group.id;
         self.tabs = group.tabs.clone();
         self.active_tab = group.active_tab.min(self.tabs.len().saturating_sub(1));
+        self.stacked = group.stacked;
         self.mode_before_graph = group.mode_before_graph;
         self.detached = group.detached.clone();
         self.words = group.words;
@@ -10313,7 +10345,11 @@ impl Workspace {
             .when(first && !self.left_visible && (!show_ribbon || mac), |d| {
                 d.child(self.sidebar_toggle(true, theme, cx).mb(px(8.)).mr(px(2.)))
             })
-            .children(tabs.iter().enumerate().map(|(ix, tab)| {
+            .children(
+                tabs.iter()
+                    .enumerate()
+                    .filter(|(ix, _)| tab_in_strip(*ix, active_ix, view.stacked))
+                    .map(|(ix, tab)| {
                 let active = ix == active_ix;
                 let divider = !active && ix + 1 != active_ix;
                 let title = tab.title();
@@ -10468,6 +10504,29 @@ impl Workspace {
                             ),
                     )
             }))
+            // Stacked tabs: only the active tab is in the strip, so a
+            // badge beside it steps through the rest of the stack.
+            .when(view.stacked && tabs.len() > 1, |d| {
+                d.child(
+                    div()
+                        .id(("stack-badge", group))
+                        .flex_shrink_0()
+                        .ml(px(4.))
+                        .mb(px(7.))
+                        .w(px(24.))
+                        .h(px(24.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(4.))
+                        .cursor_pointer()
+                        .hover(|s| s.bg(theme.bg_alt))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.cycle_stack(cx);
+                        }))
+                        .child(icon("layers", 14., theme.text_muted)),
+                )
+            })
             .child(
                 div()
                     .id("new-tab")
@@ -15031,11 +15090,28 @@ impl Render for Workspace {
     }
 }
 
+/// Whether the tab at `ix` is drawn in a group's strip: every tab, unless
+/// the group is stacked, in which case only the active one shows.
+fn tab_in_strip(ix: usize, active: usize, stacked: bool) -> bool {
+    !stacked || ix == active
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
     use std::path::Path;
+
+    #[test]
+    fn stacked_group_shows_only_the_active_tab() {
+        // Unstacked: every tab is in the strip.
+        assert!(tab_in_strip(0, 0, false));
+        assert!(tab_in_strip(2, 0, false));
+        // Stacked: only the active tab is.
+        assert!(tab_in_strip(1, 1, true));
+        assert!(!tab_in_strip(0, 1, true));
+        assert!(!tab_in_strip(2, 1, true));
+    }
 
     /// A symlink to a folder or a file on either platform. Windows refuses
     /// to make one without Developer Mode or elevation, so a test that

@@ -5,7 +5,7 @@ use crate::reading::{build_with, ReadingView};
 use crate::workspace::{VaultState, Workspace};
 use gpui::{
     actions, prelude::*, px, size, AnyWindowHandle, App, Bounds, Context, Entity, FocusHandle,
-    Focusable, SharedString, TitlebarOptions, WeakEntity, Window, WindowBackgroundAppearance,
+    Focusable, TitlebarOptions, WeakEntity, Window, WindowBackgroundAppearance,
     WindowBounds, WindowDecorations, WindowHandle, WindowOptions,
 };
 
@@ -79,7 +79,7 @@ impl Render for PopoutWindow {
     fn render(
         &mut self,
         _window: &mut Window,
-        cx: &mut Context<Self>,
+        _cx: &mut Context<Self>,
     ) -> impl IntoElement {
         self.reading.clone()
     }

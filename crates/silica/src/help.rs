@@ -162,7 +162,6 @@ impl HelpWindow {
     fn render_row(
         &self,
         row: &'static Row,
-        last: bool,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
@@ -268,9 +267,8 @@ impl Render for HelpWindow {
             .bg(theme.bg_secondary)
             .flex()
             .flex_col();
-        let count = ROWS.len();
-        for (ix, row) in ROWS.iter().enumerate() {
-            card = card.child(self.render_row(row, ix + 1 == count, &theme, cx));
+        for row in ROWS.iter() {
+            card = card.child(self.render_row(row, &theme, cx));
         }
         div()
             .id("help-window")
