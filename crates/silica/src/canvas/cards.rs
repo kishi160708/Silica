@@ -582,6 +582,12 @@ impl Cards {
                 })
             },
             preview_resolver: None,
+            // A canvas card has no player; its video opens in the system
+            // one, as it always has.
+            on_video: Rc::new(|path, _, _, cx| {
+                cx.open_url(&format!("file://{}", path.display()));
+            }),
+            video: Rc::new(std::cell::RefCell::new(None)),
         };
         let renderer = Renderer::new(
             &scaled,

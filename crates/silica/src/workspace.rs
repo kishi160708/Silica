@@ -11432,6 +11432,7 @@ impl Workspace {
             "canvas": self.canvas.read(cx).describe(cx),
             "bases": self.bases.read(cx).state_json(),
             "pdf": self.pdf.read(cx).state_json(cx),
+            "video": self.reading.read(cx).video_state_json(),
             "status": self.status_text(),
             "status_bar": self.status_bar_text(cx),
             "status_bar_items": self.status_bar_items(cx),

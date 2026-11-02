@@ -28,8 +28,10 @@ use silica_formats::config::PropertyTypes;
 use silica_formats::properties::{Change, PropertiesInDocument, Property, PropertyType};
 use silica_formats::FileKind;
 use silica_markdown::Alignment;
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::ops::Range;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -198,7 +200,16 @@ pub(crate) struct ReadingHost {
     pub on_copy: CopyHandler,
     pub on_task: TaskHandler,
     pub preview_resolver: Option<PreviewHandler>,
+    /// Play (or pause, or seek) a local video in the app's own player.
+    pub on_video: VideoHandler,
+    /// What the player is showing, if anything: the embed draws its frame
+    /// and its clock from it.
+    pub video: Rc<RefCell<Option<VideoState>>>,
 }
+
+/// A click on a video embed: the file, and `Some(share)` when the click was
+/// on the position bar (a seek) rather than the picture or the button.
+pub type VideoHandler = Rc<dyn Fn(&std::path::Path, Option<f32>, &mut Window, &mut App)>;
 
 pub enum ReadingEvent {
     OpenLink(LinkTarget),
@@ -250,6 +261,38 @@ pub struct ReadingView {
     /// Width of the view as last painted; tables lay their columns out for it.
     width: Pixels,
     pub preview_resolver: Option<PreviewHandler>,
+    /// The in-app video player: what it is showing, where, and the frame.
+    ///
+    /// Behind a cell because the embeds paint through `&self` and the player
+    /// is driven from a click inside them; the read loop is a task that
+    /// holds the decoder, so the entry disappearing is what stops `ffmpeg`.
+    pub video: Rc<RefCell<Option<VideoState>>>,
+}
+
+/// One video in the player.
+pub struct VideoState {
+    /// The absolute path being played.
+    pub path: PathBuf,
+    /// Size, frame rate and length, from `ffprobe`.
+    pub info: crate::video::Info,
+    pub playing: bool,
+    /// Where the decoder is, in seconds.
+    pub at: f32,
+    /// The frame on screen.
+    pub frame: Option<Arc<gpui::RenderImage>>,
+    /// The read loop; dropping it stops playing and kills `ffmpeg`.
+    pub task: Option<Task<()>>,
+}
+
+/// A clock reading: `0:07`, `1:03:20`.
+fn clock(seconds: f32) -> String {
+    let total = seconds.max(0.0) as u64;
+    let (h, m, s) = (total / 3600, (total % 3600) / 60, total % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
 }
 
 /// Global audio player for local audio file embeds. Single-window app,
@@ -294,6 +337,23 @@ impl ReadingView {
             flash: None,
             width: px(900.),
             preview_resolver: None,
+            video: Rc::new(RefCell::new(None)),
+        }
+    }
+
+    /// What the video player is doing, for the control socket.
+    pub fn video_state_json(&self) -> serde_json::Value {
+        let video = self.video.borrow();
+        match video.as_ref() {
+            None => Value::Null,
+            Some(v) => json!({
+                "path": v.path.display().to_string(),
+                "playing": v.playing,
+                "at": (v.at * 100.0).round() / 100.0,
+                "duration": (v.info.duration * 100.0).round() / 100.0,
+                "fps": (v.info.fps * 100.0).round() / 100.0,
+                "has_frame": v.frame.is_some(),
+            }),
         }
     }
 
@@ -313,6 +373,156 @@ impl ReadingView {
         self.property_types = types;
     }
 
+    /// Plays (or pauses, or seeks) a video embed clicked in the note.
+    ///
+    /// `share` of `Some(n)` is a click on the position bar; `None` is the
+    /// picture or the button, which toggles.
+    fn video_clicked(&self, path: &std::path::Path, share: Option<f32>, cx: &mut Context<Self>) {
+        let path = path.to_path_buf();
+        let open = {
+            let video = self.video.borrow();
+            video
+                .as_ref()
+                .filter(|v| v.path == path)
+                .map(|v| (v.playing, v.info, v.at))
+        };
+        match (open, share) {
+            // A seek on the playing file.
+            (Some((_, info, _)), Some(share)) => {
+                self.video_start(path, info, info.duration * share.clamp(0.0, 1.0), cx)
+            }
+            // The button or the picture: pause, or resume where it stopped.
+            (Some((true, _, _)), None) => self.video_pause(&path, cx),
+            (Some((false, info, at)), None) => {
+                // A file that played to its end starts again from the top,
+                // as a player's button does.
+                let at = if info.duration > 0.0 && at >= info.duration - 0.05 {
+                    0.0
+                } else {
+                    at
+                };
+                self.video_start(path, info, at, cx)
+            }
+            // Nothing open yet.
+            (None, share) => match crate::video::probe(&path) {
+                Some(info) => {
+                    let at = share.map_or(0.0, |s| info.duration * s.clamp(0.0, 1.0));
+                    self.video_start(path, info, at, cx);
+                }
+                // Not a video after all: the system player, as before.
+                None => cx.open_url(&format!("file://{}", path.display())),
+            },
+        }
+    }
+
+    /// Starts `path` at `at`, replacing whatever was open. The task owns the
+    /// decoder, so replacing a video kills the old `ffmpeg` by dropping it.
+    fn video_start(&self, path: PathBuf, info: crate::video::Info, at: f32, cx: &mut Context<Self>) {
+        if let Some(old) = self.video.borrow_mut().take() {
+            crate::video::drop_frame(old.frame, cx);
+        }
+        let frame = crate::video::still(&path, &info, at);
+        *self.video.borrow_mut() = Some(VideoState {
+            path: path.clone(),
+            info,
+            playing: true,
+            at,
+            frame,
+            task: None,
+        });
+        let task = Self::play_loop(cx.entity().downgrade(), self.video.clone(), path, info, at, cx);
+        if let Some(video) = self.video.borrow_mut().as_mut() {
+            video.task = Some(task);
+        }
+        cx.notify();
+    }
+
+    /// Pauses the video that is open; its task ends and `ffmpeg` with it.
+    fn video_pause(&self, path: &std::path::Path, cx: &mut Context<Self>) {
+        if let Some(video) = self.video.borrow_mut().as_mut().filter(|v| v.path == path) {
+            video.playing = false;
+            video.task = None;
+        }
+        cx.notify();
+    }
+
+    /// The read loop: one frame at a time, installed only while the cell
+    /// still holds this file and is still playing.
+    fn play_loop(
+        view: gpui::WeakEntity<ReadingView>,
+        slot: Rc<RefCell<Option<VideoState>>>,
+        path: PathBuf,
+        info: crate::video::Info,
+        start: f32,
+        cx: &mut Context<Self>,
+    ) -> Task<()> {
+        cx.spawn(async move |_, cx| {
+            let mut at = start;
+            let Some(decoder) = crate::video::Decoder::spawn(&path, &info, start) else {
+                return;
+            };
+            let mut decoder = Some(decoder);
+            loop {
+                let wanted = slot
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|v| v.path == path && v.playing);
+                if !wanted {
+                    break;
+                }
+                let Some(mut taken) = decoder.take() else {
+                    break;
+                };
+                let (frame, back) = cx
+                    .background_executor()
+                    .spawn(async move {
+                        let frame = taken.next_frame();
+                        (frame, taken)
+                    })
+                    .await;
+                decoder = Some(back);
+                let Some(frame) = frame else {
+                    // End of file: the last frame stays up, stopped.
+                    if let Some(video) = slot.borrow_mut().as_mut().filter(|v| v.path == path) {
+                        video.playing = false;
+                        video.at = info.duration;
+                    }
+                    view.update(cx, |_, cx| cx.notify()).ok();
+                    break;
+                };
+                at += 1.0 / info.fps.max(1.0);
+                let mut stale_to_drop = None;
+                let installed = match slot
+                    .borrow_mut()
+                    .as_mut()
+                    .filter(|v| v.path == path && v.playing)
+                {
+                    Some(video) => {
+                        // A frame's texture outlives its frame unless gpui is
+                        // told; the old one goes with the new one's arrival.
+                        if let Some(stale) = video.frame.replace(frame) {
+                            stale_to_drop = Some(stale);
+                        }
+                        video.at = at;
+                        true
+                    }
+                    None => false,
+                };
+                view.update(cx, |_, cx| {
+                    crate::video::drop_frame(stale_to_drop.take(), cx);
+                    cx.notify();
+                })
+                .ok();
+                if !installed {
+                    break;
+                }
+            }
+            if let Some(mut decoder) = decoder {
+                decoder.stop();
+            }
+        })
+    }
+
     pub fn set_note(&mut self, path: Option<String>, model: Model, cx: &mut Context<Self>) {
         let same = same_note(self.path.as_deref(), path.as_deref());
         let top = self.list.logical_scroll_top();
@@ -324,6 +534,10 @@ impl ReadingView {
         }
         self.model = Arc::new(model);
         if !same {
+            // Another note: whatever was playing belongs to the old one.
+            if let Some(old) = self.video.borrow_mut().take() {
+                crate::video::drop_frame(old.frame, cx);
+            }
             // ... and the folds they opened: the watcher re-enters this on
             // every autosave, so clearing them unconditionally collapsed an
             // expanded callout 1.5 s after any save of the note being read.
@@ -626,12 +840,22 @@ impl ReadingView {
                 });
             }
         });
+        // A click inside a video embed calls back into this view, which owns
+        // the player.
+        let view_for_video = view.clone();
+        let on_video: VideoHandler = Rc::new(move |path, share, _window, cx| {
+            let path = path.to_path_buf();
+            let _ = view_for_video
+                .update(cx, |this, cx| this.video_clicked(&path, share, cx));
+        });
         let host = ReadingHost {
             properties: self.properties_in_document,
             copied: self.copied,
             on_copy,
             on_task,
             preview_resolver: self.preview_resolver.clone(),
+            on_video,
+            video: self.video.clone(),
         };
         // The reading view's properties block is now editable: clicks on
         // rows come back as PropertyChanged events that the workspace
@@ -834,6 +1058,11 @@ pub(crate) struct Renderer<'a> {
     reading_host: Option<&'a ReadingHost>,
     on_link: LinkHandler,
     on_toggle: ToggleHandler,
+    /// Play a local video; `None` where nothing can, so Live Preview's
+    /// widget keeps the one click path it has.
+    video_play: Option<VideoHandler>,
+    /// What the player is showing, shared with the view that owns it.
+    video: Option<Rc<RefCell<Option<VideoState>>>>,
     text_system: Arc<WindowTextSystem>,
     /// Inner width of a top-level block, in pixels.
     available: f32,
@@ -863,6 +1092,8 @@ impl<'a> Renderer<'a> {
             reading_host: None,
             on_link,
             on_toggle,
+            video_play: None,
+            video: None,
             text_system,
             available: available.max(100.),
             path,
@@ -874,6 +1105,8 @@ impl<'a> Renderer<'a> {
     /// them unset, so its widgets keep the one click path they have.
     pub(crate) fn with_reading_host(mut self, host: &'a ReadingHost) -> Renderer<'a> {
         self.reading_host = Some(host);
+        self.video_play = Some(host.on_video.clone());
+        self.video = Some(host.video.clone());
         self
     }
 
@@ -1526,6 +1759,158 @@ impl<'a> Renderer<'a> {
         }
     }
 
+    /// The video embed: the frame, a play/pause button, a clock and a
+    /// position bar. Pure view — the host's handler plays, so the same
+    /// drawing serves the reading view and Live Preview's widgets.
+    fn video_embed(
+        &self,
+        path: &std::path::Path,
+        label: &str,
+        t: &Theme,
+        handler: VideoHandler,
+        video: Rc<RefCell<Option<VideoState>>>,
+    ) -> AnyElement {
+        let playing_state = {
+            let video = video.borrow();
+            video
+                .as_ref()
+                .filter(|v| v.path == path)
+                .map(|v| (v.playing, v.at, v.info, v.frame.clone()))
+        };
+        let info = match playing_state.as_ref() {
+            Some((_, _, info, _)) => *info,
+            None => match crate::video::probe(path) {
+                Some(info) => info,
+                None => return self.video_card(path, label, t),
+            },
+        };
+        let (playing, at, duration) = match playing_state.as_ref() {
+            Some((playing, at, info, _)) => (*playing, *at, info.duration),
+            None => (false, 0.0, info.duration),
+        };
+        let (w, h) = info.display_size(self.available);
+        // The frame: the player's, or the file's first, so the embed is not
+        // a black box before it is ever clicked.
+        let frame = match playing_state.and_then(|(_, _, _, frame)| frame) {
+            Some(frame) => Some(frame),
+            None => crate::video::still(path, &info, 0.0),
+        };
+        let on_frame = handler.clone();
+        let on_toggle = handler.clone();
+        let _on_bar = handler;
+        let frame_path = path.to_path_buf();
+        let toggle_path = path.to_path_buf();
+        div()
+            .my_2()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .relative()
+                    .w(px(w))
+                    .h(px(h))
+                    .rounded_md()
+                    .overflow_hidden()
+                    .border_1()
+                    .border_color(t.border)
+                    .bg(gpui::black())
+                    .id(("video-frame", label.len()))
+                    .on_click(move |_, window, cx| on_frame(&frame_path, None, window, cx))
+                    .children(
+                        frame
+                            .map(|f| img(crate::video::frame_source(f)).size_full().object_fit(ObjectFit::Fill)),
+                    )
+                    .when(!playing, |el| {
+                        el.child(
+                            div()
+                                .absolute()
+                                .inset_0()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(
+                                    div()
+                                        .size(px(52.))
+                                        .rounded_full()
+                                        .bg(gpui::rgba(0x000000b0))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .text_color(gpui::white())
+                                        .text_size(px(22.))
+                                        .child(SharedString::from("▶")),
+                                ),
+                        )
+                    }),
+            )
+            .child(
+                div()
+                    .w(px(w))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .text_size(px(12.))
+                    .text_color(t.text_muted)
+                    .child(
+                        div()
+                            .w(px(14.))
+                            .cursor_pointer()
+                            .id(("video-toggle", label.len()))
+                            .on_click(move |_, window, cx| on_toggle(&toggle_path, None, window, cx))
+                            .child(SharedString::from(if playing { "⏸" } else { "▶" })),
+                    )
+                    .child(SharedString::from(clock(at)))
+                    .child(
+                        // The position bar: the share played so far.
+                        div()
+                            .flex_1()
+                            .h(px(4.))
+                            .rounded_full()
+                            .bg(t.border)
+                            .relative()
+                            .child(
+                                div()
+                                    .absolute()
+                                    .left_0()
+                                    .top_0()
+                                    .h(px(4.))
+                                    .rounded_full()
+                                    .bg(t.accent)
+                                    .w(gpui::relative(if duration > 0.0 {
+                                        (at / duration).clamp(0.0, 1.0)
+                                    } else {
+                                        0.0
+                                    })),
+                            ),
+                    )
+                    .child(SharedString::from(clock(duration))),
+            )
+            .into_any_element()
+    }
+
+    /// A video nothing here can play: the card that opens the system player,
+    /// which is what every video embed did before the in-app one.
+    fn video_card(&self, path: &std::path::Path, label: &str, t: &Theme) -> AnyElement {
+        let target = format!("file://{}", path.display());
+        div()
+            .my_1()
+            .border_1()
+            .border_color(t.border)
+            .rounded_md()
+            .px_4()
+            .py_3()
+            .cursor_pointer()
+            .hover(|s| s.bg(t.bg_alt))
+            .id(("video-play", label.len()))
+            .on_click(move |_, _, cx| {
+                cx.open_url(&target);
+            })
+            .child(SharedString::from("▶ "))
+            .child(SharedString::from(label.to_string()))
+            .into_any_element()
+    }
+
     fn embed(&self, embed: &Embed) -> AnyElement {
         let t = self.theme;
         let base = t.base_font_size;
@@ -1628,29 +2013,21 @@ impl<'a> Renderer<'a> {
             }
             // `![[x.mp3]]` local audio plays in Silica's own player (rodio).
             // Local video and remote media open in the system's default player.
+            // `![[x.mp4]]` plays in Silica's own player: ffmpeg decodes,
+            // gpui draws. With no handler (Live Preview's widget) or no
+            // ffmpeg on the machine, the card opens the system player.
             EmbedKind::Video(path) => {
                 let label = path
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or(&embed.link)
                     .to_string();
-                let target = format!("file://{}", path.display());
-                div()
-                    .my_1()
-                    .border_1()
-                    .border_color(t.border)
-                    .rounded_md()
-                    .px_4()
-                    .py_3()
-                    .cursor_pointer()
-                    .hover(|s| s.bg(t.bg_alt))
-                    .id(("video-play", embed.link.len()))
-                    .on_click(move |_, _, cx| {
-                        cx.open_url(&target);
-                    })
-                    .child(SharedString::from("▶ "))
-                    .child(SharedString::from(label))
-                    .into_any_element()
+                match (&self.video_play, &self.video) {
+                    (Some(handler), Some(video)) => {
+                        self.video_embed(path, &label, t, handler.clone(), video.clone())
+                    }
+                    _ => self.video_card(path, &label, t),
+                }
             }
             EmbedKind::Audio(path) => {
                 let label = path

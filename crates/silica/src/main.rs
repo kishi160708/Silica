@@ -42,6 +42,7 @@ mod text_input;
 mod theme;
 mod title_field;
 mod vaults;
+mod video;
 mod watch;
 mod workspace;
 
