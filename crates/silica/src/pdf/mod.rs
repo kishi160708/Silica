@@ -13,6 +13,7 @@
 
 pub mod documents;
 pub mod embed;
+pub mod selection;
 pub mod view;
 
 pub use documents::{documents, page_source, DocState, Documents, Loaded};

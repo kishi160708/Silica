@@ -44,18 +44,20 @@
 
 use crate::assets::icon;
 use crate::canvas::menu::tooltip;
+use crate::pdf::selection::{glyph_at, Highlight, Mark, Selection};
 use crate::pdf::{documents, page_source, DocState, Loaded};
 use crate::search::{menu, menu_item};
 use crate::text_input::{InputEvent, TextInput};
 use crate::theme::{Theme, FONT_UI_SMALL, FONT_UI_SMALLER, ICON_SIZE};
 use gpui::{
     actions, anchored, canvas, deferred, div, img, point, prelude::*, px, Anchor, AnyElement, App,
-    Bounds, BoxShadow, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, Hsla,
-    KeyBinding, MouseButton, ObjectFit, Pixels, Point, Render, ScrollHandle, ScrollWheelEvent,
-    SharedString, Size, Subscription, Task, Window,
+    Bounds, BoxShadow, ClickEvent, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
+    Focusable, Hsla, KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    ObjectFit, Pixels, Point, Render, ScrollHandle, ScrollWheelEvent, SharedString, Size,
+    Subscription, Task, Window,
 };
 use serde_json::{json, Value};
-use silica_pdf::{OutlineItem, PageSize};
+use silica_pdf::{OutlineItem, PageSize, PdfGlyph};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -148,7 +150,9 @@ actions!(
         Find,
         FindNext,
         FindPrevious,
-        Dismiss
+        Dismiss,
+        Copy,
+        SelectAll
     ]
 );
 
@@ -182,6 +186,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("f3", FindNext, view),
         KeyBinding::new("shift-f3", FindPrevious, view),
         KeyBinding::new("shift-enter", FindPrevious, view),
+        KeyBinding::new("ctrl-c", Copy, view),
+        KeyBinding::new("ctrl-a", SelectAll, view),
         KeyBinding::new("escape", Dismiss, view),
     ]);
 }
@@ -467,6 +473,14 @@ pub struct PdfView {
     wheel_accum: f32,
     /// Take the keyboard back from a field on the next frame.
     refocus: bool,
+    /// The pointer drag in progress for a text selection.
+    dragging: Option<Mark>,
+    /// What the drag has selected so far; `None` when nothing is.
+    selection: Option<Selection>,
+    /// Each page's glyphs in points, read off the document once per file.
+    glyphs: Vec<Vec<PdfGlyph>>,
+    /// The file the glyphs belong to.
+    glyphs_path: Option<PathBuf>,
     settle_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
@@ -552,6 +566,10 @@ impl PdfView {
             visible: 0,
             wheel_accum: 0.0,
             refocus: false,
+            dragging: None,
+            selection: None,
+            glyphs: Vec::new(),
+            glyphs_path: None,
             settle_task: None,
             _subscriptions: subscriptions,
         }
@@ -575,6 +593,8 @@ impl PdfView {
         self.find = None;
         self.expanded.clear();
         self.sidebar_followed = None;
+        self.dragging = None;
+        self.selection = None;
         self.settle_task = None;
         if let Some(state) = self.positions.get(path).cloned() {
             self.apply_view_state(&state);
@@ -780,6 +800,13 @@ impl PdfView {
                 Menu::Display => json!("display"),
             },
             "find": find,
+            "selection": self.selection.map(|s| json!({
+                "start": {"page": s.start.page, "glyph": s.start.glyph},
+                "end": {"page": s.end.page, "glyph": s.end.glyph},
+                "text": s.text(&self.glyphs.iter().enumerate()
+                    .map(|(ix, g)| (ix, g.as_slice())).collect::<Vec<_>>()),
+                "boxes": self.highlights().len(),
+            })),
             "remembered": self.positions.len(),
             "visible": self.visible,
             "requested": self.requested,
@@ -857,6 +884,8 @@ impl PdfView {
             cx.notify();
         } else if self.find.is_some() {
             self.close_find(cx);
+        } else if self.selection.take().is_some() {
+            cx.notify();
         } else {
             cx.propagate();
         }
@@ -865,6 +894,196 @@ impl PdfView {
     fn close_find(&mut self, cx: &mut Context<Self>) {
         self.find = None;
         self.refocus = true;
+        cx.notify();
+    }
+
+    // ---- text selection -------------------------------------------------------
+
+    /// Every page's glyphs in points, read off the document on the first ask
+    /// and kept until another file is shown. Unlike a page render this is
+    /// cheap (no rasterizing), but it walks the content stream, so it happens
+    /// once, lazily — a file nobody drags over never pays for it.
+    fn ensure_glyphs(&mut self, cx: &mut Context<Self>) {
+        let Some(absolute) = self.absolute.clone() else {
+            return;
+        };
+        if self.glyphs_path.as_ref() == Some(&absolute) {
+            return;
+        }
+        self.glyphs_path = Some(absolute.clone());
+        self.glyphs.clear();
+        let Some(loaded) = self.loaded.clone() else {
+            return;
+        };
+        self.glyphs = loaded
+            .sizes
+            .iter()
+            .enumerate()
+            .map(|(ix, _)| loaded.document.page_glyphs(ix).unwrap_or_default())
+            .collect();
+        cx.notify();
+    }
+
+    /// The point a pointer at `position` (window coordinates) makes: the page
+    /// under it and the glyph nearest within that page.
+    fn mark_at(
+        &mut self,
+        position: Point<Pixels>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Mark> {
+        let _ = window;
+        self.ensure_glyphs(cx);
+        let layout = self.layout.as_ref()?;
+        let scale = layout.scale;
+        // Window -> column: the pages area's origin, then the scroll.
+        let x = f32::from(position.x) - self.origin.x + self.scroll.x;
+        let y = f32::from(position.y) - self.origin.y + self.scroll.y;
+        // The page whose box is nearest the pointer, preferring one it is in.
+        let mut best: Option<(usize, f32)> = None;
+        for (ix, b) in layout.pages.iter().enumerate() {
+            if self.glyphs.get(ix).is_none_or(|g| g.is_empty()) {
+                continue;
+            }
+            let (bx, by) = (b.origin.x, b.origin.y);
+            let (bw, bh) = (b.size.width, b.size.height);
+            let dx = if x < bx {
+                bx - x
+            } else if x > bx + bw {
+                x - (bx + bw)
+            } else {
+                0.0
+            };
+            let dy = if y < by {
+                by - y
+            } else if y > by + bh {
+                y - (by + bh)
+            } else {
+                0.0
+            };
+            let distance = dx * dx + dy * dy;
+            if best.is_none_or(|(_, d)| distance < d) {
+                best = Some((ix, distance));
+            }
+        }
+        let (page, _) = best?;
+        let glyphs = self.glyphs.get(page)?;
+        let bounds = layout.pages.get(page)?;
+        // Column pixels -> page points: subtract the page's own origin, and
+        // divide out the scale.
+        let (px_, py) = ((x - bounds.origin.x) / scale, (y - bounds.origin.y) / scale);
+        Some(Mark {
+            page,
+            glyph: glyph_at(glyphs, px_, py),
+        })
+    }
+
+    /// A press over the pages starts a drag; a drag that never moves clears
+    /// whatever was selected.
+    fn selection_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if event.button != MouseButton::Left {
+            return;
+        }
+        self.menu = Menu::None;
+        if !self.focus.is_focused(window) {
+            window.focus(&self.focus, cx);
+        }
+        let mark = self.mark_at(event.position, window, cx);
+        self.dragging = mark;
+        self.selection = None;
+        cx.notify();
+    }
+
+    /// Dragging extends the selection from where the press started.
+    fn selection_drag(
+        &mut self,
+        event: &MouseMoveEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(anchor) = self.dragging else {
+            return;
+        };
+        let Some(focus) = self.mark_at(event.position, window, cx) else {
+            return;
+        };
+        let selection = Selection::new(anchor, focus);
+        if self.selection != Some(selection) {
+            self.selection = Some(selection);
+            cx.notify();
+        }
+    }
+
+    /// The drag is over; a selection of one glyph still shows, as a click
+    /// places the caret in Obsidian.
+    fn selection_up(&mut self, _: &MouseUpEvent, cx: &mut Context<Self>) {
+        if self.dragging.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    /// The highlight boxes for what is selected, in page-local logical
+    /// pixels, grouped by page.
+    fn highlights(&self) -> Vec<Highlight> {
+        let (Some(selection), Some(layout)) = (self.selection, self.layout.as_ref()) else {
+            return Vec::new();
+        };
+        let pages: Vec<(usize, &[PdfGlyph])> = self
+            .glyphs
+            .iter()
+            .enumerate()
+            .map(|(ix, g)| (ix, g.as_slice()))
+            .collect();
+        let mut out = selection.boxes(&pages, layout.scale);
+        // A box at a page's edge can spill past the border; clamp to the page.
+        for highlight in &mut out {
+            if let Some(bounds) = layout.pages.get(highlight.page) {
+                highlight.x = highlight.x.clamp(0.0, bounds.size.width);
+                let room = (bounds.size.width - highlight.x).max(0.0);
+                highlight.width = highlight.width.min(room).max(0.0);
+                highlight.y = highlight.y.clamp(0.0, bounds.size.height);
+                let room = (bounds.size.height - highlight.y).max(0.0);
+                highlight.height = highlight.height.min(room).max(0.0);
+            }
+        }
+        out
+    }
+
+    /// Ctrl+C: the selected text to the clipboard.
+    fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(selection) = self.selection else {
+            return;
+        };
+        let pages: Vec<(usize, &[PdfGlyph])> = self
+            .glyphs
+            .iter()
+            .enumerate()
+            .map(|(ix, g)| (ix, g.as_slice()))
+            .collect();
+        let text = selection.text(&pages);
+        if text.is_empty() {
+            return;
+        }
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+    }
+
+    /// Ctrl+A: every glyph on every page.
+    fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
+        self.ensure_glyphs(cx);
+        let last = self.glyphs.iter().rposition(|page| !page.is_empty());
+        let Some(page) = last else {
+            return;
+        };
+        let glyph = self.glyphs[page].len() - 1;
+        self.selection = Some(Selection::new(
+            Mark { page: 0, glyph: 0 },
+            Mark { page, glyph },
+        ));
         cx.notify();
     }
 
@@ -1925,12 +2144,14 @@ impl PdfView {
             .on_scroll_wheel(cx.listener(|this, event, window, cx| this.wheel(event, window, cx)))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _, window, cx| {
-                    this.menu = Menu::None;
-                    if !this.focus.is_focused(window) {
-                        window.focus(&this.focus, cx);
-                    }
-                }),
+                cx.listener(|this, event, window, cx| this.selection_down(event, window, cx)),
+            )
+            .on_mouse_move(
+                cx.listener(|this, event, window, cx| this.selection_drag(event, window, cx)),
+            )
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, event, _, cx| this.selection_up(event, cx)),
             )
             .child(
                 canvas(
@@ -1952,6 +2173,12 @@ impl PdfView {
         let top = self.scroll.y;
         let scale = layout.scale * window.scale_factor();
         let cache = documents(cx);
+        let highlights = self.highlights();
+        let theme_selection = {
+            let mut c = theme.accent;
+            c.a = if theme.dark { 0.35 } else { 0.25 };
+            c
+        };
         let shadow = if theme.dark {
             vec![BoxShadow {
                 color: theme.border,
@@ -2011,6 +2238,20 @@ impl PdfView {
                         .object_fit(ObjectFit::Fill),
                 );
             }
+            // The selection, over the page's image, clipped by the box.
+            let mut overlay = div().absolute().inset_0().overflow_hidden();
+            for highlight in highlights.iter().filter(|h| h.page == ix) {
+                overlay = overlay.child(
+                    div()
+                        .absolute()
+                        .left(px(highlight.x))
+                        .top(px(highlight.y))
+                        .w(px(highlight.width))
+                        .h(px(highlight.height))
+                        .bg(theme_selection),
+                );
+            }
+            page = page.child(overlay);
             column = column.child(page);
         }
         area = area.child(column);
@@ -2063,6 +2304,8 @@ impl Render for PdfView {
             .on_action(cx.listener(Self::find))
             .on_action(cx.listener(Self::find_next))
             .on_action(cx.listener(Self::find_previous))
+            .on_action(cx.listener(Self::copy))
+            .on_action(cx.listener(Self::select_all))
             .on_action(cx.listener(Self::dismiss))
             .flex()
             .flex_col()

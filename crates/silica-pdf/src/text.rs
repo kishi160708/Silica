@@ -12,6 +12,16 @@ use hayro::hayro_interpret::{
 };
 use hayro::kurbo::{BezPath, Point, Rect};
 
+/// A glyph's text with its bounding box on the displayed page, in points.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PdfGlyph {
+    pub text: String,
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
 /// A glyph's text with where it sits on the displayed page, in points.
 struct Placed {
     text: String,
@@ -68,6 +78,37 @@ impl<'a> Device<'a> for TextDevice {
             });
         }
     }
+}
+
+pub(crate) fn page_glyphs(page: &Page<'_>, settings: &InterpreterSettings) -> Vec<PdfGlyph> {
+    let (width, height) = page.render_dimensions();
+    let transform = page.initial_transform(true).to_kurbo();
+    let cache = InterpreterCache::new();
+    let mut context = Context::new(
+        transform,
+        Rect::new(0.0, 0.0, width as f64, height as f64),
+        &cache,
+        page.xref(),
+        settings.clone(),
+    );
+    let mut device = TextDevice::default();
+    interpret_page(page, &mut context, &mut device);
+    device
+        .glyphs
+        .into_iter()
+        .map(|g| {
+            let width = ((g.right - g.x).abs() as f32).max(g.size as f32 * 0.2);
+            let height = (g.size as f32).max(1.0);
+            let y = (g.y as f32 - height * 0.8).max(0.0);
+            PdfGlyph {
+                text: g.text,
+                x: g.x as f32,
+                y,
+                width,
+                height,
+            }
+        })
+        .collect()
 }
 
 pub(crate) fn page_text(page: &Page<'_>, settings: &InterpreterSettings) -> String {

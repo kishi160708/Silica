@@ -25,6 +25,7 @@ use hayro::vello_cpu::{Pixmap, RasterizerSettings, RenderContext, Resources, Tar
 use hayro::{render_into, RenderCache, RenderSettings};
 
 pub use subpath::{parse_subpath, Subpath};
+pub use text::PdfGlyph;
 
 /// The longest side a rendered page may have, in pixels. A larger request is
 /// scaled down to fit; the bitmap then reports the size it was actually drawn at.
@@ -203,6 +204,12 @@ impl Document {
     pub fn page_text(&self, index: usize) -> Option<String> {
         let page = self.pdf.pages().get(index)?;
         catch_unwind(AssertUnwindSafe(|| text::page_text(page, &self.settings))).ok()
+    }
+
+    /// The page's glyphs with bounding boxes on the page, in points.
+    pub fn page_glyphs(&self, index: usize) -> Option<Vec<PdfGlyph>> {
+        let page = self.pdf.pages().get(index)?;
+        catch_unwind(AssertUnwindSafe(|| text::page_glyphs(page, &self.settings))).ok()
     }
 }
 

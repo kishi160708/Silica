@@ -4,7 +4,7 @@
 
 use std::time::Instant;
 
-use silica_pdf::{Bitmap, Document, Error, OutlineItem, PageSize};
+use silica_pdf::{Bitmap, Document, Error, OutlineItem, PageSize, PdfGlyph};
 
 const A4_WIDTH: f32 = 595.276;
 const A4_HEIGHT: f32 = 841.89;
@@ -333,4 +333,81 @@ fn render_timings() {
         bitmap.height,
         started.elapsed()
     );
+}
+
+#[test]
+fn pages_fixture_glyphs() {
+    let doc = open("pages.pdf");
+    // Out of range.
+    assert_eq!(doc.page_glyphs(5), None);
+    // Page 0 has the heading "One" and the sentence "This is page one."
+    let glyphs = doc.page_glyphs(0).unwrap();
+    assert!(!glyphs.is_empty(), "page 0 has no glyphs");
+    let joined: String = glyphs.iter().map(|g| g.text.as_str()).collect();
+    assert!(
+        joined.contains("One") && joined.contains("This"),
+        "joined glyphs {joined:?} lack expected words"
+    );
+    // Every glyph sits within the A4 page bounds.
+    let (w, h) = (A4_WIDTH, A4_HEIGHT);
+    for g in &glyphs {
+        assert!(
+            g.x >= -1.0 && g.x + g.width <= w + 1.0,
+            "glyph {:?} x={} w={} outside page width {w}",
+            g.text,
+            g.x,
+            g.width
+        );
+        assert!(
+            g.y >= -1.0 && g.y + g.height <= h + 1.0,
+            "glyph {:?} y={} h={} outside page height {h}",
+            g.text,
+            g.y,
+            g.height
+        );
+        assert!(g.height > 0.0 && g.width >= 0.0, "bad glyph box {:?}", g);
+    }
+    // Glyphs roughly left-aligned: the first glyph of the body line starts
+    // near the left margin, and the heading starts above the body.
+    let first = &glyphs[0];
+    assert!(
+        first.x < 200.0,
+        "first glyph x={} not left-aligned",
+        first.x
+    );
+}
+
+#[test]
+fn blank_page_has_no_glyphs() {
+    assert!(open("blank.pdf").page_glyphs(0).unwrap().is_empty());
+}
+
+#[test]
+fn glyphs_are_strictly_left_to_right_in_a_line() {
+    let doc = open("pages.pdf");
+    let glyphs = doc.page_glyphs(0).unwrap();
+    // Group glyphs into lines by y (within a few points), then assert
+    // non-decreasing x within each line.
+    let mut lines: Vec<Vec<&PdfGlyph>> = Vec::new();
+    for g in &glyphs {
+        if let Some(line) = lines.last_mut() {
+            if (line[0].y - g.y).abs() < g.height * 0.5 {
+                line.push(g);
+                continue;
+            }
+        }
+        lines.push(vec![g]);
+    }
+    let longest = lines.iter().max_by_key(|l| l.len()).unwrap();
+    assert!(longest.len() > 1, "no multi-glyph line found");
+    for w in longest.windows(2) {
+        assert!(
+            w[0].x + w[0].width <= w[1].x + 1.0,
+            "glyphs not left-to-right: {:?} at x={} then {:?} at x={}",
+            w[0].text,
+            w[0].x,
+            w[1].text,
+            w[1].x
+        );
+    }
 }
