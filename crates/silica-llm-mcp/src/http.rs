@@ -445,9 +445,21 @@ mod tests {
         let url = Url::parse("http://10.255.255.1:1/v1").unwrap();
         let before = ACTIVE_CONNECTIONS.load(Ordering::Acquire);
         let _ = request(&url, "/v1", None, None, Duration::from_millis(100));
-        // Drain any in-flight workers briefly so the counter settles.
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        assert_eq!(ACTIVE_CONNECTIONS.load(Ordering::Acquire), before);
+        // * The worker decrements after the request returns, so the counter can
+        // * still be elevated for a moment on a loaded CI machine. Poll until it
+        // * settles rather than assuming a fixed sleep is long enough.
+        let settled = (0..100).any(|_| {
+            if ACTIVE_CONNECTIONS.load(Ordering::Acquire) == before {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+            false
+        });
+        assert!(
+            settled,
+            "the connection counter stayed at {} (expected {before})",
+            ACTIVE_CONNECTIONS.load(Ordering::Acquire)
+        );
     }
 
     /// A chunk header is the server's word, so its size can be anything a

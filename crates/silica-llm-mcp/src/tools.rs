@@ -804,10 +804,12 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let backend = backend_with(1 << 20);
-        let err = read_excerpt(&backend, dir.to_str().unwrap(), None, false)
-            .unwrap_err();
+        let err = read_excerpt(&backend, dir.to_str().unwrap(), None, false).unwrap_err();
+        // * The refusal is what matters, not the wording: Windows fails the
+        // * open of a directory outright ("Access is denied") where Unix opens
+        // * it and then rejects the type, so both messages are a pass.
         assert!(
-            err.contains("is not a regular file"),
+            err.contains("is not a regular file") || err.contains("cannot read"),
             "{err}"
         );
         std::fs::remove_dir_all(&dir).ok();
