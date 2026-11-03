@@ -10,7 +10,10 @@
 use crate::model::{Answer, Ask, Backend, digest_path};
 use crate::rpc::{Fault, INVALID_PARAMS};
 use serde_json::{json, Map, Value};
+use std::path::Path;
 use std::io::{Read, Seek};
+use std::ffi::CString;
+use std::os::fd::{AsRawFd, FromRawFd};
 
 enum Run {
     Models,
@@ -308,6 +311,40 @@ fn keep_line(
     true
 }
 
+/// Open `file` for reading without following symlinks on any path component:
+/// the parent directory is opened with O_DIRECTORY|O_NOFOLLOW and the file is
+/// opened through it with openat+O_NOFOLLOW, so a link swapped into any
+/// parent component between the digest-path check and the open cannot redirect
+/// the read outside the permitted root.
+#[cfg(unix)]
+fn open_digest_file(file: &Path) -> Result<std::fs::File, String> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let parent = file.parent().unwrap_or_else(|| Path::new("."));
+    let name = file.file_name().and_then(|n| n.to_str()).ok_or_else(|| {
+        format!("cannot read {}: invalid file name", file.display())
+    })?;
+    let dir = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(parent)
+        .map_err(|e| format!("cannot open directory {}: {e}", parent.display()))?;
+    let cname = CString::new(name).map_err(|e| {
+        format!("cannot read {}: invalid file name: {e}", file.display())
+    })?;
+    let fd = unsafe {
+        libc::openat(
+            dir.as_raw_fd(),
+            cname.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        let e = std::io::Error::last_os_error();
+        return Err(format!("cannot read {}: {e}", file.display()));
+    }
+    Ok(unsafe { std::fs::File::from_raw_fd(fd) })
+}
+
 fn read_excerpt(
     backend: &Backend,
     path: &str,
@@ -321,13 +358,7 @@ fn read_excerpt(
     // Open without following symlinks on the final component (Unix): a link
     // planted between the digest-path check and the open cannot redirect the
     // read outside the permitted root.
-    #[cfg(unix)]
-    let f = {
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut opts = std::fs::OpenOptions::new();
-        opts.read(true).custom_flags(libc::O_NOFOLLOW);
-        opts.open(&file).map_err(|e| format!("cannot read {path}: {e}"))?
-    };
+    let f = open_digest_file(&file)?;
     #[cfg(not(unix))]
     let f = std::fs::File::open(&file).map_err(|e| format!("cannot read {path}: {e}"))?;
 

@@ -11,6 +11,8 @@
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
+use std::thread;
+use std::sync::mpsc;
 
 use native_tls::TlsConnector;
 
@@ -121,16 +123,34 @@ pub fn request(
     timeout: Duration,
 ) -> Result<Response, String> {
     let address = format!("{}:{}", url.host, url.port);
-    // ! Resolve and connect with the same budget as the read: a wrong port on
-    // ! loopback refuses at once, but a wrong host must not hang forever.
-    let addr = (url.host.as_str(), url.port)
-        .to_socket_addrs()
-        .map_err(|e| format!("cannot resolve {address}: {e}"))?
-        .next()
-        .ok_or_else(|| format!("no address for {address}"))?;
-    let mut stream = TcpStream::connect_timeout(&addr, timeout).map_err(|e| {
-        format!("cannot reach {address}: {e}. Is the model server running? From another machine, SILICA_LLM_URL should be that machines address (http://127.0.0.1:11434/v1 on this one).")
-    })?;
+    // ! Resolve and connect with one overall deadline: DNS resolution and the
+    // ! TCP handshake (and, for https, the TLS negotiation) all run inside a
+    // ! thread joined with the configured timeout, so a slow or unreachable
+    // ! endpoint cannot hang past it.
+    let address_for_err = address.clone();
+    let host = url.host.clone();
+    let port = url.port;
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let result = (|| {
+            let addr = (host.as_str(), port)
+                .to_socket_addrs()
+                .map_err(|e| format!("cannot resolve {address_for_err}: {e}"))?
+                .next()
+                .ok_or_else(|| format!("no address for {address_for_err}"))?;
+            TcpStream::connect_timeout(&addr, timeout).map_err(|e| {
+                format!(
+                    "cannot reach {address_for_err}: {e}. Is the model server running? From another machine, SILICA_LLM_URL should be that machines address (http://127.0.0.1:11434/v1 on this one)."
+                )
+            })
+        })();
+        let _ = tx.send(result);
+    });
+    let mut stream = match rx.recv_timeout(timeout) {
+        Ok(Ok(stream)) => stream,
+        Ok(Err(e)) => return Err(format!("{address}: {e}")),
+        Err(_) => return Err(format!("{address}: connection timed out during DNS resolution or TCP handshake")),
+    };
     stream
         .set_read_timeout(Some(timeout))
         .and_then(|()| stream.set_write_timeout(Some(timeout)))
