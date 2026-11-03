@@ -24,6 +24,22 @@ use silica_formats::config::PluginManifest;
 
 const SHIM: &str = include_str!("shim.js");
 
+/// Creates `dir` and its parents by walking from the vault root with
+/// `openat`, so a component substituted for a link between the path check and
+/// the `mkdir` cannot redirect it.
+fn make_dirs_checked(shared: &Rc<RefCell<Shared>>, dir: &Path) -> std::io::Result<()> {
+    let shared = shared.borrow();
+    let relative = dir.strip_prefix(&shared.root).unwrap_or(dir);
+    #[cfg(unix)]
+    {
+        silica_vault::create_dir_all_at(&shared.root, relative)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::create_dir_all(dir)
+    }
+}
+
 /// Byte budget for one plugin's heap. Exceeding it stops the plugin with an
 /// error instead of letting it grow without bound inside the app.
 const HEAP_BYTES: usize = 64 * 1024 * 1024;
@@ -259,6 +275,49 @@ impl Shared {
             ));
         }
         Ok(resolved)
+    }
+
+    /// Refuses an operation whose target is the open note **or a folder that
+    /// contains it**.
+    ///
+    /// [`Self::writable`] compares whole paths, which answers "is this the
+    /// note" but not "is this the note's folder". Deleting or renaming a
+    /// folder moves every note under it, and one of those may have unsaved
+    /// edits the editor still holds.
+    fn writable_tree(&self, path: &str) -> Result<PathBuf, String> {
+        let resolved = self.writable(path)?;
+        if let Some(note) = self.open_note.as_deref() {
+            let note = self.root.join(note);
+            // Same fold as `writable`: the two strings can name one path.
+            let fold = |p: &Path| p.to_string_lossy().to_lowercase();
+            let (target, note) = match (resolved.canonicalize(), note.canonicalize()) {
+                (Ok(target), Ok(note)) => (target, note),
+                _ => (resolved.clone(), note),
+            };
+            let (target, note) = (fold(&target), fold(&note));
+            let inside = note.starts_with(&format!("{target}/")) || note.starts_with(&format!("{target}\\"));
+            if inside {
+                return Err(format!(
+                    "'{path}' contains the note open in the editor; a plugin cannot move it while its unsaved changes are here"
+                ));
+            }
+        }
+        Ok(resolved)
+    }
+
+    /// Writes `bytes` to `resolved`, going through the vault's `openat` walk
+    /// so a directory cannot be swapped for a link between the check that
+    /// produced `resolved` and the write itself.
+    fn write_checked(&self, resolved: &Path, bytes: &[u8]) -> std::io::Result<()> {
+        let relative = resolved.strip_prefix(&self.root).unwrap_or(resolved);
+        #[cfg(unix)]
+        {
+            silica_vault::write_at(&self.root, relative, bytes)
+        }
+        #[cfg(not(unix))]
+        {
+            silica_vault::write_no_follow(resolved, bytes)
+        }
     }
 
     fn entry(&mut self, path: &str) -> Option<String> {
@@ -587,9 +646,11 @@ fn install<'js>(
     set!("__silica_raw_write_data", move |ctx: Ctx<'js>, text: String| -> rquickjs::Result<()> {
         let path = s.borrow().data_path.clone();
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|error| Exception::throw_message(&ctx, &error.to_string()))?;
+            make_dirs_checked(&s, parent).map_err(|error| Exception::throw_message(&ctx, &error.to_string()))?;
         }
-        std::fs::write(&path, text).map_err(|error| Exception::throw_message(&ctx, &error.to_string()))
+        s.borrow()
+            .write_checked(&path, text.as_bytes())
+            .map_err(|error| Exception::throw_message(&ctx, &error.to_string()))
     });
 
     let s = Rc::clone(&shared);
@@ -652,7 +713,8 @@ fn install<'js>(
             .borrow()
             .writable(&path)
             .map_err(|error| Exception::throw_message(&ctx, &error))?;
-        silica_vault::write_no_follow(&resolved, text.as_bytes())
+        s.borrow()
+            .write_checked(&resolved, text.as_bytes())
             .map_err(|error| Exception::throw_message(&ctx, &format!("'{path}' could not be written: {error}")))
     });
 
@@ -685,9 +747,11 @@ fn install<'js>(
             }
         };
         existing.push_str(&text);
-        silica_vault::write_no_follow(&resolved, existing.as_bytes()).map_err(|error| {
-            Exception::throw_message(&ctx, &format!("'{path}' could not be written: {error}"))
-        })
+        s.borrow()
+            .write_checked(&resolved, existing.as_bytes())
+            .map_err(|error| {
+                Exception::throw_message(&ctx, &format!("'{path}' could not be written: {error}"))
+            })
     });
 
     let s = Rc::clone(&shared);
@@ -704,10 +768,11 @@ fn install<'js>(
             ));
         }
         if let Some(parent) = resolved.parent() {
-            std::fs::create_dir_all(parent)
+            make_dirs_checked(&s, parent)
                 .map_err(|error| Exception::throw_message(&ctx, &error.to_string()))?;
         }
-        silica_vault::write_no_follow(&resolved, text.as_bytes())
+        s.borrow()
+            .write_checked(&resolved, text.as_bytes())
             .map_err(|error| Exception::throw_message(&ctx, &format!("'{path}' could not be written: {error}")))
     });
 
@@ -718,7 +783,7 @@ fn install<'js>(
             .borrow()
             .resolve(&path)
             .map_err(|error| Exception::throw_message(&ctx, &error))?;
-        std::fs::create_dir_all(&resolved).map_err(|error| {
+        make_dirs_checked(&s, &resolved).map_err(|error| {
             Exception::throw_message(&ctx, &format!("'{path}' could not be created: {error}"))
         })
     });
@@ -728,7 +793,7 @@ fn install<'js>(
         s.borrow_mut().mark_changed();
         let resolved = s
             .borrow()
-            .writable(&path)
+            .writable_tree(&path)
             .map_err(|error| Exception::throw_message(&ctx, &error))?;
         // A plugin deletes into the vault's trash rather than unlinking, so a
         // mistaken delete is recoverable.
@@ -748,9 +813,11 @@ fn install<'js>(
     let s = Rc::clone(&shared);
     set!("__silica_raw_vault_rename", move |ctx: Ctx<'js>, from: String, to: String| -> rquickjs::Result<()> {
         s.borrow_mut().mark_changed();
+        // The source needs the folder guard too: renaming a folder moves
+        // every note inside it, the open one among them.
         let source = s
             .borrow()
-            .writable(&from)
+            .writable_tree(&from)
             .map_err(|error| Exception::throw_message(&ctx, &error))?;
         let target = s
             .borrow()
@@ -1057,6 +1124,27 @@ mod path_tests {
         assert!(shared.borrow().writable("Notes/Plan.md").is_err());
         // A different note is not.
         assert!(shared.borrow().writable("Other.md").is_ok());
+    }
+
+    #[test]
+    fn a_folder_holding_the_open_note_cannot_be_moved() {
+        let (_dir, shared) = vault(Some("Notes/Plan.md"));
+        let root = shared.borrow().root.clone();
+        std::fs::create_dir_all(root.join("Notes")).unwrap();
+        std::fs::write(root.join("Notes/Plan.md"), "saved").unwrap();
+
+        // The folder, not the file: `writable` would allow this.
+        let err = shared
+            .borrow()
+            .writable_tree("Notes")
+            .expect_err("the open note's folder must be refused");
+        assert!(err.contains("contains the note"), "{err}");
+        // A sibling folder is fine.
+        std::fs::create_dir_all(root.join("Other")).unwrap();
+        assert!(shared.borrow().writable_tree("Other").is_ok());
+        // So is a folder whose name only shares a prefix.
+        std::fs::create_dir_all(root.join("Notes-old")).unwrap();
+        assert!(shared.borrow().writable_tree("Notes-old").is_ok());
     }
 
     #[test]

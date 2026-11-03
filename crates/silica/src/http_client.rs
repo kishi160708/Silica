@@ -8,8 +8,86 @@ use http_client::{
     AsyncBody, HttpClient, Url,
 };
 
+/// The largest remote image Silica will keep. A note's picture is a picture;
+/// anything past this is not one, and the disk is not the place to find out.
+pub const MAX_BYTES: u64 = 32 * 1024 * 1024;
+
+/// How many redirects a fetch may follow.
+pub const MAX_REDIRECTS: &str = "5";
+
 pub struct SilicaHttpClient {
     cache_dir: PathBuf,
+}
+
+/// Whether `url` may be fetched at all.
+///
+/// A note can name any image it likes, so the request goes where the note
+/// says. That makes the note able to probe whatever the app can reach, which
+/// on a laptop includes the router's admin page and anything on `localhost`.
+/// A literal private or loopback host is refused here, before any request.
+///
+/// Ponytail: a DNS name that resolves to a private address is not caught,
+/// because resolving it and then connecting to that address needs a real HTTP
+/// client rather than `curl`. The ceiling is a name pointing inward; the
+/// upgrade is to resolve here and pass `--resolve`.
+pub fn allows_destination(url: &str) -> bool {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return false;
+    };
+    if !matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https") {
+        return false;
+    }
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    // Drop any userinfo, then any port.
+    let host = authority.rsplit('@').next().unwrap_or(authority);
+    let host = if host.starts_with('[') {
+        // A bracketed IPv6 literal.
+        host.split(']')
+            .next()
+            .unwrap_or(host)
+            .trim_start_matches('[')
+    } else {
+        host.split(':').next().unwrap_or(host)
+    };
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    if host.is_empty() || host == "localhost" || host.ends_with(".localhost") {
+        return false;
+    }
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return !is_private(ip);
+    }
+    true
+}
+
+/// Loopback, link-local, private, and the other ranges that mean "this
+/// machine or its network" rather than "the internet".
+fn is_private(ip: std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    match ip {
+        IpAddr::V4(v4) => {
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_broadcast()
+                || v4.is_unspecified()
+                || v4.is_documentation()
+                // 100.64/10, carrier-grade NAT, which is a LAN in practice.
+                || (v4.octets()[0] == 100 && (64..128).contains(&v4.octets()[1]))
+                // 169.254 metadata endpoints are link-local and already
+                // covered; 0/8 and 240/4 are not routable either.
+                || v4.octets()[0] == 0
+                || v4.octets()[0] >= 240
+        }
+        IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || v6.is_unspecified()
+                // Unique local (fc00::/7) and link-local (fe80::/10).
+                || (v6.segments()[0] & 0xfe00) == 0xfc00
+                || (v6.segments()[0] & 0xffc0) == 0xfe80
+                // An IPv4-mapped address is private if the IPv4 is.
+                || v6.to_ipv4_mapped().is_some_and(|v4| is_private(v4.into()))
+        }
+    }
 }
 
 impl SilicaHttpClient {
@@ -17,7 +95,10 @@ impl SilicaHttpClient {
         let cache_dir = if let Some(cache) = std::env::var_os("XDG_CACHE_HOME") {
             PathBuf::from(cache).join("silica").join("remote_images")
         } else if let Some(home) = std::env::var_os("HOME") {
-            PathBuf::from(home).join(".cache").join("silica").join("remote_images")
+            PathBuf::from(home)
+                .join(".cache")
+                .join("silica")
+                .join("remote_images")
         } else {
             std::env::temp_dir().join("silica").join("remote_images")
         };
@@ -60,6 +141,14 @@ impl HttpClient for SilicaHttpClient {
     ) -> BoxFuture<'static, Result<Response<AsyncBody>>> {
         let uri = req.uri().to_string();
         let method = req.method().clone();
+        if !allows_destination(&uri) {
+            return async move {
+                Err(anyhow!(
+                    "{uri} is not an http(s) URL, or it points into a private network, so it is not fetched"
+                ))
+            }
+            .boxed();
+        }
         let cache_path = self.cache_path(&uri);
 
         async move {
@@ -86,6 +175,19 @@ impl HttpClient for SilicaHttpClient {
                     .arg("-s")
                     .arg("-f")
                     .arg("-L")
+                    // Redirects are followed, but only five of them, and only
+                    // to the same two schemes: a note's image could otherwise
+                    // bounce through `file://` or loop forever.
+                    .arg("--max-redirs")
+                    .arg(MAX_REDIRECTS)
+                    .arg("--proto")
+                    .arg("=http,https")
+                    .arg("--proto-redir")
+                    .arg("=http,https")
+                    // A response larger than the budget is abandoned rather
+                    // than written, so a hostile host cannot fill the disk.
+                    .arg("--max-filesize")
+                    .arg(MAX_BYTES.to_string())
                     .arg("--max-time")
                     .arg("30")
                     .arg(&uri_clone)
@@ -95,8 +197,22 @@ impl HttpClient for SilicaHttpClient {
 
                 let res = match status {
                     Ok(s) if s.success() => {
-                        let _ = std::fs::rename(&temp_path, &cache_path_clone);
-                        std::fs::read(&cache_path_clone).map_err(|e| anyhow!(e))
+                        // `--max-filesize` trusts the advertised length, so
+                        // the file is measured again before it is kept.
+                        match std::fs::metadata(&temp_path) {
+                            Ok(meta) if meta.len() > MAX_BYTES => {
+                                let _ = std::fs::remove_file(&temp_path);
+                                Err(anyhow!(
+                                    "{} is larger than the {} byte limit for a remote image",
+                                    uri_clone,
+                                    MAX_BYTES
+                                ))
+                            }
+                            _ => {
+                                let _ = std::fs::rename(&temp_path, &cache_path_clone);
+                                std::fs::read(&cache_path_clone).map_err(|e| anyhow!(e))
+                            }
+                        }
                     }
                     Ok(s) => {
                         let _ = std::fs::remove_file(&temp_path);
@@ -117,6 +233,59 @@ impl HttpClient for SilicaHttpClient {
             Ok(resp)
         }
         .boxed()
+    }
+}
+
+#[cfg(test)]
+mod destination_tests {
+    use super::*;
+
+    #[test]
+    fn a_public_image_url_is_allowed() {
+        for url in [
+            "https://example.com/cat.png",
+            "http://example.com/a/b.jpg",
+            "https://user:pass@example.com/x.png",
+            "https://example.com:8443/x.png",
+            "https://93.184.216.34/x.png",
+        ] {
+            assert!(allows_destination(url), "{url} was refused");
+        }
+    }
+
+    #[test]
+    fn loopback_and_private_networks_are_refused() {
+        for url in [
+            "http://localhost/x.png",
+            "http://LOCALHOST/x.png",
+            "http://localhost:8080/x.png",
+            "http://app.localhost/x.png",
+            "http://127.0.0.1/x.png",
+            "http://127.1.2.3/x.png",
+            "http://[::1]/x.png",
+            "http://10.0.0.5/x.png",
+            "http://192.168.1.1/x.png",
+            "http://172.16.0.1/x.png",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://100.64.0.1/x.png",
+            "http://0.0.0.0/x.png",
+            "http://[fd00::1]/x.png",
+            "http://[fe80::1]/x.png",
+        ] {
+            assert!(!allows_destination(url), "{url} was allowed");
+        }
+    }
+
+    #[test]
+    fn only_http_and_https_are_fetched() {
+        for url in [
+            "file:///etc/passwd",
+            "ftp://example.com/x",
+            "data:text/html,x",
+        ] {
+            assert!(!allows_destination(url), "{url} was allowed");
+        }
+        assert!(!allows_destination("example.com/x.png"), "no scheme");
     }
 }
 

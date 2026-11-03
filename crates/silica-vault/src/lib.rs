@@ -112,6 +112,118 @@ pub fn write_no_follow(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     file.write_all(bytes)
 }
 
+/// Writes `bytes` to `relative` under `root` by opening each directory
+/// component with `openat` from a directory handle, never by naming a path.
+///
+/// The difference from [`write_no_follow`] is the race: that function checks a
+/// path and then opens it, and between the two a parent directory can be
+/// replaced with a link. Here the walk itself holds the handles it walked
+/// through — `O_NOFOLLOW` at every step — so there is no moment when a name is
+/// trusted after it was checked.
+///
+/// Ponytail: Unix only, because `openat` is. Elsewhere [`write_no_follow`]
+/// stands, where a race needs a local attacker who can already write the
+/// vault.
+#[cfg(unix)]
+pub fn write_at(root: &Path, relative: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::ffi::CString;
+    use std::io::Write as _;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::unix::ffi::OsStrExt;
+
+    const DIR_FLAGS: libc::c_int = libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+    const FILE_FLAGS: libc::c_int =
+        libc::O_WRONLY | libc::O_NOFOLLOW | libc::O_CREAT | libc::O_TRUNC | libc::O_CLOEXEC;
+
+    let name = |part: &std::ffi::OsStr| -> std::io::Result<CString> {
+        CString::new(part.as_bytes())
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "a NUL in a path"))
+    };
+
+    let root_c = name(root.as_os_str())?;
+    let mut dir: OwnedFd = unsafe {
+        let fd = libc::open(root_c.as_ptr(), DIR_FLAGS);
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        OwnedFd::from_raw_fd(fd)
+    };
+
+    let mut parts: Vec<&std::ffi::OsStr> = relative
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(part) => Some(part),
+            _ => None,
+        })
+        .collect();
+    let Some(file_name) = parts.pop() else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "a write needs a file name",
+        ));
+    };
+
+    for part in parts {
+        let part_c = name(part)?;
+        let next = unsafe { libc::openat(dir.as_raw_fd(), part_c.as_ptr(), DIR_FLAGS) };
+        if next < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        dir = unsafe { OwnedFd::from_raw_fd(next) };
+    }
+
+    let file_c = name(file_name)?;
+    let fd = unsafe { libc::openat(dir.as_raw_fd(), file_c.as_ptr(), FILE_FLAGS, 0o644) };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+    file.write_all(bytes)
+}
+
+/// Creates every directory under `root` named by `relative`, one `openat` at a
+/// time, so no component can be swapped for a link mid-walk.
+#[cfg(unix)]
+pub fn create_dir_all_at(root: &Path, relative: &Path) -> std::io::Result<()> {
+    use std::ffi::CString;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::unix::ffi::OsStrExt;
+
+    const DIR_FLAGS: libc::c_int = libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+
+    let root_c = CString::new(root.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "a NUL in a path"))?;
+    let mut dir: OwnedFd = unsafe {
+        let fd = libc::open(root_c.as_ptr(), DIR_FLAGS);
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        OwnedFd::from_raw_fd(fd)
+    };
+
+    for part in relative.components() {
+        let std::path::Component::Normal(part) = part else {
+            continue;
+        };
+        let part_c = CString::new(part.as_bytes())
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "a NUL in a path"))?;
+        // Already there: step into it.
+        let mut next = unsafe { libc::openat(dir.as_raw_fd(), part_c.as_ptr(), DIR_FLAGS) };
+        if next < 0 {
+            let made = unsafe { libc::mkdirat(dir.as_raw_fd(), part_c.as_ptr(), 0o755) };
+            if made < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            next = unsafe { libc::openat(dir.as_raw_fd(), part_c.as_ptr(), DIR_FLAGS) };
+            if next < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+        }
+        dir = unsafe { OwnedFd::from_raw_fd(next) };
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 pub struct Vault {
     root: PathBuf,
@@ -1109,5 +1221,59 @@ mod tests {
         }
         vault.write_bytes("Sub/a.md", b"b").unwrap();
         assert_eq!(fs::read_to_string(r.join("Sub/a.md")).unwrap(), "b");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_at_follows_directories_but_never_a_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("a/b")).unwrap();
+
+        write_at(&root, Path::new("a/b/note.md"), b"written").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join("a/b/note.md")).unwrap(),
+            "written"
+        );
+
+        // A link where a directory should be is refused, not followed.
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.join("escape")).unwrap();
+        let err = write_at(&root, Path::new("escape/planted.md"), b"pwned").unwrap_err();
+        assert!(
+            err.raw_os_error() == Some(libc::ELOOP) || err.raw_os_error() == Some(libc::ENOTDIR),
+            "the walk did not stop at the link: {err:?}"
+        );
+        assert!(!outside.path().join("planted.md").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_at_refuses_a_link_in_the_final_position() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("real.md");
+        std::fs::write(&target, "outside").unwrap();
+        std::os::unix::fs::symlink(&target, root.join("link.md")).unwrap();
+
+        assert!(write_at(&root, Path::new("link.md"), b"pwned").is_err());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "outside");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_dir_all_at_builds_a_chain_and_refuses_a_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        create_dir_all_at(&root, Path::new("x/y/z")).unwrap();
+        assert!(root.join("x/y/z").is_dir());
+        // Idempotent.
+        create_dir_all_at(&root, Path::new("x/y/z")).unwrap();
+
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.join("esc")).unwrap();
+        assert!(create_dir_all_at(&root, Path::new("esc/deep")).is_err());
+        assert!(!outside.path().join("deep").exists());
     }
 }

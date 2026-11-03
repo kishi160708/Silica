@@ -442,23 +442,9 @@ impl Plugin for WebViewer {
                 if url.is_empty() {
                     return Err("No URL specified".to_string());
                 }
-                if cfg!(target_os = "windows") {
-                    std::process::Command::new("cmd")
-                        .args(["/C", "start", url])
-                        .spawn()
-                        .map_err(|e| format!("Failed to open browser: {e}"))?;
-                } else if cfg!(target_os = "macos") {
-                    std::process::Command::new("open")
-                        .arg(&url)
-                        .spawn()
-                        .map_err(|e| format!("Failed to open browser: {e}"))?;
-                } else {
-                    std::process::Command::new("xdg-open")
-                        .arg(&url)
-                        .spawn()
-                        .map_err(|e| format!("Failed to open browser: {e}"))?;
-                }
-                Ok(())
+                // One launcher for every platform, and it checks the scheme
+                // first: the target arrives from a note, so it is untrusted.
+                crate::launch::open(url).map_err(|error| error.to_string())
             }
             _ => Err(format!("'{id}' is not a command this plugin registered")),
         }

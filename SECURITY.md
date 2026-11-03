@@ -23,9 +23,12 @@ the properties a report is measured against:
 - **Writes stay inside the vault.** Every write goes through one checked path
   (`Vault::write_path`): a `..` or an absolute path is refused, so is a
   symbolic link anywhere along the way, and the file is opened without
-  following a link in its place (`O_NOFOLLOW` on Unix). The only writes
-  outside the folder are a file moved to the system trash when `trashOption`
-  asks for it, and nothing else.
+  following a link in its place (`O_NOFOLLOW` on Unix). On Unix the write
+  walks the path with `openat` from the vault root rather than naming it, so
+  there is no window between the check and the write in which a directory can
+  be replaced by a link; directory creation walks the same way. The only
+  writes outside the folder are a file moved to the system trash when
+  `trashOption` asks for it, and nothing else.
 - **Network access happens only for a remote image you can see.** The app
   installs an HTTP client (`src/http_client.rs`) and the reading view asks it
   for every remote image a note displays (`EmbedKind::RemoteImage`), through
@@ -36,6 +39,15 @@ the properties a report is measured against:
   when clicked, and no telemetry, update check or feed request exists.
   What a fetch therefore reveals to the image's host is your IP address and
   the time you opened that note, plus the URL itself.
+  Destinations and size are bounded: only `http` and `https` are fetched, at
+  most five redirects are followed and only to those two schemes, a literal
+  loopback, link-local, carrier-grade-NAT or private address is refused before
+  any request (`localhost`, `127.0.0.0/8`, `10/8`, `172.16/12`,
+  `192.168/16`, `169.254/16`, `100.64/10`, `fc00::/7`, `fe80::/10`, `::1`),
+  and a response past 32 MB is dropped instead of cached. A DNS name that
+  resolves to a private address is **not** caught: seeing through that needs
+  the address resolved and pinned, which is a real HTTP client rather than
+  `curl`.
 - **Code from the vault runs only when you enable a community plugin.** Themes,
   CSS snippets, manifests and settings are read as data and never evaluated.
   An *enabled* tier-1 plugin is different: `silica-plugins` loads its
@@ -55,6 +67,12 @@ the properties a report is measured against:
   - A plugin cannot write the app's own binary, cannot write outside the vault,
     and cannot reach the control socket.
   Disabling a plugin stops it being loaded at all.
+- **Links open only schemes a link is meant to carry.** `http`, `https` and
+  `mailto` are handed to the desktop's opener; anything else — `file:`,
+  `ms-msdt:`, `search-ms:`, `javascript:`, `data:`, `obsidian:` — is refused
+  before the opener sees it, because a URL is a program name to a desktop.
+  No shell is ever in the path: Windows uses `ShellExecuteW`, not
+  `cmd /C start`, so `&` and `|` in a URL are characters rather than syntax.
 - **The control socket is local and private.** `--control <path>` binds a Unix
   domain socket with mode `0600`; it accepts no path that leaves the vault.
   It is off unless asked for, and it is as powerful as the keyboard — anyone

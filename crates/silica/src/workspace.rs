@@ -6769,24 +6769,11 @@ impl Workspace {
             return;
         };
         let absolute = state.vault().absolute(path);
-        let mut command = if cfg!(target_os = "macos") {
-            std::process::Command::new("open")
-        } else if cfg!(target_os = "windows") {
-            // `start` is a shell builtin rather than a program, and its first
-            // quoted argument is the window title, not the file.
-            let mut c = std::process::Command::new("cmd");
-            c.args(["/C", "start", ""]);
-            c
-        } else {
-            std::process::Command::new("xdg-open")
-        };
-        if let Err(err) = command
-            .arg(&absolute)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-        {
+        // `cmd /C start` was here on Windows, which made the file name shell
+        // syntax: a note called `a&calc.exe.md` ran a command on being opened.
+        // The system's own open call takes the path as data instead.
+        let outcome = silica_plugins::launch::open_path(&absolute);
+        if let Err(err) = outcome {
             self.report(format!("Could not open {path}: {err}"), cx);
         }
     }
