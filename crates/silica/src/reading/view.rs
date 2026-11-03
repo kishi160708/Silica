@@ -22,7 +22,7 @@ use gpui::{
     ListOffset, ListState, MouseButton, ObjectFit, Pixels, SharedString, StrikethroughStyle,
     StyledText, Task, TextRun, UnderlineStyle, WeakEntity, Window, WindowTextSystem,
 };
-use rodio::{OutputStream, OutputStreamHandle, Sink};
+use rodio::{OutputStream, Sink};
 use serde_json::{json, Value};
 use silica_formats::config::PropertyTypes;
 use silica_formats::properties::{Change, PropertiesInDocument, Property, PropertyType};
@@ -343,7 +343,6 @@ static mut AUDIO_PLAYER: Option<AudioPlayer> = None;
 /// play one at a time), and play/pause state.
 struct AudioPlayer {
     _stream: OutputStream,
-    handle: OutputStreamHandle,
     sink: Sink,
     is_playing: bool,
 }
@@ -889,7 +888,7 @@ impl ReadingView {
         let view_for_video = view.clone();
         let on_video: VideoHandler = Rc::new(move |path, share, _window, cx| {
             let path = path.to_path_buf();
-            let _ = view_for_video
+            view_for_video
                 .update(cx, |this, cx| this.video_clicked(&path, share, cx));
         });
         let host = ReadingHost {
@@ -911,16 +910,13 @@ impl ReadingView {
         let path_for_prop = self.path.clone().unwrap_or_default();
         let view_for_prop = view.clone();
         let on_property_action: PropertyHandler = Rc::new(move |action, _window, cx| {
-            match action {
-                PropertyAction::Remove { key } => {
-                    view_for_prop.update(cx, |_, cx| {
-                        cx.emit(ReadingEvent::PropertyChanged {
-                            path: path_for_prop.clone(),
-                            changes: vec![Change::Remove { key }],
-                        });
+            if let PropertyAction::Remove { key } = action {
+                view_for_prop.update(cx, |_, cx| {
+                    cx.emit(ReadingEvent::PropertyChanged {
+                        path: path_for_prop.clone(),
+                        changes: vec![Change::Remove { key }],
                     });
-                }
-                _ => {}
+                });
             }
         });
         let properties_host = PropertiesHost {
@@ -2119,7 +2115,7 @@ impl<'a> Renderer<'a> {
                     .and_then(|n| n.to_str())
                     .unwrap_or(&embed.link)
                     .to_string();
-                let is_playing = unsafe { AUDIO_PLAYER.as_ref().map_or(false, |p| p.is_playing) };
+                let is_playing = unsafe { AUDIO_PLAYER.as_ref().is_some_and(|p| p.is_playing) };
                 let path_clone = path.clone();
                 div()
                     .my_1()
@@ -2151,7 +2147,6 @@ impl<'a> Renderer<'a> {
                                         sink.play();
                                         AUDIO_PLAYER = Some(AudioPlayer {
                                             _stream: stream,
-                                            handle,
                                             sink,
                                             is_playing: true,
                                         });

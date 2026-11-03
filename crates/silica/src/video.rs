@@ -19,7 +19,7 @@
 use gpui::{App, ImageSource, RenderImage};
 use image::{Frame, RgbaImage};
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 
@@ -229,14 +229,6 @@ pub fn frame_source(frame: Arc<RenderImage>) -> ImageSource {
     ImageSource::Render(frame)
 }
 
-/// The label an embed shows: the file's name.
-pub fn label(path: &Path, fallback: &str) -> String {
-    path.file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or(fallback)
-        .to_string()
-}
-
 /// Replacing a frame drops the previous texture; gpui keeps it until told.
 pub fn drop_frame(previous: Option<Arc<RenderImage>>, cx: &mut App) {
     if let Some(image) = previous {
@@ -252,10 +244,6 @@ pub fn is_video(path: &Path) -> bool {
         .is_some_and(|ext| silica_formats::VIDEO_EXTENSIONS.iter().any(|v| v.eq_ignore_ascii_case(ext)))
 }
 
-/// Keeps the path a `Drop` impl needs; the UI keeps its own copy.
-pub fn as_path(path: &str) -> PathBuf {
-    PathBuf::from(path)
-}
 
 #[cfg(test)]
 mod tests {

@@ -5121,8 +5121,6 @@ struct Prepaint {
     font_size: Pixels,
     text_style: TextStyle,
     wrap_width: Option<Pixels>,
-    /// Content width used for RTL mirroring of cursor and selection.
-    content_width: Pixels,
     content_x: Pixels,
     /// Width of the line-number gutter when `show_line_number`; zero otherwise.
     line_number_gutter: Pixels,
@@ -5740,7 +5738,6 @@ impl Element for EditorElement {
                 font_size,
                 text_style,
                 wrap_width,
-                content_width,
                 content_x,
                 line_number_gutter: gutter,
                 indent_guides,
@@ -5779,7 +5776,7 @@ impl Element for EditorElement {
             }
             let editor = editor_entity.read(cx);
             let vim_on = editor.vim_mode && !editor.vim_insert_mode;
-            drop(editor);
+            let _ = editor;
             if !vim_on {
                 return;
             }

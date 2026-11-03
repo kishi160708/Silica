@@ -203,6 +203,21 @@ fn extract_location(headers: &str) -> Option<String> {
         .map(|(_, value)| value.trim().to_string())
 }
 
+/// Resolves a `Location` header value against the current URL, so relative
+/// redirects such as `/images/file.png` or `//example.com/x` become absolute
+/// `http`/`https` URLs before they are validated against the destination and
+/// DNS rules. Returns `None` when the location cannot be resolved to an
+/// absolute http/https URL.
+fn resolve_redirect(base: &str, location: &str) -> Option<String> {
+    let base_url = Url::parse(base).ok()?;
+    let resolved = base_url.join(location).ok()?;
+    let scheme = resolved.scheme();
+    if scheme != "http" && scheme != "https" {
+        return None;
+    }
+    Some(resolved.to_string())
+}
+
 impl SilicaHttpClient {
     pub fn new() -> Self {
         let cache_dir = if let Some(cache) = std::env::var_os("XDG_CACHE_HOME") {
@@ -281,8 +296,8 @@ impl HttpClient for SilicaHttpClient {
         let cache_path = self.cache_path(&uri);
 
         async move {
-            if method == http_client::http::Method::GET {
-                if cache_path.is_file() {
+            if method == http_client::http::Method::GET
+                && cache_path.is_file() {
                     if let Ok(data) = std::fs::read(&cache_path) {
                         if !data.is_empty() {
                             let resp = Response::builder()
@@ -292,7 +307,6 @@ impl HttpClient for SilicaHttpClient {
                         }
                     }
                 }
-            }
 
             let (tx, rx) = futures::channel::oneshot::channel();
             let uri_clone = uri.clone();
@@ -346,21 +360,35 @@ impl HttpClient for SilicaHttpClient {
 
                                 if is_redirect_status(code) && redirects < MAX_REDIRECTS {
                                     if let Some(location) = extract_location(&headers) {
-                                        if !allows_destination(&location) {
+                                        // Resolve relative redirects (a path, or
+                                        // a protocol-relative URL) against the
+                                        // current URL before validating, so
+                                        // `/images/file.png` becomes an absolute
+                                        // http/https URL instead of being
+                                        // rejected outright.
+                                        let Some(resolved) =
+                                            resolve_redirect(&current_uri, &location)
+                                        else {
+                                            cleanup();
+                                            break 'redirects Err(anyhow!(
+                                                "redirect to {location} could not be resolved to an absolute URL",
+                                            ));
+                                        };
+                                        if !allows_destination(&resolved) {
                                             cleanup();
                                             break 'redirects Err(anyhow!(
                                                 "redirect to {} is not allowed",
-                                                location
+                                                resolved
                                             ));
                                         }
-                                        let Some(resolve) = resolve_target(&location) else {
+                                        let Some(resolve) = resolve_target(&resolved) else {
                                             cleanup();
                                             break 'redirects Err(anyhow!(
                                                 "redirect to {} could not be resolved to a public address",
-                                                location
+                                                resolved
                                             ));
                                         };
-                                        current_uri = location;
+                                        current_uri = resolved;
                                         current_resolve = resolve;
                                         redirects += 1;
                                         cleanup();
@@ -666,6 +694,36 @@ mod tests {
         // * No Location header.
         let no_location = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n";
         assert_eq!(extract_location(no_location), None);
+    }
+
+    #[test]
+    fn a_relative_redirect_is_resolved_against_the_current_url() {
+        // * A path-relative Location resolves against the current URL's origin.
+        assert_eq!(
+            resolve_redirect("https://example.com/a.png", "/images/file.png"),
+            Some("https://example.com/images/file.png".to_string())
+        );
+        // * A protocol-relative Location inherits the current scheme.
+        assert_eq!(
+            resolve_redirect("https://example.com/a.png", "//example.com/x.png"),
+            Some("https://example.com/x.png".to_string())
+        );
+        // * An absolute Location passes through unchanged.
+        assert_eq!(
+            resolve_redirect("https://example.com/a.png", "https://other.com/b.png"),
+            Some("https://other.com/b.png".to_string())
+        );
+        // * A non-http scheme is refused, not redirected to.
+        assert_eq!(
+            resolve_redirect("https://example.com/a.png", "javascript:alert(1)"),
+            None
+        );
+        assert_eq!(
+            resolve_redirect("https://example.com/a.png", "data:text/html,<x>"),
+            None
+        );
+        // * A location that cannot be resolved against the base is refused.
+        assert_eq!(resolve_redirect("not-a-url", "/x.png"), None);
     }
 
     #[test]

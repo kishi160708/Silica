@@ -83,7 +83,7 @@ mod tests {
     fn renders_simple_flowchart() {
         let diagram = "flowchart LR\n    A-->B";
         let image = render_mermaid(diagram, false).expect("flowchart rendered");
-        assert!(image.as_bytes(0).map_or(false, |b| !b.is_empty()));
+        assert!(image.as_bytes(0).is_some_and(|b| !b.is_empty()));
     }
 
     #[test]

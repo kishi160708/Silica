@@ -119,19 +119,16 @@ pub fn write_no_follow(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         .map(|m| m.file_type().is_symlink())
         .unwrap_or(false)
     {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!(
-                "{} is a symbolic link; the vault folder is the only place Silica writes",
-                path.display()
-            ),
-        ));
+        return Err(std::io::Error::other(format!(
+            "{} is a symbolic link; the vault folder is the only place Silica writes",
+            path.display()
+        )));
     }
-    // ! On Windows a junction and other reparse points redirect a path the same
-    // ! way a symlink does, but `is_symlink` does not report them. The attribute
-    // ! is the only way to see one, and a reparse point at the target is refused
-    // ! for the same reason the Unix `O_NOFOLLOW` open exists. `write_at` cannot
-    // ! be used there: the `openat` walk it relies on has no Windows equivalent.
+    // * On Windows a junction and other reparse points redirect a path the same
+    // * way a symlink does, but `is_symlink` does not report them. The attribute
+    // * is the only way to see one, and a reparse point at the target is refused
+    // * for the same reason the Unix `O_NOFOLLOW` open exists. `write_at` cannot
+    // * be used there: the `openat` walk it relies on has no Windows equivalent.
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
@@ -141,13 +138,10 @@ pub fn write_no_follow(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
             .map(|m| m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0)
             .unwrap_or(false)
         {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!(
-                    "{} is a reparse point; the vault folder is the only place Silica writes",
-                    path.display()
-                ),
-            ));
+            return Err(std::io::Error::other(format!(
+                "{} is a reparse point; the vault folder is the only place Silica writes",
+                path.display()
+            )));
         }
     }
     // * Unique per write, so two saves of one note cannot share a scratch file.
@@ -217,7 +211,7 @@ pub fn write_no_follow(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 ///
 /// * The name carries nanosecond precision plus a counter, so two saves
 ///   within the same second cannot collide and destroy an older snapshot.
-/// ! The snapshot directory and file are created through openat handles
+/// * The snapshot directory and file are created through openat handles
 ///   with O_NOFOLLOW at every component, so a symlink planted anywhere along
 ///   the path is refused, not followed.
 /// * A snapshot is best effort: if it cannot be made, the save still
@@ -311,6 +305,23 @@ fn write_snapshot(snapshots: &Path, stem: &str, ext: &str, bytes: &[u8]) -> std:
     }
 }
 
+/// Returns true when `name` is a snapshot belonging to `stem`. Snapshot
+/// names are `<stem>.<nanoseconds>.<counter>.<ext>`: the stem must be
+/// followed by a dot, so `foo.md` never matches `foobar.md`'s snapshots.
+fn snapshot_belongs_to(name: &str, stem: &str) -> bool {
+    let Some(rest) = name.strip_prefix(stem).and_then(|r| r.strip_prefix('.')) else {
+        return false;
+    };
+    let Some((nanos, rest)) = rest.split_once('.') else {
+        return false;
+    };
+    if nanos.is_empty() || !nanos.bytes().all(|b| b.is_ascii_digit()) {
+        return false;
+    }
+    let (counter, _ext) = rest.split_once('.').unwrap_or((rest, ""));
+    !counter.is_empty() && counter.bytes().all(|b| b.is_ascii_digit())
+}
+
 /// Keeps only the `keep` most recent snapshots for `stem`, removing older
 /// ones so the snapshot folder cannot grow without bound.
 fn prune_snapshots(snapshots: &Path, stem: &str, keep: usize) -> std::io::Result<()> {
@@ -320,7 +331,7 @@ fn prune_snapshots(snapshots: &Path, stem: &str, keep: usize) -> std::io::Result
         .filter(|p| {
             p.file_name()
                 .and_then(|n| n.to_str())
-                .map(|n| n.starts_with(stem))
+                .map(|n| snapshot_belongs_to(n, stem))
                 .unwrap_or(false)
         })
         .collect();
@@ -332,18 +343,20 @@ fn prune_snapshots(snapshots: &Path, stem: &str, keep: usize) -> std::io::Result
     Ok(())
 }
 
-/// Writes `bytes` to `relative` under `root` by opening each directory
-/// component with `openat` from a directory handle, never by naming a path.
+/// Writes `bytes` to `relative` under `root` atomically: every directory
+/// component is opened with `openat` from a directory handle, then the bytes
+/// go to a temporary file beside the target and are renamed over it. A crash
+/// or a failed write leaves the previous version intact instead of
+/// truncating it in place.
 ///
-/// The difference from [`write_no_follow`] is the race: that function checks a
-/// path and then opens it, and between the two a parent directory can be
-/// replaced with a link. Here the walk itself holds the handles it walked
-/// through — `O_NOFOLLOW` at every step — so there is no moment when a name is
-/// trusted after it was checked.
+/// The walk holds `O_NOFOLLOW` directory handles at every step, so no
+/// component can be swapped for a link between the check and the write. The
+/// temporary file is opened with `O_NOFOLLOW` too, and `renameat` replaces
+/// the directory entry itself, so a symlink at the target is replaced, not
+/// followed through.
 ///
-/// Ponytail: Unix only, because `openat` is. Elsewhere [`write_no_follow`]
-/// stands, where a race needs a local attacker who can already write the
-/// vault.
+/// Ponytail: Unix only, because `openat`/`renameat` are. Elsewhere
+/// [`write_no_follow`] stands.
 #[cfg(unix)]
 pub fn write_at(root: &Path, relative: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::ffi::CString;
@@ -353,7 +366,7 @@ pub fn write_at(root: &Path, relative: &Path, bytes: &[u8]) -> std::io::Result<(
 
     const DIR_FLAGS: libc::c_int = libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
     const FILE_FLAGS: libc::c_int =
-        libc::O_WRONLY | libc::O_NOFOLLOW | libc::O_CREAT | libc::O_TRUNC | libc::O_CLOEXEC;
+        libc::O_WRONLY | libc::O_NOFOLLOW | libc::O_CREAT | libc::O_EXCL | libc::O_CLOEXEC;
 
     let name = |part: &std::ffi::OsStr| -> std::io::Result<CString> {
         CString::new(part.as_bytes())
@@ -393,12 +406,56 @@ pub fn write_at(root: &Path, relative: &Path, bytes: &[u8]) -> std::io::Result<(
     }
 
     let file_c = name(file_name)?;
-    let fd = unsafe { libc::openat(dir.as_raw_fd(), file_c.as_ptr(), FILE_FLAGS, 0o644) };
-    if fd < 0 {
+    // * Refuse to write through a symlink at the target: the rename below
+    //   replaces the directory entry without following it, but we still turn
+    //   away a pre-existing link so a plugin cannot trade it for its content.
+    if root
+        .join(relative)
+        .symlink_metadata()
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        return Err(std::io::Error::other(format!(
+            "{} is a symbolic link; the vault folder is the only place Silica writes",
+            root.join(relative).display()
+        )));
+    }
+    // Temporary file beside the target, unique per write so concurrent saves
+    // of one note cannot share a scratch file.
+    let temp_name = format!(
+        ".{}.{}.silica-tmp",
+        file_name.to_string_lossy(),
+        std::process::id()
+    );
+    let temp_c = name(std::ffi::OsStr::new(&temp_name))?;
+    let tmp_fd = unsafe { libc::openat(dir.as_raw_fd(), temp_c.as_ptr(), FILE_FLAGS, 0o644) };
+    if tmp_fd < 0 {
         return Err(std::io::Error::last_os_error());
     }
-    let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
-    file.write_all(bytes)
+    let mut tmp = unsafe { std::fs::File::from_raw_fd(tmp_fd) };
+    tmp.write_all(bytes)?;
+    tmp.sync_all()?;
+    drop(tmp);
+
+    // renameat replaces the directory entry atomically while holding the
+    // directory handle, so no symlink swap can redirect the write.
+    if unsafe {
+        libc::renameat(
+            dir.as_raw_fd(),
+            temp_c.as_ptr(),
+            dir.as_raw_fd(),
+            file_c.as_ptr(),
+        )
+    } < 0
+    {
+        let _ = unsafe { libc::unlinkat(dir.as_raw_fd(), temp_c.as_ptr(), 0) };
+        return Err(std::io::Error::last_os_error());
+    }
+    // * The directory entry itself is what a crash could lose.
+    if let Ok(dir_file) = std::fs::File::open(root) {
+        let _ = dir_file.sync_all();
+    }
+    Ok(())
 }
 
 /// Creates every directory under `root` named by `relative`, one `openat` at a
@@ -452,6 +509,24 @@ pub struct Vault {
     /// Every folder, vault-relative and sorted, empty ones included (the
     /// Files view shows them; the file list alone would not).
     folders: Vec<String>,
+}
+
+/// Whether a metadata entry is a link that could redirect a path: a symlink
+/// everywhere, and a junction or other reparse point on Windows. `is_symlink`
+/// does not report junctions, so Windows needs the reparse-point attribute too.
+fn is_link_like(meta: &std::fs::Metadata) -> bool {
+    if meta.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return true;
+        }
+    }
+    false
 }
 
 impl Vault {
@@ -566,7 +641,7 @@ impl Vault {
                 break;
             }
             match std::fs::symlink_metadata(&absolute) {
-                Ok(meta) if meta.file_type().is_symlink() => {
+                Ok(meta) if is_link_like(&meta) => {
                     return Err(VaultError::Symlink(absolute));
                 }
                 // * What does not exist yet is created below the vault.
@@ -580,7 +655,29 @@ impl Vault {
     /// and without following a link at the file itself.
     pub fn write_bytes(&self, rel: &str, bytes: &[u8]) -> Result<(), VaultError> {
         let path = self.write_path(rel)?;
-        write_no_follow(&path, bytes).map_err(|source| VaultError::Io { path, source })
+        // * Snapshot the existing file before replacing it, so an interrupted
+        //   or failed write cannot destroy prior content.
+        if path.exists() {
+            snapshot_before_overwrite(&path);
+        }
+        // * On Unix, write through the `openat` walk so directory handles are
+        //   held throughout and no parent directory can be swapped for a link
+        //   mid-write. On Windows, `write_no_follow` stands: the target's
+        //   reparse-point check plus the parent-component check in
+        //   `checked_path` is the best available protection there.
+        #[cfg(unix)]
+        {
+            let relative = Path::new(rel);
+            write_at(&self.root, relative, bytes).map_err(|source| VaultError::Io {
+                path: path.clone(),
+                source,
+            })?;
+        }
+        #[cfg(not(unix))]
+        {
+            write_no_follow(&path, bytes).map_err(|source| VaultError::Io { path, source })?;
+        }
+        Ok(())
     }
 
     /// Re-enumerates the folder. Skips the config directory, `.trash`, and any
@@ -1545,6 +1642,83 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "outside");
     }
 
+    // * `write_at` refuses to write through a symlink at the target, keeping
+    // * the O_NOFOLLOW protection of the old direct-open path. The outside
+    // * file is never touched.
+    #[cfg(unix)]
+    #[test]
+    fn write_at_refuses_a_symlink_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("real.md");
+        std::fs::write(&target, "outside").unwrap();
+        let link = dir.path().join("link.md");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let err = write_at(dir.path(), Path::new("link.md"), b"pwned").unwrap_err();
+        assert!(
+            err.to_string().contains("symbolic link"),
+            "a symlink target was not refused: {err}"
+        );
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "outside");
+    }
+
+    // * `write_at` replaces the file in full: a second write leaves exactly
+    // * the new bytes and no scratch file behind, so a crash cannot leave a
+    // * truncated note.
+    #[cfg(unix)]
+    #[test]
+    fn write_at_replaces_the_file_in_full() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("note.md");
+        std::fs::write(&path, "old\nold\nold\n").unwrap();
+
+        write_at(dir.path(), Path::new("note.md"), b"new\nnew\n").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new\nnew\n");
+        let scratch: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".silica-tmp"))
+            .collect();
+        assert!(
+            scratch.is_empty(),
+            "a temp file was left behind: {scratch:?}"
+        );
+    }
+
+    /// A parent-directory junction pointing outside the vault must be refused
+    /// at the parent-component check: `is_symlink` does not see junctions on
+    /// Windows, so the reparse-point attribute is what catches the redirect
+    /// before the write is attempted.
+    #[cfg(windows)]
+    #[test]
+    fn a_parent_directory_junction_blocks_writes_outside_the_vault() {
+        use std::os::windows::process::CommandExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let junction = root.path().join("Notes");
+
+        // `mklink /J` creates a junction and needs no elevation on Windows.
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&junction)
+            .arg(outside.path())
+            .creation_flags(0x08000000)
+            .status()
+            .expect("mklink runs");
+        assert!(made.success(), "could not create a junction to test with");
+
+        let vault = Vault::open(root.path()).unwrap();
+        let err = vault.write_bytes("Notes/new.md", b"pwned").unwrap_err();
+        assert!(
+            matches!(err, VaultError::Symlink(_)),
+            "a parent-directory junction was not refused: {err:?}"
+        );
+        assert!(!outside.path().join("new.md").exists());
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_write_keeps_the_notes_permissions() {
@@ -1621,6 +1795,46 @@ mod tests {
         let snapshots = dir.path().join(".trash").join(".snapshots");
         let count = std::fs::read_dir(&snapshots).unwrap().flatten().count();
         assert_eq!(count, 10, "expected 10 pruned snapshots, got {count}");
+    }
+
+    // * Pruning matches the complete snapshot name, so saving `foo.md` never
+    // * deletes snapshots that belong to `foobar.md` (they share a prefix,
+    // * but not a stem).
+    #[test]
+    fn pruning_one_file_never_deletes_another_files_snapshots() {
+        let dir = tempfile::tempdir().unwrap();
+        let snapshots = dir.path().join(".trash").join(".snapshots");
+        std::fs::create_dir_all(&snapshots).unwrap();
+
+        // Plant snapshots for both `foo.md` and `foobar.md`.
+        for (name, content) in [
+            ("foo.md.100.1.md", "foo-old"),
+            ("foo.md.200.2.md", "foo-new"),
+            ("foobar.md.100.1.md", "foobar-old"),
+            ("foobar.md.300.3.md", "foobar-new"),
+        ] {
+            std::fs::write(snapshots.join(name), content).unwrap();
+        }
+
+        // Keep only 1 snapshot per stem: pruning `foo.md` must leave one
+        // `foo.md` snapshot and both `foobar.md` snapshots untouched.
+        let _ = prune_snapshots(&snapshots, "foo.md", 1);
+
+        let names: Vec<String> = std::fs::read_dir(&snapshots)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            names.iter().filter(|n| n.starts_with("foobar.md")).count(),
+            2,
+            "pruning foo.md must not touch foobar.md's snapshots"
+        );
+        assert_eq!(
+            names.iter().filter(|n| n.starts_with("foo.md")).count(),
+            1,
+            "pruning foo.md must keep only its most recent snapshot"
+        );
     }
 
     #[cfg(unix)]

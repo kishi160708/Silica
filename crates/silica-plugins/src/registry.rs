@@ -77,7 +77,7 @@ impl Registry {
                 let native = e.path().join("silica.json").exists();
                 let source = read_prefix(&e.path().join("main.js"), SCAN_PREFIX);
                 let tier = classify(&manifest, &source, native);
-                let enabled = enabled.iter().any(|id| *id == manifest.id);
+                let enabled = enabled.contains(&manifest.id);
                 Some(PluginRecord {
                     folder,
                     manifest,

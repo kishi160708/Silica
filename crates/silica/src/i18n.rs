@@ -73,18 +73,13 @@ static CURRENT: AtomicU8 = AtomicU8::new(0);
 /// Sets the locale in force and answers the one it replaced, so a caller can
 /// skip a repaint when nothing changed.
 pub fn set(locale: Locale) -> Locale {
-    let previous = Locale::from_index(CURRENT.swap(locale.index(), Ordering::Relaxed));
-    previous
+    
+    Locale::from_index(CURRENT.swap(locale.index(), Ordering::Relaxed))
 }
 
 pub fn current() -> Locale {
     Locale::from_index(CURRENT.load(Ordering::Relaxed))
 }
-
-/// What is translated today, for the Settings row's own description: the
-/// chrome of the Settings modal, which is where the choice is made.
-pub const COVERED: &str = "The Settings window's own labels are translated; note text, the file \
-     explorer and the other views are still English.";
 
 /// The string `key` names, in the locale in force, or the English original
 /// when this locale has no translation for it.

@@ -412,88 +412,88 @@ impl Theme {
                 // * Colours
                 "--background-primary" => {
                     if let Some(c) = parse_colour(value) {
-                        self.bg = c.into();
+                        self.bg = c;
                     }
                 }
                 "--background-secondary" => {
                     if let Some(c) = parse_colour(value) {
-                        self.bg_secondary = c.into();
+                        self.bg_secondary = c;
                     }
                 }
                 "--background-secondary-alt" => {
                     if let Some(c) = parse_colour(value) {
-                        self.code_bg = c.into();
+                        self.code_bg = c;
                     }
                 }
                 "--background-tertiary" => {
                     if let Some(c) = parse_colour(value) {
-                        self.bg_alt = c.into();
+                        self.bg_alt = c;
                     }
                 }
                 "--background-modifier-hover" => {
                     if let Some(c) = parse_colour(value) {
-                        self.bg_alt = c.into();
+                        self.bg_alt = c;
                     }
                 }
                 "--background-modifier-border" => {
                     if let Some(c) = parse_colour(value) {
-                        self.border = c.into();
+                        self.border = c;
                     }
                 }
                 "--background-modifier-border-focus" => {
                     if let Some(c) = parse_colour(value) {
-                        self.border_focus = c.into();
+                        self.border_focus = c;
                     }
                 }
                 "--text-normal" => {
                     if let Some(c) = parse_colour(value) {
-                        self.text = c.into();
+                        self.text = c;
                     }
                 }
                 "--text-muted" => {
                     if let Some(c) = parse_colour(value) {
-                        self.text_muted = c.into();
+                        self.text_muted = c;
                     }
                 }
                 "--text-faint" => {
                     if let Some(c) = parse_colour(value) {
-                        self.text_faint = c.into();
+                        self.text_faint = c;
                     }
                 }
                 "--text-accent" | "--interactive-accent" => {
                     if let Some(c) = parse_colour(value) {
-                        self.accent = c.into();
+                        self.accent = c;
                     }
                 }
                 // * Canvas colour presets
                 "--color-red" => {
                     if let Some(c) = parse_colour(value) {
-                        self.canvas.presets[0] = c.into();
+                        self.canvas.presets[0] = c;
                     }
                 }
                 "--color-orange" => {
                     if let Some(c) = parse_colour(value) {
-                        self.canvas.presets[1] = c.into();
+                        self.canvas.presets[1] = c;
                     }
                 }
                 "--color-yellow" => {
                     if let Some(c) = parse_colour(value) {
-                        self.canvas.presets[2] = c.into();
+                        self.canvas.presets[2] = c;
                     }
                 }
                 "--color-green" => {
                     if let Some(c) = parse_colour(value) {
-                        self.canvas.presets[3] = c.into();
+                        self.canvas.presets[3] = c;
                     }
                 }
                 "--color-cyan" => {
                     if let Some(c) = parse_colour(value) {
-                        self.canvas.presets[4] = c.into();
+                        self.canvas.presets[4] = c;
                     }
                 }
                 "--color-purple" => {
                     if let Some(c) = parse_colour(value) {
-                        self.canvas.presets[5] = c.into();
+                        self.canvas.presets[5] = c;
                     }
                 }
                 // * Fonts

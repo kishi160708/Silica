@@ -473,7 +473,21 @@ fn libc_exdev() -> i32 {
 
 #[cfg(all(unix, not(target_os = "macos")))]
 fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
-    if from.is_dir() {
+    let meta = match from.symlink_metadata() {
+        Ok(meta) => meta,
+        // The source vanished while the copy was in flight: nothing to copy.
+        Err(_) => return Ok(()),
+    };
+    // * A symlink is re-created as a symlink, never followed: this keeps the
+    // * copy inside the vault and cannot loop, even if the link points at
+    // * itself or an ancestor directory.
+    if meta.file_type().is_symlink() {
+        let target = std::fs::read_link(from)?;
+        use std::os::unix::fs::symlink;
+        symlink(&target, to)?;
+        return Ok(());
+    }
+    if meta.is_dir() {
         std::fs::create_dir_all(to)?;
         for entry in std::fs::read_dir(from)? {
             let entry = entry?;
@@ -1080,5 +1094,65 @@ mod daily_tests {
                 "Attachments/Pasted image 20261101120000 1.png".into()
             )]
         );
+    }
+
+    // * A symlink is re-created as a symlink during fallback copying: it is
+    // * never followed, so the copy cannot reach outside the vault or loop.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn copy_tree_preserves_a_file_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("real.txt");
+        fs::write(&target, "outside").unwrap();
+        symlink(&target, src.path().join("link.txt")).unwrap();
+
+        super::copy_tree(src.path(), dst.path()).unwrap();
+
+        let link = dst.path().join("link.txt");
+        assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+        assert_eq!(fs::read_link(&link).unwrap(), target);
+        assert_eq!(fs::read_to_string(&target).unwrap(), "outside");
+    }
+
+    // * A directory symlink is re-created as a symlink, not traversed: the
+    // * file it points at is not copied into the destination.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn copy_tree_does_not_recurse_a_directory_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("secret.txt"), "secret").unwrap();
+        symlink(outside.path(), src.path().join("dir")).unwrap();
+
+        super::copy_tree(src.path(), dst.path()).unwrap();
+
+        let dir = dst.path().join("dir");
+        let meta = dir.symlink_metadata().unwrap();
+        assert!(meta.file_type().is_symlink());
+        assert!(!meta.file_type().is_dir());
+        assert!(!dst.path().join("secret.txt").exists());
+    }
+
+    // * A self-referencing symlink cannot make fallback copying loop forever.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn copy_tree_does_not_loop_on_a_symlink_loop() {
+        use std::os::unix::fs::symlink;
+
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        symlink("itself", src.path().join("loop.md")).unwrap();
+
+        super::copy_tree(src.path(), dst.path()).unwrap();
+
+        let link = dst.path().join("loop.md");
+        assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
     }
 }

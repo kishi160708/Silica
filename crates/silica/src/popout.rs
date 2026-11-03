@@ -15,10 +15,10 @@ actions!(popout, [ClosePopout]);
 /// window). Returns the window handle so the workspace can track it and
 /// bring it forward if it is already open.
 pub fn open(
-    workspace: WeakEntity<Workspace>,
+    _workspace: WeakEntity<Workspace>,
     path: String,
     state: std::sync::Arc<VaultState>,
-    main: AnyWindowHandle,
+    _main: AnyWindowHandle,
     cx: &mut App,
 ) -> anyhow::Result<WindowHandle<PopoutWindow>> {
     let (w, h) = WINDOW_SIZE;
@@ -39,10 +39,6 @@ pub fn open(
         move |window, cx| {
             let view = cx.new(|cx| PopoutWindow {
                 focus_handle: cx.focus_handle(),
-                path: path.clone(),
-                workspace,
-                main,
-                state: state.clone(),
                 reading: cx.new(ReadingView::new),
             });
             // * Build the model and set it on the reading view.
@@ -62,10 +58,6 @@ pub fn open(
 /// The popout window's root view: a reading view showing one note.
 pub struct PopoutWindow {
     focus_handle: FocusHandle,
-    path: String,
-    workspace: WeakEntity<Workspace>,
-    main: AnyWindowHandle,
-    state: std::sync::Arc<VaultState>,
     reading: Entity<ReadingView>,
 }
 

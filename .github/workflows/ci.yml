@@ -48,9 +48,9 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+      # Clippy is a blocking gate: a warning means the change does not ship.
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
-        continue-on-error: true
 
   gui:
     name: gui end-to-end (linux, xvfb)
@@ -83,4 +83,3 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@cargo-audit
       - run: cargo audit
-        continue-on-error: true

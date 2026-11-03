@@ -73,6 +73,10 @@ impl Url {
     }
 }
 
+/// A model answer can be arbitrarily large; this is the hard ceiling on the
+/// bytes this client will hold for one response, chunked or not.
+pub const MAX_RESPONSE_BYTES: usize = 16 << 20; // 16 MiB
+
 pub struct Response {
     pub status: u16,
     pub body: String,
@@ -99,9 +103,8 @@ pub fn request(
     let mut stream = TcpStream::connect(&address).map_err(|e| {
         format!(
             "cannot reach {address}: {e}. Is the model server running? \
-             On misco: `systemctl status llama-cpp`. From another machine, \
-             SILICA_LLM_URL should be the tailnet name \
-             (http://127.0.0.1:11434/v1)."
+             From another machine, SILICA_LLM_URL should be that machine's \
+             address (http://127.0.0.1:11434/v1 on this one)."
         )
     })?;
     stream
@@ -166,7 +169,15 @@ fn read_response(
                     };
                     let value = value.trim();
                     match name.trim().to_ascii_lowercase().as_str() {
-                        "content-length" => length = value.parse().ok(),
+                        "content-length" => {
+                            let len = value.parse().ok();
+                            if let Some(len) = len.filter(|n| *n > MAX_RESPONSE_BYTES) {
+                                return Err(format!(
+                                    "{address}: Content-Length {len} exceeds the                                      {MAX_RESPONSE_BYTES} byte response cap"
+                                ));
+                            }
+                            length = len;
+                        }
                         "transfer-encoding" => {
                             chunked |= value.to_ascii_lowercase().contains("chunked")
                         }
@@ -207,6 +218,11 @@ fn read_response(
             });
         }
         raw.extend_from_slice(&chunk[..read]);
+        if raw.len() > MAX_RESPONSE_BYTES {
+            return Err(format!(
+                "{address}: response exceeds the {MAX_RESPONSE_BYTES} byte cap"
+            ));
+        }
     }
 }
 

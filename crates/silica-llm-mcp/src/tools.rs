@@ -7,7 +7,7 @@
 //! the whole point of the tool — a 40,000-line `cargo test` log can be reduced
 //! to a paragraph without ever entering the conversation.
 
-use crate::model::{Answer, Ask, Backend};
+use crate::model::{Answer, Ask, Backend, digest_path};
 use crate::rpc::{Fault, INVALID_PARAMS};
 use serde_json::{json, Map, Value};
 
@@ -149,9 +149,8 @@ fn run(backend: &Backend, tool: &Tool, arguments: &Value) -> Result<String, Stri
             let origin = backend.config.url.origin();
             if names.is_empty() {
                 return Ok(format!(
-                    "{origin} is up but serving no models; check \
-                     `modelsPreset` in hosts/misco/llm.nix and that the GGUFs \
-                     are in /var/lib/llm-models (wanted `{}`).",
+                "{origin} is up but serving no models; check \
+                     that the model is pulled and the server is serving it (wanted `{}`).",
                     backend.config.model
                 ));
             }
@@ -259,7 +258,8 @@ fn read_excerpt(
     contains: Option<&str>,
     tail: bool,
 ) -> Result<Excerpt, String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("cannot read {path}: {e}"))?;
+    let file = digest_path(&backend.config.digest_root, path)?;
+    let bytes = std::fs::read(&file).map_err(|e| format!("cannot read {path}: {e}"))?;
     let whole = String::from_utf8_lossy(&bytes);
     let total_lines = whole.lines().count();
     let mut note = format!("[{path}: {} bytes, {total_lines} lines", bytes.len());
@@ -408,6 +408,36 @@ mod tests {
         let none = read_excerpt(&backend_with(1 << 20), &path, Some("zzz"), false);
         assert!(none.unwrap_err().contains("none contain"));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn digest_root_rejects_files_outside_it() {
+        use std::env::temp_dir;
+        use std::fs;
+        let base = temp_dir().join(format!(
+            "silica-digest-root-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(base.join("root/inside")).unwrap();
+        fs::create_dir_all(base.join("outside")).unwrap();
+        fs::write(base.join("root/inside/note.md"), "inside note").unwrap();
+        fs::write(base.join("outside/secret.md"), "secret").unwrap();
+        let mut config = Config::from_env().expect("config parses");
+        config.max_bytes = 1 << 20;
+        config.digest_root = Some(base.join("root"));
+        let backend = Backend::new(config);
+        let inside = base.join("root/inside/note.md");
+        let out =
+            read_excerpt(&backend, inside.to_str().unwrap(), None, false).unwrap();
+        assert!(out.body.contains("inside note"), "{}", out.body);
+        let outside = base.join("outside/secret.md");
+        let err = read_excerpt(&backend, outside.to_str().unwrap(), None, false)
+            .unwrap_err();
+        assert!(
+            err.contains("outside the permitted digest root"),
+            "{err}"
+        );
+        fs::remove_dir_all(&base).ok();
     }
 
     #[test]

@@ -307,11 +307,19 @@ impl Shared {
 
     /// Writes `bytes` to `resolved`, going through the vault's `openat` walk
     /// so a directory cannot be swapped for a link between the check that
-    /// produced `resolved` and the write itself.
+    /// produced `resolved` and the write itself. The existing file is
+    /// snapshotted before it is replaced, so a plugin write cannot destroy
+    /// prior content if the process crashes mid-write.
     fn write_checked(&self, resolved: &Path, bytes: &[u8]) -> std::io::Result<()> {
         let relative = resolved.strip_prefix(&self.root).unwrap_or(resolved);
         #[cfg(unix)]
         {
+            // * Snapshot the existing file before replacing it: the atomic
+            //   rename below never truncates in place, but the snapshot keeps
+            //   the previous bytes recoverable.
+            if resolved.exists() {
+                silica_vault::snapshot_before_overwrite(resolved);
+            }
             silica_vault::write_at(&self.root, relative, bytes)
         }
         #[cfg(not(unix))]

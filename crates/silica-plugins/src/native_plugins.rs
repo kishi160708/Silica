@@ -120,11 +120,7 @@ impl Plugin for Backlink {
                         }
                     }
                 }
-                if backlinks.is_empty() {
-                    Ok(())
-                } else {
-                    Ok(())
-                }
+                Ok(())
             }
             _ => Err(format!("'{id}' is not a command this plugin registered")),
         }
@@ -162,23 +158,7 @@ impl Plugin for OutgoingLink {
                 if current.is_empty() {
                     return Err("No note is open".to_string());
                 }
-                let metadata = (ctx.metadata_cache)(&current)?;
-                let meta: serde_json::Value =
-                    serde_json::from_str(&metadata).map_err(|e| e.to_string())?;
-                let links = meta
-                    .get("links")
-                    .and_then(|v| v.as_array())
-                    .cloned()
-                    .unwrap_or_default();
-                let targets: Vec<String> = links
-                    .iter()
-                    .filter_map(|l| l.get("link").and_then(|v| v.as_str()).map(|s| s.to_string()))
-                    .collect();
-                if targets.is_empty() {
-                    Ok(())
-                } else {
-                    Ok(())
-                }
+                Ok(())
             }
             _ => Err(format!("'{id}' is not a command this plugin registered")),
         }
@@ -774,17 +754,7 @@ impl Plugin for Footnotes {
                 if current.is_empty() {
                     return Err("No note is open".to_string());
                 }
-                let content = (ctx.read_file)(&current)?;
-                let footnotes: Vec<String> = content
-                    .lines()
-                    .filter(|l| l.starts_with("[^") && l.contains(':'))
-                    .map(|l| l.to_string())
-                    .collect();
-                if footnotes.is_empty() {
-                    Ok(())
-                } else {
-                    Ok(())
-                }
+                Ok(())
             }
             _ => Err(format!("'{id}' is not a command this plugin registered")),
         }
@@ -837,11 +807,7 @@ impl Plugin for TagPane {
                     }
                 }
 
-                if tags.is_empty() {
-                    Ok(())
-                } else {
-                    Ok(())
-                }
+                Ok(())
             }
             _ => Err(format!("'{id}' is not a command this plugin registered")),
         }

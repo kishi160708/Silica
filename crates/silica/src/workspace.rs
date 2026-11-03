@@ -2846,11 +2846,8 @@ fn view_subscriptions(
         cx.subscribe(reading, |this, _, event: &TaskToggled, cx| {
             this.toggle_task(&event.path, event.marker, cx)
         }),
-        cx.subscribe(reading, |this, _, event: &ReadingEvent, cx| match event {
-            &ReadingEvent::PropertyChanged { ref path, ref changes } => {
-                this.change_property(path, changes, cx)
-            }
-            _ => {}
+        cx.subscribe(reading, |this, _, event: &ReadingEvent, cx| if let ReadingEvent::PropertyChanged { path, changes } = event {
+            this.change_property(path, changes, cx)
         }),
         cx.subscribe(editor, |this, _, event: &EditorEvent, cx| match event {
             EditorEvent::Edited => {
@@ -2983,13 +2980,13 @@ impl Workspace {
                     ExplorerEvent::Rename(path) => this.start_rename(path, window, cx),
                     ExplorerEvent::Move(path) => this.start_move(path, window, cx),
                     ExplorerEvent::MoveToFolder { src, dest_folder } => {
-                        let name = src.rsplit('/').next().unwrap_or(&src);
+                        let name = src.rsplit('/').next().unwrap_or(src);
                         let to = if dest_folder.is_empty() {
                             name.to_string()
                         } else {
                             format!("{dest_folder}/{name}")
                         };
-                        this.rename_with_links(&src, &to, window, cx);
+                        this.rename_with_links(src, &to, window, cx);
                     }
                     ExplorerEvent::Duplicate(path) => this.duplicate(path, cx),
                     ExplorerEvent::Delete(path) => this.start_delete(path, window, cx),
@@ -3086,19 +3083,19 @@ impl Workspace {
                         this.open_in_new_tab(path.clone(), None, cx);
                     }
                     SearchEvent::Rename(path) => {
-                        this.start_rename(&path, window, cx);
+                        this.start_rename(path, window, cx);
                     }
                     SearchEvent::Delete(path) => {
-                        this.start_delete(&path, window, cx);
+                        this.start_delete(path, window, cx);
                     }
                     SearchEvent::CopyPath(path) => {
-                        this.copy_path(&path, cx);
+                        this.copy_path(path, cx);
                     }
                     SearchEvent::OpenInDefaultApp(path) => {
-                        this.open_in_default_app(&path, cx);
+                        this.open_in_default_app(path, cx);
                     }
                     SearchEvent::OpenInPopout(path) => {
-                        this.open_popout(&path, window, cx);
+                        this.open_popout(path, window, cx);
                     }
                 },
             ),
@@ -13897,7 +13894,7 @@ impl Workspace {
                     .when(mac, |d| d.child(self.sidebar_toggle(false, theme, cx))),
             )
             .child(div().flex_1().overflow_hidden().child(body))
-            .children(self.render_side_menu(&theme, cx))
+            .children(self.render_side_menu(theme, cx))
             .child(self.dock_handle(false, theme))
     }
 }
@@ -15281,6 +15278,30 @@ impl Render for Workspace {
 /// the group is stacked, in which case only the active one shows.
 fn tab_in_strip(ix: usize, active: usize, stacked: bool) -> bool {
     !stacked || ix == active
+}
+
+/// An embedded canvas is bounded by the note, not by the window: it gets a
+/// fixed box with its own pan and zoom inside it.
+fn canvas_frame(
+    entity: Entity<crate::canvas::view::CanvasView>,
+    width: f32,
+    height: f32,
+) -> gpui::AnyElement {
+    let w = if width > 0.0 { width } else { 0.0 };
+    // * Tall enough that the fit zoom stays above the card-text threshold: a
+    //   short box shrinks the board until the labels fade out, which reads as
+    //   an empty canvas rather than a small one.
+    let h = if height > 0.0 { height } else { 460.0 };
+    div()
+        .id("canvas-embed-frame")
+        .w_full()
+        .when(w > 0.0, |d| d.max_w(px(w)))
+        .h(px(h))
+        .rounded_md()
+        .border_1()
+        .overflow_hidden()
+        .child(entity)
+        .into_any_element()
 }
 
 #[cfg(test)]
@@ -17008,28 +17029,4 @@ mod tests {
         assert!(n.latest().is_none());
         assert_eq!(n.push("three".into()), 3, "ids keep counting up");
     }
-}
-
-/// An embedded canvas is bounded by the note, not by the window: it gets a
-/// fixed box with its own pan and zoom inside it.
-fn canvas_frame(
-    entity: Entity<crate::canvas::view::CanvasView>,
-    width: f32,
-    height: f32,
-) -> gpui::AnyElement {
-    let w = if width > 0.0 { width } else { 0.0 };
-    // * Tall enough that the fit zoom stays above the card-text threshold: a
-    //   short box shrinks the board until the labels fade out, which reads as
-    //   an empty canvas rather than a small one.
-    let h = if height > 0.0 { height } else { 460.0 };
-    div()
-        .id("canvas-embed-frame")
-        .w_full()
-        .when(w > 0.0, |d| d.max_w(px(w)))
-        .h(px(h))
-        .rounded_md()
-        .border_1()
-        .overflow_hidden()
-        .child(entity)
-        .into_any_element()
 }

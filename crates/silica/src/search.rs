@@ -423,11 +423,10 @@ impl SearchPane {
                 },
             };
             let new_text = apply_replacements(&orig_text, &file.hits, re.as_ref(), &replacement);
-            if new_text != orig_text {
-                if state.vault().write_bytes(&file.path, new_text.as_bytes()).is_ok() {
+            if new_text != orig_text
+                && state.vault().write_bytes(&file.path, new_text.as_bytes()).is_ok() {
                     modified.push(FileChange::Modified(file.path.clone()));
                 }
-            }
         }
 
         if !modified.is_empty() {

@@ -444,7 +444,7 @@ pub fn stored_frame_style() -> String {
         .ok()
         .flatten()
         .and_then(|r| r.setting("frameStyle").map(str::to_string))
-        .unwrap_or_else(|| frame_style())
+        .unwrap_or_else(frame_style)
 }
 
 /// Every key binding in the app, from scratch: the views' own and the
@@ -523,9 +523,9 @@ fn main() {
         .unwrap_or_default();
     let css_snippets = vault
         .as_ref()
-        .and_then(|v| {
+        .map(|v| {
             let root = v.root().to_path_buf();
-            Some(theme::load_css_snippets(&root, &css_snippets))
+            theme::load_css_snippets(&root, &css_snippets)
         })
         .unwrap_or_default();
     // ? The window is what knows the desktop's colour scheme, and it does not

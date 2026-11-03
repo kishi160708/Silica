@@ -1130,11 +1130,10 @@ impl FileExplorer {
         if parent == dest_folder {
             return;
         }
-        if drag.is_folder {
-            if dest_folder == src || dest_folder.starts_with(&format!("{src}/")) {
+        if drag.is_folder
+            && (dest_folder == src || dest_folder.starts_with(&format!("{src}/"))) {
                 return;
             }
-        }
         cx.emit(ExplorerEvent::MoveToFolder {
             src: src.clone(),
             dest_folder: dest_folder.to_string(),

@@ -17,35 +17,42 @@ pub struct NativeCommand {
     pub name: String,
 }
 
+type ReadFile<'a> = Box<dyn Fn(&str) -> Result<String, String> + 'a>;
+type WriteFile<'a> = Box<dyn Fn(&str, &str) -> Result<(), String> + 'a>;
+type ListDir<'a> = Box<dyn Fn(&str) -> Result<Vec<String>, String> + 'a>;
+type FileExists<'a> = Box<dyn Fn(&str) -> Result<bool, String> + 'a>;
+type OpenNote<'a> = Box<dyn Fn() -> Option<String> + 'a>;
+type StrToUnit<'a> = Box<dyn Fn(&str) -> Result<(), String> + 'a>;
+
 /// Context handed to a plugin when one of its commands runs. The app fills
 /// in the closures; the plugin only calls them.
 pub struct PluginContext<'a> {
     /// Vault root directory.
     pub vault_root: &'a Path,
     /// Read a vault-relative file's contents.
-    pub read_file: Box<dyn Fn(&str) -> Result<String, String> + 'a>,
+    pub read_file: ReadFile<'a>,
     /// Write (overwrite) a vault-relative file's contents.
-    pub write_file: Box<dyn Fn(&str, &str) -> Result<(), String> + 'a>,
+    pub write_file: WriteFile<'a>,
     /// Append text to a vault-relative file.
-    pub append_file: Box<dyn Fn(&str, &str) -> Result<(), String> + 'a>,
+    pub append_file: WriteFile<'a>,
     /// Create a new vault-relative file (fails if it exists).
-    pub create_file: Box<dyn Fn(&str, &str) -> Result<(), String> + 'a>,
+    pub create_file: WriteFile<'a>,
     /// Create a folder (parents too).
-    pub create_folder: Box<dyn Fn(&str) -> Result<(), String> + 'a>,
+    pub create_folder: StrToUnit<'a>,
     /// Delete a file (moves to trash).
-    pub delete_file: Box<dyn Fn(&str) -> Result<(), String> + 'a>,
+    pub delete_file: StrToUnit<'a>,
     /// Rename a file or folder.
-    pub rename_file: Box<dyn Fn(&str, &str) -> Result<(), String> + 'a>,
+    pub rename_file: WriteFile<'a>,
     /// List entries in a vault-relative directory.
-    pub list_dir: Box<dyn Fn(&str) -> Result<Vec<String>, String> + 'a>,
+    pub list_dir: ListDir<'a>,
     /// Check if a file exists.
-    pub file_exists: Box<dyn Fn(&str) -> Result<bool, String> + 'a>,
+    pub file_exists: FileExists<'a>,
     /// Get metadata cache for a note (JSON).
-    pub metadata_cache: Box<dyn Fn(&str) -> Result<String, String> + 'a>,
+    pub metadata_cache: ReadFile<'a>,
     /// Open a note in the editor (by vault-relative path).
-    pub open_note: Box<dyn Fn(&str) -> Result<(), String> + 'a>,
+    pub open_note: StrToUnit<'a>,
     /// Get the currently open note's vault-relative path, if any.
-    pub current_note: Box<dyn Fn() -> Option<String> + 'a>,
+    pub current_note: OpenNote<'a>,
 }
 
 /// A plugin Silica runs in-process: no bridge, no sandbox, no QuickJS.

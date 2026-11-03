@@ -1049,14 +1049,6 @@ impl Item {
             ..self
         }
     }
-
-    /// Silica does not read this one yet; it is written for Obsidian.
-    fn not_yet(self) -> Item {
-        Item {
-            honored: Honored::No,
-            ..self
-        }
-    }
 }
 
 fn heading(name: &str) -> Item {
@@ -1111,10 +1103,6 @@ fn appearance_toggle(
 
 fn switcher_toggle(name: &str, desc: &str, switcher: &SwitcherConfig, flag: SwitcherFlag) -> Item {
     toggle(name, desc, flag.is_on(switcher), Flag::Switcher(flag))
-}
-
-fn dropdown(name: &str, desc: &str, value: impl Into<SharedString>) -> Item {
-    item(name, desc, Control::Dropdown(value.into()))
 }
 
 /// "Language": `app.json`'s `locale`, read by [`crate::i18n`] at startup and
@@ -1695,7 +1683,7 @@ impl SettingsView {
         let available_snippets = std::fs::read_dir(&snippet_dir).ok().map(|entries| {
             entries
                 .filter_map(|e| e.ok())
-                .filter(|e| e.path().extension().map_or(false, |ext| ext == "css"))
+                .filter(|e| e.path().extension().is_some_and(|ext| ext == "css"))
                 .filter_map(|e| {
                     e.file_name()
                         .to_str()

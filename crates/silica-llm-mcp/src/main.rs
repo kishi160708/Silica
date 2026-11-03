@@ -12,14 +12,14 @@
 //! [`tools`], the framing in [`rpc`], the model in [`model`], and [`http`] is
 //! the small HTTP client that reaches it.
 //!
-//! The model is misco's `llama-server` router (`hosts/misco/llm.nix` in the
-//! nix flake): one OpenAI-compatible endpoint serving five Qwen presets, which
-//! it loads on demand. The wire format is OpenAI's `/v1/chat/completions`, so
-//! any other such server works by changing one variable:
+//! The server is any OpenAI-compatible endpoint — Ollama, `llama-server`,
+//! vLLM, or anything else speaking `/v1/chat/completions`. It is configured
+//! by one variable, so moving from one to another is `SILICA_LLM_URL`, not a
+//! new code path:
 //!
 //! ```sh
-//! SILICA_LLM_URL=http://127.0.0.1:8080/v1                 # on misco (the default)
-//! SILICA_LLM_URL=http://127.0.0.1:11434/v1     # from the tailnet
+//! SILICA_LLM_URL=http://127.0.0.1:11434/v1   # Ollama default
+//! SILICA_LLM_URL=http://127.0.0.1:8080/v1     # llama-server
 //! ```
 //!
 //! Configuration, all environment variables: `SILICA_LLM_URL`,
