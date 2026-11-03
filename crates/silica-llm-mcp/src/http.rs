@@ -13,8 +13,15 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 use std::thread;
 use std::sync::mpsc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use native_tls::TlsConnector;
+
+// Max concurrent DNS/TCP resolution workers. Each connect attempt is
+// bounded by `timeout`, but we still cap the number of live worker
+// threads so repeated slow resolutions cannot accumulate unboundedly.
+const MAX_CONCURRENT_CONNECTIONS: usize = 64;
+static ACTIVE_CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
 
 /// The pieces of a `http://` or `https://` URL.
 #[derive(Debug)]
@@ -132,6 +139,15 @@ pub fn request(
     let address_for_err = address.clone();
     let host = url.host.clone();
     let port = url.port;
+    // * Bound concurrent resolution workers so repeated slow resolutions
+    // * cannot accumulate detached threads without limit. Each worker exits
+    // * within `timeout` on its own, but the cap makes the worst case fixed.
+    if ACTIVE_CONNECTIONS.load(Ordering::Acquire) >= MAX_CONCURRENT_CONNECTIONS {
+        return Err(format!(
+            "{address}: too many concurrent connections ({MAX_CONCURRENT_CONNECTIONS})"
+        ));
+    }
+    ACTIVE_CONNECTIONS.fetch_add(1, Ordering::AcqRel);
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let result = (|| {
@@ -147,6 +163,7 @@ pub fn request(
             })
         })();
         let _ = tx.send(result);
+        ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::Release);
     });
     let mut stream = match rx.recv_timeout(timeout) {
         Ok(Ok(stream)) => stream,
@@ -396,4 +413,17 @@ mod tests {
         assert!(head.contains("GET /models HTTP/1.1"));
     }
 
+
+    #[test]
+    fn connection_counter_returns_to_zero_after_failure() {
+        // * A connect to an unreachable address must not leave the
+        // * worker counter elevated; every worker decrements on exit even
+        // * when the connection fails.
+        let url = Url::parse("http://10.255.255.1:1/v1").unwrap();
+        let before = ACTIVE_CONNECTIONS.load(Ordering::Acquire);
+        let _ = request(&url, "/v1", None, None, Duration::from_millis(100));
+        // Drain any in-flight workers briefly so the counter settles.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert_eq!(ACTIVE_CONNECTIONS.load(Ordering::Acquire), before);
+    }
 }

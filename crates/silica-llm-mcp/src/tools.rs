@@ -341,9 +341,10 @@ fn open_digest_file(root: &Path, file: &Path) -> Result<std::fs::File, String> {
     let (dirs, last) = comps.split_at(comps.len() - 1);
     let mut dir_fd = root_fd;
     for comp in dirs {
-        let cname = CString::new(comp.to_str().unwrap()).map_err(|e| {
-            format!("invalid path component {}: {e}", comp.to_string_lossy())
-        })?;
+        let cname =
+            CString::new(comp.as_encoded_bytes()).map_err(|e| {
+                format!("invalid path component {}: {e}", comp.to_string_lossy())
+            })?;
         let next = unsafe {
             libc::openat(
                 dir_fd.as_raw_fd(),
@@ -360,7 +361,7 @@ fn open_digest_file(root: &Path, file: &Path) -> Result<std::fs::File, String> {
         }
         dir_fd = unsafe { std::fs::File::from_raw_fd(next) };
     }
-    let cname = CString::new(last[0].to_str().unwrap()).map_err(|e| {
+    let cname = CString::new(last[0].as_encoded_bytes()).map_err(|e| {
         format!("invalid path component {}: {e}", last[0].to_string_lossy())
     })?;
     let fd = unsafe {
