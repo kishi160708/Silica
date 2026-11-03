@@ -10,7 +10,7 @@
 use crate::model::{Answer, Ask, Backend, digest_path};
 use crate::rpc::{Fault, INVALID_PARAMS};
 use serde_json::{json, Map, Value};
-use std::io::BufRead;
+use std::io::Read;
 
 enum Run {
     Models,
@@ -253,6 +253,42 @@ struct Excerpt {
     note: String,
 }
 
+/// Process one complete line (trailing newline already stripped) for the
+/// digest excerpt. Returns false when the byte cap is reached and reading
+/// must stop.
+fn keep_line(
+    needle: &Option<String>,
+    kept: &mut Vec<String>,
+    kept_bytes: &mut usize,
+    max: usize,
+    line: &[u8],
+) -> bool {
+    let mut content = line;
+    while content.last() == Some(&b'\r') {
+        content = &content[..content.len() - 1];
+    }
+    match needle {
+        Some(needle) => {
+            let text = String::from_utf8_lossy(content);
+            if text.to_ascii_lowercase().contains(needle.as_str()) {
+                if *kept_bytes + content.len() + 1 > max && *kept_bytes > 0 {
+                    return false;
+                }
+                *kept_bytes += content.len() + 1;
+                kept.push(text.into_owned());
+            }
+        }
+        None => {
+            if *kept_bytes + content.len() + 1 > max && *kept_bytes > 0 {
+                return false;
+            }
+            *kept_bytes += content.len() + 1;
+            kept.push(String::from_utf8_lossy(content).into_owned());
+        }
+    }
+    true
+}
+
 fn read_excerpt(
     backend: &Backend,
     path: &str,
@@ -265,60 +301,96 @@ fn read_excerpt(
     let f = std::fs::File::open(&file).map_err(|e| format!("cannot read {path}: {e}"))?;
     let mut reader = std::io::BufReader::new(f);
     let mut bytes_read = 0u64;
-    let needle = contains.filter(|n| !n.is_empty()).map(|n| n.to_lowercase());
+    const CHUNK: usize = 8 << 10; // fixed-size reads: one read never allocates more than this
+    let mut buf = [0u8; CHUNK];
 
-    // Matching lines (contains mode) or leading lines (head mode).
+    if tail {
+        // Rolling buffer of the last `max` bytes: bounded even when the file
+        // is one enormous line or has no newlines at all.
+        let mut tail_buf: Vec<u8> = Vec::with_capacity(max);
+        loop {
+            let n = match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(e) => return Err(format!("cannot read {path}: {e}")),
+            };
+            bytes_read += n as u64;
+            let data = &buf[..n];
+            if tail_buf.len() + data.len() > max {
+                let need = tail_buf.len() + data.len() - max;
+                let drop_buf = need.min(tail_buf.len());
+                tail_buf.drain(..drop_buf);
+                let data = &data[need - drop_buf..];
+                tail_buf.extend_from_slice(data);
+            } else {
+                tail_buf.extend_from_slice(data);
+            }
+        }
+        let detail = format!(": {bytes_read} bytes read, last {max} bytes kept");
+        note.push_str(&detail);
+        note.push(']');
+        return Ok(Excerpt {
+            body: String::from_utf8_lossy(&tail_buf).into_owned(),
+            note,
+        });
+    }
+
+    // Head or contains mode: read at most `max` bytes from disk and split into
+    // lines. Fixed-size reads plus a mid-read stop mean no single line can
+    // allocate more than `max` bytes.
+    let needle = contains.filter(|n| !n.is_empty()).map(|n| n.to_lowercase());
     let mut kept: Vec<String> = Vec::new();
     let mut kept_bytes = 0usize;
-    // Rolling tail buffer: the last `max` bytes read (tail mode, no filter).
-    let mut tail_buf: Vec<u8> = Vec::with_capacity(max);
+    let mut partial: Vec<u8> = Vec::with_capacity(CHUNK);
+    let mut stopped_early = false;
 
-    let mut line = String::new();
     loop {
-        line.clear();
-        let n = match reader.read_line(&mut line) {
+        if bytes_read >= max as u64 {
+            break;
+        }
+        let n = match reader.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => n,
             Err(e) => return Err(format!("cannot read {path}: {e}")),
         };
-        // Enforce a maximum number of bytes read from disk: head and contains
-        // modes never read more than `max` bytes of any one file, so a huge
-        // file cannot exhaust memory. Tail mode reads incrementally and bounds
-        // memory with `tail_buf` instead of capping bytes read, because the
-        // end of a large file is exactly what a tail caller wants.
-        if !tail && bytes_read + n as u64 > max as u64 && bytes_read > 0 {
-            break;
-        }
         bytes_read += n as u64;
-        let content = line.trim_end_matches(['\n', '\r']);
-        match &needle {
-            Some(needle) => {
-                if content.to_lowercase().contains(needle) {
-                    if kept_bytes + content.len() + 1 > max && kept_bytes > 0 {
+        let data = &buf[..n];
+        // Split `partial + data` on newlines. `partial` holds the bytes of
+        // the current unterminated line carried over from the last chunk.
+        let mut pos = 0;
+        while pos < data.len() {
+            match data[pos..].iter().position(|b| *b == b'\n') {
+                Some(at) => {
+                    let end = pos + at;
+                    let mut line = partial.clone();
+                    line.extend_from_slice(&data[pos..end]);
+                    if !keep_line(&needle, &mut kept, &mut kept_bytes, max, &line) {
+                        stopped_early = true;
                         break;
                     }
-                    kept_bytes += content.len() + 1;
-                    kept.push(content.to_string());
+                    partial.clear();
+                    pos = end + 1;
                 }
-            }
-            None if tail => {
-                let bytes = content.as_bytes();
-                let need = bytes.len() + 1;
-                if tail_buf.len() + need > max {
-                    let drop = (tail_buf.len() + need - max).min(tail_buf.len());
-                    tail_buf.drain(..drop);
+                None => {
+                    partial.extend_from_slice(&data[pos..]);
+                    pos = data.len();
                 }
-                tail_buf.extend_from_slice(bytes);
-                tail_buf.push(b'\n');
-            }
-            None => {
-                if kept_bytes + content.len() + 1 > max && kept_bytes > 0 {
-                    break;
-                }
-                kept_bytes += content.len() + 1;
-                kept.push(content.to_string());
             }
         }
+        if stopped_early {
+            break;
+        }
+    }
+
+    // Any bytes left in `partial` form the final unterminated line. Emit it
+    // only when nothing else was kept (an oversized first line with no
+    // newline); otherwise it is an incomplete line read past the cutoff.
+    if !stopped_early && !partial.is_empty() && kept.is_empty() {
+        let mut line = partial;
+        if line.len() > max {
+            line.truncate(max);
+        }
+        keep_line(&needle, &mut kept, &mut kept_bytes, max, &line);
     }
 
     let (body, detail) = match &needle {
@@ -332,10 +404,6 @@ fn read_excerpt(
             let body = kept.join("\n");
             let detail = format!(": {bytes_read} bytes read, {count} lines match {needle:?}");
             (body, detail)
-        }
-        None if tail => {
-            let detail = format!(": {bytes_read} bytes read, last {max} bytes kept");
-            (String::from_utf8_lossy(&tail_buf).into_owned(), detail)
         }
         None => {
             let detail = format!(": {bytes_read} bytes read, {} lines kept", kept.len());
@@ -445,6 +513,66 @@ mod tests {
         let none = read_excerpt(&backend_with(1 << 20), &path, Some("zzz"), false);
         assert!(none.unwrap_err().contains("no lines containing"));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn long_single_line_is_bounded_by_max_bytes() {
+        let dir = std::env::temp_dir().join(format!(
+            "silica-llm-mcp-longline-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("long.txt");
+        // One line with no newline, far larger than the limit.
+        std::fs::write(&path, "x".repeat(100_000)).unwrap();
+        let path = path.to_string_lossy().into_owned();
+
+        // Head mode: limit smaller than the line -> body bounded to max bytes.
+        let head = read_excerpt(&backend_with(50), &path, None, false).unwrap();
+        assert!(head.body.len() <= 50, "{}", head.body.len());
+        assert!(head.body.starts_with("x"));
+
+        // Tail mode: single enormous line -> memory bounded.
+        let tail = read_excerpt(&backend_with(50), &path, None, true).unwrap();
+        assert!(tail.body.len() <= 50, "{}", tail.body.len());
+        assert!(tail.body.ends_with("x"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn contains_mode_stops_at_byte_limit_without_allocating_a_giant_line() {
+        let dir = std::env::temp_dir().join(format!(
+            "silica-llm-mcp-containlong-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("log.txt");
+        // Every line is long and none contains the needle; the limit stops us
+        // before we ever reach a later matching line, and no giant line is
+        // allocated.
+        std::fs::write(&path, "hello world\n".repeat(20_000)).unwrap();
+        let path = path.to_string_lossy().into_owned();
+
+        let err = read_excerpt(&backend_with(50), &path, Some("match"), false)
+            .unwrap_err();
+        assert!(err.contains("no lines containing"), "{err}");
+    }
+
+    #[test]
+    fn file_without_newline_and_match_within_limit() {
+        let dir = std::env::temp_dir().join(format!(
+            "silica-llm-mcp-nonewline-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("note.txt");
+        std::fs::write(&path, "abcdefghij").unwrap();
+        let path = path.to_string_lossy().into_owned();
+
+        let out = read_excerpt(&backend_with(100), &path, Some("abc"), false).unwrap();
+        assert_eq!(out.body, "abcdefghij");
+        assert!(out.note.contains("lines match"), "{}", out.note);
     }
 
     #[test]

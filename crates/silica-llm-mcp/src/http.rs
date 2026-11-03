@@ -117,7 +117,7 @@ pub fn request(
         env!("CARGO_PKG_VERSION"),
     );
     if let Some(bearer) = bearer {
-        head.push_str(&format!("Authorization: Bearer {bearer}"));
+        head.push_str(&format!("Authorization: Bearer {bearer}\r\n"));
     }
     if let Some(body) = body {
         head.push_str(&format!(
