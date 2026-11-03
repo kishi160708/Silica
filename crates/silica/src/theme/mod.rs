@@ -16,7 +16,44 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 pub mod css;
+pub mod defaults;
 pub mod value;
+
+/// The default declarations of one base theme, parsed once and kept.
+///
+/// This is the layer a community theme stands on: `--text-muted` is declared
+/// as `var(--color-base-70)`, so a theme that overrides `--color-base-70`
+/// moves the muted text and everything else downstream, the way it does in
+/// Obsidian. Without this layer a theme's declaration of a base colour would
+/// resolve to nothing, because nothing declares the token it feeds.
+fn base_table(dark: bool) -> &'static value::Table {
+    static DARK: std::sync::OnceLock<value::Table> = std::sync::OnceLock::new();
+    static LIGHT: std::sync::OnceLock<value::Table> = std::sync::OnceLock::new();
+    let cell = if dark { &DARK } else { &LIGHT };
+    cell.get_or_init(|| {
+        let mut table = value::Table::new();
+        for (name, text) in defaults::COMMON {
+            table.set_str(name, text);
+        }
+        for (name, text) in if dark {
+            defaults::DARK
+        } else {
+            defaults::LIGHT
+        } {
+            table.set_str(name, text);
+        }
+        table
+    })
+}
+
+/// Read a token out of a resolved table as a colour.
+#[cfg(test)]
+fn token_color(table: &value::Table, token: &str) -> Option<Hsla> {
+    match table.resolve_all().get(token) {
+        Some(value::Value::Color(c)) => Some(*c),
+        _ => None,
+    }
+}
 
 /// Obsidian's interface sizes: the small UI text of tabs, rows and headers,
 /// the smaller text of the status bar, the height of every header row, the
@@ -410,11 +447,13 @@ impl Theme {
     /// theme explicitly sets are overridden; everything else keeps the base
     /// theme's value.
     ///
-    /// Values are resolved through [`value::Table`] so `var()` chains,
-    /// `calc()`, `hsl()`, `color-mix()` and other CSS functions work across
-    /// the theme's own declarations.
+    /// The theme's declarations are laid over Obsidian's own defaults
+    /// ([`base_table`]) and resolved together, so `var()` chains, `calc()`,
+    /// `hsl()`, `color-mix()` and a theme that only moves a base colour all
+    /// work the way they do in Obsidian: overriding `--color-base-70` moves
+    /// `--text-muted` and everything downstream of it.
     pub fn apply_css_theme(&mut self, css: &CssTheme) {
-        let mut table = value::Table::new();
+        let mut table = base_table(self.dark).clone();
         for (name, value) in &css.vars {
             table.set_str(name, value);
         }
@@ -570,6 +609,74 @@ impl Theme {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The defaults resolve, and the chains are real: `--text-muted` is
+    /// declared as `var(--color-base-70)`, so the value that comes out is
+    /// `--color-base-70`'s. This is what a community theme stands on — a
+    /// theme that only moves `--color-base-70` moves the muted text.
+    #[test]
+    fn the_defaults_resolve_through_the_chains() {
+        let dark = base_table(true);
+        assert_eq!(
+            token_color(dark, "--text-muted"),
+            token_color(dark, "--color-base-70"),
+            "--text-muted does not follow --color-base-70"
+        );
+        assert_eq!(
+            token_color(dark, "--background-primary"),
+            token_color(dark, "--color-base-00"),
+        );
+        // The observed values, read off Obsidian 1.14.5's dark theme.
+        assert_eq!(
+            token_color(dark, "--color-base-70"),
+            Some(rgb(0xb3b3b3).into())
+        );
+        assert_eq!(
+            token_color(dark, "--color-base-00"),
+            Some(rgb(0x1c1c1c).into())
+        );
+    }
+
+    /// A theme that declares only a base colour still moves the semantic
+    /// tokens above it, which is the whole point of keeping the chains.
+    #[test]
+    fn a_base_colour_override_propagates_downstream() {
+        let mut table = base_table(true).clone();
+        table.set_str("--color-base-70", "#00ff00");
+        let resolved = table.resolve_all();
+        match resolved.get("--text-muted") {
+            Some(value::Value::Color(c)) => {
+                let want: Hsla = rgb(0x00ff00).into();
+                assert!(
+                    (c.h - want.h).abs() < 1e-3
+                        && (c.s - want.s).abs() < 1e-3
+                        && (c.l - want.l).abs() < 1e-3,
+                    "--text-muted did not follow the override: {c:?}"
+                );
+            }
+            other => panic!("--text-muted did not resolve: {other:?}"),
+        }
+    }
+
+    /// Every token the defaults declare must resolve to something. A chain
+    /// that points at a property nothing declares is a broken default.
+    #[test]
+    fn every_default_declaration_resolves() {
+        let dark = base_table(true);
+        let light = base_table(false);
+        for (name, _) in defaults::COMMON
+            .iter()
+            .chain(defaults::DARK)
+            .chain(defaults::LIGHT)
+        {
+            for (theme, table) in [("dark", dark), ("light", light)] {
+                assert!(
+                    table.resolve_all().get(name).is_some(),
+                    "{name} resolved to nothing on the {theme} theme"
+                );
+            }
+        }
+    }
 
     /// The whole of the probe's `--callout-color` table, aliases and all, read
     /// in Obsidian 1.14.5's default dark theme. Before this test
