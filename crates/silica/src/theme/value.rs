@@ -443,6 +443,23 @@ impl Table {
         }
         Resolved { values: out }
     }
+
+    /// Resolve one name on its own, with no table already memoized.
+    ///
+    /// `resolve_all` walks the declarations in hash order, so an early name
+    /// can memoize the tail of a chain and the head then resolves one link
+    /// deep. That makes *which* answer comes out depend on iteration order,
+    /// which differs between platforms. A caller that wants to know what a
+    /// deep chain does has to start at the head, which is what this does.
+    #[cfg(test)]
+    fn resolve_one(&self, name: &str) -> Value {
+        Resolver {
+            table: self,
+            memo: HashMap::new(),
+            stack: Vec::new(),
+        }
+        .property(name)
+    }
 }
 
 fn canonical(name: &str) -> String {
@@ -1002,11 +1019,12 @@ mod tests {
             t.set_str(&format!("--c{i}"), &format!("var(--c{})", i + 1));
         }
         t.set_str("--c200", "#123456");
-        let r = t.resolve_all();
-        // The head of the chain is past the limit and resolves to nothing;
-        // the literal at the end and its near neighbours are still fine.
-        assert_eq!(r.get("--c0"), Some(&Value::Invalid));
-        assert!(matches!(r.get("--c200"), Some(Value::Color(_))));
+        // * Started at the head, so the whole chain is walked and the limit is
+        // * what stops it. `resolve_all` could memoize the tail first and let
+        // * the head resolve one link deep, which is why this asks for `--c0`
+        // * directly.
+        assert_eq!(t.resolve_one("--c0"), Value::Invalid);
+        assert!(matches!(t.resolve_one("--c200"), Value::Color(_)));
         // A chain inside the limit still resolves.
         let mut short = Table::new();
         short.set_str("--a", "var(--b)");
