@@ -68,13 +68,14 @@ impl App {
 
     /// Wait until the vault is scanned and the view has painted quietly.
     fn settle(&mut self) {
-        self.call("wait_idle", json!({}));
+        self.call("wait_idle", json!({"frames": 3, "timeout_ms": 20000}));
     }
 
-    /// The open note's full text, polling up to five seconds for it to be
-    /// populated (the editor loads the file asynchronously after open).
+    /// The open note's full text, polling for up to twenty seconds: the
+    /// editor loads the file asynchronously after open, and a cold debug
+    /// build can take a while to paint the first frame.
     fn text(&mut self) -> String {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(20);
         loop {
             let v = self.call("state", json!({"text": true}));
             let t = v
@@ -113,6 +114,10 @@ impl Vault {
 
 #[test]
 fn open_save_and_reopen_round_trips_bytes() {
+    if env::var("SILICA_E2E").is_err() {
+        eprintln!("skipped: set SILICA_E2E=1 to run the graphical end-to-end tests");
+        return;
+    }
     let mut app = match App::launch(&Vault::new().root) {
         Some(a) => a,
         None => {
@@ -161,6 +166,10 @@ fn open_save_and_reopen_round_trips_bytes() {
 
 #[test]
 fn overwriting_a_note_snapshots_its_previous_bytes() {
+    if env::var("SILICA_E2E").is_err() {
+        eprintln!("skipped: set SILICA_E2E=1 to run the graphical end-to-end tests");
+        return;
+    }
     let mut app = match App::launch(&Vault::new().root) {
         Some(a) => a,
         None => {

@@ -15,6 +15,70 @@ pub const MAX_BYTES: u64 = 32 * 1024 * 1024;
 /// How many redirects a fetch may follow.
 pub const MAX_REDIRECTS: &str = "5";
 
+/// The largest remote-image cache Silica will keep on disk. A note's picture
+/// is a picture; the cache is a cache, not an archive, and it is not the
+/// place to let a hostile note fill the disk. Oldest entries are evicted
+/// first.
+pub const MAX_CACHE_BYTES: u64 = 100 * 1024 * 1024;
+
+/// The total size of every file in `dir`, in bytes.
+fn dir_size(dir: &Path) -> u64 {
+    let mut total = 0u64;
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let Ok(meta) = entry.metadata() else { continue };
+            if meta.is_file() {
+                total += meta.len();
+            }
+        }
+    }
+    total
+}
+
+/// Evicts the oldest files in `dir` until its total size is at or below
+/// `limit`, so the cache cannot grow without bound. Best effort: a file that
+/// disappears between listing and removal is simply skipped.
+fn evict_to_limit(dir: &Path, limit: u64) {
+    let mut files: Vec<(std::path::PathBuf, std::time::SystemTime)> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Ok(meta) = entry.metadata() {
+                if meta.is_file() {
+                    if let Ok(mtime) = meta.modified() {
+                        files.push((path, mtime));
+                    }
+                }
+            }
+        }
+    }
+    files.sort_by_key(|(_, mtime)| *mtime);
+    let mut total = dir_size(dir);
+    for (path, _) in files {
+        if total <= limit {
+            break;
+        }
+        if let Ok(meta) = std::fs::metadata(&path) {
+            total = total.saturating_sub(meta.len());
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
+/// Removes temp files left behind by an interrupted download, so a crashed
+/// run cannot leave the cache full of partial files.
+fn sweep_temp_files(dir: &Path) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.ends_with(".tmp") || name.contains(".silica-tmp") {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+}
+
 pub struct SilicaHttpClient {
     cache_dir: PathBuf,
 }
@@ -133,6 +197,10 @@ impl SilicaHttpClient {
             std::env::temp_dir().join("silica").join("remote_images")
         };
         let _ = std::fs::create_dir_all(&cache_dir);
+        // A crashed run can leave partial downloads behind; sweep them before
+        // the cache is used, and keep the cache within its size budget.
+        sweep_temp_files(&cache_dir);
+        evict_to_limit(&cache_dir, MAX_CACHE_BYTES);
         Self { cache_dir }
     }
 
@@ -258,6 +326,12 @@ impl HttpClient for SilicaHttpClient {
                             }
                             _ => {
                                 let _ = std::fs::rename(&temp_path, &cache_path_clone);
+                                // Keep the cache within its size budget:
+                                // evict the oldest entries if this write put
+                                // it over the limit.
+                                if let Some(dir) = cache_path_clone.parent() {
+                                    evict_to_limit(dir, MAX_CACHE_BYTES);
+                                }
                                 std::fs::read(&cache_path_clone).map_err(|e| anyhow!(e))
                             }
                         }
@@ -394,5 +468,54 @@ mod tests {
     fn resolve_target_pins_https_to_443() {
         let resolve = resolve_target("https://example.com/x.png").unwrap();
         assert!(resolve.starts_with("example.com:443:"));
+    }
+
+    #[test]
+    fn dir_size_sums_only_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.bin"), b"hello").unwrap();
+        std::fs::write(dir.path().join("b.bin"), b"world!").unwrap();
+        std::fs::write(dir.path().join("c.bin"), b"!!").unwrap();
+        assert_eq!(dir_size(dir.path()), 13);
+    }
+
+    #[test]
+    fn sweep_temp_files_removes_partial_downloads() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("real.png"), b"png").unwrap();
+        std::fs::write(dir.path().join("partial.png.tmp"), b"part").unwrap();
+        std::fs::write(dir.path().join("image.silica-tmp"), b"part2").unwrap();
+        sweep_temp_files(dir.path());
+        assert!(dir.path().join("real.png").exists());
+        assert!(!dir.path().join("partial.png.tmp").exists());
+        assert!(!dir.path().join("image.silica-tmp").exists());
+    }
+
+    #[test]
+    fn evict_to_limit_removes_files_when_over_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["a.bin", "b.bin", "c.bin"] {
+            std::fs::write(dir.path().join(name), b"0123456789").unwrap();
+        }
+        assert_eq!(dir_size(dir.path()), 30);
+        evict_to_limit(dir.path(), 15);
+        assert!(dir_size(dir.path()) <= 15, "the cache was not evicted");
+        // At least one file had to go; at least one had to stay.
+        let remaining: Vec<_> = ["a.bin", "b.bin", "c.bin"]
+            .iter()
+            .filter(|n| dir.path().join(n).exists())
+            .collect();
+        assert!(!remaining.is_empty(), "everything was evicted");
+        assert!(remaining.len() < 3, "nothing was evicted");
+    }
+
+    #[test]
+    fn evict_to_limit_keeps_everything_under_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.bin"), b"hi").unwrap();
+        std::fs::write(dir.path().join("b.bin"), b"ho").unwrap();
+        evict_to_limit(dir.path(), 100);
+        assert!(dir.path().join("a.bin").exists());
+        assert!(dir.path().join("b.bin").exists());
     }
 }
