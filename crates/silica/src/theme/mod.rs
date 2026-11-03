@@ -15,6 +15,9 @@ use silica_formats::config::AppearanceConfig;
 use std::collections::BTreeMap;
 use std::path::Path;
 
+pub mod css;
+pub mod value;
+
 /// Obsidian's interface sizes: the small UI text of tabs, rows and headers,
 /// the smaller text of the status bar, the height of every header row, the
 /// ribbon's width, the icon box, and the sidebar width a new vault gets.
@@ -406,158 +409,162 @@ impl Theme {
     /// Apply a parsed community theme on top of this one. Only properties the
     /// theme explicitly sets are overridden; everything else keeps the base
     /// theme's value.
+    ///
+    /// Values are resolved through [`value::Table`] so `var()` chains,
+    /// `calc()`, `hsl()`, `color-mix()` and other CSS functions work across
+    /// the theme's own declarations.
     pub fn apply_css_theme(&mut self, css: &CssTheme) {
+        let mut table = value::Table::new();
         for (name, value) in &css.vars {
+            table.set_str(name, value);
+        }
+        let resolved = table.resolve_all();
+
+        for name in css.vars.keys() {
+            let Some(v) = resolved.get(name) else {
+                continue;
+            };
             match name.as_str() {
                 // * Colours
                 "--background-primary" => {
-                    if let Some(c) = parse_colour(value) {
-                        self.bg = c;
+                    if let value::Value::Color(c) = v {
+                        self.bg = *c;
                     }
                 }
                 "--background-secondary" => {
-                    if let Some(c) = parse_colour(value) {
-                        self.bg_secondary = c;
+                    if let value::Value::Color(c) = v {
+                        self.bg_secondary = *c;
                     }
                 }
                 "--background-secondary-alt" => {
-                    if let Some(c) = parse_colour(value) {
-                        self.code_bg = c;
+                    if let value::Value::Color(c) = v {
+                        self.code_bg = *c;
                     }
                 }
                 "--background-tertiary" => {
-                    if let Some(c) = parse_colour(value) {
-                        self.bg_alt = c;
+                    if let value::Value::Color(c) = v {
+                        self.bg_alt = *c;
                     }
                 }
                 "--background-modifier-hover" => {
-                    if let Some(c) = parse_colour(value) {
-                        self.bg_alt = c;
+                    if let value::Value::Color(c) = v {
+                        self.bg_alt = *c;
                     }
                 }
                 "--background-modifier-border" => {
-                    if let Some(c) = parse_colour(value) {
-                        self.border = c;
+                    if let value::Value::Color(c) = v {
+                        self.border = *c;
                     }
                 }
                 "--background-modifier-border-focus" => {
-                    if let Some(c) = parse_colour(value) {
-                        self.border_focus = c;
+                    if let value::Value::Color(c) = v {
+                        self.border_focus = *c;
                     }
                 }
                 "--text-normal" => {
-                    if let Some(c) = parse_colour(value) {
-                        self.text = c;
+                    if let value::Value::Color(c) = v {
+                        self.text = *c;
                     }
                 }
                 "--text-muted" => {
-                    if let Some(c) = parse_colour(value) {
-                        self.text_muted = c;
+                    if let value::Value::Color(c) = v {
+                        self.text_muted = *c;
                     }
                 }
                 "--text-faint" => {
-                    if let Some(c) = parse_colour(value) {
-                        self.text_faint = c;
+                    if let value::Value::Color(c) = v {
+                        self.text_faint = *c;
                     }
                 }
                 "--text-accent" | "--interactive-accent" => {
-                    if let Some(c) = parse_colour(value) {
-                        self.accent = c;
+                    if let value::Value::Color(c) = v {
+                        self.accent = *c;
                     }
                 }
                 // * Canvas colour presets
                 "--color-red" => {
-                    if let Some(c) = parse_colour(value) {
-                        self.canvas.presets[0] = c;
+                    if let value::Value::Color(c) = v {
+                        self.canvas.presets[0] = *c;
                     }
                 }
                 "--color-orange" => {
-                    if let Some(c) = parse_colour(value) {
-                        self.canvas.presets[1] = c;
+                    if let value::Value::Color(c) = v {
+                        self.canvas.presets[1] = *c;
                     }
                 }
                 "--color-yellow" => {
-                    if let Some(c) = parse_colour(value) {
-                        self.canvas.presets[2] = c;
+                    if let value::Value::Color(c) = v {
+                        self.canvas.presets[2] = *c;
                     }
                 }
                 "--color-green" => {
-                    if let Some(c) = parse_colour(value) {
-                        self.canvas.presets[3] = c;
+                    if let value::Value::Color(c) = v {
+                        self.canvas.presets[3] = *c;
                     }
                 }
                 "--color-cyan" => {
-                    if let Some(c) = parse_colour(value) {
-                        self.canvas.presets[4] = c;
+                    if let value::Value::Color(c) = v {
+                        self.canvas.presets[4] = *c;
                     }
                 }
                 "--color-purple" => {
-                    if let Some(c) = parse_colour(value) {
-                        self.canvas.presets[5] = c;
+                    if let value::Value::Color(c) = v {
+                        self.canvas.presets[5] = *c;
                     }
                 }
                 // * Fonts
                 "--font-interface" => {
-                    self.ui_font = SharedString::from(value.trim_matches('"').trim_matches('\''));
+                    if let value::Value::Seq(terms) = v {
+                        let s: String = terms
+                            .iter()
+                            .filter_map(|t| match t {
+                                value::Value::Keyword(k) => Some(k.clone()),
+                                _ => None,
+                            })
+                            .collect();
+                        if !s.is_empty() {
+                            self.ui_font = SharedString::from(s);
+                        }
+                    } else if let value::Value::Keyword(k) = v {
+                        self.ui_font = SharedString::from(k.clone());
+                    }
                 }
                 "--font-text" => {
-                    self.text_font = SharedString::from(value.trim_matches('"').trim_matches('\''));
+                    if let value::Value::Seq(terms) = v {
+                        let s: String = terms
+                            .iter()
+                            .filter_map(|t| match t {
+                                value::Value::Keyword(k) => Some(k.clone()),
+                                _ => None,
+                            })
+                            .collect();
+                        if !s.is_empty() {
+                            self.text_font = SharedString::from(s);
+                        }
+                    } else if let value::Value::Keyword(k) = v {
+                        self.text_font = SharedString::from(k.clone());
+                    }
                 }
                 "--font-monospace" => {
-                    self.mono_font = SharedString::from(value.trim_matches('"').trim_matches('\''));
+                    if let value::Value::Seq(terms) = v {
+                        let s: String = terms
+                            .iter()
+                            .filter_map(|t| match t {
+                                value::Value::Keyword(k) => Some(k.clone()),
+                                _ => None,
+                            })
+                            .collect();
+                        if !s.is_empty() {
+                            self.mono_font = SharedString::from(s);
+                        }
+                    } else if let value::Value::Keyword(k) = v {
+                        self.mono_font = SharedString::from(k.clone());
+                    }
                 }
                 _ => {}
             }
         }
     }
-}
-
-/// Parse a CSS colour string into an `Hsla`. Supports `#rrggbb`, `#rgb`,
-/// `rgb(r, g, b)`, `rgba(r, g, b, a)`, `hsl(h, s, l)`, `hsla(h, s, l, a)`,
-/// `oklch(l c h / alpha)` and named colours. Returns `None` for anything
-/// unrecognised.
-fn parse_colour(s: &str) -> Option<Hsla> {
-    let s = s.trim();
-    if let Some(hex) = s.strip_prefix('#') {
-        return parse_hex(hex);
-    }
-    if let Some(rest) = s.strip_prefix("rgb(").or_else(|| s.strip_prefix("rgba(")) {
-        let rest = rest.trim_end_matches(')');
-        let parts: Vec<&str> = rest.split(',').map(str::trim).collect();
-        if parts.len() >= 3 {
-            let r = parts[0].parse::<f32>().ok()? / 255.0;
-            let g = parts[1].parse::<f32>().ok()? / 255.0;
-            let b = parts[2].parse::<f32>().ok()? / 255.0;
-            let a = parts
-                .get(3)
-                .and_then(|p| p.parse::<f32>().ok())
-                .unwrap_or(1.0);
-            let hex_val =
-                ((r as u32) << 24) | ((g as u32) << 16) | ((b as u32) << 8) | (a as u32 * 255);
-            return Some(rgba(hex_val).into());
-        }
-    }
-    None
-}
-
-/// Parse a hex colour string (`rrggbb` or `rgb`).
-fn parse_hex(hex: &str) -> Option<Hsla> {
-    let hex = hex.trim();
-    if hex.len() == 3 {
-        let r = u8::from_str_radix(&hex[0..1], 16).ok()? * 0x11;
-        let g = u8::from_str_radix(&hex[1..2], 16).ok()? * 0x11;
-        let b = u8::from_str_radix(&hex[2..3], 16).ok()? * 0x11;
-        let hex_val = ((r as u32) << 24) | ((g as u32) << 16) | ((b as u32) << 8) | 0xff;
-        return Some(rgba(hex_val).into());
-    }
-    if hex.len() == 6 {
-        let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-        let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-        let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-        let hex_val = ((r as u32) << 24) | ((g as u32) << 16) | ((b as u32) << 8) | 0xff;
-        return Some(rgba(hex_val).into());
-    }
-    None
 }
 
 #[cfg(test)]
