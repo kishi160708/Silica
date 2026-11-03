@@ -1078,6 +1078,7 @@ mod path_tests {
         (dir, Rc::new(RefCell::new(shared)))
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_symlinked_folder_cannot_be_written_through() {
         let (dir, shared) = vault(None);
@@ -1094,6 +1095,7 @@ mod path_tests {
         assert!(!outside.path().join("planted.md").exists());
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_symlinked_file_cannot_be_written() {
         let (_dir, shared) = vault(None);
