@@ -26,10 +26,9 @@ pub struct SilicaHttpClient {
 /// on a laptop includes the router's admin page and anything on `localhost`.
 /// A literal private or loopback host is refused here, before any request.
 ///
-/// Ponytail: a DNS name that resolves to a private address is not caught,
-/// because resolving it and then connecting to that address needs a real HTTP
-/// client rather than `curl`. The ceiling is a name pointing inward; the
-/// upgrade is to resolve here and pass `--resolve`.
+/// A hostname that resolves to a private address is refused here, before any
+/// request: the name is resolved and every candidate address is checked, so
+/// DNS rebinding cannot reach the local network through a look-alike name.
 pub fn allows_destination(url: &str) -> bool {
     let Some((scheme, rest)) = url.split_once("://") else {
         return false;
@@ -56,7 +55,38 @@ pub fn allows_destination(url: &str) -> bool {
     if let Ok(ip) = host.parse::<std::net::IpAddr>() {
         return !is_private(ip);
     }
-    true
+    // A DNS name: resolve it and refuse if every address it could reach is
+    // private. curl resolves again at connect time, but this check catches the
+    // common rebinding case and the `--resolve` argument below pins the one we
+    // validated.
+    match std::net::ToSocketAddrs::to_socket_addrs(&format!("{host}:80")) {
+        Ok(mut addrs) => addrs.any(|a| !is_private(a.ip())),
+        Err(_) => false,
+    }
+}
+
+/// The `--resolve host:port:ip` argument for curl, pinning the connection to
+/// the first public address the name resolves to. Returns `None` when the
+/// name cannot be resolved or every address is private, so the caller can
+/// refuse the request rather than let curl resolve on its own.
+pub fn resolve_target(url: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once("://")?;
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host_port = authority.rsplit('@').next().unwrap_or(authority);
+    let (host, port) = match host_port.rsplit_once(':') {
+        Some((h, p)) if p.parse::<u16>().is_ok() => (h, p.parse::<u16>().ok()?),
+        _ => (
+            host_port,
+            match scheme.to_ascii_lowercase().as_str() {
+                "https" => 443,
+                _ => 80,
+            },
+        ),
+    };
+    let ip = std::net::ToSocketAddrs::to_socket_addrs(&format!("{host}:{port}"))
+        .ok()?
+        .find(|a| !is_private(a.ip()))?;
+    Some(format!("{host}:{port}:{}", ip.ip()))
 }
 
 /// Loopback, link-local, private, and the other ranges that mean "this
@@ -149,6 +179,18 @@ impl HttpClient for SilicaHttpClient {
             }
             .boxed();
         }
+        // Pin the connection to the public address the name resolves to, so
+        // DNS rebinding cannot send the request somewhere else at connect
+        // time. A name that cannot be resolved, or that resolves only to a
+        // private address, is refused.
+        let Some(resolve_arg) = resolve_target(&uri) else {
+            return async move {
+                Err(anyhow!(
+                    "{uri} could not be resolved to a public address, so it is not fetched"
+                ))
+            }
+            .boxed();
+        };
         let cache_path = self.cache_path(&uri);
 
         async move {
@@ -168,6 +210,7 @@ impl HttpClient for SilicaHttpClient {
             let (tx, rx) = futures::channel::oneshot::channel();
             let uri_clone = uri.clone();
             let cache_path_clone = cache_path.clone();
+            let resolve_clone = resolve_arg.clone();
 
             std::thread::spawn(move || {
                 let temp_path = cache_path_clone.with_extension("tmp");
@@ -184,6 +227,11 @@ impl HttpClient for SilicaHttpClient {
                     .arg("=http,https")
                     .arg("--proto-redir")
                     .arg("=http,https")
+                    // Pin the connection to the public address the name
+                    // resolved to, so DNS rebinding cannot redirect it at
+                    // connect time.
+                    .arg("--resolve")
+                    .arg(&resolve_clone)
                     // A response larger than the budget is abandoned rather
                     // than written, so a hostile host cannot fill the disk.
                     .arg("--max-filesize")
@@ -308,7 +356,7 @@ mod tests {
     #[test]
     fn disk_cache_hit_returns_cached_bytes() {
         let client = SilicaHttpClient::new();
-        let url = "https://test.local/dummy_cached_test_image.png";
+        let url = "https://example.com/dummy_cached_test_image.png";
         let cache_path = client.cache_path(url);
         let test_bytes = b"fake-png-content";
         std::fs::write(&cache_path, test_bytes).unwrap();
@@ -322,5 +370,29 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
 
         let _ = std::fs::remove_file(cache_path);
+    }
+
+    #[test]
+    fn a_public_name_resolves_to_a_public_address() {
+        assert!(allows_destination("http://example.com/x.png"));
+        assert!(allows_destination("https://example.com/x.png"));
+        let resolve = resolve_target("http://example.com/x.png").unwrap();
+        assert!(resolve.starts_with("example.com:80:"));
+        // The resolved address must not be private or loopback.
+        let ip = resolve.split_once(':').and_then(|(_, rest)| rest.split_once(':').map(|(_, ip)| ip)).unwrap();
+        let ip: std::net::IpAddr = ip.parse().unwrap();
+        assert!(!is_private(ip));
+    }
+
+    #[test]
+    fn an_unresolvable_name_is_refused() {
+        assert!(!allows_destination("http://this-name-does-not-exist-silica-test.invalid/x.png"));
+        assert!(resolve_target("http://this-name-does-not-exist-silica-test.invalid/x.png").is_none());
+    }
+
+    #[test]
+    fn resolve_target_pins_https_to_443() {
+        let resolve = resolve_target("https://example.com/x.png").unwrap();
+        assert!(resolve.starts_with("example.com:443:"));
     }
 }

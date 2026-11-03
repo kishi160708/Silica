@@ -44,10 +44,11 @@ the properties a report is measured against:
   loopback, link-local, carrier-grade-NAT or private address is refused before
   any request (`localhost`, `127.0.0.0/8`, `10/8`, `172.16/12`,
   `192.168/16`, `169.254/16`, `100.64/10`, `fc00::/7`, `fe80::/10`, `::1`),
-  and a response past 32 MB is dropped instead of cached. A DNS name that
-  resolves to a private address is **not** caught: seeing through that needs
-  the address resolved and pinned, which is a real HTTP client rather than
-  `curl`.
+  and a response past 32 MB is dropped instead of cached. A DNS name is
+  resolved before connecting and refused if every address it could reach is
+  private, and curl is pinned to the validated address with `--resolve`, so
+  DNS rebinding cannot reach the local network through a look-alike name.
+  A name that cannot be resolved is not fetched.
 - **Code from the vault runs only when you enable a community plugin.** Themes,
   CSS snippets, manifests and settings are read as data and never evaluated.
   An *enabled* tier-1 plugin is different: `silica-plugins` loads its
