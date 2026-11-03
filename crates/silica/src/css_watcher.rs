@@ -9,7 +9,7 @@ use std::path::Path;
 use std::sync::mpsc;
 
 use notify::RecommendedWatcher;
-use notify::Watcher as _;
+use notify::{RecursiveMode, Watcher as _};
 
 /// Watches a vault's CSS theme and snippet directories for changes.
 ///
@@ -42,14 +42,23 @@ impl CssWatcher {
             notify::Config::default(),
         )?;
 
-        let themes_dir = vault_path.join(".obsidian/themes");
-        let snippets_dir = vault_path.join(".obsidian/snippets");
-
-        if themes_dir.exists() {
-            watcher.watch(&themes_dir, notify::RecursiveMode::NonRecursive)?;
+        // * `.obsidian` itself is watched, not only the two folders inside it:
+        // * a vault that has no `themes/` yet gets no events from watching a
+        // * directory that does not exist, so creating one later would never
+        // * reload. Watching the parent covers the folder appearing; the two
+        // * are still watched directly so a file edited inside one is caught
+        // * even where the parent event is only a directory write.
+        let obsidian = vault_path.join(".obsidian");
+        let themes_dir = obsidian.join("themes");
+        let snippets_dir = obsidian.join("snippets");
+        if obsidian.is_dir() {
+            watcher.watch(&obsidian, RecursiveMode::NonRecursive)?;
         }
-        if snippets_dir.exists() {
-            watcher.watch(&snippets_dir, notify::RecursiveMode::NonRecursive)?;
+        if themes_dir.is_dir() {
+            watcher.watch(&themes_dir, RecursiveMode::NonRecursive)?;
+        }
+        if snippets_dir.is_dir() {
+            watcher.watch(&snippets_dir, RecursiveMode::NonRecursive)?;
         }
 
         Ok((Self { _watcher: watcher }, rx))

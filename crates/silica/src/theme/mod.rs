@@ -319,6 +319,16 @@ impl Theme {
         for css in css_snippets {
             theme.apply_css_theme(css);
         }
+        // * `appearance.json`'s `accentColor` is Obsidian's own accent setting
+        //   and outranks a theme's, so it goes on after the stylesheets. It
+        //   writes the three channels the accent shades are derived from, which
+        //   is what Obsidian does with them: one hex moves every accent-tinted
+        //   surface, not just `--interactive-accent`.
+        if let Some(accent) = config.accent_color.as_deref().and_then(accent_hsla) {
+            theme.accent = accent;
+            theme.link = accent;
+            theme.tag = accent;
+        }
         theme
     }
 
@@ -370,6 +380,21 @@ impl Theme {
     }
 }
 
+/// `appearance.json`'s `accentColor` (`#rrggbb`) as the colour it names.
+///
+/// An empty or malformed value is `None`, which leaves the theme's own accent
+/// in place — the same "no accent set" the picker writes as an empty string.
+fn accent_hsla(hex: &str) -> Option<Hsla> {
+    let hex = hex.trim().trim_start_matches('#');
+    if !matches!(hex.len(), 3 | 6) || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    match value::parse(&format!("#{hex}")) {
+        value::Expr::Color(c) => Some(c),
+        _ => None,
+    }
+}
+
 /// The first family of a CSS-style `"Font A", Font B` list.
 fn first_font(list: Option<&str>) -> Option<SharedString> {
     let first = list?
@@ -393,25 +418,71 @@ pub struct CssTheme {
     pub vars: BTreeMap<String, String>,
 }
 
-/// Parse CSS custom properties (`--name: value;`) from a theme's CSS source.
+/// The largest CSS file a theme or snippet may be, in bytes.
 ///
-/// Only `--name: value;` declarations at the top level are read; nested rules
-/// (`:root { ... }`) are flattened, and anything Silica does not recognize is
-/// silently dropped. Colours accept `#rrggbb`, `#rgb`, `rgb(...)`, `hsl(...)`,
-/// `oklch(...)` and named colours; anything unparseable is left as its raw
-/// string and interpreted when applied.
-pub fn parse_css_theme(css: &str) -> CssTheme {
+/// A theme is a few hundred declarations at most; the biggest community themes
+/// are under 200 KB. The cap keeps a vault's `themes/` folder from being a way
+/// to feed the parser an arbitrarily large file.
+const MAX_CSS_BYTES: u64 = 512 * 1024;
+
+/// A theme or snippet name that cannot escape its directory.
+///
+/// `appearance.json` names a theme with `cssTheme` and snippets with
+/// `enabledCssSnippets`, and both are just strings in a file the vault can
+/// carry. A name holding a separator or `..` would otherwise join its way out
+/// of `.obsidian/` and read whatever it liked.
+fn safe_css_name(name: &str) -> Option<&str> {
+    let name = name.trim();
+    if name.is_empty()
+        || name.contains('/')
+        || name.contains('\\')
+        || name.contains("..")
+        || name.contains('\0')
+        || name.starts_with('.')
+    {
+        return None;
+    }
+    Some(name)
+}
+
+/// Read a theme or snippet file, refusing anything that is not a plain file
+/// inside `dir` of at most [`MAX_CSS_BYTES`].
+///
+/// The name check is lexical; a symlink at `dir/<name>.css` would still be
+/// followed by an ordinary read, so the opened file is checked too: a link is
+/// refused rather than followed out of the vault.
+fn read_css_file(dir: &Path, name: &str) -> Option<String> {
+    let name = safe_css_name(name)?;
+    let path = dir.join(format!("{name}.css"));
+    let meta = std::fs::symlink_metadata(&path).ok()?;
+    if !meta.file_type().is_file() || meta.len() > MAX_CSS_BYTES {
+        return None;
+    }
+    std::fs::read_to_string(&path).ok()
+}
+
+/// Parse a theme's CSS source into the declarations it sets for one base theme.
+///
+/// The parse is [`css::Sheet`]'s: only `:root`, `html`, `body`, `.theme-dark`
+/// and `.theme-light` rules are understood, and within them only `--custom`
+/// declarations. Selector scope, specificity, `!important`, comments and
+/// selector lists all decide which declaration wins, the way CSS does; every
+/// other rule a community theme carries — component styling for Obsidian's own
+/// DOM — is skipped without being parsed.
+///
+/// `dark` selects which variant applies: a `.theme-light` block is dropped in
+/// a dark theme and a `.theme-dark` block in a light one.
+pub fn parse_css_theme(css: &str, dark: bool) -> CssTheme {
+    let mut sheet = css::Sheet::new();
+    sheet.parse_css(css, dark);
     let mut vars = BTreeMap::new();
-    // * Strip comments.
-    let css = css.replace("/*", "").replace("*/", "");
-    for line in css.lines() {
-        let line = line.trim();
-        if let Some((name, value)) = line.split_once(':') {
-            let name = name.trim();
-            let value = value.trim().trim_end_matches(';').trim();
-            if name.starts_with("--") && !value.is_empty() {
-                vars.insert(name.to_string(), value.to_string());
-            }
+    for (name, raw) in sheet.declarations() {
+        // * Only what the stylesheet itself declares is recorded: the resolved
+        // * values come from the defaults those declarations stand on, and
+        // * copying them here would make every theme look like it overrode
+        // * every token.
+        if let Some(raw) = raw {
+            vars.insert(name.to_string(), raw.to_string());
         }
     }
     CssTheme { vars }
@@ -419,27 +490,35 @@ pub fn parse_css_theme(css: &str) -> CssTheme {
 
 /// Load a community theme from `.obsidian/themes/<name>.css` inside a vault.
 pub fn load_css_theme(vault_path: &Path, name: &str) -> Option<CssTheme> {
-    let path = vault_path
-        .join(".obsidian/themes")
-        .join(format!("{name}.css"));
-    let css = std::fs::read_to_string(&path).ok()?;
-    Some(parse_css_theme(&css))
+    let css = read_css_file(&vault_path.join(".obsidian/themes"), name)?;
+    Some(parse_css_theme(&css, is_dark_theme(vault_path)))
 }
 
-/// Load every enabled CSS snippet from `.obsidian/snippets/*.css` inside a vault.
-/// Only snippets whose names appear in `enabled` are loaded and returned, in
-/// the same order as `enabled`.
+/// Load every enabled CSS snippet from `.obsidian/snippets/*.css` inside a
+/// vault. Only snippets whose names appear in `enabled` are loaded and
+/// returned, in the same order as `enabled`.
 pub fn load_css_snippets(vault_path: &Path, enabled: &[String]) -> Vec<CssTheme> {
-    let mut out = Vec::new();
-    for name in enabled {
-        let path = vault_path
-            .join(".obsidian/snippets")
-            .join(format!("{name}.css"));
-        if let Ok(css) = std::fs::read_to_string(&path) {
-            out.push(parse_css_theme(&css));
-        }
-    }
-    out
+    let dir = vault_path.join(".obsidian/snippets");
+    let dark = is_dark_theme(vault_path);
+    enabled
+        .iter()
+        .filter_map(|name| read_css_file(&dir, name))
+        .map(|css| parse_css_theme(&css, dark))
+        .collect()
+}
+
+/// Which base theme the vault asks for, for a caller that has only a path.
+///
+/// `moonstone` is light, `obsidian` is dark, and `system` — the default — is
+/// taken as dark here; the window corrects it later through
+/// [`Theme::from_appearance`]. This only decides which `.theme-dark` /
+/// `.theme-light` block of a stylesheet is read.
+fn is_dark_theme(vault_path: &Path) -> bool {
+    silica_vault::Vault::open(vault_path)
+        .ok()
+        .and_then(|v| v.appearance_config().ok())
+        .and_then(|a| a.theme)
+        .is_none_or(|t| t != "moonstone")
 }
 
 impl Theme {

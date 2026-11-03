@@ -30,14 +30,7 @@ const SHIM: &str = include_str!("shim.js");
 fn make_dirs_checked(shared: &Rc<RefCell<Shared>>, dir: &Path) -> std::io::Result<()> {
     let shared = shared.borrow();
     let relative = dir.strip_prefix(&shared.root).unwrap_or(dir);
-    #[cfg(unix)]
-    {
-        silica_vault::create_dir_all_at(&shared.root, relative)
-    }
-    #[cfg(not(unix))]
-    {
-        std::fs::create_dir_all(dir)
-    }
+    silica_vault::create_dir_all_at(&shared.root, relative)
 }
 
 /// Byte budget for one plugin's heap. Exceeding it stops the plugin with an
@@ -295,7 +288,8 @@ impl Shared {
                 _ => (resolved.clone(), note),
             };
             let (target, note) = (fold(&target), fold(&note));
-            let inside = note.starts_with(&format!("{target}/")) || note.starts_with(&format!("{target}\\"));
+            let inside =
+                note.starts_with(&format!("{target}/")) || note.starts_with(&format!("{target}\\"));
             if inside {
                 return Err(format!(
                     "'{path}' contains the note open in the editor; a plugin cannot move it while its unsaved changes are here"
@@ -310,6 +304,10 @@ impl Shared {
     /// produced `resolved` and the write itself. The existing file is
     /// snapshotted before it is replaced, so a plugin write cannot destroy
     /// prior content if the process crashes mid-write.
+    ///
+    /// Windows has no `openat`; the same guarantee comes from walking the
+    /// path through directory handles there, which is what
+    /// [`silica_vault::write_at_handles`] does.
     fn write_checked(&self, resolved: &Path, bytes: &[u8]) -> std::io::Result<()> {
         let relative = resolved.strip_prefix(&self.root).unwrap_or(resolved);
         #[cfg(unix)]
@@ -322,7 +320,11 @@ impl Shared {
             }
             silica_vault::write_at(&self.root, relative, bytes)
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            silica_vault::write_at_handles(&self.root, relative, bytes)
+        }
+        #[cfg(all(not(unix), not(windows)))]
         {
             silica_vault::write_no_follow(resolved, bytes)
         }
@@ -471,8 +473,12 @@ impl PluginHost {
         drain_jobs(&runtime);
 
         let taken = context.with(|ctx| {
-            ctx.eval::<String, _>(b"__silica_take()")
-                .map_err(|error| format!("its registrations could not be read: {}", describe(&ctx, error)))
+            ctx.eval::<String, _>(b"__silica_take()").map_err(|error| {
+                format!(
+                    "its registrations could not be read: {}",
+                    describe(&ctx, error)
+                )
+            })
         });
         match taken {
             Ok(json) => match serde_json::from_str::<Registrations>(&json) {
@@ -576,9 +582,10 @@ impl PluginHost {
         };
         let call = format!("__silica_run({key}, {value})");
         self.deadline.set(Instant::now() + CALL_DEADLINE);
-        let result = self
-            .context
-            .with(|ctx| ctx.eval::<(), _>(call.as_bytes()).map_err(|error| describe(&ctx, error)));
+        let result = self.context.with(|ctx| {
+            ctx.eval::<(), _>(call.as_bytes())
+                .map_err(|error| describe(&ctx, error))
+        });
         // * An async command does its work in the jobs after the call returns.
         drain_jobs(&self._runtime);
         result
@@ -602,7 +609,10 @@ impl PluginHost {
             .ok_or_else(|| format!("'{id}' is not a command this plugin registered"))?;
         match &command.callback {
             Some(key) => self.run(key, None),
-            None => Err(format!("'{}' was registered without a callback", command.id)),
+            None => Err(format!(
+                "'{}' was registered without a callback",
+                command.id
+            )),
         }
     }
 
@@ -651,15 +661,19 @@ fn install<'js>(
     });
 
     let s = Rc::clone(&shared);
-    set!("__silica_raw_write_data", move |ctx: Ctx<'js>, text: String| -> rquickjs::Result<()> {
-        let path = s.borrow().data_path.clone();
-        if let Some(parent) = path.parent() {
-            make_dirs_checked(&s, parent).map_err(|error| Exception::throw_message(&ctx, &error.to_string()))?;
+    set!(
+        "__silica_raw_write_data",
+        move |ctx: Ctx<'js>, text: String| -> rquickjs::Result<()> {
+            let path = s.borrow().data_path.clone();
+            if let Some(parent) = path.parent() {
+                make_dirs_checked(&s, parent)
+                    .map_err(|error| Exception::throw_message(&ctx, &error.to_string()))?;
+            }
+            s.borrow()
+                .write_checked(&path, text.as_bytes())
+                .map_err(|error| Exception::throw_message(&ctx, &error.to_string()))
         }
-        s.borrow()
-            .write_checked(&path, text.as_bytes())
-            .map_err(|error| Exception::throw_message(&ctx, &error.to_string()))
-    });
+    );
 
     let s = Rc::clone(&shared);
     set!("__silica_raw_files", move || -> String {
@@ -704,7 +718,11 @@ fn install<'js>(
     });
 
     let s = Rc::clone(&shared);
-    set!("__silica_raw_vault_read", move |ctx: Ctx<'js>, path: String| -> rquickjs::Result<String> {
+    set!("__silica_raw_vault_read", move |ctx: Ctx<'js>,
+                                          path: String|
+          -> rquickjs::Result<
+        String,
+    > {
         let resolved = s
             .borrow()
             .resolve(&path)
@@ -715,19 +733,32 @@ fn install<'js>(
     });
 
     let s = Rc::clone(&shared);
-    set!("__silica_raw_vault_write", move |ctx: Ctx<'js>, path: String, text: String| -> rquickjs::Result<()> {
-        s.borrow_mut().mark_changed();
-        let resolved = s
-            .borrow()
-            .writable(&path)
-            .map_err(|error| Exception::throw_message(&ctx, &error))?;
-        s.borrow()
-            .write_checked(&resolved, text.as_bytes())
-            .map_err(|error| Exception::throw_message(&ctx, &format!("'{path}' could not be written: {error}")))
-    });
+    set!(
+        "__silica_raw_vault_write",
+        move |ctx: Ctx<'js>, path: String, text: String| -> rquickjs::Result<()> {
+            s.borrow_mut().mark_changed();
+            let resolved = s
+                .borrow()
+                .writable(&path)
+                .map_err(|error| Exception::throw_message(&ctx, &error))?;
+            s.borrow()
+                .write_checked(&resolved, text.as_bytes())
+                .map_err(|error| {
+                    Exception::throw_message(
+                        &ctx,
+                        &format!("'{path}' could not be written: {error}"),
+                    )
+                })
+        }
+    );
 
     let s = Rc::clone(&shared);
-    set!("__silica_raw_vault_append", move |ctx: Ctx<'js>, path: String, text: String| -> rquickjs::Result<()> {
+    set!("__silica_raw_vault_append", move |ctx: Ctx<'js>,
+                                            path: String,
+                                            text: String|
+          -> rquickjs::Result<
+        (),
+    > {
         s.borrow_mut().mark_changed();
         let resolved = s
             .borrow()
@@ -763,7 +794,12 @@ fn install<'js>(
     });
 
     let s = Rc::clone(&shared);
-    set!("__silica_raw_vault_create", move |ctx: Ctx<'js>, path: String, text: String| -> rquickjs::Result<()> {
+    set!("__silica_raw_vault_create", move |ctx: Ctx<'js>,
+                                            path: String,
+                                            text: String|
+          -> rquickjs::Result<
+        (),
+    > {
         s.borrow_mut().mark_changed();
         let resolved = s
             .borrow()
@@ -781,23 +817,32 @@ fn install<'js>(
         }
         s.borrow()
             .write_checked(&resolved, text.as_bytes())
-            .map_err(|error| Exception::throw_message(&ctx, &format!("'{path}' could not be written: {error}")))
+            .map_err(|error| {
+                Exception::throw_message(&ctx, &format!("'{path}' could not be written: {error}"))
+            })
     });
 
     let s = Rc::clone(&shared);
-    set!("__silica_raw_vault_create_folder", move |ctx: Ctx<'js>, path: String| -> rquickjs::Result<()> {
-        s.borrow_mut().mark_changed();
-        let resolved = s
-            .borrow()
-            .resolve(&path)
-            .map_err(|error| Exception::throw_message(&ctx, &error))?;
-        make_dirs_checked(&s, &resolved).map_err(|error| {
-            Exception::throw_message(&ctx, &format!("'{path}' could not be created: {error}"))
-        })
-    });
+    set!(
+        "__silica_raw_vault_create_folder",
+        move |ctx: Ctx<'js>, path: String| -> rquickjs::Result<()> {
+            s.borrow_mut().mark_changed();
+            let resolved = s
+                .borrow()
+                .resolve(&path)
+                .map_err(|error| Exception::throw_message(&ctx, &error))?;
+            make_dirs_checked(&s, &resolved).map_err(|error| {
+                Exception::throw_message(&ctx, &format!("'{path}' could not be created: {error}"))
+            })
+        }
+    );
 
     let s = Rc::clone(&shared);
-    set!("__silica_raw_vault_delete", move |ctx: Ctx<'js>, path: String| -> rquickjs::Result<()> {
+    set!("__silica_raw_vault_delete", move |ctx: Ctx<'js>,
+                                            path: String|
+          -> rquickjs::Result<
+        (),
+    > {
         s.borrow_mut().mark_changed();
         let resolved = s
             .borrow()
@@ -814,12 +859,18 @@ fn install<'js>(
             .replace('/', "-");
         std::fs::create_dir_all(&trash)
             .map_err(|error| Exception::throw_message(&ctx, &error.to_string()))?;
-        std::fs::rename(&resolved, trash.join(name))
-            .map_err(|error| Exception::throw_message(&ctx, &format!("'{path}' could not be deleted: {error}")))
+        std::fs::rename(&resolved, trash.join(name)).map_err(|error| {
+            Exception::throw_message(&ctx, &format!("'{path}' could not be deleted: {error}"))
+        })
     });
 
     let s = Rc::clone(&shared);
-    set!("__silica_raw_vault_rename", move |ctx: Ctx<'js>, from: String, to: String| -> rquickjs::Result<()> {
+    set!("__silica_raw_vault_rename", move |ctx: Ctx<'js>,
+                                            from: String,
+                                            to: String|
+          -> rquickjs::Result<
+        (),
+    > {
         s.borrow_mut().mark_changed();
         // ! The source needs the folder guard too: renaming a folder moves
         // ! every note inside it, the open one among them.
@@ -831,8 +882,9 @@ fn install<'js>(
             .borrow()
             .writable(&to)
             .map_err(|error| Exception::throw_message(&ctx, &error))?;
-        std::fs::rename(&source, &target)
-            .map_err(|error| Exception::throw_message(&ctx, &format!("'{from}' could not be renamed: {error}")))
+        std::fs::rename(&source, &target).map_err(|error| {
+            Exception::throw_message(&ctx, &format!("'{from}' could not be renamed: {error}"))
+        })
     });
 
     let s = Rc::clone(&shared);
@@ -845,9 +897,12 @@ fn install<'js>(
     });
 
     let s = Rc::clone(&shared);
-    set!("__silica_raw_post_processor", move |order: i64, key: String| {
-        s.borrow_mut().post_processors.push((order, key));
-    });
+    set!(
+        "__silica_raw_post_processor",
+        move |order: i64, key: String| {
+            s.borrow_mut().post_processors.push((order, key));
+        }
+    );
 
     globals.set("__silica_manifest", manifest_json)?;
     Ok(())
@@ -924,7 +979,9 @@ fn collect_files(root: &Path) -> Vec<FileEntry> {
             if name.starts_with('.') {
                 continue;
             }
-            let Ok(kind) = entry.file_type() else { continue };
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
             let path = entry.path();
             if kind.is_dir() {
                 stack.push(path);
@@ -1044,7 +1101,9 @@ fn yaml_to_json(value: &serde_yaml::Value) -> Value {
         serde_yaml::Value::Bool(b) => json!(b),
         serde_yaml::Value::Number(n) => json!(n),
         serde_yaml::Value::String(s) => json!(s),
-        serde_yaml::Value::Sequence(items) => Value::Array(items.iter().map(yaml_to_json).collect()),
+        serde_yaml::Value::Sequence(items) => {
+            Value::Array(items.iter().map(yaml_to_json).collect())
+        }
         serde_yaml::Value::Mapping(map) => Value::Object(
             map.iter()
                 .map(|(key, value)| {
@@ -1161,7 +1220,14 @@ mod path_tests {
     fn traversal_and_absolute_paths_still_bounce() {
         let (_dir, shared) = vault(None);
         assert!(shared.borrow().writable("../outside.md").is_err());
-        assert!(shared.borrow().writable("/etc/passwd").is_ok(), "a leading slash is vault-relative");
-        assert!(!shared.borrow().writable("/etc/passwd").unwrap().starts_with("/etc"));
+        assert!(
+            shared.borrow().writable("/etc/passwd").is_ok(),
+            "a leading slash is vault-relative"
+        );
+        assert!(!shared
+            .borrow()
+            .writable("/etc/passwd")
+            .unwrap()
+            .starts_with("/etc"));
     }
 }

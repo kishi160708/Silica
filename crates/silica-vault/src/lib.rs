@@ -3,6 +3,8 @@
 
 pub mod ops;
 pub mod registry;
+#[cfg(windows)]
+pub mod win_fs;
 
 pub use ops::{OpError, TrashOption};
 pub use registry::{VaultEntry, VaultRegistry};
@@ -125,15 +127,10 @@ pub fn write_no_follow(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         )));
     }
     // * On Windows a junction and other reparse points redirect a path the same
-    // * way a symlink does, but `is_symlink` does not report them. The attribute
-    // * is the only way to see one, and a reparse point at the target is refused
-    // * for the same reason the Unix `O_NOFOLLOW` open exists. `write_at` cannot
-    // * be used there: the `openat` walk it relies on has no Windows equivalent.
-    // ! TODO(windows): this reparse-point check is check-then-act — a hostile
-    // ! process can substitute the target path for a junction between this
-    // ! check and the rename below. Bind validation and the write to Windows
-    // ! directory/file handles (CreateFileW with FILE_FLAG_OPEN_REPARSE_POINT
-    // ! and ReplaceFileW) before this is considered fixed there.
+    // * way a symlink does, but `is_symlink` does not report them. `write_at`
+    // * walks the path through directory handles there, which is the real fix;
+    // * this path-level check stays for the callers that hand a bare path with
+    // * no vault root to walk from.
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
@@ -374,8 +371,9 @@ fn prune_snapshots(snapshots: &Path, stem: &str, keep: usize) -> std::io::Result
 /// the directory entry itself, so a symlink at the target is replaced, not
 /// followed through.
 ///
-/// Ponytail: Unix only, because `openat`/`renameat` are. Elsewhere
-/// [`write_no_follow`] stands.
+/// Ponytail: `openat` on Unix; on Windows [`win_fs`] walks the same path
+/// through directory handles. [`write_no_follow`] stands for a caller with no
+/// root to walk from.
 #[cfg(unix)]
 pub fn write_at(root: &Path, relative: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::ffi::CString;
@@ -546,6 +544,22 @@ fn is_link_like(meta: &std::fs::Metadata) -> bool {
         }
     }
     false
+}
+
+/// Creates every directory under `root` named by `relative`, one directory
+/// handle at a time, so no component can be swapped for a reparse point
+/// mid-walk. See [`win_fs`].
+#[cfg(windows)]
+pub fn create_dir_all_at(root: &Path, relative: &Path) -> std::io::Result<()> {
+    win_fs::create_dir_all_at(root, relative)
+}
+
+/// Writes `relative` under `root` through directory handles, so neither the
+/// target nor a component leading to it can be swapped for a reparse point
+/// between the check and the write. See [`win_fs`].
+#[cfg(windows)]
+pub fn write_at_handles(root: &Path, relative: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    win_fs::write_at(root, relative, bytes)
 }
 
 impl Vault {

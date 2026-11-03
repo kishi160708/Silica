@@ -399,6 +399,14 @@ fn named_color(name: &str) -> Option<Hsla> {
 
 // ---- resolution ------------------------------------------------------------
 
+/// The most `var()` references a single resolution may follow.
+///
+/// A real theme chains three or four deep at most — `--nav-item-color` is
+/// `--text-muted` is `--color-base-70` is a hex. The limit is generous enough
+/// that no hand-written theme reaches it and small enough that a file built to
+/// recurse cannot exhaust the stack.
+const MAX_DEPTH: usize = 64;
+
 /// The declarations a resolution reads from: later entries win, as in a
 /// stylesheet where the theme's `body` block follows the app's.
 #[derive(Debug, Default, Clone)]
@@ -480,6 +488,13 @@ impl<'a> Resolver<'a> {
             return v.clone();
         }
         if self.stack.iter().any(|n| n == name) {
+            return Value::Invalid;
+        }
+        // * A cycle is caught above, but a long acyclic chain is not: a theme
+        // * can declare `--a: var(--b)` a thousand times over, and resolving it
+        // * would recurse as deep as the file is long. `stack` is the recursion
+        // * the resolver is actually in, so its length is the depth to bound.
+        if self.stack.len() >= MAX_DEPTH {
             return Value::Invalid;
         }
         let Some(expr) = self.table.decls.get(name) else {
@@ -986,6 +1001,32 @@ mod tests {
     fn a_cycle_is_invalid_not_a_hang() {
         let t = table(&[("--a", "var(--b)"), ("--b", "var(--a)")]);
         assert_eq!(t.resolve_all().get("--a"), Some(&Value::Invalid));
+    }
+
+    /// A chain that is acyclic but deeper than [`MAX_DEPTH`] stops rather than
+    /// recursing once per declaration in the file.
+    #[test]
+    fn a_chain_deeper_than_the_limit_stops() {
+        let mut t = Table::new();
+        // 200 links: `--c0` -> `--c1` -> … -> `--c199` -> a literal.
+        for i in 0..200 {
+            t.set_str(&format!("--c{i}"), &format!("var(--c{})", i + 1));
+        }
+        t.set_str("--c200", "#123456");
+        let r = t.resolve_all();
+        // The head of the chain is past the limit and resolves to nothing;
+        // the literal at the end and its near neighbours are still fine.
+        assert_eq!(r.get("--c0"), Some(&Value::Invalid));
+        assert!(matches!(r.get("--c200"), Some(Value::Color(_))));
+        // A chain inside the limit still resolves.
+        let mut short = Table::new();
+        short.set_str("--a", "var(--b)");
+        short.set_str("--b", "var(--c)");
+        short.set_str("--c", "#abcdef");
+        assert!(matches!(
+            short.resolve_all().get("--a"),
+            Some(Value::Color(_))
+        ));
     }
 
     #[test]

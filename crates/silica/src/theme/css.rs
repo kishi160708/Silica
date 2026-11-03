@@ -52,6 +52,9 @@ pub enum Themes {
 pub struct Declaration {
     pub name: String,
     pub value: Expr,
+    /// The declaration's source text, kept so a loader can record what the
+    /// stylesheet wrote rather than what it resolves to.
+    pub raw: Option<String>,
     pub scope: Scope,
     pub themes: Themes,
     /// `(ids, classes and pseudo-classes, elements)`.
@@ -198,6 +201,7 @@ impl Sheet {
                 let decl = Declaration {
                     name: decl.name,
                     value: parse(&decl.value),
+                    raw: Some(decl.value),
                     scope,
                     themes,
                     specificity: spec,
@@ -226,6 +230,26 @@ impl Sheet {
             table.set(&name, best.value.clone());
         }
         table
+    }
+
+    /// The winning declaration of every property, as its source text.
+    ///
+    /// A theme loader records what a stylesheet *declares*, not what it
+    /// resolves to: the resolved values come from the defaults those
+    /// declarations stand on, and writing them back would make every theme
+    /// look like it overrode every token.
+    pub fn declarations(&self) -> impl Iterator<Item = (&str, Option<&str>)> {
+        let mut best: std::collections::HashMap<&str, &Declaration> =
+            std::collections::HashMap::new();
+        for d in &self.decls {
+            match best.get(d.name.as_str()) {
+                Some(held) if held.rank() >= d.rank() => {}
+                _ => {
+                    best.insert(&d.name, d);
+                }
+            }
+        }
+        best.into_iter().map(|(name, d)| (name, d.raw.as_deref()))
     }
 }
 

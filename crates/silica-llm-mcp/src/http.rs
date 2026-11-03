@@ -10,10 +10,10 @@
 
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::time::Duration;
-use std::thread;
-use std::sync::mpsc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 use native_tls::TlsConnector;
 
@@ -75,7 +75,10 @@ impl Url {
     }
 
     pub fn origin(&self) -> String {
-        format!("{}://{}:{}{}", self.scheme, self.host, self.port, self.prefix)
+        format!(
+            "{}://{}:{}{}",
+            self.scheme, self.host, self.port, self.prefix
+        )
     }
 }
 
@@ -181,7 +184,11 @@ pub fn request(
     let mut stream = match rx.recv_timeout(timeout) {
         Ok(Ok(stream)) => stream,
         Ok(Err(e)) => return Err(format!("{address}: {e}")),
-        Err(_) => return Err(format!("{address}: connection timed out during DNS resolution or TCP handshake")),
+        Err(_) => {
+            return Err(format!(
+                "{address}: connection timed out during DNS resolution or TCP handshake"
+            ))
+        }
     };
     stream
         .set_read_timeout(Some(timeout))
@@ -212,9 +219,8 @@ fn https_request(
     body: Option<&str>,
     address: &str,
 ) -> Result<Response, String> {
-    let connector = TlsConnector::new().map_err(|e| {
-        format!("{address}: could not build a TLS connector: {e}")
-    })?;
+    let connector = TlsConnector::new()
+        .map_err(|e| format!("{address}: could not build a TLS connector: {e}"))?;
     let mut tls = connector
         .connect(url.host.as_str(), stream)
         .map_err(|e| format!("{address}: TLS handshake failed: {e}"))?;
@@ -228,10 +234,7 @@ fn https_request(
 /// Read until the message is complete rather than until EOF: a server that
 /// ignores `Connection: close` would otherwise hold the socket open until the
 /// read timeout, turning every call into a stall.
-fn read_response<S: Read>(
-    stream: &mut S,
-    address: &str,
-) -> Result<Response, String> {
+fn read_response<S: Read>(stream: &mut S, address: &str) -> Result<Response, String> {
     let mut raw: Vec<u8> = Vec::with_capacity(8 << 10);
     let mut chunk = [0u8; 8 << 10];
     let mut head_end = None;
@@ -289,9 +292,9 @@ fn read_response<S: Read>(
                 });
             }
         }
-        let read = stream.read(&mut chunk).map_err(|e| {
-            format!("{address}: reading the response failed: {e}")
-        })?;
+        let read = stream
+            .read(&mut chunk)
+            .map_err(|e| format!("{address}: reading the response failed: {e}"))?;
         if read == 0 {
             let start = head_end
                 .ok_or_else(|| format!("{address}: closed before sending a complete header"))?;
@@ -327,12 +330,20 @@ fn decode(body: &[u8], chunked: bool, length: Option<usize>) -> String {
             break;
         }
         let from = at + 2;
-        let to = (from + size).min(rest.len());
-        out.extend_from_slice(&rest[from..to]);
-        if to + 2 > rest.len() {
+        // * `size` is the server's word, so `from + size` can wrap: a header of
+        // * `ffffffffffffffff` would otherwise land `end` below `from` and panic
+        // * on the slice. A header that overflows is not a size at all and the
+        // * loop stops; one that merely runs past the body is clamped, so a
+        // * response cut off mid-chunk still yields what arrived.
+        let Some(end) = from.checked_add(size) else {
+            break;
+        };
+        let end = end.min(rest.len());
+        out.extend_from_slice(&rest[from..end]);
+        if end + 2 > rest.len() {
             break;
         }
-        rest = &rest[to + 2..];
+        rest = &rest[end + 2..];
     }
     String::from_utf8_lossy(&out).into_owned()
 }
@@ -426,7 +437,6 @@ mod tests {
         assert!(head.contains("GET /models HTTP/1.1"));
     }
 
-
     #[test]
     fn connection_counter_returns_to_zero_after_failure() {
         // * A connect to an unreachable address must not leave the
@@ -438,5 +448,31 @@ mod tests {
         // Drain any in-flight workers briefly so the counter settles.
         std::thread::sleep(std::time::Duration::from_millis(50));
         assert_eq!(ACTIVE_CONNECTIONS.load(Ordering::Acquire), before);
+    }
+
+    /// A chunk header is the server's word, so its size can be anything a
+    /// `usize` holds. `from + size` then wrapped and the slice panicked; the
+    /// body must come back ignored instead of taking the process down.
+    #[test]
+    fn an_oversized_chunk_header_does_not_panic() {
+        // usize::MAX as a chunk size: no arithmetic can satisfy it, so the
+        // loop stops with nothing decoded rather than wrapping `end` below
+        // `from` and panicking on the slice.
+        assert_eq!(
+            decode(b"ffffffffffffffff\r\nhello\r\n0\r\n\r\n", true, None),
+            ""
+        );
+        // A size that fits but runs past the body is clamped to what arrived,
+        // so a response cut off mid-chunk still yields its bytes.
+        assert_eq!(decode(b"ff\r\nshort", true, None), "short");
+        // And a header that is not hex stops the loop rather than guessing.
+        assert_eq!(decode(b"zz\r\nhello\r\n0\r\n\r\n", true, None), "");
+    }
+
+    /// A chunk whose declared size covers the body but whose trailing CRLF is
+    /// missing: the last chunk is taken, the loop stops cleanly.
+    #[test]
+    fn a_truncated_chunk_keeps_what_it_has() {
+        assert_eq!(decode(b"5\r\nhello", true, None), "hello");
     }
 }
