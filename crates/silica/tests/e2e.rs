@@ -165,6 +165,7 @@ fn open_save_and_reopen_round_trips_bytes() {
 
     // Edit through the real typing path, then save through the real save
     // path. Whatever the cursor does, the saved bytes must equal the buffer.
+    app.call("focus", json!({"set": "editor"}));
     app.call("type", json!({"text": "appended\n"}));
     app.settle();
     let buffered = app.text();
@@ -211,6 +212,9 @@ fn overwriting_a_note_snapshots_its_previous_bytes() {
     app.settle();
     assert_eq!(app.text(), "original\n");
 
+    // Focus the editor first: on a bare X server (xvfb in CI) nothing has
+    // keyboard focus after a window opens, so keystrokes would be dropped.
+    app.call("focus", json!({"set": "editor"}));
     app.call("type", json!({"text": "first edit\n"}));
     app.settle();
     app.run_command("editor:save-file");
