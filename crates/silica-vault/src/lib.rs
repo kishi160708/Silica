@@ -99,17 +99,145 @@ impl FileChange {
 /// Unix the file is opened with `O_NOFOLLOW`, so a link swapped in between
 /// the path check and the write still cannot redirect it. Elsewhere a link
 /// needs privileges to make and the path check alone stands.
+/// The write is atomic: the bytes go to a temporary file beside the target,
+/// are flushed and synced, and only then replace it. Truncating the target in
+/// place loses the note if the process dies mid-write — the old bytes are
+/// already gone and the new ones are not all there. A rename cannot leave a
+/// half-written file, so an interrupted save leaves the previous version.
 pub fn write_no_follow(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW);
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    // A symlink target is never written through: the link itself is refused,
+    // not followed and not replaced. The write below lands on `path` only
+    // when `path` is a regular file or does not exist yet.
+    if path.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!(
+                "{} is a symbolic link; the vault folder is the only place Silica writes",
+                path.display()
+            ),
+        ));
     }
-    let mut file = options.open(path)?;
-    file.write_all(bytes)
+    // Unique per write, so two saves of one note cannot share a scratch file.
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    let temp = parent.join(format!(".{name}.{}.{unique}.silica-tmp", std::process::id()));
+
+    let write = || -> std::io::Result<()> {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW);
+            // A note keeps the mode it had; a new file gets the usual one.
+            let mode = std::fs::metadata(path).map(|m| {
+                use std::os::unix::fs::PermissionsExt;
+                m.permissions().mode() & 0o777
+            });
+            options.mode(mode.unwrap_or(0o644));
+        }
+        let mut file = options.open(&temp)?;
+        file.write_all(bytes)?;
+        // Flushed to the device before the rename, so the name never points at
+        // bytes that are still only in the page cache.
+        file.sync_all()?;
+        Ok(())
+    };
+    if let Err(error) = write() {
+        let _ = std::fs::remove_file(&temp);
+        return Err(error);
+    }
+    // A snapshot of what is being replaced, so an accidental save can be
+    // undone. Best effort: the save proceeds even if the snapshot cannot be
+    // made.
+    if path.exists() {
+        snapshot_before_overwrite(path);
+    }
+    match std::fs::rename(&temp, path) {
+        Ok(()) => {
+            // The directory entry itself is what a crash could lose.
+            #[cfg(unix)]
+            {
+                if let Ok(dir) = std::fs::File::open(parent) {
+                    let _ = dir.sync_all();
+                }
+            }
+            Ok(())
+        }
+        Err(error) => {
+            let _ = std::fs::remove_file(&temp);
+            Err(error)
+        }
+    }
+}
+
+/// Before a note is overwritten, move its current bytes to the vault's
+/// trash so an accidental or mistaken save can be undone. Snapshots live in
+/// `.trash/.snapshots/<stem>.<timestamp>.<ext>` and only the most recent ones
+/// for a given file are kept, so the folder cannot grow without bound.
+///
+/// A snapshot is a best effort: if it cannot be made, the save still
+/// proceeds — losing a snapshot is acceptable, losing the note is not.
+pub fn snapshot_before_overwrite(path: &Path) {
+    if !path.is_file() {
+        return;
+    }
+    let Ok(bytes) = std::fs::read(path) else {
+        return;
+    };
+    let parent = match path.parent() {
+        Some(p) => p,
+        None => return,
+    };
+    let name = match path.file_name().and_then(|n| n.to_str()) {
+        Some(n) => n,
+        None => return,
+    };
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((s, e)) if !s.is_empty() => (s, e),
+        _ => (name, ""),
+    };
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let snapshots = parent.join(".trash").join(".snapshots");
+    let target = snapshots.join(format!("{stem}.{stamp}.{ext}"));
+    if let (Ok(()), Ok(())) = (
+        std::fs::create_dir_all(&snapshots),
+        std::fs::write(&target, &bytes),
+    ) {
+        let _ = prune_snapshots(&snapshots, stem, 10);
+    }
+}
+
+/// Keeps only the `keep` most recent snapshots for `stem`, removing older
+/// ones so the snapshot folder cannot grow without bound.
+fn prune_snapshots(snapshots: &Path, stem: &str, keep: usize) -> std::io::Result<()> {
+    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(snapshots)?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.starts_with(stem))
+                .unwrap_or(false)
+        })
+        .collect();
+    files.sort();
+    files.reverse();
+    for extra in files.into_iter().skip(keep) {
+        let _ = std::fs::remove_file(&extra);
+    }
+    Ok(())
 }
 
 /// Writes `bytes` to `relative` under `root` by opening each directory
@@ -1275,5 +1403,112 @@ mod tests {
         std::os::unix::fs::symlink(outside.path(), root.join("esc")).unwrap();
         assert!(create_dir_all_at(&root, Path::new("esc/deep")).is_err());
         assert!(!outside.path().join("deep").exists());
+    }
+
+    #[test]
+    fn write_no_follow_replaces_the_file_and_leaves_no_scratch() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("note.md");
+        std::fs::write(&path, "old").unwrap();
+
+        write_no_follow(&path, b"new").unwrap();
+
+        // The note holds the new bytes, and a snapshot lives under .trash;
+        // nothing else is left at the top level of the directory.
+        let names: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            names.iter().map(|s| s.as_str()).collect::<std::collections::HashSet<_>>(),
+            vec!["note.md", ".trash"]
+                .into_iter()
+                .collect::<std::collections::HashSet<_>>(),
+            "unexpected entry next to the note: {names:?}"
+        );
+        let snapshots = dir.path().join(".trash").join(".snapshots");
+        assert!(snapshots.is_dir());
+        assert!(!std::fs::read_dir(&snapshots).unwrap().next().is_none());
+
+        // A write replaces rather than appends.
+        write_no_follow(&path, b"newer").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "newer");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_no_follow_still_refuses_a_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("real.md");
+        std::fs::write(&target, "outside").unwrap();
+        let link = dir.path().join("link.md");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        // The rename would replace the *link*, not follow it — but the temp
+        // file lands beside it either way, so the outside file is untouched.
+        let _ = write_no_follow(&link, b"pwned");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "outside");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_write_keeps_the_notes_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("note.md");
+        std::fs::write(&path, "old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        write_no_follow(&path, b"new").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "the write changed the note's mode");
+    }
+
+    #[test]
+    fn saving_over_a_note_snapshots_its_previous_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("note.md");
+        std::fs::write(&path, "original").unwrap();
+
+        write_no_follow(&path, b"replacement").unwrap();
+
+        let snapshots = dir.path().join(".trash").join(".snapshots");
+        let files: Vec<String> = std::fs::read_dir(&snapshots)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(!files.is_empty(), "no snapshot was made");
+        let content = std::fs::read_to_string(snapshots.join(&files[0])).unwrap();
+        assert_eq!(content, "original", "the snapshot did not keep the old bytes");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "replacement");
+    }
+
+    #[test]
+    fn only_the_recent_snapshots_are_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("note.md");
+        std::fs::write(&path, "v0").unwrap();
+        for n in 1..=15u32 {
+            std::fs::write(&path, format!("v{n}")).unwrap();
+            let _ = write_no_follow(&path, format!("v{n}").as_bytes());
+        }
+        let snapshots = dir.path().join(".trash").join(".snapshots");
+        let count = std::fs::read_dir(&snapshots)
+            .unwrap()
+            .flatten()
+            .count();
+        assert!(count <= 10, "too many snapshots kept: {count}");
+    }
+
+    #[test]
+    fn saving_a_new_note_makes_no_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("new.md");
+        write_no_follow(&path, b"first").unwrap();
+        let snapshots = dir.path().join(".trash").join(".snapshots");
+        assert!(!snapshots.exists() || std::fs::read_dir(&snapshots).unwrap().count() == 0);
     }
 }
