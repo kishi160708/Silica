@@ -124,9 +124,11 @@ pub fn request(
 ) -> Result<Response, String> {
     let address = format!("{}:{}", url.host, url.port);
     // ! Resolve and connect with one overall deadline: DNS resolution and the
-    // ! TCP handshake (and, for https, the TLS negotiation) all run inside a
-    // ! thread joined with the configured timeout, so a slow or unreachable
-    // ! endpoint cannot hang past it.
+    // ! TCP handshake run inside a thread joined with the configured timeout,
+    // ! so a slow or unreachable endpoint cannot hang past it. On timeout the
+    // ! worker thread is detached and exits on its own; the caller never blocks
+    // ! on it. Read/write timeouts are set on the stream immediately after the
+    // ! connect, so TLS negotiation and request I/O are bounded too.
     let address_for_err = address.clone();
     let host = url.host.clone();
     let port = url.port;

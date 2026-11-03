@@ -311,29 +311,61 @@ fn keep_line(
     true
 }
 
-/// Open `file` for reading without following symlinks on any path component:
-/// the parent directory is opened with O_DIRECTORY|O_NOFOLLOW and the file is
-/// opened through it with openat+O_NOFOLLOW, so a link swapped into any
-/// parent component between the digest-path check and the open cannot redirect
-/// the read outside the permitted root.
+/// Open `file` for reading without following symlinks on *any* path
+/// component: the digest root is opened once as a directory handle, then each
+/// component of the relative path is traversed with openat+O_NOFOLLOW, so a
+/// symlink swapped into any intermediate directory between the digest-path
+/// check and the open cannot redirect the read outside the permitted root.
+/// Every component is validated against an open handle rather than re-resolved
+/// by pathname.
 #[cfg(unix)]
-fn open_digest_file(file: &Path) -> Result<std::fs::File, String> {
+fn open_digest_file(root: &Path, file: &Path) -> Result<std::fs::File, String> {
     use std::os::unix::fs::OpenOptionsExt;
-    let parent = file.parent().unwrap_or_else(|| Path::new("."));
-    let name = file.file_name().and_then(|n| n.to_str()).ok_or_else(|| {
-        format!("cannot read {}: invalid file name", file.display())
-    })?;
-    let dir = std::fs::OpenOptions::new()
+    let root_fd = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(parent)
-        .map_err(|e| format!("cannot open directory {}: {e}", parent.display()))?;
-    let cname = CString::new(name).map_err(|e| {
-        format!("cannot read {}: invalid file name: {e}", file.display())
+        .open(root)
+        .map_err(|e| format!("cannot open digest root {}: {e}", root.display()))?;
+    let comps: Vec<&std::ffi::OsStr> = file
+        .strip_prefix(root)
+        .map_err(|e| format!("cannot compute path relative to {}: {e}", root.display()))?
+        .components()
+        .map(|c| c.as_os_str())
+        .collect();
+    if comps.is_empty() {
+        return Err(format!(
+            "cannot read {}: empty path relative to digest root",
+            file.display()
+        ));
+    }
+    let (dirs, last) = comps.split_at(comps.len() - 1);
+    let mut dir_fd = root_fd;
+    for comp in dirs {
+        let cname = CString::new(comp.to_str().unwrap()).map_err(|e| {
+            format!("invalid path component {}: {e}", comp.to_string_lossy())
+        })?;
+        let next = unsafe {
+            libc::openat(
+                dir_fd.as_raw_fd(),
+                cname.as_ptr(),
+                libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if next < 0 {
+            let e = std::io::Error::last_os_error();
+            return Err(format!(
+                "cannot traverse component {}: {e}",
+                comp.to_string_lossy()
+            ));
+        }
+        dir_fd = unsafe { std::fs::File::from_raw_fd(next) };
+    }
+    let cname = CString::new(last[0].to_str().unwrap()).map_err(|e| {
+        format!("invalid path component {}: {e}", last[0].to_string_lossy())
     })?;
     let fd = unsafe {
         libc::openat(
-            dir.as_raw_fd(),
+            dir_fd.as_raw_fd(),
             cname.as_ptr(),
             libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
         )
@@ -358,7 +390,7 @@ fn read_excerpt(
     // Open without following symlinks on the final component (Unix): a link
     // planted between the digest-path check and the open cannot redirect the
     // read outside the permitted root.
-    let f = open_digest_file(&file)?;
+    let f = open_digest_file(&backend.config.digest_root, &file)?;
     #[cfg(not(unix))]
     let f = std::fs::File::open(&file).map_err(|e| format!("cannot read {path}: {e}"))?;
 
@@ -766,4 +798,48 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+
+    #[test]
+    #[cfg(unix)]
+    fn digest_openat_traverses_nested_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "silica-llm-mcp-openat-{0}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(dir.join("sub/dir")).unwrap();
+        std::fs::write(dir.join("sub/dir/note.txt"), "nested content").unwrap();
+        let file = dir.join("sub/dir/note.txt");
+        let f = open_digest_file(&dir, &file).unwrap();
+        assert!(f.metadata().unwrap().file_type().is_file());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn digest_openat_rejects_symlinked_intermediate_directory() {
+        use std::os::unix::fs::symlink;
+        let dir = std::env::temp_dir().join(format!(
+            "silica-llm-mcp-openat-sym-{0}",
+            std::process::id()
+        ));
+        let real = std::env::temp_dir().join(format!(
+            "silica-llm-mcp-openat-real-{0}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(real.join("note")).unwrap();
+        std::fs::write(real.join("note/secret.txt"), "secret").unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        symlink(&real, dir.join("link")).unwrap();
+        std::fs::write(dir.join("own.txt"), "own content").unwrap();
+        let err = open_digest_file(&dir, &dir.join("link/note/secret.txt"))
+            .unwrap_err();
+        assert!(
+            err.contains("cannot traverse component"),
+            "{err}"
+        );
+        let f = open_digest_file(&dir, &dir.join("own.txt")).unwrap();
+        assert!(f.metadata().unwrap().file_type().is_file());
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&real).ok();
+    }
 }
