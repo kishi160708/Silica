@@ -127,6 +127,29 @@ pub fn write_no_follow(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
             ),
         ));
     }
+    // On Windows a junction and other reparse points redirect a path the same
+    // way a symlink does, but `is_symlink` does not report them. The attribute
+    // is the only way to see one, and a reparse point at the target is refused
+    // for the same reason the Unix `O_NOFOLLOW` open exists. `write_at` cannot
+    // be used there: the `openat` walk it relies on has no Windows equivalent.
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if path
+            .symlink_metadata()
+            .map(|m| m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0)
+            .unwrap_or(false)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!(
+                    "{} is a reparse point; the vault folder is the only place Silica writes",
+                    path.display()
+                ),
+            ));
+        }
+    }
     // Unique per write, so two saves of one note cannot share a scratch file.
     let unique = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1607,5 +1630,43 @@ mod tests {
         snapshot_before_overwrite(&link);
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "outside");
         assert!(!root.join(".trash").join(".snapshots").exists());
+    }
+
+    /// Windows has no `openat`, so `write_no_follow` is the path that protects
+    /// a vault write there. It must refuse a reparse point the way the Unix
+    /// `O_NOFOLLOW` open refuses a symlink, or a junction would redirect a
+    /// save outside the vault.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_reparse_point_is_refused() {
+        use std::os::windows::process::CommandExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("real.md"), "outside").unwrap();
+        let link = dir.path().join("note.md");
+
+        // `mklink /J` creates a junction, which needs no elevation, unlike a
+        // symlink. A junction is a reparse point and is what a hostile vault
+        // can ship without any special privilege.
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(outside.path())
+            .creation_flags(0x08000000)
+            .status()
+            .expect("mklink runs");
+        assert!(made.success(), "could not create a junction to test with");
+
+        let result = write_no_follow(&link, b"overwritten");
+        assert!(
+            result.is_err(),
+            "a reparse point was written through: {result:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(outside.path().join("real.md")).unwrap(),
+            "outside",
+            "the file behind the junction was changed"
+        );
     }
 }
