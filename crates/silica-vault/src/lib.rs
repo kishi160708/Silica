@@ -248,9 +248,15 @@ pub fn snapshot_before_overwrite(path: &Path) {
         _ => (name, ""),
     };
     let snapshots = parent.join(".trash").join(".snapshots");
-    // ! Create the snapshot directory through openat so no component can be
-    // ! swapped for a link between the check and the write.
-    if create_dir_all_at(parent, Path::new(".trash/.snapshots")).is_err() {
+    // ! Create the snapshot directory through openat where that exists, so no
+    // ! component can be swapped for a link between the check and the write.
+    // * Windows has no openat; the reparse-point check in `write_no_follow`
+    // * refuses a redirected target there instead.
+    #[cfg(unix)]
+    let made = create_dir_all_at(parent, Path::new(".trash/.snapshots")).is_ok();
+    #[cfg(not(unix))]
+    let made = std::fs::create_dir_all(&snapshots).is_ok();
+    if !made {
         return;
     }
     // * Write the snapshot with a collision-proof name; best effort — the
@@ -292,7 +298,13 @@ fn write_snapshot(snapshots: &Path, stem: &str, ext: &str, bytes: &[u8]) -> std:
             counter += 1;
             continue;
         }
-        match write_at(snapshots, Path::new(target.file_name().unwrap()), bytes) {
+        // * Windows has no openat; the reparse-point refusal at the top of
+        // * this file is what stands in for it there.
+        #[cfg(unix)]
+        let written = write_at(snapshots, Path::new(target.file_name().unwrap()), bytes);
+        #[cfg(not(unix))]
+        let written = write_no_follow(&target, bytes);
+        match written {
             Ok(()) => return Ok(()),
             Err(e) => return Err(e),
         }
