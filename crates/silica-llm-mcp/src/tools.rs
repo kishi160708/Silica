@@ -10,9 +10,8 @@
 use crate::model::{Answer, Ask, Backend, digest_path};
 use crate::rpc::{Fault, INVALID_PARAMS};
 use serde_json::{json, Map, Value};
-#[cfg(unix)]
-use std::path::Path;
 use std::io::{Read, Seek};
+use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::ffi::CString;
 #[cfg(unix)]
@@ -403,19 +402,24 @@ fn read_excerpt(
     let f = open_digest_file(&backend.config.digest_root, &file)?;
     #[cfg(windows)]
     let f = {
-        // * `digest_path` returned the canonical path, which on Windows carries
-        // * the `\\?\` verbatim prefix; the configured root does not, so the two
-        // * cannot be compared directly. Both are canonicalized before the
-        // * relative path is cut, and `open_inside` then re-checks the handle.
-        let root = backend
-            .config
-            .digest_root
-            .canonicalize()
-            .map_err(|e| format!("cannot resolve the digest root: {e}"))?;
-        let relative = file
-            .strip_prefix(&root)
-            .map_err(|_| format!("{} is not under the digest root", file.display()))?;
-        silica_vault::win_fs::open_inside(&root, relative)
+        // * `digest_path` returns the canonical path, which on Windows carries
+        // * the `\\?\` verbatim prefix; the configured root has neither that nor
+        // * macOS's `/var` -> `/private/var` resolution. Rather than assume the
+        // * two agree, the relative path is cut against whichever form of the
+        // * root actually prefixes it, and the handle is re-checked either way.
+        let relative = strip_any_prefix(
+            &file,
+            &[
+                backend.config.digest_root.clone(),
+                backend
+                    .config
+                    .digest_root
+                    .canonicalize()
+                    .unwrap_or_else(|_| backend.config.digest_root.clone()),
+            ],
+        )
+        .ok_or_else(|| format!("{} is not under the digest root", file.display()))?;
+        silica_vault::win_fs::open_inside(&backend.config.digest_root, relative)
             .map_err(|e| format!("cannot read {path}: {e}"))?
     };
 
@@ -555,6 +559,17 @@ fn str_arg<'a>(arguments: &'a Value, name: &str) -> Option<&'a str> {
 
 fn text(body: impl Into<String>) -> Value {
     json!({"type": "text", "text": body.into()})
+}
+
+/// `path` relative to whichever of `roots` prefixes it.
+///
+/// The same directory can be spelled more than one way — Windows prefixes a
+/// canonical path with `\\?\`, macOS resolves `/var` to `/private/var`, and a
+/// caller may hold either form. Comparing one spelling against the other
+/// reports a file inside the root as outside it, so every form is tried.
+#[cfg_attr(unix, allow(dead_code))]
+fn strip_any_prefix<'a>(path: &'a Path, roots: &[PathBuf]) -> Option<&'a Path> {
+    roots.iter().find_map(|root| path.strip_prefix(root).ok())
 }
 
 #[cfg(test)]
