@@ -592,6 +592,55 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_writes_stay_under_limit_and_leave_no_temps() {
+        // ! Simulates the cache under load: many threads write files and
+        //   evict concurrently, the way parallel image downloads would.
+        //   The cache must never exceed its budget, and no temp files may
+        //   survive the sweep.
+        let dir = tempfile::tempdir().unwrap();
+        let limit = 10_000;
+        let threads = 8;
+        let files_per_thread = 20;
+
+        let path = dir.path().to_path_buf();
+        let handles: Vec<_> = (0..threads)
+            .map(|t| {
+                let p = path.clone();
+                std::thread::spawn(move || {
+                    for i in 0..files_per_thread {
+                        let name = format!("t{t}-f{i}.bin");
+                        let bytes = vec![0u8; 500 + (i * 37) % 300];
+                        std::fs::write(p.join(&name), &bytes).unwrap();
+                        evict_to_limit(&p, limit);
+                        sweep_temp_files(&p);
+                    }
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        // The cache must be at or under the budget.
+        assert!(
+            dir_size(&path) <= limit,
+            "cache grew past its budget: {} > {limit}",
+            dir_size(&path)
+        );
+
+        // No temp files may remain.
+        for entry in std::fs::read_dir(&path).unwrap().flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            assert!(
+                !name.ends_with(".tmp") && !name.contains(".silica-tmp"),
+                "a temp file survived the sweep: {name}"
+            );
+        }
+    }
+
+    #[test]
     fn redirect_status_codes_are_recognised() {
         for code in [301, 302, 303, 307, 308] {
             assert!(is_redirect_status(code), "{code} should be a redirect");

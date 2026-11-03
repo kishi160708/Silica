@@ -2,9 +2,9 @@
 //! socket: open a note, edit it, save it, reopen it, and verify the bytes
 //! round-trip.
 //!
-//! These need a graphical session (Wayland or X11) to launch GPUI. On a
-//! headless machine they skip instead of failing, so they never break a
-//! headless CI run — they only add coverage where a display exists.
+//! These need a graphical session (Wayland or X11) to launch GPUI. They run by
+//! default when a display exists; on a headless machine they skip instead of
+//! failing, so a headless CI run is not broken by them.
 
 use serde_json::{json, Value};
 use silica_control::Client;
@@ -32,18 +32,29 @@ impl App {
         let bin = silica_bin()?;
         let socket = vault.join("silica-e2e.sock");
         let _ = fs::remove_file(&socket);
+        let log = vault.join("silica-e2e.log");
+        let log_file = fs::File::create(&log).ok()?;
+        let log_file_err = log_file.try_clone().ok()?;
         let mut child = Command::new(bin)
             .arg(vault)
             .arg("--control")
             .arg(&socket)
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            // A launch that dies leaves its panic in this log instead of
+            // vanishing, so a failing run says why.
+            .stderr(std::process::Stdio::from(log_file_err))
             .spawn()
             .ok()?;
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {
             match Client::connect(&socket, Duration::from_millis(200)) {
-                Ok(client) => return Some(Self { _child: child, socket, client }),
+                Ok(client) => {
+                    return Some(Self {
+                        _child: child,
+                        socket,
+                        client,
+                    })
+                }
                 Err(_) => {
                     if child.try_wait().ok().flatten().is_some() {
                         // The process exited before opening the socket — most
@@ -112,13 +123,29 @@ impl Vault {
     }
 }
 
+/// Whether the graphical end-to-end tests should run.
+///
+/// They run by default whenever a display exists, so an ordinary `cargo test`
+/// on a desktop covers the GUI workflows instead of silently skipping them.
+/// `SILICA_E2E=0` forces them off, and a headless machine skips without
+/// failing because there is no display to launch GPUI on.
+fn e2e_enabled() -> bool {
+    match env::var("SILICA_E2E").as_deref() {
+        Ok("0") => return false,
+        Ok("1") => return true,
+        _ => {}
+    }
+    env::var_os("WAYLAND_DISPLAY").is_some() || env::var_os("DISPLAY").is_some()
+}
+
 #[test]
 fn open_save_and_reopen_round_trips_bytes() {
-    if env::var("SILICA_E2E").is_err() {
-        eprintln!("skipped: set SILICA_E2E=1 to run the graphical end-to-end tests");
+    if !e2e_enabled() {
+        eprintln!("skipped: no display available for the graphical end-to-end tests");
         return;
     }
-    let mut app = match App::launch(&Vault::new().root) {
+    let vault = Vault::new();
+    let mut app = match App::launch(&vault.root) {
         Some(a) => a,
         None => {
             eprintln!("skipped: no graphical session to launch silica in");
@@ -139,26 +166,21 @@ fn open_save_and_reopen_round_trips_bytes() {
         buffered.contains("original") && buffered.contains("appended"),
         "typing changed the buffer: {buffered:?}"
     );
-    app.run_command("app:save");
+    app.run_command("editor:save-file");
     app.settle();
-    assert_eq!(
-        app.text(),
-        buffered,
-        "the buffer holds the saved text"
-    );
+    assert_eq!(app.text(), buffered, "the buffer holds the saved text");
 
     // The bytes on disk must be exactly what was saved — nothing more,
     // nothing less.
     let vault_root = app.socket.parent().expect("the vault folder").to_path_buf();
     let on_disk = fs::read_to_string(vault_root.join("Note.md")).expect("the saved note");
     assert_eq!(
-        on_disk,
-        buffered,
+        on_disk, buffered,
         "the file on disk is byte-for-byte the saved buffer"
     );
 
     // Save again with no change: still byte-identical.
-    app.run_command("app:save");
+    app.run_command("editor:save-file");
     app.settle();
     let again = fs::read_to_string(vault_root.join("Note.md")).expect("the note again");
     assert_eq!(again, buffered, "a no-op save does not drift the bytes");
@@ -166,11 +188,12 @@ fn open_save_and_reopen_round_trips_bytes() {
 
 #[test]
 fn overwriting_a_note_snapshots_its_previous_bytes() {
-    if env::var("SILICA_E2E").is_err() {
-        eprintln!("skipped: set SILICA_E2E=1 to run the graphical end-to-end tests");
+    if !e2e_enabled() {
+        eprintln!("skipped: no display available for the graphical end-to-end tests");
         return;
     }
-    let mut app = match App::launch(&Vault::new().root) {
+    let vault = Vault::new();
+    let mut app = match App::launch(&vault.root) {
         Some(a) => a,
         None => {
             eprintln!("skipped: no graphical session to launch silica in");
@@ -184,7 +207,7 @@ fn overwriting_a_note_snapshots_its_previous_bytes() {
 
     app.call("type", json!({"text": "first edit\n"}));
     app.settle();
-    app.run_command("app:save");
+    app.run_command("editor:save-file");
     app.settle();
 
     let vault_root = app.socket.parent().expect("the vault folder").to_path_buf();
@@ -195,7 +218,7 @@ fn overwriting_a_note_snapshots_its_previous_bytes() {
 
     app.call("type", json!({"text": "second edit\n"}));
     app.settle();
-    app.run_command("app:save");
+    app.run_command("editor:save-file");
     app.settle();
 
     let snapshots = vault_root.join(".trash").join(".snapshots");
@@ -209,11 +232,19 @@ fn overwriting_a_note_snapshots_its_previous_bytes() {
     // At least one snapshot must hold the bytes that were on disk before the
     // last save.
     let has_expected = files.iter().any(|name| {
-        fs::read_to_string(snapshots.join(name)).map(|c| c == pre_second).unwrap_or(false)
+        fs::read_to_string(snapshots.join(name))
+            .map(|c| c == pre_second)
+            .unwrap_or(false)
     });
-    assert!(has_expected, "a snapshot holds the pre-save bytes: {files:?}");
+    assert!(
+        has_expected,
+        "a snapshot holds the pre-save bytes: {files:?}"
+    );
 
     // And the current file is the newest version.
     let on_disk = fs::read_to_string(vault_root.join("Note.md")).expect("the note");
-    assert!(on_disk.contains("second edit"), "the newest bytes are on disk: {on_disk:?}");
+    assert!(
+        on_disk.contains("second edit"),
+        "the newest bytes are on disk: {on_disk:?}"
+    );
 }

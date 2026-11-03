@@ -5199,123 +5199,6 @@ impl Element for EditorElement {
         let theme = cx.global::<Theme>().clone();
         let entity = self.editor.clone();
 
-        // Vim mode: when vim_mode is on and not in insert mode, keystrokes
-        // are vim commands, not text input. Intercept them here so they never
-        // reach the buffer's default input handler.
-        let editor_entity = self.editor.clone();
-        window.on_key_event(move |event: &KeyDownEvent, phase, _window, cx| {
-            if phase != DispatchPhase::Bubble {
-                return;
-            }
-            let editor = editor_entity.read(cx);
-            let vim_on = editor.vim_mode && !editor.vim_insert_mode;
-            drop(editor);
-            if !vim_on {
-                return;
-            }
-            let key = event.keystroke.key.clone();
-            match key.as_str() {
-                "i" => {
-                    cx.stop_propagation();
-                    editor_entity.update(cx, |e, cx| {
-                        e.vim_insert_mode = true;
-                        cx.notify();
-                    });
-                }
-                "Escape" => {
-                    cx.stop_propagation();
-                    editor_entity.update(cx, |e, cx| {
-                        e.vim_insert_mode = false;
-                        cx.notify();
-                    });
-                }
-                "h" => {
-                    cx.stop_propagation();
-                    editor_entity.update(cx, |e, cx| {
-                        if e.buf.head > 0 {
-                            e.buf.head -= 1;
-                        }
-                        e.buf.anchor = e.buf.head;
-                        e.buf.mark_dirty();
-                        cx.notify();
-                    });
-                }
-                "l" => {
-                    cx.stop_propagation();
-                    editor_entity.update(cx, |e, cx| {
-                        e.buf.head = e.buf.head.saturating_add(1).min(e.buf.text().len());
-                        e.buf.anchor = e.buf.head;
-                        e.buf.mark_dirty();
-                        cx.notify();
-                    });
-                }
-                "j" => {
-                    cx.stop_propagation();
-                    editor_entity.update(cx, |e, cx| {
-                        let starts = e.buf.line_starts();
-                        let head = e.buf.head;
-                        let mut cur = 0usize;
-                        for (i, &s) in starts.iter().enumerate() {
-                            if s <= head {
-                                cur = i;
-                            } else {
-                                break;
-                            }
-                        }
-                        if cur + 1 < starts.len() {
-                            let line_start = starts[cur + 1];
-                            let line_end = if cur + 2 < starts.len() {
-                                starts[cur + 2]
-                            } else {
-                                e.buf.text().len()
-                            };
-                            let col = head - starts[cur];
-                            let new_head = line_start + e.buf.clamp_col(cur + 1, col);
-                            e.buf.head = new_head.min(line_end);
-                            e.buf.anchor = e.buf.head;
-                        }
-                        e.buf.mark_dirty();
-                        cx.notify();
-                    });
-                }
-                "k" => {
-                    cx.stop_propagation();
-                    editor_entity.update(cx, |e, cx| {
-                        let starts = e.buf.line_starts();
-                        let head = e.buf.head;
-                        let mut cur = 0usize;
-                        for (i, &s) in starts.iter().enumerate() {
-                            if s <= head {
-                                cur = i;
-                            } else {
-                                break;
-                            }
-                        }
-                        if cur > 0 {
-                            let line_start = starts[cur - 1];
-                            let line_end = starts[cur];
-                            let col = head - starts[cur];
-                            let new_head = line_start + e.buf.clamp_col(cur - 1, col);
-                            e.buf.head = new_head.min(line_end);
-                            e.buf.anchor = e.buf.head;
-                        }
-                        e.buf.mark_dirty();
-                        cx.notify();
-                    });
-                }
-                "x" => {
-                    cx.stop_propagation();
-                    editor_entity.update(cx, |e, cx| {
-                        e.buf.delete_forward();
-                        e.buf.mark_dirty();
-                        cx.notify();
-                    });
-                }
-                _ => {
-                    cx.stop_propagation();
-                }
-            }
-        });
         // The editor is leased for the frame so widgets (GPUI elements
         // built from the reading renderer) can be laid out with the app
         // at hand while its lines are read.
@@ -5885,6 +5768,125 @@ impl Element for EditorElement {
         window: &mut Window,
         cx: &mut App,
     ) {
+        // Vim mode: when vim_mode is on and not in insert mode, keystrokes
+        // are vim commands, not text input. Intercept them here so they never
+        // reach the buffer's default input handler. This must run during
+        // paint, not prepaint: `on_key_event` asserts it is called from a
+        // paint pass.
+        let editor_entity = self.editor.clone();
+        window.on_key_event(move |event: &KeyDownEvent, phase, _window, cx| {
+            if phase != DispatchPhase::Bubble {
+                return;
+            }
+            let editor = editor_entity.read(cx);
+            let vim_on = editor.vim_mode && !editor.vim_insert_mode;
+            drop(editor);
+            if !vim_on {
+                return;
+            }
+            let key = event.keystroke.key.clone();
+            match key.as_str() {
+                "i" => {
+                    cx.stop_propagation();
+                    editor_entity.update(cx, |e, cx| {
+                        e.vim_insert_mode = true;
+                        cx.notify();
+                    });
+                }
+                "Escape" => {
+                    cx.stop_propagation();
+                    editor_entity.update(cx, |e, cx| {
+                        e.vim_insert_mode = false;
+                        cx.notify();
+                    });
+                }
+                "h" => {
+                    cx.stop_propagation();
+                    editor_entity.update(cx, |e, cx| {
+                        if e.buf.head > 0 {
+                            e.buf.head -= 1;
+                        }
+                        e.buf.anchor = e.buf.head;
+                        e.buf.mark_dirty();
+                        cx.notify();
+                    });
+                }
+                "l" => {
+                    cx.stop_propagation();
+                    editor_entity.update(cx, |e, cx| {
+                        e.buf.head = e.buf.head.saturating_add(1).min(e.buf.text().len());
+                        e.buf.anchor = e.buf.head;
+                        e.buf.mark_dirty();
+                        cx.notify();
+                    });
+                }
+                "j" => {
+                    cx.stop_propagation();
+                    editor_entity.update(cx, |e, cx| {
+                        let starts = e.buf.line_starts();
+                        let head = e.buf.head;
+                        let mut cur = 0usize;
+                        for (i, &s) in starts.iter().enumerate() {
+                            if s <= head {
+                                cur = i;
+                            } else {
+                                break;
+                            }
+                        }
+                        if cur + 1 < starts.len() {
+                            let line_start = starts[cur + 1];
+                            let line_end = if cur + 2 < starts.len() {
+                                starts[cur + 2]
+                            } else {
+                                e.buf.text().len()
+                            };
+                            let col = head - starts[cur];
+                            let new_head = line_start + e.buf.clamp_col(cur + 1, col);
+                            e.buf.head = new_head.min(line_end);
+                            e.buf.anchor = e.buf.head;
+                        }
+                        e.buf.mark_dirty();
+                        cx.notify();
+                    });
+                }
+                "k" => {
+                    cx.stop_propagation();
+                    editor_entity.update(cx, |e, cx| {
+                        let starts = e.buf.line_starts();
+                        let head = e.buf.head;
+                        let mut cur = 0usize;
+                        for (i, &s) in starts.iter().enumerate() {
+                            if s <= head {
+                                cur = i;
+                            } else {
+                                break;
+                            }
+                        }
+                        if cur > 0 {
+                            let line_start = starts[cur - 1];
+                            let line_end = starts[cur];
+                            let col = head - starts[cur];
+                            let new_head = line_start + e.buf.clamp_col(cur - 1, col);
+                            e.buf.head = new_head.min(line_end);
+                            e.buf.anchor = e.buf.head;
+                        }
+                        e.buf.mark_dirty();
+                        cx.notify();
+                    });
+                }
+                "x" => {
+                    cx.stop_propagation();
+                    editor_entity.update(cx, |e, cx| {
+                        e.buf.delete_forward();
+                        e.buf.mark_dirty();
+                        cx.notify();
+                    });
+                }
+                _ => {
+                    cx.stop_propagation();
+                }
+            }
+        });
         let focus_handle = self.editor.read(cx).focus_handle.clone();
         window.handle_input(
             &focus_handle,
