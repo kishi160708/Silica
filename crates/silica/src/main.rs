@@ -17,24 +17,25 @@ mod chooser;
 mod clipboard_html;
 mod control;
 mod copy_results;
+mod css_watcher;
 mod editor;
 mod explorer;
 mod fold;
 mod graph;
 mod help;
 mod html_to_markdown;
-mod i18n;
 mod http_client;
+mod i18n;
 mod math;
 mod mentions;
-mod native_menus;
 mod mermaid;
+mod native_menus;
+mod page_preview;
 mod palette;
 mod panes;
 mod pdf;
 mod popout;
 mod preview;
-mod page_preview;
 mod prompt;
 mod properties;
 mod reading;
@@ -50,6 +51,7 @@ mod video;
 mod watch;
 mod workspace;
 
+use crate::css_watcher::CssWatcher;
 use gpui::{
     actions, point, prelude::*, px, size, App, Bounds, Focusable, KeyBinding, TitlebarOptions,
     WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowDecorations, WindowOptions,
@@ -58,10 +60,17 @@ use silica_commands::CommandRegistry;
 use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use theme::Theme;
 use workspace::{Commands, ViewMode, Workspace};
 
 actions!(silica, [Quit]);
+
+/// Receiver for CSS theme/snippet change signals from the background watcher.
+/// Drained non-blockingly in `SettingsView::render` so a file change reloads
+/// the theme without restarting.
+static CSS_RELOAD_CHANNEL: OnceLock<std::sync::Mutex<std::sync::mpsc::Receiver<()>>> =
+    OnceLock::new();
 
 /// A deterministic note of `lines` lines exercising headings, wikilinks,
 /// tags, emphasis, code, lists, and callouts, for the 50k-line spike.
@@ -536,6 +545,20 @@ fn main() {
         .as_ref()
         .map(|a| Theme::from_appearance(a, true, css_theme.as_ref(), &css_snippets))
         .unwrap_or_else(Theme::dark);
+    // * Watch the vault's CSS theme and snippet directories for changes so
+    //   community themes and snippets can be reloaded without restarting.
+    let _is_dark = theme.dark;
+    let vault_root = vault.as_ref().map(|v| v.root().to_path_buf());
+    let (_css_watcher, _css_receiver) = match &vault_root {
+        Some(root) => match CssWatcher::new(root) {
+            Ok((watcher, receiver)) => {
+                let _ = CSS_RELOAD_CHANNEL.set(std::sync::Mutex::new(receiver));
+                (Some(watcher), None::<CssWatcher>)
+            }
+            Err(_) => (None, None::<CssWatcher>),
+        },
+        None => (None, None::<CssWatcher>),
+    };
     let mut registry = CommandRegistry::with_known_ids();
     // * A core plugin that is off has no commands: not in the palette, and
     //   nothing bound to its keys. `core-plugins.json` is read here so the

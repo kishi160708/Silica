@@ -23,12 +23,15 @@
 use crate::assets::logo;
 use crate::palette::hotkey_chip;
 use crate::text_input::{InputEvent, TextInput};
-use crate::theme::Theme;
+use crate::theme::{load_css_snippets, load_css_theme, Theme};
 use crate::workspace::{Commands, VaultState};
+use crate::CSS_RELOAD_CHANNEL;
 use gpui::{
-    actions, deferred, div, prelude::*, px, rgb, uniform_list, App, Context, Entity, EventEmitter,
-    FocusHandle, Focusable, FontWeight, KeyBinding, KeyDownEvent, Keystroke, SharedString,
-    Subscription, UniformListScrollHandle, Window,
+    actions, canvas, deferred, div, hsla, linear_color_stop, linear_gradient, prelude::*, px, rgb,
+    uniform_list, AnyElement, App, Bounds, Context, CursorStyle, Entity, EventEmitter, FocusHandle,
+    Focusable, FontWeight, Hsla, InteractiveElement, KeyBinding, KeyDownEvent, Keystroke,
+    MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Point, Rgba, SharedString, Subscription,
+    UniformListScrollHandle, Window,
 };
 use serde_json::{json, Value};
 use silica_commands::{hotkey_label, keystroke, Command};
@@ -37,6 +40,7 @@ use silica_formats::config::{
 };
 use silica_plugins::Tier;
 use silica_search::fuzzy_match;
+use silica_vault::Vault;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -656,16 +660,14 @@ const ACCENT_COLOR: TextField = TextField {
     key: "accentColor",
     placeholder: "Default",
     prefix: "",
-    read: |state| {
-        state
-            .appearance()
-            .accent_color
-            .clone()
-            .unwrap_or_default()
-    },
+    read: |state| state.appearance().accent_color.clone().unwrap_or_default(),
     write: |state, value| {
         let mut next = state.appearance().clone();
-        let value = if value.is_empty() { None } else { Some(value.to_string()) };
+        let value = if value.is_empty() {
+            None
+        } else {
+            Some(value.to_string())
+        };
         next.accent_color = value;
         SettingChange::Appearance(next)
     },
@@ -685,7 +687,11 @@ const INTERFACE_FONT_FAMILY: TextField = TextField {
     },
     write: |state, value| {
         let mut next = state.appearance().clone();
-        let value = if value.is_empty() { None } else { Some(value.to_string()) };
+        let value = if value.is_empty() {
+            None
+        } else {
+            Some(value.to_string())
+        };
         next.interface_font_family = value;
         SettingChange::Appearance(next)
     },
@@ -705,7 +711,11 @@ const TEXT_FONT_FAMILY: TextField = TextField {
     },
     write: |state, value| {
         let mut next = state.appearance().clone();
-        let value = if value.is_empty() { None } else { Some(value.to_string()) };
+        let value = if value.is_empty() {
+            None
+        } else {
+            Some(value.to_string())
+        };
         next.text_font_family = value;
         SettingChange::Appearance(next)
     },
@@ -725,7 +735,11 @@ const MONOSPACE_FONT_FAMILY: TextField = TextField {
     },
     write: |state, value| {
         let mut next = state.appearance().clone();
-        let value = if value.is_empty() { None } else { Some(value.to_string()) };
+        let value = if value.is_empty() {
+            None
+        } else {
+            Some(value.to_string())
+        };
         next.monospace_font_family = value;
         SettingChange::Appearance(next)
     },
@@ -776,7 +790,11 @@ const EXCLUDED_FILES: TextField = TextField {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
-        next.user_ignore_filters = if filters.is_empty() { None } else { Some(filters) };
+        next.user_ignore_filters = if filters.is_empty() {
+            None
+        } else {
+            Some(filters)
+        };
         SettingChange::App(next)
     },
 };
@@ -961,9 +979,160 @@ enum Control {
     Toggle(bool),
     Dropdown(SharedString),
     Text(SharedString),
+    Color(SharedString),
     Slider(SharedString),
     Button(SharedString),
 }
+
+/// Normalise a stored accent hex: lower-case `#rrggbb`, empty for none.
+fn normalize_accent(typed: &str) -> String {
+    let trimmed = typed.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let hex = trimmed.strip_prefix('#').unwrap_or(trimmed);
+    if hex.len() == 6 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        format!("#{}", hex.to_ascii_lowercase())
+    } else {
+        String::new()
+    }
+}
+
+/// HSV colour: hue in degrees, saturation and value 0..=1.
+#[derive(Debug, Clone, Copy)]
+struct Hsv {
+    h: f32,
+    s: f32,
+    v: f32,
+}
+
+impl Hsv {
+    fn of_rgb(r: f32, g: f32, b: f32) -> Hsv {
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
+        let d = max - min;
+        let h = if d < 1e-6 {
+            0.
+        } else if max == r {
+            60. * ((g - b) / d).rem_euclid(6.)
+        } else if max == g {
+            60. * ((b - r) / d + 2.)
+        } else {
+            60. * ((r - g) / d + 4.)
+        };
+        let s = if max < 1e-6 { 0. } else { d / max };
+        Hsv { h, s, v: max }
+    }
+
+    fn of_hex(hex: &str) -> Option<Hsv> {
+        let hex = normalize_accent(hex);
+        if hex.is_empty() {
+            return None;
+        }
+        let byte = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).ok();
+        let (r, g, b) = (byte(1)?, byte(3)?, byte(5)?);
+        Some(Hsv::of_rgb(
+            r as f32 / 255.,
+            g as f32 / 255.,
+            b as f32 / 255.,
+        ))
+    }
+
+    fn of_hsla(c: Hsla) -> Hsv {
+        let rgb = c.to_rgb();
+        Hsv::of_rgb(rgb.r, rgb.g, rgb.b)
+    }
+
+    fn rgb(self) -> (f32, f32, f32) {
+        let c = self.v * self.s;
+        let hp = self.h.rem_euclid(360.) / 60.;
+        let x = c * (1. - ((hp % 2.) - 1.).abs());
+        let (r, g, b) = match hp as u32 {
+            0 => (c, x, 0.),
+            1 => (x, c, 0.),
+            2 => (0., c, x),
+            3 => (0., x, c),
+            4 => (x, 0., c),
+            _ => (c, 0., x),
+        };
+        let m = self.v - c;
+        (r + m, g + m, b + m)
+    }
+
+    /// The `#rrggbb` the file gets.
+    fn hex(self) -> String {
+        let (r, g, b) = self.rgb();
+        let byte = |v: f32| (v * 255.).round().clamp(0., 255.) as u8;
+        format!("{:02x}{:02x}{:02x}", byte(r), byte(g), byte(b))
+    }
+
+    fn hsla(self) -> Hsla {
+        let (r, g, b) = self.rgb();
+        Rgba { r, g, b, a: 1. }.into()
+    }
+
+    /// The hue at full saturation and value: the square's right edge.
+    fn pure(self) -> Hsla {
+        hsla(self.h / 360., 1., 0.5, 1.)
+    }
+}
+
+/// Which part of the picker a press began on, and so what the drag moves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PickerPart {
+    Square,
+    Bar,
+}
+
+/// The accent picker open under the swatch: the colour it shows, which
+/// the drag moves before the file is written, and where its two controls
+/// were painted, so a drag that leaves them still maps to them.
+#[derive(Debug)]
+struct AccentPicker {
+    hsv: Hsv,
+    /// The stored hex the colour was read from, so a write that lands
+    /// from elsewhere (the hex field, "Restore default") is picked up on
+    /// the next render and a drag's own write is not.
+    from: String,
+    drag: Option<PickerPart>,
+    square: Bounds<Pixels>,
+    bar: Bounds<Pixels>,
+}
+
+impl AccentPicker {
+    /// For the stored value, or `fallback` - the theme's own accent - when
+    /// nothing is stored.
+    fn new(stored: &str, fallback: Hsla) -> AccentPicker {
+        AccentPicker {
+            hsv: Hsv::of_hex(stored).unwrap_or_else(|| Hsv::of_hsla(fallback)),
+            from: normalize_accent(stored),
+            drag: None,
+            square: Bounds::default(),
+            bar: Bounds::default(),
+        }
+    }
+}
+
+/// The square's width and height, and the hue bar's height, in pixels.
+const PICKER_SQUARE: (f32, f32) = (200., 140.);
+const PICKER_BAR: f32 = 12.;
+
+/// Saturation and value for a point over (or past) the square.
+fn square_pick(square: Bounds<Pixels>, at: Point<Pixels>) -> (f32, f32) {
+    let s = ((at.x - square.origin.x) / square.size.width).clamp(0., 1.);
+    let down = ((at.y - square.origin.y) / square.size.height).clamp(0., 1.);
+    (s, 1. - down)
+}
+
+/// Hue in degrees for a point over (or past) the bar.
+fn bar_pick(bar: Bounds<Pixels>, at: Point<Pixels>) -> f32 {
+    let along = ((at.x - bar.origin.x) / bar.size.width).clamp(0., 1.);
+    (along * 360.).min(359.)
+}
+
+/// The presets under the square: the theme's own accent first, written as
+/// the empty "no accent set", then Obsidian's purple.
+const PICKER_PRESETS: &[(&str, &str)] = &[("Silica's own", ""), ("Obsidian's purple", "#8a5cf6")];
 
 /// How far a setting gets in Silica.
 ///
@@ -1234,6 +1403,8 @@ pub struct SettingsView {
     capturing: Option<String>,
     /// The dropdown whose options are showing, by the key it writes.
     menu: Option<&'static str>,
+    /// The accent picker open under the swatch, if any.
+    picker: Option<AccentPicker>,
     /// The text field being typed into, by the key it writes. The rows are
     /// rebuilt from the vault on every render, so the open field is the
     /// view's, not the row's.
@@ -1285,6 +1456,7 @@ impl SettingsView {
             hotkey_scroll: UniformListScrollHandle::new(),
             capturing: None,
             menu: None,
+            picker: None,
             editing: None,
             field,
             _subscriptions: subscriptions,
@@ -1329,6 +1501,303 @@ impl SettingsView {
             .update(cx, |input, cx| input.set_text("", cx));
         self.focus_tab(window, cx);
         cx.notify();
+    }
+
+    // ---- accent color picker -------------------------------------------
+
+    /// Opens the accent picker under the swatch, with the hex field inside
+    /// it holding what the vault stores.
+    fn open_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let accent = cx.global::<Theme>().accent;
+        let stored = (ACCENT_COLOR.read)(&state);
+        self.picker = Some(AccentPicker::new(&stored, accent));
+        self.edit_field(ACCENT_COLOR, window, cx);
+        self.menu = Some(ACCENT_COLOR.key);
+        cx.notify();
+    }
+
+    /// Writes the picker's colour: the hex goes to the file and into the
+    /// hex field, so the field's own commit later finds nothing to change.
+    fn write_picked(&mut self, hex: String, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        if let Some(picker) = &mut self.picker {
+            picker.from = normalize_accent(&hex);
+        }
+        self.field
+            .update(cx, |input, cx| input.set_text(hex.clone(), cx));
+        if (ACCENT_COLOR.read)(&state) != hex {
+            cx.emit(SettingsEvent::Changed(Box::new((ACCENT_COLOR.write)(
+                &state, &hex,
+            ))));
+        }
+        cx.notify();
+    }
+
+    /// A press on the square or the bar: the colour moves to the point at
+    /// once and follows the mouse until it is let go.
+    fn picker_press(&mut self, part: PickerPart, at: Point<Pixels>, cx: &mut Context<Self>) {
+        if let Some(picker) = &mut self.picker {
+            picker.drag = Some(part);
+        }
+        self.picker_move(at, cx);
+    }
+
+    fn picker_move(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(picker) = &mut self.picker else {
+            return;
+        };
+        match picker.drag {
+            Some(PickerPart::Square) => {
+                let (s, v) = square_pick(picker.square, at);
+                picker.hsv.s = s;
+                picker.hsv.v = v;
+            }
+            Some(PickerPart::Bar) => picker.hsv.h = bar_pick(picker.bar, at),
+            None => return,
+        }
+        cx.notify();
+    }
+
+    /// Letting go is the write: one file per pick rather than one per pixel
+    /// the mouse crossed.
+    fn picker_release(&mut self, cx: &mut Context<Self>) {
+        let Some(picker) = &mut self.picker else {
+            return;
+        };
+        if picker.drag.take().is_none() {
+            return;
+        }
+        let hex = picker.hsv.hex();
+        self.write_picked(hex, cx);
+    }
+
+    /// A preset: the empty one is "Restore default", the rest are hexes.
+    fn pick_preset(&mut self, hex: &'static str, window: &Window, cx: &mut Context<Self>) {
+        if hex.is_empty() {
+            self.reset_accent(window, cx);
+            return;
+        }
+        if let Some(picker) = &mut self.picker {
+            if let Some(hsv) = Hsv::of_hex(hex) {
+                picker.hsv = hsv;
+            }
+        }
+        self.write_picked(hex.to_string(), cx);
+    }
+
+    /// Restore the accent to the theme's default (empty string).
+    fn reset_accent(&mut self, window: &Window, cx: &mut Context<Self>) {
+        self.after_open_field(window, cx, move |this, cx| {
+            let Some(state) = this.state.clone() else {
+                return;
+            };
+            if (ACCENT_COLOR.read)(&state).is_empty() {
+                return;
+            }
+            cx.emit(SettingsEvent::Changed(Box::new((ACCENT_COLOR.write)(
+                &state, "",
+            ))));
+            cx.notify();
+        });
+    }
+
+    /// The picker: a saturation and value square under a hue bar, the
+    /// presets, and the hex field beside a swatch of the colour as it
+    /// stands. Deferred and absolute like the dropdowns' option lists, and
+    /// every press in it stops at it, so the root's click does not close
+    /// it and the drag's own mouse-up is the write.
+    fn render_picker(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let Some(picker) = &self.picker else {
+            return div().into_any_element();
+        };
+        let hsv = picker.hsv;
+        let (w, h) = PICKER_SQUARE;
+        let view = cx.entity().clone();
+        let square_bounds = view.clone();
+        let bar_bounds = view;
+        let black = hsla(0., 0., 0., 1.);
+        let clear = hsla(0., 0., 0., 0.);
+        let white = hsla(0., 0., 1., 1.);
+        let ring = div()
+            .absolute()
+            .size(px(12.))
+            .rounded_full()
+            .border_2()
+            .border_color(white)
+            .shadow_sm()
+            .left(px(hsv.s * w - 6.))
+            .top(px((1. - hsv.v) * h - 6.));
+        let square = div()
+            .id("settings-accent-square")
+            .relative()
+            .w(px(w))
+            .h(px(h))
+            .rounded_sm()
+            .overflow_hidden()
+            .bg(linear_gradient(
+                90.,
+                linear_color_stop(white, 0.),
+                linear_color_stop(hsv.pure(), 1.),
+            ))
+            .cursor(CursorStyle::Crosshair)
+            .child(div().absolute().inset_0().bg(linear_gradient(
+                180.,
+                linear_color_stop(clear, 0.),
+                linear_color_stop(black, 1.),
+            )))
+            .child(
+                canvas(
+                    move |bounds, _, cx| {
+                        square_bounds.update(cx, |this, _| {
+                            if let Some(p) = &mut this.picker {
+                                p.square = bounds;
+                            }
+                        })
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            )
+            .child(ring)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.picker_press(PickerPart::Square, e.position, cx)
+                }),
+            );
+
+        let hue_bar = div()
+            .id("settings-accent-bar")
+            .w(px(w))
+            .h(px(PICKER_BAR))
+            .rounded_sm()
+            .overflow_hidden()
+            .bg(linear_gradient(
+                90.,
+                linear_color_stop(hsla(0., 1., 0.5, 1.), 0.),
+                linear_color_stop(hsla(360., 1., 0.5, 1.), 1.),
+            ))
+            .cursor(CursorStyle::Crosshair)
+            .child(
+                canvas(
+                    move |bounds, _, cx| {
+                        bar_bounds.update(cx, |this, _| {
+                            if let Some(p) = &mut this.picker {
+                                p.bar = bounds;
+                            }
+                        })
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .size(px(12.))
+                    .rounded_full()
+                    .border_2()
+                    .border_color(white)
+                    .shadow_sm()
+                    .left(px(hsv.s * w - 6.))
+                    .top(px((1. - hsv.v) * h - 6.)),
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.picker_press(PickerPart::Bar, e.position, cx)
+                }),
+            )
+            .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| {
+                if this.picker.is_some() && this.picker.as_ref().unwrap().drag.is_some() {
+                    this.picker_move(e.position, cx);
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    this.picker_release(cx);
+                }),
+            );
+
+        let presets =
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_1()
+                .mt(px(4.))
+                .children(PICKER_PRESETS.iter().map(|(name, hex)| {
+                    let swatch = Hsv::of_hex(hex).map(|h| h.hsla()).unwrap_or(theme.accent);
+                    let is_default = hex.is_empty();
+                    let preset = div()
+                        .id(SharedString::from(format!("settings-preset-{name}")))
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_1()
+                        .px_2()
+                        .py(px(1.))
+                        .rounded_sm()
+                        .bg(if is_default { theme.bg_alt } else { theme.bg })
+                        .border_1()
+                        .border_color(theme.border)
+                        .cursor_pointer()
+                        .hover(|s| s.bg(theme.bg_active))
+                        .child(div().size(px(10.)).rounded_full().bg(swatch))
+                        .child(SharedString::from(*name));
+                    preset.on_click(cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.pick_preset(hex, window, cx)
+                    }))
+                }));
+
+        div()
+            .absolute()
+            .top(px(28.))
+            .left(px(0.))
+            .w(px(240.))
+            .bg(theme.bg_secondary)
+            .border_1()
+            .border_color(theme.border)
+            .rounded_md()
+            .shadow_lg()
+            .p_3()
+            .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| {
+                if this.picker.as_ref().is_some_and(|p| p.drag.is_some()) {
+                    this.picker_move(e.position, cx);
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.picker_release(cx)),
+            )
+            .child(square)
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .mt(px(6.))
+                    .text_color(theme.text_muted)
+                    .child("Hue"),
+            )
+            .child(hue_bar)
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .mt(px(4.))
+                    .text_color(theme.text_muted)
+                    .child("Presets"),
+            )
+            .child(presets)
+            .into_any_element()
     }
 
     /// Which tab is open and what it has in hand, for the control socket's
@@ -1392,6 +1861,7 @@ impl SettingsView {
                     Control::Text(v) => ("text", json!(v.as_ref())),
                     Control::Slider(v) => ("slider", json!(v.as_ref())),
                     Control::Button(v) => ("button", json!(v.as_ref())),
+                    Control::Color(_) => ("color", json!("")),
                 };
                 json!({
                     "kind": if item.heading { "heading" } else { "setting" },
@@ -1698,14 +2168,24 @@ impl SettingsView {
             state,
             BASE_COLOR_SCHEME,
         ));
-        items.push(
-            field(
-                "Accent color",
-                "Choose the accent color used throughout the app.",
-                state,
-                ACCENT_COLOR,
+        items.push(Item {
+            heading: false,
+            name: "Accent color".into(),
+            desc: "Choose the accent color used throughout the app.".into(),
+            control: Control::Color(
+                state
+                    .appearance()
+                    .accent_color
+                    .clone()
+                    .unwrap_or_default()
+                    .into(),
             ),
-        );
+            flag: None,
+            typed: None,
+            number: None,
+            field: Some(ACCENT_COLOR),
+            honored: Honored::Live,
+        });
         items.push(field(
             "Themes",
             "Manage installed themes and browse community themes.",
@@ -1980,14 +2460,12 @@ impl SettingsView {
                 NEW_FILE_FOLDER,
             ));
         }
-        items.push(
-            choice(
-                "Default location for new attachments",
-                "Where newly added attachments are placed.",
-                state,
-                ATTACHMENT_LOCATION,
-            ),
-        );
+        items.push(choice(
+            "Default location for new attachments",
+            "Where newly added attachments are placed.",
+            state,
+            ATTACHMENT_LOCATION,
+        ));
         match ATTACHMENT_LOCATION.value(state) {
             "Attachments" => items.push(
                 field(
@@ -2155,17 +2633,20 @@ impl SettingsView {
                     None => {}
                 }
                 items.push(
-                    toggle(&title, &detail, record.enabled, Flag::CommunityPlugin(record.id().to_string()))
-                        // * The list is Obsidian's, and the runtimes are built
-                        //   when this tab or the palette is first opened: flipping
-                        //   a switch here rewrites `community-plugins.json` for
-                        //   the next open.
+                    toggle(
+                        &title,
+                        &detail,
+                        record.enabled,
+                        Flag::CommunityPlugin(record.id().to_string()),
+                    ), // * The list is Obsidian's, and the runtimes are built
+                       //   when this tab or the palette is first opened: flipping
+                       //   a switch here rewrites `community-plugins.json` for
+                       //   the next open.
                 );
             }
         }
         items
     }
-
 
     fn plugin_items(state: &VaultState, commands: &[Command], id: &str) -> Vec<Item> {
         match id {
@@ -2534,6 +3015,65 @@ impl SettingsView {
                     value.clone()
                 })
                 .into_any_element(),
+            Control::Color(value) => {
+                let stored = value.clone();
+                let swatch = Hsv::of_hex(&stored)
+                    .map(|h| h.hsla())
+                    .unwrap_or(theme.accent);
+                let at_default = stored.is_empty();
+                let open = self.menu == Some(ACCENT_COLOR.key);
+                let popover = open.then(|| self.render_picker(theme, cx));
+                div()
+                    .relative()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .children(popover)
+                    .child(
+                        div()
+                            .id("settings-accent-reset")
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .size(px(24.))
+                            .rounded_sm()
+                            .text_color(if at_default {
+                                theme.text_faint
+                            } else {
+                                theme.accent
+                            })
+                            .when(!at_default, |d| {
+                                d.cursor_pointer().hover(|s| s.bg(theme.bg_alt))
+                            })
+                            .child(crate::assets::icon("rotate-ccw", 16., theme.accent))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                cx.stop_propagation();
+                                if this.click_dismissed_a_popover(cx) {
+                                    return;
+                                }
+                                this.reset_accent(window, cx)
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("settings-accent-swatch")
+                            .size(px(22.))
+                            .rounded_full()
+                            .bg(swatch)
+                            .border_1()
+                            .border_color(theme.border)
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                cx.stop_propagation();
+                                if this.click_dismissed_a_popover(cx) {
+                                    return;
+                                }
+                                this.open_picker(window, cx)
+                            })),
+                    )
+                    .into_any_element()
+            }
             Control::Slider(value) => {
                 let Some(number) = item.number else {
                     return div()
@@ -2947,6 +3487,41 @@ impl Render for SettingsView {
         if self.editing.is_none() && self.field.focus_handle(cx).is_focused(window) {
             self.focus_tab(window, cx);
         }
+        // * Reload community CSS themes and snippets when their files change,
+        //   without restarting. Drained non-blockingly every render.
+        if CSS_RELOAD_CHANNEL
+            .get()
+            .is_some_and(|rx| rx.lock().unwrap().try_recv().is_ok())
+        {
+            if let Some(state) = &self.state {
+                let root = state.root.clone();
+                if let Ok(vault) = Vault::open(&root) {
+                    if let Ok(appearance) = vault.appearance_config() {
+                        let is_dark = cx.global::<Theme>().dark;
+                        let css_theme = appearance
+                            .css_theme
+                            .as_ref()
+                            .and_then(|name| load_css_theme(&root, name));
+                        let css_snippets =
+                            appearance.enabled_css_snippets.clone().unwrap_or_default();
+                        let css_snippets = css_snippets
+                            .iter()
+                            .filter_map(|name| {
+                                load_css_snippets(&root, &[name.clone()]).first().cloned()
+                            })
+                            .collect::<Vec<_>>();
+                        let new_theme = Theme::from_appearance(
+                            &appearance,
+                            is_dark,
+                            css_theme.as_ref(),
+                            &css_snippets,
+                        );
+                        <gpui::Context<'_, SettingsView> as std::borrow::BorrowMut<gpui::App>>::borrow_mut(cx).set_global(new_theme);
+                        cx.notify();
+                    }
+                }
+            }
+        }
         let theme = cx.global::<Theme>().clone();
         let tab = self.tab;
         let body: gpui::AnyElement = if tab == Tab::Hotkeys {
@@ -3332,7 +3907,8 @@ pub(crate) mod tests {
                     Control::Dropdown(v)
                     | Control::Text(v)
                     | Control::Slider(v)
-                    | Control::Button(v) => v.to_string(),
+                    | Control::Button(v)
+                    | Control::Color(v) => v.to_string(),
                     Control::Toggle(on) => on.to_string(),
                     Control::None => String::new(),
                 };
