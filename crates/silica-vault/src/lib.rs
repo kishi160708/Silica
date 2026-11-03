@@ -129,6 +129,11 @@ pub fn write_no_follow(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     // * is the only way to see one, and a reparse point at the target is refused
     // * for the same reason the Unix `O_NOFOLLOW` open exists. `write_at` cannot
     // * be used there: the `openat` walk it relies on has no Windows equivalent.
+    // ! TODO(windows): this reparse-point check is check-then-act — a hostile
+    // ! process can substitute the target path for a junction between this
+    // ! check and the rename below. Bind validation and the write to Windows
+    // ! directory/file handles (CreateFileW with FILE_FLAG_OPEN_REPARSE_POINT
+    // ! and ReplaceFileW) before this is considered fixed there.
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
@@ -196,6 +201,12 @@ pub fn write_no_follow(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     match std::fs::rename(&temp, path) {
         Ok(()) => {
             // * The directory entry itself is what a crash could lose.
+            // ! TODO(windows): std::fs::rename is check-then-act — the
+            // ! destination path can be substituted for a junction between
+            // ! the reparse-point check above and this rename. Bind the
+            // ! destination to an opened directory handle and use
+            // // ReplaceFileW on Windows before this is considered fixed
+            // // there.
             #[cfg(unix)]
             {
                 if let Ok(dir) = std::fs::File::open(parent) {

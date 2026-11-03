@@ -394,6 +394,12 @@ fn read_excerpt(
     let f = open_digest_file(&backend.config.digest_root, &file)?;
     #[cfg(not(unix))]
     let f = std::fs::File::open(&file).map_err(|e| format!("cannot read {path}: {e}"))?;
+    // ! TODO(windows): std::fs::File::open is a check-then-act open: a symlink
+    // ! or reparse point planted after digest_path validation and before this
+    // ! open can redirect the read outside the digest root. Implement
+    // // handle-relative traversal from an opened directory descriptor with
+    // // FILE_FLAG_OPEN_REPARSE_POINT / CreateFileW on Windows before this is
+    // // considered fixed there.
 
     let meta = f.metadata().map_err(|e| format!("cannot stat {path}: {e}"))?;
     // Reject non-regular files (FIFOs, sockets, devices): they cannot be
