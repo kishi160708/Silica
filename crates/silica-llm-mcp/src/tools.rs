@@ -323,6 +323,15 @@ fn keep_line(
 #[cfg(unix)]
 fn open_digest_file(root: &Path, file: &Path) -> Result<std::fs::File, String> {
     use std::os::unix::fs::OpenOptionsExt;
+    // * `file` came from `digest_path`, which returns the canonical path. The
+    // * root a caller holds may be spelled differently — macOS reports
+    // * `/var/folders/…` for what canonicalizes to `/private/var/folders/…` —
+    // * so it is canonicalized here before the relative path is cut. Without
+    // * this every file under a symlinked temp dir looks like it is outside.
+    let root = root
+        .canonicalize()
+        .map_err(|e| format!("cannot resolve digest root {}: {e}", root.display()))?;
+    let root = root.as_path();
     let root_fd = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
@@ -820,6 +829,36 @@ mod tests {
         assert!(head.body.len() <= 20, "{}", head.body.len());
         assert!(head.body.starts_with("z"));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// macOS reports `temp_dir()` as `/var/folders/…`, which canonicalizes to
+    /// `/private/var/folders/…`. A root held in the short form and a file in
+    /// the long one must not look like an escape.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_root_is_the_same_root() {
+        let base = std::env::temp_dir().join(format!(
+            "silica-llm-mcp-linkroot-{}",
+            std::process::id()
+        ));
+        let real = base.join("real");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::write(real.join("note.md"), "hello").unwrap();
+        // * A symlink standing in for the short spelling, which is the shape
+        // * macOS gives `/var`. `canonicalize` on the link yields the target.
+        let short = base.join("short");
+        std::os::unix::fs::symlink(&real, &short).unwrap();
+
+        let mut config = Config::from_env().expect("the default config parses");
+        config.digest_root = short.clone();
+        let backend = Backend::new(config);
+        // * The path arrives in the canonical (long) form, as `digest_path`
+        // * returns it.
+        let path = real.join("note.md");
+        let excerpt = read_excerpt(&backend, path.to_str().unwrap(), None, false)
+            .expect("a file under a symlinked root reads");
+        assert_eq!(excerpt.body, "hello");
+        std::fs::remove_dir_all(&base).ok();
     }
 
     #[test]
