@@ -142,12 +142,25 @@ pub fn request(
     // * Bound concurrent resolution workers so repeated slow resolutions
     // * cannot accumulate detached threads without limit. Each worker exits
     // * within `timeout` on its own, but the cap makes the worst case fixed.
-    if ACTIVE_CONNECTIONS.load(Ordering::Acquire) >= MAX_CONCURRENT_CONNECTIONS {
-        return Err(format!(
-            "{address}: too many concurrent connections ({MAX_CONCURRENT_CONNECTIONS})"
-        ));
+    // * compare-and-exchange reserves a slot atomically so concurrent requests
+    // * cannot all observe a count below the limit and increment past it.
+    let mut n = ACTIVE_CONNECTIONS.load(Ordering::Acquire);
+    loop {
+        if n >= MAX_CONCURRENT_CONNECTIONS {
+            return Err(format!(
+                "{address}: too many concurrent connections ({MAX_CONCURRENT_CONNECTIONS})"
+            ));
+        }
+        match ACTIVE_CONNECTIONS.compare_exchange_weak(
+            n,
+            n + 1,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => break,
+            Err(m) => n = m,
+        }
     }
-    ACTIVE_CONNECTIONS.fetch_add(1, Ordering::AcqRel);
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let result = (|| {
