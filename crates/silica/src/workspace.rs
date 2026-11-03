@@ -2636,6 +2636,11 @@ pub struct Workspace {
     /// when that is a `.pdf`.
     pdf: Entity<PdfView>,
     graph: Entity<GraphView>,
+    /// `![[Board.canvas]]` embeds, made once per path and reused: a canvas
+    /// view holds a parsed scene, a viewport and a card cache, so making a
+    /// new one on every paint would drop all three.
+    embedded_canvases:
+        std::rc::Rc<std::cell::RefCell<std::collections::HashMap<String, Entity<CanvasView>>>>,
     /// The mode to return to when the graph closes.
     mode_before_graph: ViewMode,
     mode: ViewMode,
@@ -2904,6 +2909,18 @@ impl Workspace {
                         let back = this.mode_before_graph;
                         this.set_mode(back, window, cx);
                         this.open_file(path.clone(), None, cx);
+                    }
+                    // The picture was written, or the dialog or the file
+                    // refused: either way the reader is told once.
+                    GraphEvent::Exported(Ok(path)) => {
+                        let name = path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| path.display().to_string());
+                        this.report(format!("Saved {name}"), cx);
+                    }
+                    GraphEvent::Exported(Err(err)) => {
+                        this.report(format!("Could not save the graph: {err}"), cx)
                     }
                 },
             ),
@@ -3193,6 +3210,9 @@ impl Workspace {
             bases,
             pdf,
             graph,
+            embedded_canvases: std::rc::Rc::new(std::cell::RefCell::new(
+                std::collections::HashMap::new(),
+            )),
             mode_before_graph: ViewMode::Reading,
             mode: ViewMode::Reading,
             current: None,
@@ -5763,8 +5783,10 @@ impl Workspace {
                     let build_ms = started.elapsed().as_secs_f64() * 1000.0;
                     self.words = text.split_whitespace().count();
                     self.chars = text.chars().count();
+                    self.prepare_embeds(&model, cx);
                     self.reading
                         .update(cx, |r, cx| r.set_note(Some(path.to_string()), model, cx));
+                    self.install_canvas_host(cx);
                     // The editor keeps its buffer when the file on disk is
                     // what it last saved (or still holds unsaved edits), and
                     // keeps its place when the note changed underneath it.
@@ -6515,8 +6537,10 @@ impl Workspace {
         self.words = text.split_whitespace().count();
         self.chars = text.chars().count();
         let model = reading::build_with(path, &text, state.as_ref(), state.build_options());
+        self.prepare_embeds(&model, cx);
         self.reading
             .update(cx, |r, cx| r.set_note(Some(path.to_string()), model, cx));
+        self.install_canvas_host(cx);
         cx.notify();
     }
 
@@ -6559,8 +6583,10 @@ impl Workspace {
             return;
         }
         let model = reading::build_with(path, &new_text, state.as_ref(), state.build_options());
+        self.prepare_embeds(&model, cx);
         self.reading
             .update(cx, |r, cx| r.set_note(Some(path.to_string()), model, cx));
+        self.install_canvas_host(cx);
         cx.notify();
     }
 
@@ -11246,6 +11272,72 @@ impl Workspace {
     /// screenshot. Every key is always there, `null` when there is nothing
     /// to say, so a caller can index into it without guessing. Each view
     /// describes itself; the rest is the shell's own.
+    /// Teach the reading view to draw an `![[x.canvas]]` embed.
+    ///
+    /// The entities live here because a canvas view needs the vault; they
+    /// are made on demand and reused, so a note that shows the same board
+    /// twice holds one scene rather than two.
+    fn install_canvas_host(&mut self, cx: &mut Context<Self>) {
+        // The entities are made when a note loads (see `prepare_embeds`), so
+        // this paints from a map it only reads: a paint has no `cx` to make
+        // one with.
+        let canvases = self.embedded_canvases.clone();
+        let host: crate::reading::view::CanvasHandler =
+            std::rc::Rc::new(move |path: &str, width: f32, height: f32| {
+                let found = canvases.borrow().get(path).cloned();
+                match found {
+                    Some(entity) => canvas_frame(entity, width, height),
+                    None => crate::reading::view::missing_canvas(path, width, height),
+                }
+            });
+        self.reading.update(cx, |r, _| r.canvas_host = Some(host));
+    }
+
+    /// Make a canvas view for every `![[x.canvas]]` the note embeds, so the
+    /// handler can paint from the map without a `cx` of its own. Existing
+    /// views are kept: a canvas holds a scene and a viewport, and rebuilding
+    /// one on every load would throw the reader's pan away.
+    fn prepare_embeds(&mut self, model: &reading::model::Model, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let mut wanted: Vec<String> = Vec::new();
+        reading::model::each_embed(&model.blocks, &mut |embed| {
+            if let reading::model::EmbedKind::Canvas(path) = &embed.kind {
+                wanted.push(path.to_string_lossy().into_owned());
+            }
+        });
+        // Only what this note shows: anything else has been scrolled past.
+        self.embedded_canvases
+            .borrow_mut()
+            .retain(|path, _| wanted.contains(path));
+        for path in wanted {
+            if self.embedded_canvases.borrow().contains_key(&path) {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(state.vault().absolute(&path)) else {
+                continue;
+            };
+            let entity = cx.new(crate::canvas::view::CanvasView::new);
+            entity.update(cx, |view, cx| {
+                // At scale 1 rather than fitted: fitting the whole board into
+                // a note-width box lands below the zoom where cards keep
+                // their text, so a fitted embed draws blank cards. The
+                // reader pans and zooms it like any canvas.
+                view.load(&path, &text, Some(Default::default()), state.clone(), cx)
+            });
+            self.embedded_canvases.borrow_mut().insert(path, entity);
+        }
+    }
+
+    /// The graph as a PNG, written to `path` — the control socket's entry to
+    /// the same picture the panel's *Save as image* writes.
+    pub fn export_graph_png(&self, path: &std::path::Path, cx: &App) -> Result<Value, String> {
+        let theme = cx.global::<Theme>().clone();
+        self.graph.read(cx).export_png(path, &theme)?;
+        Ok(serde_json::json!({"path": path.display().to_string()}))
+    }
+
     pub fn describe(&self, text: bool, rows: usize, window: &Window, cx: &App) -> Value {
         let mut vault = Map::new();
         vault.insert(
@@ -11433,6 +11525,7 @@ impl Workspace {
             "bases": self.bases.read(cx).state_json(),
             "pdf": self.pdf.read(cx).state_json(cx),
             "video": self.reading.read(cx).video_state_json(),
+            "embedded_canvases": self.embedded_canvases.borrow().keys().cloned().collect::<Vec<_>>(),
             "status": self.status_text(),
             "status_bar": self.status_bar_text(cx),
             "status_bar_items": self.status_bar_items(cx),
@@ -16822,4 +16915,28 @@ mod tests {
         assert!(n.latest().is_none());
         assert_eq!(n.push("three".into()), 3, "ids keep counting up");
     }
+}
+
+/// An embedded canvas is bounded by the note, not by the window: it gets a
+/// fixed box with its own pan and zoom inside it.
+fn canvas_frame(
+    entity: Entity<crate::canvas::view::CanvasView>,
+    width: f32,
+    height: f32,
+) -> gpui::AnyElement {
+    let w = if width > 0.0 { width } else { 0.0 };
+    // Tall enough that the fit zoom stays above the card-text threshold: a
+    // short box shrinks the board until the labels fade out, which reads as
+    // an empty canvas rather than a small one.
+    let h = if height > 0.0 { height } else { 460.0 };
+    div()
+        .id("canvas-embed-frame")
+        .w_full()
+        .when(w > 0.0, |d| d.max_w(px(w)))
+        .h(px(h))
+        .rounded_md()
+        .border_1()
+        .overflow_hidden()
+        .child(entity)
+        .into_any_element()
 }

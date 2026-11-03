@@ -175,6 +175,10 @@ pub enum EmbedKind {
     /// A `.pdf`: the path and the subpath, nothing read. The pages come
     /// from the document cache when the embed is drawn (`pdf::embed`).
     Pdf(crate::pdf::embed::PdfEmbed),
+    /// A `.canvas`: the vault path, and the size the note gives the card.
+    /// Nothing is read here — the canvas view parses the file when the
+    /// embed is drawn, as the PDF embed defers to the document cache.
+    Canvas(PathBuf),
     /// The target file does not exist.
     Missing,
     /// The target exists but Silica cannot render it inline yet.
@@ -1168,6 +1172,7 @@ impl<'v> Builder<'v> {
                         height,
                     ))
                 }
+                FileKind::Canvas => EmbedKind::Canvas(PathBuf::from(path)),
                 FileKind::Audio => EmbedKind::Audio(self.vault.absolute(&path)),
                 FileKind::Video => EmbedKind::Video(self.vault.absolute(&path)),
                 other => EmbedKind::Unsupported(other),

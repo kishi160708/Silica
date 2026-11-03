@@ -1,5 +1,6 @@
 //! Graph view: notes as nodes, resolved links as edges.
 
+pub mod image;
 pub mod layout;
 mod view;
 

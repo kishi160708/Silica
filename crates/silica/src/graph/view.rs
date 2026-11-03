@@ -292,6 +292,9 @@ struct Built {
 
 pub enum GraphEvent {
     Open(String),
+    /// The reader picked "Save as image": the view has written the file, and
+    /// this carries the outcome to be reported either way.
+    Exported(Result<std::path::PathBuf, String>),
 }
 
 struct Drag {
@@ -977,6 +980,120 @@ impl GraphView {
         self.reheat(cx);
     }
 
+    /// Write the picture the view is showing to `path` as a PNG.
+    ///
+    /// The layout is read under its lock, so a running simulation yields a
+    /// frame rather than a torn one. Nodes are drawn where the view puts
+    /// them, relative to the content rather than the viewport, so the file
+    /// has the whole graph in it however the reader has panned.
+    pub fn export_png(&self, path: &std::path::Path, theme: &Theme) -> Result<(), String> {
+        // The picture is not the viewport: it is at least natural size, so a
+        // reader who has zoomed out for the overview still saves something
+        // whose labels can be read.
+        let scale = self.scale.max(1.0);
+        let layout = self.layout.lock().unwrap_or_else(|e| e.into_inner());
+        let mut placed: Vec<crate::graph::image::Placed> = Vec::with_capacity(self.nodes.len());
+        for (i, node) in self.nodes.iter().enumerate() {
+            let Some(body) = layout.bodies.get(i) else {
+                continue;
+            };
+            placed.push(crate::graph::image::Placed {
+                node: i,
+                x: body.x * scale,
+                y: body.y * scale,
+                radius: self.node_radius(node) * scale,
+            });
+        }
+        drop(layout);
+        // The picture is the content plus a margin for the labels and the
+        // outermost radii, so nothing is clipped at the edge.
+        // Labels are centred under their node and are often wider than it,
+        // so the box they need is measured rather than assumed: 11 px text
+        // is about 6 px a character, and half of that on either side.
+        let half_label = |i: usize| -> f32 {
+            self.nodes
+                .get(i)
+                .map(|n| n.label.len() as f32 * 6.0 / 2.0)
+                .unwrap_or(0.0)
+        };
+        let margin = 24.0f32;
+        let (mut min_x, mut min_y) = (f32::MAX, f32::MAX);
+        let (mut max_x, mut max_y) = (f32::MIN, f32::MIN);
+        for p in &placed {
+            let half = p.radius.max(half_label(p.node));
+            min_x = min_x.min(p.x - half);
+            min_y = min_y.min(p.y - p.radius);
+            max_x = max_x.max(p.x + half);
+            max_y = max_y.max(p.y + p.radius + 18.0);
+        }
+        if !min_x.is_finite() || !min_y.is_finite() {
+            min_x = 0.0;
+            min_y = 0.0;
+            max_x = 0.0;
+            max_y = 0.0;
+        }
+        let width = ((max_x - min_x) + margin * 2.0).ceil().max(1.0) as u32;
+        let height = ((max_y - min_y) + margin * 2.0).ceil().max(1.0) as u32;
+        for p in placed.iter_mut() {
+            p.x = p.x - min_x + margin;
+            p.y = p.y - min_y + margin;
+        }
+        let palette = crate::graph::image::Palette {
+            background: hex(theme.bg),
+            node: hex(theme.text),
+            edge: hex(theme.text_faint),
+            label: hex(theme.text),
+        };
+        let doc = crate::graph::image::svg(
+            width,
+            height,
+            &self.nodes,
+            &placed,
+            &self.edges,
+            self.config.show_arrow.unwrap_or(false),
+            &palette,
+        );
+        let bytes = crate::graph::image::png(&doc, width, height)?;
+        std::fs::write(path, bytes).map_err(|e| e.to_string())
+    }
+
+    /// "Save as image": the desktop's save dialog, then the picture.
+    ///
+    /// The dialog starts in the vault's own folder with the graph's name, so
+    /// the common case is one Enter.
+    fn export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let dir = state.vault().root().to_path_buf();
+        let theme = cx.global::<Theme>().clone();
+        let name = self.current.clone().unwrap_or_else(|| "Graph".to_string());
+        let suggested = format!("{}.png", name.trim_end_matches(".md"));
+        let picked = cx.prompt_for_new_path(&dir, Some(&suggested));
+        cx.spawn_in(window, async move |this, cx| {
+            let path = match picked.await {
+                Ok(Ok(Some(path))) => path,
+                Ok(Ok(None)) | Err(_) => return,
+                Ok(Err(err)) => {
+                    this.update(cx, |view, cx| {
+                        cx.emit(GraphEvent::Exported(Err(err.to_string())));
+                        let _ = view;
+                        cx.notify();
+                    })
+                    .ok();
+                    return;
+                }
+            };
+            this.update(cx, |view, cx| {
+                let outcome = view.export_png(&path, &theme).map(|()| path.clone());
+                cx.emit(GraphEvent::Exported(outcome));
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn set_closed(&mut self, closed: bool, cx: &mut Context<Self>) {
         self.config.close = Some(closed);
         self.schedule_save(cx);
@@ -1567,6 +1684,10 @@ impl GraphView {
                             .on_click(cx.listener(|this, _, _, cx| this.restart_layout(cx))),
                     )
                     .child(
+                        Self::icon_button("graph-controls-export", "⭳", theme)
+                            .on_click(cx.listener(|this, _, window, cx| this.export(window, cx))),
+                    )
+                    .child(
                         Self::icon_button("graph-controls-reset", "↺", theme).on_click(
                             cx.listener(|this, _, _, cx| {
                                 // Randomize the physics layout without touching zoom or pan.
@@ -1668,6 +1789,17 @@ fn frame(
 }
 
 /// Builds the node and edge lists for the current filters.
+/// A theme colour as `#rrggbb`, for the SVG the export writes.
+fn hex(color: gpui::Hsla) -> String {
+    let rgba: gpui::Rgba = color.into();
+    format!(
+        "#{:02x}{:02x}{:02x}",
+        (rgba.r.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (rgba.g.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (rgba.b.clamp(0.0, 1.0) * 255.0).round() as u8
+    )
+}
+
 fn build(
     state: &VaultState,
     config: &GraphConfig,

@@ -205,6 +205,36 @@ pub(crate) struct ReadingHost {
     /// What the player is showing, if anything: the embed draws its frame
     /// and its clock from it.
     pub video: Rc<RefCell<Option<VideoState>>>,
+    /// An embedded `.canvas`, which needs a view of its own: given the
+    /// vault path and the size the note leaves it, answer an element.
+    pub on_canvas: CanvasHandler,
+}
+
+/// An `![[Board.canvas]]`: the vault path and the size the note gives it.
+///
+/// No window: the answer is a canvas view the workspace already made, and
+/// putting an entity in the tree is not something a paint has to ask for.
+pub type CanvasHandler = Rc<dyn Fn(&str, f32, f32) -> AnyElement>;
+
+/// A canvas embed with no host behind it: a card naming the file, which the
+/// reading view's link handler opens on a click.
+pub(crate) fn missing_canvas(path: &str, _w: f32, _h: f32) -> AnyElement {
+    let label = path.rsplit('/').next().unwrap_or(path).to_string();
+    div()
+        .id(SharedString::from(format!("canvas-embed-{path}")))
+        .px_3()
+        .py_2()
+        .rounded_md()
+        .border_1()
+        .border_color(gpui::Hsla {
+            h: 0.0,
+            s: 0.0,
+            l: 0.0,
+            a: 0.12,
+        })
+        .cursor_pointer()
+        .child(SharedString::from(label))
+        .into_any_element()
 }
 
 /// A click on a video embed: the file, and `Some(share)` when the click was
@@ -261,6 +291,10 @@ pub struct ReadingView {
     /// Width of the view as last painted; tables lay their columns out for it.
     width: Pixels,
     pub preview_resolver: Option<PreviewHandler>,
+    /// Where an `![[x.canvas]]` embed gets its element. The workspace sets
+    /// this because it owns the canvas views; without it the embed falls
+    /// back to a card that opens the file.
+    pub canvas_host: Option<CanvasHandler>,
     /// The in-app video player: what it is showing, where, and the frame.
     ///
     /// Behind a cell because the embeds paint through `&self` and the player
@@ -324,6 +358,7 @@ impl ReadingView {
         ReadingView {
             focus_handle: cx.focus_handle(),
             path: None,
+            canvas_host: None,
             model: Arc::new(Model::default()),
             list: ListState::new(0, ListAlignment::Top, px(1200.)),
             toggled: HashSet::new(),
@@ -856,6 +891,10 @@ impl ReadingView {
             preview_resolver: self.preview_resolver.clone(),
             on_video,
             video: self.video.clone(),
+            on_canvas: self
+                .canvas_host
+                .clone()
+                .unwrap_or_else(|| Rc::new(missing_canvas)),
         };
         // The reading view's properties block is now editable: clicks on
         // rows come back as PropertyChanged events that the workspace
@@ -1063,6 +1102,9 @@ pub(crate) struct Renderer<'a> {
     video_play: Option<VideoHandler>,
     /// What the player is showing, shared with the view that owns it.
     video: Option<Rc<RefCell<Option<VideoState>>>>,
+    /// Where a canvas embed asks for its element; `None` where nothing can
+    /// answer, so Live Preview's widget keeps the card.
+    on_canvas: Option<CanvasHandler>,
     text_system: Arc<WindowTextSystem>,
     /// Inner width of a top-level block, in pixels.
     available: f32,
@@ -1093,6 +1135,7 @@ impl<'a> Renderer<'a> {
             on_link,
             on_toggle,
             video_play: None,
+            on_canvas: None,
             video: None,
             text_system,
             available: available.max(100.),
@@ -1107,6 +1150,7 @@ impl<'a> Renderer<'a> {
         self.reading_host = Some(host);
         self.video_play = Some(host.on_video.clone());
         self.video = Some(host.video.clone());
+        self.on_canvas = Some(host.on_canvas.clone());
         self
     }
 
@@ -2016,6 +2060,15 @@ impl<'a> Renderer<'a> {
             // `![[x.mp4]]` plays in Silica's own player: ffmpeg decodes,
             // gpui draws. With no handler (Live Preview's widget) or no
             // ffmpeg on the machine, the card opens the system player.
+            EmbedKind::Canvas(path) => {
+                let vault_path = path.to_string_lossy().into_owned();
+                let width = embed.width.unwrap_or(0.0);
+                let height = embed.height.unwrap_or(0.0);
+                match self.on_canvas.as_ref() {
+                    Some(host) => host(&vault_path, width, height),
+                    None => missing_canvas(&vault_path, width, height),
+                }
+            }
             EmbedKind::Video(path) => {
                 let label = path
                     .file_name()

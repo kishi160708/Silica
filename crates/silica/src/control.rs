@@ -252,6 +252,13 @@ fn handle(
             wait_idle(ctl, request.id, frames, timeout, reply.clone())?;
             Ok(None)
         }
+        // Save the graph as a PNG at a path the caller names, so the export
+        // is exercised without driving a desktop save dialog.
+        "graph_png" => {
+            let path = request.str_param("path")?;
+            ctl.workspace(|ws, _window, cx| ws.export_graph_png(std::path::Path::new(&path), cx))
+                .map(Some)
+        }
         "state" => {
             let text = request.bool_param("text", false);
             let rows = request.opt_usize("rows").unwrap_or(50);

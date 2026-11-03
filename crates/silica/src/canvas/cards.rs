@@ -588,6 +588,9 @@ impl Cards {
                 cx.open_url(&format!("file://{}", path.display()));
             }),
             video: Rc::new(std::cell::RefCell::new(None)),
+            // A canvas card has no canvas host either; the file card's own
+            // click opens it.
+            on_canvas: Rc::new(crate::reading::view::missing_canvas),
         };
         let renderer = Renderer::new(
             &scaled,
