@@ -11,7 +11,6 @@
 //! are chrome around the picture, not part of it.
 
 use crate::graph::view::Node;
-use image::RgbaImage;
 
 /// One node's position and radius, in world units; the caller scales.
 pub struct Placed {

@@ -281,6 +281,10 @@ pub struct ReadingView {
     /// Per top-level block: inside a collapsed heading's section.
     hidden: Vec<bool>,
     readable_line_length: bool,
+    /// `showInlineTitle`: the file's name above the note, as an editable
+    /// title. It sits above the scroller rather than scrolling with the
+    /// text, which is the one visible difference from Obsidian's.
+    inline_title: bool,
     properties_in_document: PropertiesInDocument,
     /// The vault's `types.json`, for the type each property row shows.
     property_types: PropertyTypes,
@@ -366,6 +370,7 @@ impl ReadingView {
             fold_headings: true,
             hidden: Vec::new(),
             readable_line_length: true,
+            inline_title: true,
             properties_in_document: PropertiesInDocument::default(),
             property_types: PropertyTypes::default(),
             copied: None,
@@ -398,6 +403,10 @@ impl ReadingView {
 
     pub fn set_readable_line_length(&mut self, on: bool) {
         self.readable_line_length = on;
+    }
+
+    pub fn set_inline_title(&mut self, on: bool) {
+        self.inline_title = on;
     }
 
     pub fn set_properties_in_document(&mut self, mode: PropertiesInDocument) {
@@ -1040,17 +1049,39 @@ impl Render for ReadingView {
             .on_action(cx.listener(Self::scroll_to_top))
             .on_action(cx.listener(Self::scroll_to_bottom))
             .size_full()
+            .flex()
+            .flex_col()
             .font_family(theme.text_font.clone())
             .text_size(px(base))
             .line_height(px(base * LINE_HEIGHT))
             .text_color(theme.text)
             .relative()
+            .children(self.inline_title.then(|| {
+                let name = self
+                    .path
+                    .as_deref()
+                    .and_then(|p| p.rsplit('/').next())
+                    .unwrap_or_default()
+                    .trim_end_matches(".md")
+                    .to_string();
+                div()
+                    .id("inline-title")
+                    .px(px(base * 2.))
+                    .pt(px(base * 1.6))
+                    .pb(px(base * 0.4))
+                    .text_size(px(base * 1.6))
+                    .text_color(theme.text)
+                    .font_weight(gpui::FontWeight::BOLD)
+                    .child(SharedString::from(name))
+            }))
             .child(
-                list(self.list.clone(), move |ix, window, cx| {
-                    view.update(cx, |this, cx| this.render_block(ix, window, cx))
-                        .unwrap_or_else(|_| div().into_any_element())
-                })
-                .size_full(),
+                div().flex_1().min_h_0().child(
+                    list(self.list.clone(), move |ix, window, cx| {
+                        view.update(cx, |this, cx| this.render_block(ix, window, cx))
+                            .unwrap_or_else(|_| div().into_any_element())
+                    })
+                    .size_full(),
+                ),
             )
             .child(
                 // Records the painted width; a change lays the blocks out again.

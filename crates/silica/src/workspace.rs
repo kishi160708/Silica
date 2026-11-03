@@ -672,6 +672,16 @@ impl VaultState {
         CorePlugins::is_enabled_or_default(self.core_plugins().as_ref(), plugin)
     }
 
+    /// The config folder this vault was opened with when it is not
+    /// `.obsidian`: "Override config folder", kept in the per-user store
+    /// because the folder it names is the one that would hold it.
+    pub fn registry_config_folder(&self) -> Option<String> {
+        silica_vault::VaultRegistry::open()
+            .ok()
+            .flatten()
+            .and_then(|r| r.config_folder(&self.root))
+    }
+
     pub fn app(&self) -> RwLockReadGuard<'_, AppConfig> {
         self.app.read().unwrap_or_else(|e| e.into_inner())
     }
@@ -737,6 +747,31 @@ impl VaultState {
                 self.vault()
                     .replace_config("hotkeys.json", overrides)
                     .map_err(|e| e.to_string())?;
+            }
+            SettingChange::Frame(style) => {
+                // Outside the vault, in the per-user store the vault list
+                // already uses: `frame_style()` reads it on the next start.
+                let Some(mut registry) = silica_vault::VaultRegistry::open()
+                    .map_err(|e| e.to_string())?
+                else {
+                    return Err("no configuration folder to save the frame style in".into());
+                };
+                registry.set_setting("frameStyle", Some(style));
+                registry.save().map_err(|e| e.to_string())?;
+            }
+            SettingChange::ConfigFolder(folder) => {
+                // The same store: `Vault::open` reads the folder from the
+                // vault's entry on the next start, which is what the row's
+                // "on restart" tag says.
+                let Some(mut registry) = silica_vault::VaultRegistry::open()
+                    .map_err(|e| e.to_string())?
+                else {
+                    return Err("no configuration folder to save this in".into());
+                };
+                let root = self.vault().root().to_path_buf();
+                let folder = (!folder.is_empty()).then_some(folder.as_str());
+                registry.set_config_folder(&root, folder);
+                registry.save().map_err(|e| e.to_string())?;
             }
         }
         Ok(())
@@ -3393,6 +3428,7 @@ impl Workspace {
         for group in &self.groups {
             group.reading.update(cx, |r, cx| {
                 r.set_readable_line_length(readable);
+                r.set_inline_title(state.app().show_inline_title.unwrap_or(true));
                 r.set_property_types(state.property_types().clone());
                 r.set_properties_in_document(properties);
                 r.set_fold_headings(state.app().fold_heading.unwrap_or(true));
@@ -3403,9 +3439,6 @@ impl Workspace {
                 e.set_readable_line_length(readable);
                 e.set_show_line_number(state.app().show_line_number.unwrap_or(false));
                 e.set_show_indent_guide(state.app().show_indent_guide.unwrap_or(true));
-                e.set_vim_mode(state.app().vim_mode.unwrap_or(false));
-                e.set_spellcheck(state.app().spellcheck.unwrap_or(false));
-                e.set_right_to_left(state.app().right_to_left.unwrap_or(false));
                 e.set_vim_mode(state.app().vim_mode.unwrap_or(false));
                 e.set_spellcheck(state.app().spellcheck.unwrap_or(false));
                 e.set_right_to_left(state.app().right_to_left.unwrap_or(false));
@@ -8093,7 +8126,9 @@ impl Workspace {
                 )
             })
             .child(self.render_tab_strip(&view, first, last, theme, cx))
-            .child(self.render_header(&view, theme, cx))
+            .when(self.show_view_header(), |d| {
+                d.child(self.render_header(&view, theme, cx))
+            })
             .child(
                 div()
                     .relative()
@@ -8902,15 +8937,21 @@ impl Workspace {
         self.load_tab(cx);
     }
 
-    /// Opens `path` in a new tab, leaving the active one as it is.
+    /// Opens `path` in a new tab, leaving the active one as it is — unless
+    /// `alwaysFocusNewTabs` is on, which is Obsidian's default and switches
+    /// to the tab it just made.
     pub fn open_in_new_tab(
         &mut self,
         path: String,
         subpath: Option<Subpath<'_>>,
         cx: &mut Context<Self>,
     ) {
+        let was = self.active_tab;
         self.new_tab(cx);
         self.open_file(path, subpath, cx);
+        if !self.focus_new_tab() && was < self.tabs.len() - 1 {
+            self.activate_tab(was, cx);
+        }
     }
 
     pub fn activate_tab(&mut self, ix: usize, cx: &mut Context<Self>) {
@@ -9796,6 +9837,42 @@ impl Workspace {
             .as_ref()
             .map(|s| s.appearance().show_ribbon.unwrap_or(true))
             .unwrap_or(true)
+    }
+
+    /// The per-file header above each leaf: the path crumbs and the history
+    /// arrows, off when `showViewHeader` is false. The tab strip stays — it
+    /// is what Obsidian calls the tab title bar.
+    fn show_view_header(&self) -> bool {
+        self.state
+            .as_ref()
+            .map(|s| s.appearance().show_view_header.unwrap_or(true))
+            .unwrap_or(true)
+    }
+
+    /// Whether a link opened in a new tab takes the screen: Obsidian's
+    /// `alwaysFocusNewTabs`, on by default.
+    fn focus_new_tab(&self) -> bool {
+        self.state
+            .as_ref()
+            .map(|s| s.app().focus_new_tab.unwrap_or(true))
+            .unwrap_or(true)
+    }
+
+    /// Whether the status bar carries the mode toggle: the `editor-status`
+    /// core plugin, on by default. It is not in `CORE_PLUGINS` — Obsidian
+    /// writes it in `core-plugins.json` but gives it no settings tab — so
+    /// the map is read directly rather than through
+    /// [`Self::core_plugin_enabled`], which would answer `true` for an id
+    /// it does not know.
+    fn editor_status_shown(&self) -> bool {
+        let Some(state) = self.state.as_ref() else {
+            return true;
+        };
+        match state.core_plugins().as_ref() {
+            Some(CorePlugins::Map(m)) => m.get("editor-status").copied().unwrap_or(true),
+            Some(CorePlugins::List(l)) => l.iter().any(|p| p == "editor-status"),
+            None => true,
+        }
     }
 
     /// Whether the window has macOS's hidden frame: the desktop's traffic
@@ -15028,7 +15105,27 @@ impl Render for Workspace {
                     .px(px(4.))
                     .whitespace_nowrap()
                     .child(SharedString::from(text))
-            }));
+            }))
+            // Obsidian's "Show editing mode in status bar": the same toggle
+            // the header draws, as a word rather than an icon.
+            .when(self.editor_status_shown(), |d| {
+                let editing = self.mode.is_editing();
+                d.child(
+                    div()
+                        .id("status-mode")
+                        .px(px(4.))
+                        .whitespace_nowrap()
+                        .cursor_pointer()
+                        .child(if editing {
+                            SharedString::from("Editing")
+                        } else {
+                            SharedString::from("Reading")
+                        })
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.toggle_mode(&ToggleMode, window, cx)
+                        })),
+                )
+            });
 
         // Every overlay occludes: a modal in Obsidian owns the pointer as
         // well as the keyboard, and without this the editor's raw window

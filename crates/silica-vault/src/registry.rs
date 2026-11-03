@@ -20,6 +20,11 @@ use std::path::{Path, PathBuf};
 /// The file's name under the configuration folder.
 pub const FILE_NAME: &str = "silica.json";
 
+/// The key a vault's entry carries when its config folder is not
+/// `.obsidian`: Obsidian's "Override config folder", kept outside the vault
+/// because the folder it names is the one that would hold it.
+const CONFIG_FOLDER_KEY: &str = "configFolder";
+
 /// One remembered vault.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VaultEntry {
@@ -161,6 +166,60 @@ impl VaultRegistry {
         }
         let text = serde_json::to_string(&self.doc)?;
         std::fs::write(&self.path, text)
+    }
+
+    /// A document-level string setting, kept beside `vaults` rather than in
+    /// a vault: Obsidian keeps "Window frame style" outside `.obsidian`
+    /// (the probe of 2026-10-20 wrote nothing there), and this file is the
+    /// per-user place Silica already has.
+    pub fn setting(&self, key: &str) -> Option<&str> {
+        self.doc.extra.get(key).and_then(|v| v.as_str())
+    }
+
+    /// Sets one, removing it when `value` is `None`.
+    pub fn set_setting(&mut self, key: &str, value: Option<&str>) {
+        match value {
+            Some(v) => {
+                self.doc
+                    .extra
+                    .insert(key.to_string(), Value::String(v.to_string()));
+            }
+            None => {
+                self.doc.extra.shift_remove(key);
+            }
+        }
+    }
+
+    /// The config folder this vault was opened with, when it is not the
+    /// default `.obsidian`: Obsidian's "Override config folder". Kept on the
+    /// vault's own entry so two vaults can differ.
+    pub fn config_folder(&self, root: &Path) -> Option<String> {
+        self.find(root).and_then(|(_, e)| {
+            e.extra
+                .get(CONFIG_FOLDER_KEY)
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        })
+    }
+
+    /// Sets or clears it.
+    pub fn set_config_folder(&mut self, root: &Path, folder: Option<&str>) {
+        let root = absolute(root);
+        let Some((id, _)) = self.find(&root).map(|(id, _)| (id.to_string(), ())) else {
+            return;
+        };
+        if let Some(entry) = self.doc.vaults.get_mut(&id) {
+            match folder {
+                Some(f) => {
+                    entry
+                        .extra
+                        .insert(CONFIG_FOLDER_KEY.to_string(), Value::String(f.to_string()));
+                }
+                None => {
+                    entry.extra.shift_remove(CONFIG_FOLDER_KEY);
+                }
+            }
+        }
     }
 }
 

@@ -398,18 +398,6 @@ fn parse_args() -> Args {
     args
 }
 
-/// The "Window frame style" the app was started with, as Obsidian's
-/// Interface tab labels it: "Hidden (default)", "Obsidian frame" or
-/// "Native frame". Obsidian keeps the choice outside the vault, so it is an
-/// argument here (`--frame hidden|native`, or `SILICA_FRAME`).
-pub fn frame_style_label() -> &'static str {
-    match frame_style().as_str() {
-        "native" => "Native frame",
-        "custom" => "Obsidian frame",
-        _ => "Hidden (default)",
-    }
-}
-
 /// Whether the window is opened without the desktop's own title bar, which
 /// is what Obsidian's "Hidden" frame style means and its default on Linux
 /// and Windows. Answered once: the window asks on the way up, and the
@@ -419,17 +407,40 @@ pub fn hidden_frame() -> bool {
     *HIDDEN.get_or_init(|| frame_style() != "native")
 }
 
-/// `--frame`'s value, `SILICA_FRAME`'s, or `hidden`.
+/// `--frame`'s value, `SILICA_FRAME`'s, the one saved in `silica.json`'s
+/// `frameStyle`, or `hidden`.
 fn frame_style() -> String {
-    let mut it = std::env::args().skip(1);
-    while let Some(a) = it.next() {
-        if a == "--frame" {
-            if let Some(v) = it.next() {
+    static STYLE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    STYLE
+        .get_or_init(|| {
+            let mut it = std::env::args().skip(1);
+            while let Some(a) = it.next() {
+                if a == "--frame" {
+                    if let Some(v) = it.next() {
+                        return v;
+                    }
+                }
+            }
+            if let Ok(v) = std::env::var("SILICA_FRAME") {
                 return v;
             }
-        }
-    }
-    std::env::var("SILICA_FRAME").unwrap_or_else(|_| "hidden".into())
+            silica_vault::VaultRegistry::open()
+                .ok()
+                .flatten()
+                .and_then(|r| r.setting("frameStyle").map(str::to_string))
+                .unwrap_or_else(|| "hidden".into())
+        })
+        .clone()
+}
+
+/// The same value for the Settings row, so the dropdown shows the stored
+/// choice rather than only the one this process started with.
+pub fn stored_frame_style() -> String {
+    silica_vault::VaultRegistry::open()
+        .ok()
+        .flatten()
+        .and_then(|r| r.setting("frameStyle").map(str::to_string))
+        .unwrap_or_else(|| frame_style())
 }
 
 /// Every key binding in the app, from scratch: the views' own and the
@@ -472,6 +483,18 @@ fn main() {
                         .map(|(_, e)| e.path.clone())
                 })
                 .and_then(|path| silica_vault::Vault::open(&path).ok())
+        })
+        // "Override config folder": the folder is on the vault's entry in
+        // the per-user store, so the vault has to be reopened with it once
+        // both are known.
+        .and_then(|v| {
+            let folder = silica_vault::VaultRegistry::open()
+                .ok()
+                .flatten()
+                .and_then(|r| r.config_folder(v.root()))?;
+            silica_vault::Vault::open_with_config_dir(v.root(), &folder)
+                .ok()
+                .or(Some(v))
         });
     // A community CSS theme layers its custom properties on top of the base
     // theme; read it from `.obsidian/themes/<name>.css` inside the vault.

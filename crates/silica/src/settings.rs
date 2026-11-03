@@ -781,6 +781,22 @@ const EXCLUDED_FILES: TextField = TextField {
     },
 };
 
+/// "Override config folder": the folder is named by the vault's own entry in
+/// `silica.json`, because the folder it points at is the one that would hold
+/// the setting. Applied when the vault is next opened.
+const CONFIG_FOLDER: TextField = TextField {
+    key: "configFolder",
+    placeholder: ".obsidian",
+    prefix: "",
+    read: |state| {
+        state
+            .registry_config_folder()
+            .filter(|f| f != ".obsidian")
+            .unwrap_or_default()
+    },
+    write: |_, value| SettingChange::ConfigFolder(value.trim().to_string()),
+};
+
 /// Every slider and text field that writes, for the tests that walk them.
 #[cfg(test)]
 const NUMBERS: &[Number] = &[FONT_SIZE, TAB_SIZE];
@@ -809,6 +825,12 @@ pub enum SettingChange {
     /// `hotkeys.json` whole: the map in the file's order with one entry
     /// added, changed or removed.
     Hotkeys(Hotkeys),
+    /// "Window frame style": outside the vault, so it goes in the per-user
+    /// store beside the vault list rather than in a config file.
+    Frame(String),
+    /// "Override config folder": the vault's entry in that same store, since
+    /// the folder it names is the one the setting would otherwise live in.
+    ConfigFolder(String),
 }
 
 impl SettingChange {
@@ -821,6 +843,8 @@ impl SettingChange {
             SettingChange::CorePlugins(_) => "core-plugins.json",
             SettingChange::CommunityPlugins(_) => "community-plugins.json",
             SettingChange::Hotkeys(_) => "hotkeys.json",
+            SettingChange::Frame(_) => "silica.json",
+            SettingChange::ConfigFolder(_) => "silica.json",
         }
     }
 }
@@ -1092,6 +1116,22 @@ fn switcher_toggle(name: &str, desc: &str, switcher: &SwitcherConfig, flag: Swit
 fn dropdown(name: &str, desc: &str, value: impl Into<SharedString>) -> Item {
     item(name, desc, Control::Dropdown(value.into()))
 }
+
+/// "Window frame style": the one dropdown whose value lives outside the
+/// vault, in the per-user store. Its closures ignore the vault they are
+/// handed and go to `silica.json` instead, which the `Typed` shape allows
+/// because neither reads a field of the state.
+const FRAME_STYLE: Typed = Typed {
+    key: "frameStyle",
+    options: &[
+        ("Hidden (default)", "hidden"),
+        ("Obsidian frame", "custom"),
+        ("Native frame", "native"),
+    ],
+    read: |_| crate::stored_frame_style(),
+    write: |_, value| SettingChange::Frame(value.to_string()),
+    shape: None,
+};
 
 /// A slider that writes, reading and writing through the one accessor pair.
 fn slider(name: &str, desc: &str, state: &VaultState, number: Number) -> Item {
@@ -1723,7 +1763,7 @@ impl SettingsView {
                 "Display the header at the top of every tab.",
                 a,
                 SHOW_VIEW_HEADER,
-            ).not_yet(),
+            ),
             appearance_toggle(
                 "Show ribbon",
                 "Display vertical toolbar on the side of the window.",
@@ -1738,16 +1778,16 @@ impl SettingsView {
                 NATIVE_MENUS,
             ).not_yet(),
             // Obsidian keeps this one outside the vault: changing it wrote
-            // nothing under `.obsidian` (probed 2026-10-20), so Silica takes
-            // it from `--frame` or `SILICA_FRAME` until a per-user store
-            // exists.
-            dropdown(
+            // nothing under `.obsidian` (probed 2026-10-20), so it lives in
+            // the per-user store beside the vault list — the same place
+            // Obsidian's own copy is.
+            choice(
                 "Window frame style",
                 "Determines the styling of the title bar of Obsidian windows. Requires a full restart to take effect.",
-                crate::frame_style_label(),
+                state,
+                FRAME_STYLE,
             )
-            .on_restart()
-            .not_yet(),
+            .on_restart(),
         ]
     }
 
@@ -1776,14 +1816,14 @@ impl SettingsView {
                 "Show the editing mode toggle in the status bar.",
                 editor_status,
                 Flag::CorePlugin("editor-status", true),
-            ).not_yet(),
+            ),
             heading("Display"),
             app_toggle(
                 "Inline title",
                 "Display the filename as an editable title inline with the file contents.",
                 app,
                 SHOW_INLINE_TITLE,
-            ).not_yet(),
+            ),
             app_toggle(
                 "Readable line length",
                 "Limit maximum line length. Less content fits onscreen, but long blocks of text are more readable.",
@@ -1831,14 +1871,14 @@ impl SettingsView {
                 "Sets the default text direction of notes to right-to-left.",
                 app,
                 RIGHT_TO_LEFT,
-            ).not_yet(),
+            ),
             heading("Behavior"),
             app_toggle(
                 "Spellcheck",
                 "Turn on the spellchecker.",
                 app,
                 SPELLCHECK,
-            ).not_yet(),
+            ),
             field(
                 "Spellcheck languages",
                 "Choose the languages for the spellchecker to use.",
@@ -1887,7 +1927,7 @@ impl SettingsView {
                 "Use Vim key bindings when editing.",
                 app,
                 VIM_MODE,
-            ).not_yet(),
+            ),
         ]
     }
 
@@ -1900,8 +1940,7 @@ impl SettingsView {
                 "When you open a link in a new tab, switch to it immediately.",
                 app,
                 FOCUS_NEW_TAB,
-            )
-            .not_yet(),
+            ),
             choice(
                 "Default location for new notes",
                 "Where newly created notes are placed.",
@@ -1914,17 +1953,10 @@ impl SettingsView {
         // keyed off the selected option rather than off the stored string,
         // so the row appears the moment the option is picked.
         //
-        // The attachment rows keep their `not_yet()` tag even though the
-        // probe settled their labels and stored values and the dropdown now
-        // writes the four shapes Obsidian writes. `Honored::No` is "not read
-        // at all yet: the value is written for Obsidian", and that is still
-        // exactly the case: `silica_vault::ops::attachment_path` knows where
-        // each shape sends a file, but nothing calls it, because Silica
-        // creates no attachments. A function with no caller honours nothing,
-        // and the tag the row shows reads "not in Silica yet", which would be
-        // a lie to take off here. It comes off with the first caller.
-        // Contrast "Default location for new notes" above, which carries no
-        // tag because `Vault::new_note_folder` really does read it.
+        // Both attachment rows are read: `editor::paste_image_attachment`
+        // and `paste_files_attachment` send every pasted file through
+        // `silica_vault::ops::attachment_folder`, which resolves all four
+        // shapes Obsidian writes.
         if NEW_FILE_LOCATION.value(state) == "folder" {
             items.push(field(
                 "Folder to create new notes in",
@@ -1939,8 +1971,7 @@ impl SettingsView {
                 "Where newly added attachments are placed.",
                 state,
                 ATTACHMENT_LOCATION,
-            )
-            .not_yet(),
+            ),
         );
         match ATTACHMENT_LOCATION.value(state) {
             "Attachments" => items.push(
@@ -1949,8 +1980,7 @@ impl SettingsView {
                     "Place newly created attachment files, such as images created via drag-and-drop or audio recordings, in this folder.",
                     state,
                     ATTACHMENT_FOLDER,
-                )
-                .not_yet(),
+                ),
             ),
             "./Attachments" => items.push(
                 field(
@@ -1958,8 +1988,7 @@ impl SettingsView {
                     "If your file is in “vault/folder”, and you set subfolder name to “attachments”, attachments will be saved to “vault/folder/attachments”.",
                     state,
                     SUBFOLDER_NAME,
-                )
-                .not_yet(),
+                ),
             ),
             _ => {}
         }
@@ -2009,15 +2038,13 @@ impl SettingsView {
                 state,
                 EXCLUDED_FILES,
             ),
-            text(
+            field(
                 "Override config folder",
                 "Use a different config folder than the default one. Must start with a dot.",
-                if config_dir == ".obsidian" {
-                    String::new()
-                } else {
-                    config_dir
-                },
-            ).not_yet(),
+                state,
+                CONFIG_FOLDER,
+            )
+            .on_restart(),
         ]);
         items
     }
@@ -2032,11 +2059,12 @@ impl SettingsView {
                     CorePlugins::is_enabled_or_default(state.core_plugins().as_ref(), p),
                     Flag::CorePlugin(p.id, p.default_on),
                 )
-                // Silica's own Files, Search, Graph and the rest do not
-                // turn off with the plugin that owns them in Obsidian; the
-                // one thing that follows is which plugin tabs this modal
-                // shows.
-                .not_yet()
+                // The toggle is read: `rebuild_commands` drops a plugin's
+                // commands from the registry, `left_pane_enabled` and
+                // `pane_enabled` close its dock panes, and `run_command`
+                // refuses it by name. What does not follow is the plugin's
+                // own internals — Silica's Files, Search and Graph are its
+                // own views rather than plugin-provided ones.
             })
             .collect()
     }
@@ -3639,22 +3667,57 @@ mod tests {
         assert_eq!(
             live,
             [
+                "Show tab title bar",
                 "Show ribbon",
+                "Show editing mode in status bar",
+                "Inline title",
                 "Readable line length",
                 "Strict line breaks",
                 "Fold heading",
                 "Fold indent",
                 "Line numbers",
                 "Indentation guides",
+                "Right-to-left (RTL)",
+                "Spellcheck",
                 "Auto-pair brackets",
                 "Auto-pair Markdown syntax",
                 "Smart lists",
                 "Indent using tabs",
+                "Vim key bindings",
+                "Always focus new tabs",
                 "Automatically update internal links",
                 "Use [[Wikilinks]]",
                 "Show all file types",
                 "Confirm before deleting files",
-                // The Quick switcher tab's three, read by `QuickSwitcher::set_state`.
+                "Audio recorder",
+                "Backlinks",
+                "Bases",
+                "Bookmarks",
+                "Canvas",
+                "Command palette",
+                "Daily notes",
+                "File recovery",
+                "Files",
+                "Footnotes view",
+                "Graph view",
+                "Note composer",
+                "Outgoing links",
+                "Outline",
+                "Page preview",
+                "Properties view",
+                "Publish",
+                "Quick switcher",
+                "Random note",
+                "Search",
+                "Slash commands",
+                "Slides",
+                "Sync",
+                "Tags view",
+                "Templates",
+                "Unique note creator",
+                "Web viewer",
+                "Word count",
+                "Workspaces",
                 "Show existing only",
                 "Show attachments",
                 "Show all file types",
