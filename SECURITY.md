@@ -40,7 +40,10 @@ the properties a report is measured against:
   What a fetch therefore reveals to the image's host is your IP address and
   the time you opened that note, plus the URL itself.
   Destinations and size are bounded: only `http` and `https` are fetched, at
-  most five redirects are followed and only to those two schemes, a literal
+  most five redirects are followed and only to those two schemes, each
+  redirect hop is revalidated against the same private-network rules before
+  the connection is made (so a redirect chain cannot bounce to a private
+  address the original URL passed), a literal
   loopback, link-local, carrier-grade-NAT or private address is refused before
   any request (`localhost`, `127.0.0.0/8`, `10/8`, `172.16/12`,
   `192.168/16`, `169.254/16`, `100.64/10`, `fc00::/7`, `fe80::/10`, `::1`),
@@ -56,9 +59,11 @@ the properties a report is measured against:
   runtime can do:
   - **Filesystem** — read and write paths inside the vault only. Every path is
     resolved against the vault root, refused if it contains `..` or a symbolic
-    link anywhere along the way, and written with `O_NOFOLLOW`. Writes to the
-    note open in the editor are refused so unsaved edits cannot be lost, and a
-    delete moves the file to `.trash` rather than unlinking it.
+    link anywhere along the way, and written through `openat` with
+    `O_NOFOLLOW` on every component, so no check-then-open race can redirect
+    a write outside the vault. Writes to the note open in the editor are
+    refused so unsaved edits cannot be lost, and a delete moves the file to
+    `.trash` rather than unlinking it.
   - **Network** — none. The plugin runtime has no network primitive, and the
     app's HTTP client is not exposed to the shim.
   - **Process, threads, dynamic code from outside** — none. No `eval` of
@@ -80,7 +85,12 @@ the properties a report is measured against:
   who can connect to it can edit the vault.
 - **Bytes it did not change are left alone.** Config files keep their unknown
   keys, BOMs and line endings; a note that changed on disk underneath an open
-  buffer is not overwritten.
+  buffer is not overwritten. A note that *is* overwritten is saved atomically
+  (temp file, `fsync`, `rename`) and the bytes it replaces are snapshotted to
+  `.trash/.snapshots/` first, with a nanosecond-and-counter filename so two
+  saves in one second cannot overwrite an earlier snapshot. Snapshots and
+  their directory are written through the same `openat` walk as vault writes,
+  so a symlink in the path cannot redirect them outside the vault.
 
 ## Scope
 

@@ -12,8 +12,10 @@ use http_client::{
 /// anything past this is not one, and the disk is not the place to find out.
 pub const MAX_BYTES: u64 = 32 * 1024 * 1024;
 
-/// How many redirects a fetch may follow.
-pub const MAX_REDIRECTS: &str = "5";
+/// How many redirects a fetch may follow. Each hop is revalidated against the
+/// private-network rules before the connection is made, so a hostile redirect
+/// chain cannot reach an address the original URL was refused.
+pub const MAX_REDIRECTS: u32 = 5;
 
 /// The largest remote-image cache Silica will keep on disk. A note's picture
 /// is a picture; the cache is a cache, not an archive, and it is not the
@@ -184,6 +186,23 @@ fn is_private(ip: std::net::IpAddr) -> bool {
     }
 }
 
+/// Whether an HTTP status code is a redirect that we follow and revalidate,
+/// so a redirect chain cannot bounce to a private address the original URL
+/// passed.
+fn is_redirect_status(code: u16) -> bool {
+    matches!(code, 301 | 302 | 303 | 307 | 308)
+}
+
+/// Extracts the `Location` header value from the headers dump curl writes
+/// with `-D`.
+fn extract_location(headers: &str) -> Option<String> {
+    headers
+        .lines()
+        .find(|line| line.to_ascii_lowercase().starts_with("location:"))
+        .and_then(|line| line.split_once(':'))
+        .map(|(_, value)| value.trim().to_string())
+}
+
 impl SilicaHttpClient {
     pub fn new() -> Self {
         let cache_dir = if let Some(cache) = std::env::var_os("XDG_CACHE_HOME") {
@@ -281,71 +300,117 @@ impl HttpClient for SilicaHttpClient {
             let resolve_clone = resolve_arg.clone();
 
             std::thread::spawn(move || {
-                let temp_path = cache_path_clone.with_extension("tmp");
-                let status = std::process::Command::new("curl")
-                    .arg("-s")
-                    .arg("-f")
-                    .arg("-L")
-                    // Redirects are followed, but only five of them, and only
-                    // to the same two schemes: a note's image could otherwise
-                    // bounce through `file://` or loop forever.
-                    .arg("--max-redirs")
-                    .arg(MAX_REDIRECTS)
-                    .arg("--proto")
-                    .arg("=http,https")
-                    .arg("--proto-redir")
-                    .arg("=http,https")
-                    // Pin the connection to the public address the name
-                    // resolved to, so DNS rebinding cannot redirect it at
-                    // connect time.
-                    .arg("--resolve")
-                    .arg(&resolve_clone)
-                    // A response larger than the budget is abandoned rather
-                    // than written, so a hostile host cannot fill the disk.
-                    .arg("--max-filesize")
-                    .arg(MAX_BYTES.to_string())
-                    .arg("--max-time")
-                    .arg("30")
-                    .arg(&uri_clone)
-                    .arg("-o")
-                    .arg(&temp_path)
-                    .status();
+                // Follow redirects manually, validating every hop, so a
+                // redirect chain cannot bounce to a private address that the
+                // original URL passed.
+                let mut current_uri = uri_clone;
+                let mut current_resolve = resolve_clone;
+                let mut redirects = 0u32;
 
-                let res = match status {
-                    Ok(s) if s.success() => {
-                        // `--max-filesize` trusts the advertised length, so
-                        // the file is measured again before it is kept.
-                        match std::fs::metadata(&temp_path) {
-                            Ok(meta) if meta.len() > MAX_BYTES => {
-                                let _ = std::fs::remove_file(&temp_path);
-                                Err(anyhow!(
-                                    "{} is larger than the {} byte limit for a remote image",
-                                    uri_clone,
-                                    MAX_BYTES
-                                ))
-                            }
-                            _ => {
-                                let _ = std::fs::rename(&temp_path, &cache_path_clone);
-                                // Keep the cache within its size budget:
-                                // evict the oldest entries if this write put
-                                // it over the limit.
-                                if let Some(dir) = cache_path_clone.parent() {
-                                    evict_to_limit(dir, MAX_CACHE_BYTES);
+                let result = 'redirects: {
+                    loop {
+                        let temp_path = cache_path_clone.with_extension("tmp");
+                        let headers_path = cache_path_clone.with_extension("headers");
+
+                        let status = std::process::Command::new("curl")
+                            .arg("-s")
+                            .arg("-f")
+                            // No -L: we follow redirects ourselves so each hop
+                            // can be validated against the private-network
+                            // rules before the connection is made.
+                            .arg("--proto").arg("=http,https")
+                            .arg("--proto-redir").arg("=http,https")
+                            .arg("--resolve").arg(&current_resolve)
+                            .arg("--max-filesize").arg(MAX_BYTES.to_string())
+                            .arg("--max-time").arg("30")
+                            .arg("-D").arg(&headers_path)
+                            .arg("-o").arg(&temp_path)
+                            .arg(&current_uri)
+                            .status();
+
+                        let cleanup = || {
+                            let _ = std::fs::remove_file(&temp_path);
+                            let _ = std::fs::remove_file(&headers_path);
+                        };
+
+                        match status {
+                            Ok(s) if s.success() => {
+                                let headers = std::fs::read_to_string(&headers_path)
+                                    .unwrap_or_default();
+                                let code = headers
+                                    .lines()
+                                    .next()
+                                    .and_then(|l| l.split_whitespace().nth(1))
+                                    .and_then(|c| c.parse::<u16>().ok())
+                                    .unwrap_or(0);
+
+                                if is_redirect_status(code) && redirects < MAX_REDIRECTS {
+                                    if let Some(location) = extract_location(&headers) {
+                                        if !allows_destination(&location) {
+                                            cleanup();
+                                            break 'redirects Err(anyhow!(
+                                                "redirect to {} is not allowed",
+                                                location
+                                            ));
+                                        }
+                                        let Some(resolve) = resolve_target(&location) else {
+                                            cleanup();
+                                            break 'redirects Err(anyhow!(
+                                                "redirect to {} could not be resolved to a public address",
+                                                location
+                                            ));
+                                        };
+                                        current_uri = location;
+                                        current_resolve = resolve;
+                                        redirects += 1;
+                                        cleanup();
+                                        continue;
+                                    }
                                 }
-                                std::fs::read(&cache_path_clone).map_err(|e| anyhow!(e))
+
+                                // Final response (not a redirect, or too many
+                                // redirects): keep the body, discard headers.
+                                let _ = std::fs::remove_file(&headers_path);
+
+                                match std::fs::metadata(&temp_path) {
+                                    Ok(meta) if meta.len() > MAX_BYTES => {
+                                        let _ = std::fs::remove_file(&temp_path);
+                                        break 'redirects Err(anyhow!(
+                                            "{} is larger than the {} byte limit for a remote image",
+                                            current_uri,
+                                            MAX_BYTES
+                                        ));
+                                    }
+                                    _ => {
+                                        let _ = std::fs::rename(&temp_path, &cache_path_clone);
+                                        // Keep the cache within its size budget:
+                                        // evict the oldest entries if this write put
+                                        // it over the limit.
+                                        if let Some(dir) = cache_path_clone.parent() {
+                                            evict_to_limit(dir, MAX_CACHE_BYTES);
+                                        }
+                                        match std::fs::read(&cache_path_clone) {
+                                            Ok(data) => break 'redirects Ok(data),
+                                            Err(e) => {
+                                                break 'redirects Err(anyhow!(e));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Ok(s) => {
+                                cleanup();
+                                break 'redirects Err(anyhow!("curl failed with status: {s}"));
+                            }
+                            Err(e) => {
+                                cleanup();
+                                break 'redirects Err(anyhow!("failed to spawn curl: {e}"));
                             }
                         }
                     }
-                    Ok(s) => {
-                        let _ = std::fs::remove_file(&temp_path);
-                        Err(anyhow!("curl failed with status: {}", s))
-                    }
-                    Err(e) => {
-                        let _ = std::fs::remove_file(&temp_path);
-                        Err(anyhow!("failed to spawn curl: {}", e))
-                    }
                 };
-                let _ = tx.send(res);
+
+                let _ = tx.send(result);
             });
 
             let data = rx.await.map_err(|_| anyhow!("fetch cancelled"))??;
@@ -453,15 +518,22 @@ mod tests {
         let resolve = resolve_target("http://example.com/x.png").unwrap();
         assert!(resolve.starts_with("example.com:80:"));
         // The resolved address must not be private or loopback.
-        let ip = resolve.split_once(':').and_then(|(_, rest)| rest.split_once(':').map(|(_, ip)| ip)).unwrap();
+        let ip = resolve
+            .split_once(':')
+            .and_then(|(_, rest)| rest.split_once(':').map(|(_, ip)| ip))
+            .unwrap();
         let ip: std::net::IpAddr = ip.parse().unwrap();
         assert!(!is_private(ip));
     }
 
     #[test]
     fn an_unresolvable_name_is_refused() {
-        assert!(!allows_destination("http://this-name-does-not-exist-silica-test.invalid/x.png"));
-        assert!(resolve_target("http://this-name-does-not-exist-silica-test.invalid/x.png").is_none());
+        assert!(!allows_destination(
+            "http://this-name-does-not-exist-silica-test.invalid/x.png"
+        ));
+        assert!(
+            resolve_target("http://this-name-does-not-exist-silica-test.invalid/x.png").is_none()
+        );
     }
 
     #[test]
@@ -517,5 +589,63 @@ mod tests {
         evict_to_limit(dir.path(), 100);
         assert!(dir.path().join("a.bin").exists());
         assert!(dir.path().join("b.bin").exists());
+    }
+
+    #[test]
+    fn redirect_status_codes_are_recognised() {
+        for code in [301, 302, 303, 307, 308] {
+            assert!(is_redirect_status(code), "{code} should be a redirect");
+        }
+        for code in [200, 404, 500, 201, 204, 304] {
+            assert!(!is_redirect_status(code), "{code} should not be a redirect");
+        }
+    }
+
+    #[test]
+    fn location_header_is_extracted_case_insensitively() {
+        let headers = "HTTP/1.1 302 Found\r\nLocation: https://example.com/elsewhere\r\nContent-Length: 0\r\n";
+        assert_eq!(
+            extract_location(headers),
+            Some("https://example.com/elsewhere".to_string())
+        );
+        // Case-insensitive header name.
+        let headers_lower = "HTTP/1.1 301 Moved\r\nlocation: http://example.com/x\r\n";
+        assert_eq!(
+            extract_location(headers_lower),
+            Some("http://example.com/x".to_string())
+        );
+        // No Location header.
+        let no_location = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n";
+        assert_eq!(extract_location(no_location), None);
+    }
+
+    #[test]
+    fn a_redirect_to_a_private_address_would_be_refused() {
+        // ! The redirect-following loop calls allows_destination on every
+        //   Location header. A redirect to a private address must be caught
+        //   here, before curl ever connects to it.
+        for url in [
+            "http://127.0.0.1/secret",
+            "http://10.0.0.5/admin",
+            "http://192.168.1.1/router",
+            "http://169.254.169.254/metadata",
+            "http://localhost/loopback",
+        ] {
+            assert!(
+                !allows_destination(url),
+                "a redirect to {url} was not refused"
+            );
+            assert!(
+                resolve_target(url).is_none(),
+                "a redirect to {url} was not refused by resolve_target"
+            );
+        }
+    }
+
+    #[test]
+    fn a_redirect_to_a_public_address_would_be_allowed() {
+        let url = "https://example.com/redirected-image.png";
+        assert!(allows_destination(url));
+        assert!(resolve_target(url).is_some());
     }
 }

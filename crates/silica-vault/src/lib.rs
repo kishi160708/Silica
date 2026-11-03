@@ -114,7 +114,11 @@ pub fn write_no_follow(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     // A symlink target is never written through: the link itself is refused,
     // not followed and not replaced. The write below lands on `path` only
     // when `path` is a regular file or does not exist yet.
-    if path.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+    if path
+        .symlink_metadata()
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
+    {
         return Err(std::io::Error::new(
             std::io::ErrorKind::Other,
             format!(
@@ -128,7 +132,10 @@ pub fn write_no_follow(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.subsec_nanos())
         .unwrap_or(0);
-    let temp = parent.join(format!(".{name}.{}.{unique}.silica-tmp", std::process::id()));
+    let temp = parent.join(format!(
+        ".{name}.{}.{unique}.silica-tmp",
+        std::process::id()
+    ));
 
     let write = || -> std::io::Result<()> {
         let mut options = std::fs::OpenOptions::new();
@@ -181,13 +188,25 @@ pub fn write_no_follow(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 
 /// Before a note is overwritten, move its current bytes to the vault's
 /// trash so an accidental or mistaken save can be undone. Snapshots live in
-/// `.trash/.snapshots/<stem>.<timestamp>.<ext>` and only the most recent ones
-/// for a given file are kept, so the folder cannot grow without bound.
+/// `.trash/.snapshots/<stem>.<nanoseconds>.<counter>.<ext>` and only the
+/// most recent ones for a given file are kept, so the folder cannot grow
+/// without bound.
 ///
-/// A snapshot is a best effort: if it cannot be made, the save still
-/// proceeds — losing a snapshot is acceptable, losing the note is not.
+/// * The name carries nanosecond precision plus a counter, so two saves
+///   within the same second cannot collide and destroy an older snapshot.
+/// ! The snapshot directory and file are created through openat handles
+///   with O_NOFOLLOW at every component, so a symlink planted anywhere along
+///   the path is refused, not followed.
+/// * A snapshot is best effort: if it cannot be made, the save still
+///   proceeds — losing a snapshot is acceptable, losing the note is not.
 pub fn snapshot_before_overwrite(path: &Path) {
-    if !path.is_file() {
+    // ! Never snapshot through a symlink: the note itself must be a real file.
+    if !path.is_file()
+        || path
+            .symlink_metadata()
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+    {
         return;
     }
     let Ok(bytes) = std::fs::read(path) else {
@@ -205,17 +224,55 @@ pub fn snapshot_before_overwrite(path: &Path) {
         Some((s, e)) if !s.is_empty() => (s, e),
         _ => (name, ""),
     };
+    let snapshots = parent.join(".trash").join(".snapshots");
+    // ! Create the snapshot directory through openat so no component can be
+    //   swapped for a link between the check and the write.
+    if create_dir_all_at(parent, Path::new(".trash/.snapshots")).is_err() {
+        return;
+    }
+    // * Write the snapshot with a collision-proof name; best effort — the
+    //   save proceeds even if the snapshot cannot be made.
+    if write_snapshot(&snapshots, stem, ext, &bytes).is_ok() {
+        // * Prune old snapshots so the folder cannot grow without bound.
+        let _ = prune_snapshots(&snapshots, stem, 10);
+    }
+}
+
+/// Writes `bytes` to a new snapshot file under `snapshots` with a
+/// collision-proof name, refusing to write through symlinks.
+///
+/// The name is `<stem>.<nanoseconds>.<counter>.<ext>`. Nanosecond precision
+/// plus an incrementing counter makes two saves within the same second
+/// unable to collide and destroy an older snapshot.
+fn write_snapshot(snapshots: &Path, stem: &str, ext: &str, bytes: &[u8]) -> std::io::Result<()> {
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
+        .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let snapshots = parent.join(".trash").join(".snapshots");
-    let target = snapshots.join(format!("{stem}.{stamp}.{ext}"));
-    if let (Ok(()), Ok(())) = (
-        std::fs::create_dir_all(&snapshots),
-        std::fs::write(&target, &bytes),
-    ) {
-        let _ = prune_snapshots(&snapshots, stem, 10);
+    let mut counter: u64 = 0;
+    loop {
+        let target = snapshots.join(format!("{stem}.{stamp}.{counter}.{ext}"));
+        // ! Refuse to write through a symlink: an attacker who plants a link
+        //   at the target path must not redirect the snapshot.
+        if target
+            .symlink_metadata()
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            counter += 1;
+            continue;
+        }
+        // * Skip names that already exist so two sequential saves never
+        //   collide; a concurrent race is acceptable — losing a snapshot is
+        //   acceptable, losing the note is not.
+        if target.exists() {
+            counter += 1;
+            continue;
+        }
+        match write_at(snapshots, Path::new(target.file_name().unwrap()), bytes) {
+            Ok(()) => return Ok(()),
+            Err(e) => return Err(e),
+        }
     }
 }
 
@@ -333,8 +390,9 @@ pub fn create_dir_all_at(root: &Path, relative: &Path) -> std::io::Result<()> {
         let std::path::Component::Normal(part) = part else {
             continue;
         };
-        let part_c = CString::new(part.as_bytes())
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "a NUL in a path"))?;
+        let part_c = CString::new(part.as_bytes()).map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "a NUL in a path")
+        })?;
         // Already there: step into it.
         let mut next = unsafe { libc::openat(dir.as_raw_fd(), part_c.as_ptr(), DIR_FLAGS) };
         if next < 0 {
@@ -1421,7 +1479,10 @@ mod tests {
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(
-            names.iter().map(|s| s.as_str()).collect::<std::collections::HashSet<_>>(),
+            names
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<std::collections::HashSet<_>>(),
             vec!["note.md", ".trash"]
                 .into_iter()
                 .collect::<std::collections::HashSet<_>>(),
@@ -1482,7 +1543,10 @@ mod tests {
             .collect();
         assert!(!files.is_empty(), "no snapshot was made");
         let content = std::fs::read_to_string(snapshots.join(&files[0])).unwrap();
-        assert_eq!(content, "original", "the snapshot did not keep the old bytes");
+        assert_eq!(
+            content, "original",
+            "the snapshot did not keep the old bytes"
+        );
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "replacement");
     }
 
@@ -1496,10 +1560,7 @@ mod tests {
             let _ = write_no_follow(&path, format!("v{n}").as_bytes());
         }
         let snapshots = dir.path().join(".trash").join(".snapshots");
-        let count = std::fs::read_dir(&snapshots)
-            .unwrap()
-            .flatten()
-            .count();
+        let count = std::fs::read_dir(&snapshots).unwrap().flatten().count();
         assert!(count <= 10, "too many snapshots kept: {count}");
     }
 
@@ -1510,5 +1571,41 @@ mod tests {
         write_no_follow(&path, b"first").unwrap();
         let snapshots = dir.path().join(".trash").join(".snapshots");
         assert!(!snapshots.exists() || std::fs::read_dir(&snapshots).unwrap().count() == 0);
+    }
+
+    #[test]
+    fn rapid_saves_do_not_collide_snapshots() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("note.md");
+        std::fs::write(&path, "v0").unwrap();
+
+        // Save 15 times in quick succession — each must produce a distinct
+        // snapshot, none overwriting an earlier one.
+        for n in 1..=15u32 {
+            std::fs::write(&path, format!("v{n}")).unwrap();
+            let _ = write_no_follow(&path, format!("v{n}").as_bytes());
+        }
+
+        let snapshots = dir.path().join(".trash").join(".snapshots");
+        let count = std::fs::read_dir(&snapshots).unwrap().flatten().count();
+        assert_eq!(count, 10, "expected 10 pruned snapshots, got {count}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn snapshot_refuses_a_symlink_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("real.md");
+        std::fs::write(&target, "outside").unwrap();
+        let link = root.join("note.md");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        // The snapshot must refuse to write through the symlink, and the
+        // outside file must be untouched.
+        snapshot_before_overwrite(&link);
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "outside");
+        assert!(!root.join(".trash").join(".snapshots").exists());
     }
 }
