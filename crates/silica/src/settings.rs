@@ -23,9 +23,8 @@
 use crate::assets::logo;
 use crate::palette::hotkey_chip;
 use crate::text_input::{InputEvent, TextInput};
-use crate::theme::{load_css_snippets, load_css_theme, Theme};
+use crate::theme::Theme;
 use crate::workspace::{Commands, VaultState};
-use crate::CSS_RELOAD_CHANNEL;
 use gpui::{
     actions, canvas, deferred, div, hsla, linear_color_stop, linear_gradient, prelude::*, px, rgb,
     uniform_list, AnyElement, App, Bounds, Context, CursorStyle, Entity, EventEmitter, FocusHandle,
@@ -40,7 +39,6 @@ use silica_formats::config::{
 };
 use silica_plugins::Tier;
 use silica_search::fuzzy_match;
-use silica_vault::Vault;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -3487,41 +3485,8 @@ impl Render for SettingsView {
         if self.editing.is_none() && self.field.focus_handle(cx).is_focused(window) {
             self.focus_tab(window, cx);
         }
-        // * Reload community CSS themes and snippets when their files change,
-        //   without restarting. Drained non-blockingly every render.
-        if CSS_RELOAD_CHANNEL
-            .get()
-            .is_some_and(|rx| rx.lock().unwrap().try_recv().is_ok())
-        {
-            if let Some(state) = &self.state {
-                let root = state.root.clone();
-                if let Ok(vault) = Vault::open(&root) {
-                    if let Ok(appearance) = vault.appearance_config() {
-                        let is_dark = cx.global::<Theme>().dark;
-                        let css_theme = appearance
-                            .css_theme
-                            .as_ref()
-                            .and_then(|name| load_css_theme(&root, name));
-                        let css_snippets =
-                            appearance.enabled_css_snippets.clone().unwrap_or_default();
-                        let css_snippets = css_snippets
-                            .iter()
-                            .filter_map(|name| {
-                                load_css_snippets(&root, &[name.clone()]).first().cloned()
-                            })
-                            .collect::<Vec<_>>();
-                        let new_theme = Theme::from_appearance(
-                            &appearance,
-                            is_dark,
-                            css_theme.as_ref(),
-                            &css_snippets,
-                        );
-                        <gpui::Context<'_, SettingsView> as std::borrow::BorrowMut<gpui::App>>::borrow_mut(cx).set_global(new_theme);
-                        cx.notify();
-                    }
-                }
-            }
-        }
+        // * CSS theme/snippet reloads are drained by the workspace's render,
+        //   which paints every frame whether or not this modal is open.
         let theme = cx.global::<Theme>().clone();
         let tab = self.tab;
         let body: gpui::AnyElement = if tab == Tab::Hotkeys {
