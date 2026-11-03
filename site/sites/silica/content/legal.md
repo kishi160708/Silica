@@ -1,12 +1,12 @@
 ---
 title: Legal
 layout: page
-description: Silica is free software under the MIT license, from RAGTUX LLC. What the license means in plain words, what the warranty disclaimer means for your vault, trademark notice, privacy, and how to reach us.
+description: Silica is free software under the MIT license, from Silica. What the license means in plain words, what the warranty disclaimer means for your vault, trademark notice, privacy, and how to reach us.
 ---
 
 # Legal
 
-Silica is free software published by RAGTUX LLC, a Minnesota limited liability company.
+Silica is free software published by Silica, a Minnesota limited liability company.
 This page says what that means in ordinary words. The words that actually bind are in
 [LICENSE](https://github.com/lw-xiong/Silica/blob/main/LICENSE) in the repository; where
 this page and that file differ, the file governs.
@@ -41,7 +41,7 @@ Silica contains no code, stylesheets, icons or other assets from Obsidian's appl
 bundle. Its behavior was implemented from a written specification derived from observing
 Obsidian's public behavior, its documented file formats and its public documentation.
 
-**Silica** and **RAGTUX** are names used by RAGTUX LLC. The MIT license covers the code,
+**Silica** and **Silica** are names used by Silica. The MIT license covers the code,
 not the names: a fork is welcome, and should carry its own name rather than ours, so that
 nobody mistakes your build for one of our releases.
 
@@ -83,5 +83,5 @@ the same problem can find it.
 
 ## The company
 
-RAGTUX LLC, Minnesota, USA. Company-level terms, privacy and support pages are at
+Silica, Minnesota, USA. Company-level terms, privacy and support pages are at
 [](https:///).

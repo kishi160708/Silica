@@ -4,7 +4,7 @@
   "host": "silica.cc",
   "baseUrl": "/",
   "description": "Silica is a native knowledge base written in Rust that opens Obsidian vaults unchanged — same folder, same configuration, same Markdown. Free software under the MIT license, and not affiliated with Obsidian.",
-  "footer": "Silica is free software from RAGTUX LLC, under the MIT license. An independent implementation, not affiliated with Obsidian.",
+  "footer": "Silica is free software under the MIT license. An independent implementation, not affiliated with Obsidian.",
   "mark": "/assets/logo.svg",
   "cta": { "text": "Download", "url": "/download/" },
   "styles": ["/assets/silica.css"],
