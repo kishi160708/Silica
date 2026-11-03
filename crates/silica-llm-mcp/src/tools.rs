@@ -10,9 +10,12 @@
 use crate::model::{Answer, Ask, Backend, digest_path};
 use crate::rpc::{Fault, INVALID_PARAMS};
 use serde_json::{json, Map, Value};
+#[cfg(unix)]
 use std::path::Path;
 use std::io::{Read, Seek};
+#[cfg(unix)]
 use std::ffi::CString;
+#[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd};
 
 enum Run {
@@ -391,15 +394,22 @@ fn read_excerpt(
     // Open without following symlinks on the final component (Unix): a link
     // planted between the digest-path check and the open cannot redirect the
     // read outside the permitted root.
+    // * Windows has no `openat`, so the guarantee comes from the handle instead
+    // * of the name: the file is opened, then the handle is asked where it
+    // * landed and refused if that is outside the digest root. A reparse point
+    // * planted after `digest_path` validated the string cannot redirect the
+    // * read, because the check describes the object already open.
+    #[cfg(unix)]
     let f = open_digest_file(&backend.config.digest_root, &file)?;
-    #[cfg(not(unix))]
-    let f = std::fs::File::open(&file).map_err(|e| format!("cannot read {path}: {e}"))?;
-    // ! TODO(windows): std::fs::File::open is a check-then-act open: a symlink
-    // ! or reparse point planted after digest_path validation and before this
-    // ! open can redirect the read outside the digest root. Implement
-    // // handle-relative traversal from an opened directory descriptor with
-    // // FILE_FLAG_OPEN_REPARSE_POINT / CreateFileW on Windows before this is
-    // // considered fixed there.
+    #[cfg(windows)]
+    let f = {
+        let root = &backend.config.digest_root;
+        let relative = file
+            .strip_prefix(root)
+            .map_err(|_| format!("{} is not under the digest root", file.display()))?;
+        silica_vault::win_fs::open_inside(root, relative)
+            .map_err(|e| format!("cannot read {path}: {e}"))?
+    };
 
     let meta = f.metadata().map_err(|e| format!("cannot stat {path}: {e}"))?;
     // Reject non-regular files (FIFOs, sockets, devices): they cannot be

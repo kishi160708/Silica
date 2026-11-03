@@ -12,6 +12,7 @@ name = "silica-llm-mcp"
 path = "src/main.rs"
 
 [dependencies]
+silica-vault = { path = "../silica-vault" }
 serde_json.workspace = true
 libc = "0.2"
 # Blocking TLS for `https://` model-server endpoints. native-tls uses the

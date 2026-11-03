@@ -20,8 +20,20 @@ pub struct CssWatcher {
 }
 
 impl CssWatcher {
-    /// Watch `vault_path/.obsidian/themes/` and
-    /// `vault_path/.obsidian/snippets/` (only when they exist).
+    /// Watch a vault's `.obsidian` subtree for CSS changes.
+    ///
+    /// `.obsidian` is watched recursively rather than `themes/` and
+    /// `snippets/` being watched one by one, because those two may not exist
+    /// when the window opens: a non-recursive registration made at startup
+    /// never covers a directory created afterwards, so the first theme a user
+    /// installed would sit there until a restart. A recursive watch follows
+    /// directories as they appear and needs no re-registration.
+    ///
+    /// The vault root is watched too, non-recursively: `.obsidian` itself can
+    /// be created later (a folder of notes that was never opened in Obsidian
+    /// has none), and nothing below it is visible to a watcher that started
+    /// before it existed. Root stays non-recursive so saving a note does not
+    /// fire a CSS reload.
     pub fn new(vault_path: &Path) -> anyhow::Result<(Self, mpsc::Receiver<()>)> {
         let (tx, rx) = mpsc::channel::<()>();
         let tx = std::sync::Mutex::new(tx);
@@ -35,32 +47,63 @@ impl CssWatcher {
                             | notify::EventKind::Create(_)
                             | notify::EventKind::Remove(_)
                     ) {
-                        let _ = tx.lock().unwrap().send(());
+                        // * Only a `.css` file under `.obsidian` matters. The
+                        // * recursive watch also reports `workspace.json`
+                        // * churn and plugin folders, and rebuilding the theme
+                        // * for those would be work with no visible effect.
+                        let ours = event.paths.iter().any(|p| {
+                            p.extension().is_some_and(|e| e.eq_ignore_ascii_case("css"))
+                                && p.components().any(|c| c.as_os_str() == ".obsidian")
+                        });
+                        if ours {
+                            let _ = tx.lock().unwrap().send(());
+                        }
                     }
                 }
             },
             notify::Config::default(),
         )?;
 
-        // * `.obsidian` itself is watched, not only the two folders inside it:
-        // * a vault that has no `themes/` yet gets no events from watching a
-        // * directory that does not exist, so creating one later would never
-        // * reload. Watching the parent covers the folder appearing; the two
-        // * are still watched directly so a file edited inside one is caught
-        // * even where the parent event is only a directory write.
+        if vault_path.is_dir() {
+            watcher.watch(vault_path, RecursiveMode::NonRecursive)?;
+        }
         let obsidian = vault_path.join(".obsidian");
-        let themes_dir = obsidian.join("themes");
-        let snippets_dir = obsidian.join("snippets");
         if obsidian.is_dir() {
-            watcher.watch(&obsidian, RecursiveMode::NonRecursive)?;
-        }
-        if themes_dir.is_dir() {
-            watcher.watch(&themes_dir, RecursiveMode::NonRecursive)?;
-        }
-        if snippets_dir.is_dir() {
-            watcher.watch(&snippets_dir, RecursiveMode::NonRecursive)?;
+            watcher.watch(&obsidian, RecursiveMode::Recursive)?;
         }
 
         Ok((Self { _watcher: watcher }, rx))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A theme installed after the watcher started still reloads: the folder
+    /// is created late and the recursive watch is what picks it up.
+    #[test]
+    fn a_theme_folder_created_after_startup_is_seen() {
+        let vault = tempfile::tempdir().expect("a temp vault");
+        std::fs::create_dir_all(vault.path().join(".obsidian")).expect("config dir");
+        let (_watcher, rx) = CssWatcher::new(vault.path()).expect("watcher");
+
+        // * Created only now, which is the case a per-directory registration
+        // * at startup would have missed.
+        let themes = vault.path().join(".obsidian/themes");
+        std::fs::create_dir_all(&themes).expect("themes");
+        // * inotify registers a newly created subdirectory of a recursive watch
+        // * asynchronously. A file written in the same instant lands before the
+        // * registration exists and is never reported, so give the watch the
+        // * moment it needs — the assertion below is about the file event, not
+        // * about how fast the kernel got there.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+
+        std::fs::write(themes.join("late.css"), ":root { --x: #123456; }").expect("theme");
+        let first = rx.recv_timeout(std::time::Duration::from_secs(5));
+        assert!(
+            first.is_ok(),
+            "a theme written into a late folder must trigger a reload (got {first:?})"
+        );
     }
 }

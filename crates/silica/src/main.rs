@@ -517,7 +517,10 @@ fn main() {
         .and_then(|name| {
             vault.as_ref().and_then(|v| {
                 let root = v.root().to_path_buf();
-                theme::load_css_theme(&root, &name)
+                // * Startup has no window yet, so the desktop scheme is not
+                //   known; the theme is rebuilt by `recompute_theme` once the
+                //   window can answer, which re-reads the CSS for the real mode.
+                theme::load_css_theme(&root, &name, true)
             })
         });
     // * Enabled CSS snippets from `.obsidian/snippets/<name>.css`; applied last
@@ -534,7 +537,7 @@ fn main() {
         .as_ref()
         .map(|v| {
             let root = v.root().to_path_buf();
-            theme::load_css_snippets(&root, &css_snippets)
+            theme::load_css_snippets(&root, &css_snippets, true)
         })
         .unwrap_or_default();
     // ? The window is what knows the desktop's colour scheme, and it does not

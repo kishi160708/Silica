@@ -3525,9 +3525,9 @@ impl Workspace {
         let css_theme = appearance
             .css_theme
             .as_ref()
-            .and_then(|name| load_css_theme(&state.root, name));
+            .and_then(|name| load_css_theme(&state.root, name, dark));
         let snippets_names = appearance.enabled_css_snippets.as_deref().unwrap_or(&[]);
-        let css_snippets = load_css_snippets(&state.root, snippets_names);
+        let css_snippets = load_css_snippets(&state.root, snippets_names, dark);
         cx.set_global(Theme::from_appearance(
             &appearance,
             dark,

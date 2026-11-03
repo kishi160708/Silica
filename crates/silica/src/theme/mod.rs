@@ -446,19 +446,20 @@ fn safe_css_name(name: &str) -> Option<&str> {
 }
 
 /// Read a theme or snippet file, refusing anything that is not a plain file
-/// inside `dir` of at most [`MAX_CSS_BYTES`].
+/// inside the vault of at most [`MAX_CSS_BYTES`].
 ///
-/// The name check is lexical; a symlink at `dir/<name>.css` would still be
-/// followed by an ordinary read, so the opened file is checked too: a link is
-/// refused rather than followed out of the vault.
-fn read_css_file(dir: &Path, name: &str) -> Option<String> {
+/// The name check is lexical and only the first line of defence: a symlink at
+/// `<dir>/<name>.css` is not ruled out by spelling. What closes that is that
+/// the file is opened first and then judged from the **handle** — its type and
+/// size describe the object that was opened, not the path that named it, so a
+/// link swapped in between cannot redirect the read or the size limit.
+fn read_css_file(vault_path: &Path, dir: &Path, name: &str) -> Option<String> {
     let name = safe_css_name(name)?;
     let path = dir.join(format!("{name}.css"));
-    let meta = std::fs::symlink_metadata(&path).ok()?;
-    if !meta.file_type().is_file() || meta.len() > MAX_CSS_BYTES {
-        return None;
-    }
-    std::fs::read_to_string(&path).ok()
+    let relative = path.strip_prefix(vault_path).ok()?;
+    // * `read_verified` opens first and judges the handle, so a link at the
+    // * file cannot be swapped in between the name and the read.
+    silica_vault::read_verified(vault_path, relative, MAX_CSS_BYTES).ok()
 }
 
 /// Parse a theme's CSS source into the declarations it sets for one base theme.
@@ -489,37 +490,28 @@ pub fn parse_css_theme(css: &str, dark: bool) -> CssTheme {
 }
 
 /// Load a community theme from `.obsidian/themes/<name>.css` inside a vault.
-pub fn load_css_theme(vault_path: &Path, name: &str) -> Option<CssTheme> {
-    let css = read_css_file(&vault_path.join(".obsidian/themes"), name)?;
-    Some(parse_css_theme(&css, is_dark_theme(vault_path)))
+///
+/// `dark` is the *resolved* base scheme, not the `theme` key: when a vault says
+/// `system`, only the window knows which way the desktop is set, so the caller
+/// passes its answer. Reading `appearance.json` here instead would load the
+/// `.theme-dark` block of a stylesheet while a light desktop renders, which is
+/// exactly the mismatch this parameter exists to prevent.
+pub fn load_css_theme(vault_path: &Path, name: &str, dark: bool) -> Option<CssTheme> {
+    let css = read_css_file(vault_path, &vault_path.join(".obsidian/themes"), name)?;
+    Some(parse_css_theme(&css, dark))
 }
 
 /// Load every enabled CSS snippet from `.obsidian/snippets/*.css` inside a
 /// vault. Only snippets whose names appear in `enabled` are loaded and
 /// returned, in the same order as `enabled`.
-pub fn load_css_snippets(vault_path: &Path, enabled: &[String]) -> Vec<CssTheme> {
-    let dir = vault_path.join(".obsidian/snippets");
-    let dark = is_dark_theme(vault_path);
+pub fn load_css_snippets(vault_path: &Path, enabled: &[String], dark: bool) -> Vec<CssTheme> {
     enabled
         .iter()
-        .filter_map(|name| read_css_file(&dir, name))
+        .filter_map(|name| read_css_file(vault_path, &vault_path.join(".obsidian/snippets"), name))
         .map(|css| parse_css_theme(&css, dark))
         .collect()
 }
 
-/// Which base theme the vault asks for, for a caller that has only a path.
-///
-/// `moonstone` is light, `obsidian` is dark, and `system` — the default — is
-/// taken as dark here; the window corrects it later through
-/// [`Theme::from_appearance`]. This only decides which `.theme-dark` /
-/// `.theme-light` block of a stylesheet is read.
-fn is_dark_theme(vault_path: &Path) -> bool {
-    silica_vault::Vault::open(vault_path)
-        .ok()
-        .and_then(|v| v.appearance_config().ok())
-        .and_then(|a| a.theme)
-        .is_none_or(|t| t != "moonstone")
-}
 
 impl Theme {
     /// Apply a parsed community theme on top of this one. Only properties the
@@ -688,6 +680,60 @@ impl Theme {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The mode is the caller's answer, not a guess from `appearance.json`:
+    /// the same file yields the dark block when told dark and the light block
+    /// when told light. A vault set to `system` on a light desktop must not
+    /// get `.theme-dark`.
+    #[test]
+    fn the_mode_decides_which_block_a_theme_supplies() {
+        let css = "
+            .theme-dark { --background-primary: #111111; }
+            .theme-light { --background-primary: #eeeeee; }
+        ";
+        let dark = parse_css_theme(css, true);
+        let light = parse_css_theme(css, false);
+        assert_eq!(dark.vars.get("--background-primary").map(String::as_str), Some("#111111"));
+        assert_eq!(light.vars.get("--background-primary").map(String::as_str), Some("#eeeeee"));
+    }
+
+    /// A name that could join its way out of `.obsidian` is refused before any
+    /// filesystem call, and a name that is fine still loads.
+    #[test]
+    fn a_theme_loader_refuses_a_traversing_name() {
+        let vault = tempfile::tempdir().expect("a temp vault");
+        let themes = vault.path().join(".obsidian/themes");
+        std::fs::create_dir_all(&themes).expect("themes");
+        std::fs::write(themes.join("good.css"), ":root { --x: #123456; }").expect("theme");
+        // * A file one level up, which a traversing name would reach.
+        std::fs::write(vault.path().join("secret.css"), ":root { --x: #ff0000; }").expect("secret");
+
+        assert!(load_css_theme(vault.path(), "good", true).is_some());
+        for bad in ["../secret", "..\\secret", "/etc/passwd", ".hidden", "a/b"] {
+            assert!(
+                load_css_theme(vault.path(), bad, true).is_none(),
+                "{bad} should not load"
+            );
+        }
+    }
+
+    /// A symlink where a theme should be is refused rather than followed, and
+    /// the refusal is about the opened file, not the spelling of the name.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_theme_is_refused() {
+        let vault = tempfile::tempdir().expect("a temp vault");
+        let themes = vault.path().join(".obsidian/themes");
+        std::fs::create_dir_all(&themes).expect("themes");
+        let outside = vault.path().join("outside.css");
+        std::fs::write(&outside, ":root { --x: #ff0000; }").expect("outside");
+        std::os::unix::fs::symlink(&outside, themes.join("linked.css")).expect("link");
+
+        assert!(
+            load_css_theme(vault.path(), "linked", true).is_none(),
+            "a symlinked theme must not be read"
+        );
+    }
 
     /// The defaults resolve, and the chains are real: `--text-muted` is
     /// declared as `var(--color-base-70)`, so the value that comes out is

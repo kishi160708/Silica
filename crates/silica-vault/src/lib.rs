@@ -308,11 +308,19 @@ fn write_snapshot(snapshots: &Path, stem: &str, ext: &str, bytes: &[u8]) -> std:
             counter += 1;
             continue;
         }
-        // * Windows has no openat; the reparse-point refusal at the top of
-        // * this file is what stands in for it there.
+        // * Windows has no `openat`; `win_fs::write_at` verifies the parent by
+        // * its handle and renames relative to it, so the pathname check above
+        // * is not what stands between a junction and the snapshot.
         #[cfg(unix)]
         let written = write_at(snapshots, Path::new(target.file_name().unwrap()), bytes);
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        let written = {
+            let relative = target
+                .strip_prefix(snapshots)
+                .unwrap_or_else(|_| Path::new(target.file_name().unwrap()));
+            win_fs::write_at(snapshots, relative, bytes)
+        };
+        #[cfg(not(any(unix, windows)))]
         let written = write_no_follow(&target, bytes);
         match written {
             Ok(()) => return Ok(()),
@@ -544,6 +552,48 @@ fn is_link_like(meta: &std::fs::Metadata) -> bool {
         }
     }
     false
+}
+
+/// Read a file under `root` without following a link at any step, bounding it
+/// at `max_bytes`.
+///
+/// The file is opened first and judged from the handle that was opened — its
+/// type and length — rather than from `symlink_metadata` on a path that is
+/// then reopened. On Unix that is `O_NOFOLLOW` on the final component; on
+/// Windows it is [`win_fs::open_inside`], which asks the handle where it
+/// landed. A link swapped in between naming the file and opening it therefore
+/// cannot redirect the read or slip past the size limit.
+pub fn read_verified(root: &Path, relative: &Path, max_bytes: u64) -> std::io::Result<String> {
+    #[cfg(unix)]
+    let mut file = {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(root.join(relative))?
+    };
+    #[cfg(windows)]
+    let mut file = win_fs::open_inside(root, relative)?;
+    #[cfg(not(any(unix, windows)))]
+    let mut file = std::fs::File::open(root.join(relative))?;
+
+    let meta = file.metadata()?;
+    if !meta.file_type().is_file() {
+        return Err(std::io::Error::other(format!(
+            "{} is not a regular file",
+            relative.display()
+        )));
+    }
+    if meta.len() > max_bytes {
+        return Err(std::io::Error::other(format!(
+            "{} is {} bytes, over the {max_bytes}-byte limit",
+            relative.display(),
+            meta.len()
+        )));
+    }
+    let mut out = String::new();
+    std::io::Read::read_to_string(&mut file, &mut out)?;
+    Ok(out)
 }
 
 /// Creates every directory under `root` named by `relative`, one directory
