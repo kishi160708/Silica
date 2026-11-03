@@ -9,7 +9,7 @@
 //! Nothing here may panic: both the URL and the response come from outside.
 
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
 use native_tls::TlsConnector;
@@ -87,28 +87,12 @@ impl Response {
 
 /// One request, one connection. `body` is sent as JSON when present, which
 /// makes this a POST; without it the request is a GET.
-pub fn request(
-    url: &Url,
-    path: &str,
-    body: Option<&str>,
-    bearer: Option<&str>,
-    timeout: Duration,
-) -> Result<Response, String> {
-    let address = format!("{}:{}", url.host, url.port);
-    // ! Resolve and connect with the same budget as the read: a wrong port on
-    // ! loopback refuses at once, but a wrong host must not hang forever.
-    let mut stream = TcpStream::connect(&address).map_err(|e| {
-        format!(
-            "cannot reach {address}: {e}. Is the model server running? \
-             From another machine, SILICA_LLM_URL should be that machine's \
-             address (http://127.0.0.1:11434/v1 on this one)."
-        )
-    })?;
-    stream
-        .set_read_timeout(Some(timeout))
-        .and_then(|()| stream.set_write_timeout(Some(timeout)))
-        .map_err(|e| format!("{address}: cannot set a timeout: {e}"))?;
-
+/// Build the HTTP/1.1 request head for one call. Extracted so tests can
+/// verify header construction: `Authorization` is always terminated with
+/// CRLF before `Content-Type` on authenticated POST requests, so the header
+/// cannot be malformed into a single invalid line, and the bearer token is
+/// actually sent instead of being redacted.
+fn build_head(url: &Url, path: &str, body: Option<&str>, bearer: Option<&str>) -> String {
     let method = if body.is_some() { "POST" } else { "GET" };
     let mut head = format!(
         "{method} {path} HTTP/1.1\r\nHost: {}\r\nAccept: application/json\r\n\
@@ -126,6 +110,33 @@ pub fn request(
         ));
     }
     head.push_str("\r\n");
+    head
+}
+
+pub fn request(
+    url: &Url,
+    path: &str,
+    body: Option<&str>,
+    bearer: Option<&str>,
+    timeout: Duration,
+) -> Result<Response, String> {
+    let address = format!("{}:{}", url.host, url.port);
+    // ! Resolve and connect with the same budget as the read: a wrong port on
+    // ! loopback refuses at once, but a wrong host must not hang forever.
+    let addr = (url.host.as_str(), url.port)
+        .to_socket_addrs()
+        .map_err(|e| format!("cannot resolve {address}: {e}"))?
+        .next()
+        .ok_or_else(|| format!("no address for {address}"))?;
+    let mut stream = TcpStream::connect_timeout(&addr, timeout).map_err(|e| {
+        format!("cannot reach {address}: {e}. Is the model server running? From another machine, SILICA_LLM_URL should be that machines address (http://127.0.0.1:11434/v1 on this one).")
+    })?;
+    stream
+        .set_read_timeout(Some(timeout))
+        .and_then(|()| stream.set_write_timeout(Some(timeout)))
+        .map_err(|e| format!("{address}: cannot set a timeout: {e}"))?;
+
+    let head = build_head(url, path, body, bearer);
 
     if url.scheme == "https" {
         return https_request(stream, url, &head, body, &address);
@@ -339,4 +350,28 @@ mod tests {
         assert_eq!(decode(b"5;x=1\r\nhello\r\n", true, None), "hello");
         assert_eq!(decode(b"ff\r\nshort", true, None), "short");
     }
+
+    #[test]
+    fn authenticated_post_head_ends_authorization_with_crlf() {
+        let url = Url::parse("http://127.0.0.1:11434/v1").unwrap();
+        let head = build_head(&url, "/chat/completions", Some("{}"), Some("secret-token"));
+        assert!(
+            head.contains("Authorization: Bearer secret-token\r\nContent-Type:"),
+            "head was:\n{head}"
+        );
+        assert!(head.contains("POST /chat/completions HTTP/1.1"));
+    }
+
+    #[test]
+    fn authenticated_get_head_ends_authorization_with_crlf() {
+        let url = Url::parse("http://127.0.0.1:11434/v1").unwrap();
+        let head = build_head(&url, "/models", None, Some("secret-token"));
+        assert!(
+            head.contains("Authorization: Bearer secret-token\r\n"),
+            "head was:\n{head}"
+        );
+        assert!(!head.contains("Content-Type"));
+        assert!(head.contains("GET /models HTTP/1.1"));
+    }
+
 }

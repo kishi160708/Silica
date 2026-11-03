@@ -6116,6 +6116,7 @@ dependencies = [
 name = "silica-llm-mcp"
 version = "0.5.6"
 dependencies = [
+ "libc",
  "native-tls",
  "serde_json",
 ]

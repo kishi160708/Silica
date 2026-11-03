@@ -10,7 +10,7 @@
 use crate::model::{Answer, Ask, Backend, digest_path};
 use crate::rpc::{Fault, INVALID_PARAMS};
 use serde_json::{json, Map, Value};
-use std::io::Read;
+use std::io::{Read, Seek};
 
 enum Run {
     Models,
@@ -263,27 +263,46 @@ fn keep_line(
     max: usize,
     line: &[u8],
 ) -> bool {
-    let mut content = line;
-    while content.last() == Some(&b'\r') {
-        content = &content[..content.len() - 1];
+    let mut text = std::str::from_utf8(line).unwrap_or("");
+    while text.ends_with('\r') {
+        text = &text[..text.len() - 1];
     }
     match needle {
         Some(needle) => {
-            let text = String::from_utf8_lossy(content);
             if text.to_ascii_lowercase().contains(needle.as_str()) {
-                if *kept_bytes + content.len() + 1 > max && *kept_bytes > 0 {
+                // Enforce the output limit even when the first matching line
+                // is oversized: truncate to `max` bytes and stop reading.
+                if text.len() > max {
+                    let mut end = max.min(text.len());
+                    while end > 0 && !text.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    kept.push(text[..end].to_string());
+                    *kept_bytes = end;
                     return false;
                 }
-                *kept_bytes += content.len() + 1;
-                kept.push(text.into_owned());
+                if *kept_bytes + text.len() + 1 > max && *kept_bytes > 0 {
+                    return false;
+                }
+                *kept_bytes += text.len() + 1;
+                kept.push(text.to_string());
             }
         }
         None => {
-            if *kept_bytes + content.len() + 1 > max && *kept_bytes > 0 {
+            if text.len() > max {
+                let mut end = max.min(text.len());
+                while end > 0 && !text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                kept.push(text[..end].to_string());
+                *kept_bytes = end;
                 return false;
             }
-            *kept_bytes += content.len() + 1;
-            kept.push(String::from_utf8_lossy(content).into_owned());
+            if *kept_bytes + text.len() + 1 > max && *kept_bytes > 0 {
+                return false;
+            }
+            *kept_bytes += text.len() + 1;
+            kept.push(text.to_string());
         }
     }
     true
@@ -298,35 +317,46 @@ fn read_excerpt(
     let file = digest_path(&backend.config.digest_root, path)?;
     let max = backend.config.max_bytes;
     let mut note = format!("[{path}");
+
+    // Open without following symlinks on the final component (Unix): a link
+    // planted between the digest-path check and the open cannot redirect the
+    // read outside the permitted root.
+    #[cfg(unix)]
+    let f = {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut opts = std::fs::OpenOptions::new();
+        opts.read(true).custom_flags(libc::O_NOFOLLOW);
+        opts.open(&file).map_err(|e| format!("cannot read {path}: {e}"))?
+    };
+    #[cfg(not(unix))]
     let f = std::fs::File::open(&file).map_err(|e| format!("cannot read {path}: {e}"))?;
-    let mut reader = std::io::BufReader::new(f);
-    let mut bytes_read = 0u64;
-    const CHUNK: usize = 8 << 10; // fixed-size reads: one read never allocates more than this
-    let mut buf = [0u8; CHUNK];
+
+    let meta = f.metadata().map_err(|e| format!("cannot stat {path}: {e}"))?;
+    // Reject non-regular files (FIFOs, sockets, devices): they cannot be
+    // meaningfully sought and may block or stream indefinitely.
+    if !meta.file_type().is_file() {
+        return Err(format!("{path} is not a regular file; refuse to read"));
+    }
+    let len = meta.len();
 
     if tail {
-        // Rolling buffer of the last `max` bytes: bounded even when the file
-        // is one enormous line or has no newlines at all.
-        let mut tail_buf: Vec<u8> = Vec::with_capacity(max);
-        loop {
-            let n = match reader.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => n,
-                Err(e) => return Err(format!("cannot read {path}: {e}")),
-            };
-            bytes_read += n as u64;
-            let data = &buf[..n];
-            if tail_buf.len() + data.len() > max {
-                let need = tail_buf.len() + data.len() - max;
-                let drop_buf = need.min(tail_buf.len());
-                tail_buf.drain(..drop_buf);
-                let data = &data[need - drop_buf..];
-                tail_buf.extend_from_slice(data);
-            } else {
-                tail_buf.extend_from_slice(data);
-            }
-        }
-        let detail = format!(": {bytes_read} bytes read, last {max} bytes kept");
+        // Seek to the last `max` bytes of a regular file: bounded disk
+        // activity and memory even for a very large file or one enormous line
+        // without newlines.
+        let mut reader = std::io::BufReader::new(f);
+        let start = len.saturating_sub(max as u64);
+        reader
+            .seek(std::io::SeekFrom::Start(start))
+            .map_err(|e| format!("cannot seek {path}: {e}"))?;
+        let mut tail_buf = Vec::new();
+        reader
+            .take(max as u64)
+            .read_to_end(&mut tail_buf)
+            .map_err(|e| format!("cannot read {path}: {e}"))?;
+        let detail = format!(
+            ": {len} bytes in file, last {} bytes kept",
+            tail_buf.len()
+        );
         note.push_str(&detail);
         note.push(']');
         return Ok(Excerpt {
@@ -335,9 +365,13 @@ fn read_excerpt(
         });
     }
 
-    // Head or contains mode: read at most `max` bytes from disk and split into
-    // lines. Fixed-size reads plus a mid-read stop mean no single line can
-    // allocate more than `max` bytes.
+    // Head or contains mode: read at most `max` bytes from disk, limiting
+    // each read to the remaining allowance so a single read cannot allocate
+    // beyond the cap.
+    let mut reader = std::io::BufReader::new(f);
+    let mut bytes_read = 0u64;
+    const CHUNK: usize = 8 << 10;
+    let mut buf = [0u8; CHUNK];
     let needle = contains.filter(|n| !n.is_empty()).map(|n| n.to_lowercase());
     let mut kept: Vec<String> = Vec::new();
     let mut kept_bytes = 0usize;
@@ -348,15 +382,14 @@ fn read_excerpt(
         if bytes_read >= max as u64 {
             break;
         }
-        let n = match reader.read(&mut buf) {
+        let remaining = (max as u64 - bytes_read) as usize;
+        let n = match reader.read(&mut buf[..remaining.min(CHUNK)]) {
             Ok(0) => break,
             Ok(n) => n,
             Err(e) => return Err(format!("cannot read {path}: {e}")),
         };
         bytes_read += n as u64;
         let data = &buf[..n];
-        // Split `partial + data` on newlines. `partial` holds the bytes of
-        // the current unterminated line carried over from the last chunk.
         let mut pos = 0;
         while pos < data.len() {
             match data[pos..].iter().position(|b| *b == b'\n') {
@@ -402,11 +435,16 @@ fn read_excerpt(
                 ));
             }
             let body = kept.join("\n");
-            let detail = format!(": {bytes_read} bytes read, {count} lines match {needle:?}");
+            let detail = format!(
+                ": {bytes_read} bytes read, {count} lines match {needle:?}"
+            );
             (body, detail)
         }
         None => {
-            let detail = format!(": {bytes_read} bytes read, {} lines kept", kept.len());
+            let detail = format!(
+                ": {bytes_read} bytes read, {} lines kept",
+                kept.len()
+            );
             (kept.join("\n"), detail)
         }
     };
@@ -611,4 +649,90 @@ mod tests {
             read_excerpt(&backend_with(1 << 10), "/nonexistent/log.txt", None, false).unwrap_err();
         assert!(e.contains("/nonexistent/log.txt"), "{e}");
     }
+
+    #[test]
+    fn digest_head_caps_output_at_max_bytes() {
+        let dir = std::env::temp_dir().join(format!(
+            "silica-llm-mcp-headcap-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("big.txt");
+        std::fs::write(&path, "alpha\nbeta\ngamma\ndelta\n").unwrap();
+        let path = path.to_string_lossy().into_owned();
+
+        let head = read_excerpt(&backend_with(20), &path, None, false).unwrap();
+        assert!(head.body.len() <= 20, "{}", head.body.len());
+        assert!(head.body.starts_with("alpha\nbeta"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn digest_tail_reads_only_last_bytes() {
+        let dir = std::env::temp_dir().join(format!(
+            "silica-llm-mcp-tail-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("big.txt");
+        std::fs::write(&path, "0123456789\nabcdefghij\n").unwrap();
+        let path = path.to_string_lossy().into_owned();
+
+        let tail = read_excerpt(&backend_with(7), &path, None, true).unwrap();
+        assert!(tail.body.len() <= 7, "{}", tail.body.len());
+        assert!(tail.body.ends_with("ghij\n"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn digest_rejects_non_regular_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "silica-llm-mcp-dir-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let backend = backend_with(1 << 20);
+        let err = read_excerpt(&backend, dir.to_str().unwrap(), None, false)
+            .unwrap_err();
+        assert!(
+            err.contains("is not a regular file"),
+            "{err}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+
+    #[test]
+    fn digest_oversized_first_line_capped_at_limit() {
+        let dir = std::env::temp_dir().join(format!(
+            "silica-llm-mcp-oversize-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("one_line.txt");
+        std::fs::write(&path, "z".repeat(10_000)).unwrap();
+        let path = path.to_string_lossy().into_owned();
+
+        let head = read_excerpt(&backend_with(20), &path, None, false).unwrap();
+        assert!(head.body.len() <= 20, "{}", head.body.len());
+        assert!(head.body.starts_with("z"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn digest_exact_limit_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "silica-llm-mcp-exact-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("exact.txt");
+        std::fs::write(&path, "0123456789").unwrap();
+        let path = path.to_string_lossy().into_owned();
+
+        let head = read_excerpt(&backend_with(10), &path, None, false).unwrap();
+        assert_eq!(head.body, "0123456789");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
 }
