@@ -1143,8 +1143,6 @@ enum Honored {
     Live,
     /// Read when Silica starts (the theme and the fonts).
     OnRestart,
-    /// Not read at all yet: the value is written for Obsidian.
-    No,
 }
 
 impl Honored {
@@ -1153,7 +1151,6 @@ impl Honored {
         match self {
             Honored::Live => None,
             Honored::OnRestart => Some(crate::i18n::t("on restart")),
-            Honored::No => Some(crate::i18n::t("not in Silica yet")),
         }
     }
 }
@@ -2159,13 +2156,12 @@ impl SettingsView {
                 })
                 .collect::<Vec<_>>()
         });
-        let mut items: Vec<Item> = Vec::new();
-        items.push(choice(
+        let mut items: Vec<Item> = vec![choice(
             "Base color scheme",
             "Choose Obsidian's default color scheme.",
             state,
             BASE_COLOR_SCHEME,
-        ));
+        )];
         items.push(Item {
             heading: false,
             name: "Accent color".into(),

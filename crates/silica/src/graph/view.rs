@@ -1800,6 +1800,11 @@ fn hex(color: gpui::Hsla) -> String {
     )
 }
 
+// * Eight parameters is what the graph needs to know: the vault, the config,
+// * and the five local-graph options that are passed through untouched to
+// * every call. Bundling them into a struct would add a type whose only job
+// * is to be unpacked one line later.
+#[allow(clippy::too_many_arguments)]
 fn build(
     state: &VaultState,
     config: &GraphConfig,

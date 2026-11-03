@@ -121,8 +121,6 @@ pub enum SearchEvent {
 enum SearchTarget {
     /// A file row, by vault-relative path.
     File(String),
-    /// The empty space below the last result.
-    Blank,
 }
 
 /// One line of the "Copy search results" modal: a file in the result list.
@@ -243,7 +241,6 @@ fn search_menu_items(target: &SearchTarget) -> Vec<SearchMenuItem> {
                 E::OpenInPopout(path.clone()),
             ),
         ],
-        SearchTarget::Blank => vec![],
     }
 }
 

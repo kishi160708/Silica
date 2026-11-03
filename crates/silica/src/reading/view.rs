@@ -118,10 +118,6 @@ pub enum PropertyAction {
         key: String,
         index: usize,
     },
-    /// Flip a checkbox row.
-    Toggle {
-        key: String,
-    },
     Remove {
         key: String,
     },
@@ -333,10 +329,17 @@ fn clock(seconds: f32) -> String {
     }
 }
 
-/// Global audio player for local audio file embeds. Single-window app,
-/// so a module-level static is sufficient. `unsafe` is safe here because
-/// GPUI runs all event handlers on the main thread.
-static mut AUDIO_PLAYER: Option<AudioPlayer> = None;
+thread_local! {
+    /// The audio player for local audio file embeds.
+    ///
+    /// Thread-local rather than a `static mut`: rodio's stream is not `Send`,
+    /// so a `Mutex` cannot hold it, and GPUI runs every event handler on the
+    /// main thread anyway. A `static mut` reference is undefined behaviour as
+    /// soon as two exist — a fact the compiler cannot know from the comment
+    /// that used to stand here.
+    static AUDIO_PLAYER: std::cell::RefCell<Option<AudioPlayer>> =
+        const { std::cell::RefCell::new(None) };
+}
 
 /// An audio player for local audio file embeds. Holds one output stream,
 /// one sink (which can play multiple sources sequentially, though we only
@@ -2115,7 +2118,9 @@ impl<'a> Renderer<'a> {
                     .and_then(|n| n.to_str())
                     .unwrap_or(&embed.link)
                     .to_string();
-                let is_playing = unsafe { AUDIO_PLAYER.as_ref().is_some_and(|p| p.is_playing) };
+                let is_playing = AUDIO_PLAYER.with(|p| {
+                    p.borrow().as_ref().is_some_and(|player| player.is_playing)
+                });
                 let path_clone = path.clone();
                 div()
                     .my_1()
@@ -2128,8 +2133,9 @@ impl<'a> Renderer<'a> {
                     .hover(|s| s.bg(t.bg_alt))
                     .id(("audio-player", embed.link.len()))
                     .on_click(move |_, _, _cx| {
-                        unsafe {
-                            if let Some(player) = AUDIO_PLAYER.as_mut() {
+                        AUDIO_PLAYER.with(|slot| {
+                            let mut slot = slot.borrow_mut();
+                            if let Some(player) = slot.as_mut() {
                                 if player.is_playing {
                                     player.sink.pause();
                                     player.is_playing = false;
@@ -2137,23 +2143,28 @@ impl<'a> Renderer<'a> {
                                     player.sink.play();
                                     player.is_playing = true;
                                 }
-                            } else if let Ok((stream, handle)) =
-                                rodio::OutputStream::try_default()
-                            {
-                                if let Ok(file) = std::fs::File::open(&path_clone) {
-                                    if let Ok(source) = rodio::Decoder::new(file) {
-                                        let sink = rodio::Sink::try_new(&handle).unwrap();
-                                        sink.append(source);
-                                        sink.play();
-                                        AUDIO_PLAYER = Some(AudioPlayer {
-                                            _stream: stream,
-                                            sink,
-                                            is_playing: true,
-                                        });
-                                    }
-                                }
+                                return;
                             }
-                        }
+                            let Ok((stream, handle)) = rodio::OutputStream::try_default() else {
+                                return;
+                            };
+                            let Ok(file) = std::fs::File::open(&path_clone) else {
+                                return;
+                            };
+                            let Ok(source) = rodio::Decoder::new(file) else {
+                                return;
+                            };
+                            let Ok(sink) = rodio::Sink::try_new(&handle) else {
+                                return;
+                            };
+                            sink.append(source);
+                            sink.play();
+                            *slot = Some(AudioPlayer {
+                                _stream: stream,
+                                sink,
+                                is_playing: true,
+                            });
+                        });
                     })
                     .child(SharedString::from(if is_playing { "⏸ " } else { "▶ " }))
                     .child(SharedString::from(label))

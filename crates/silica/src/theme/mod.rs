@@ -489,7 +489,25 @@ pub fn parse_css_theme(css: &str, dark: bool) -> CssTheme {
     CssTheme { vars }
 }
 
-/// Load a community theme from `.obsidian/themes/<name>.css` inside a vault.
+/// The file a theme name names, in the two layouts Obsidian uses.
+///
+/// A theme installed from the community gallery is a **folder** —
+/// `.obsidian/themes/<name>/theme.css`, sometimes with a `manifest.json` and
+/// images beside it. A theme dropped in by hand is a single file,
+/// `.obsidian/themes/<name>.css`. Both are real, and a vault can hold either,
+/// so both are tried in that order: the folder first, because that is what a
+/// theme installed through Obsidian produces.
+fn theme_file(dir: &Path, name: &str) -> Option<std::path::PathBuf> {
+    let name = safe_css_name(name)?;
+    let folder = dir.join(name).join("theme.css");
+    if folder.is_file() {
+        return Some(folder);
+    }
+    let flat = dir.join(format!("{name}.css"));
+    flat.is_file().then_some(flat)
+}
+
+/// Load a community theme, whichever layout it was installed in.
 ///
 /// `dark` is the *resolved* base scheme, not the `theme` key: when a vault says
 /// `system`, only the window knows which way the desktop is set, so the caller
@@ -497,7 +515,9 @@ pub fn parse_css_theme(css: &str, dark: bool) -> CssTheme {
 /// `.theme-dark` block of a stylesheet while a light desktop renders, which is
 /// exactly the mismatch this parameter exists to prevent.
 pub fn load_css_theme(vault_path: &Path, name: &str, dark: bool) -> Option<CssTheme> {
-    let css = read_css_file(vault_path, &vault_path.join(".obsidian/themes"), name)?;
+    let path = theme_file(&vault_path.join(".obsidian/themes"), name)?;
+    let relative = path.strip_prefix(vault_path).ok()?;
+    let css = silica_vault::read_verified(vault_path, relative, MAX_CSS_BYTES).ok()?;
     Some(parse_css_theme(&css, dark))
 }
 
@@ -715,6 +735,33 @@ mod tests {
                 "{bad} should not load"
             );
         }
+    }
+
+    /// A theme installed from the gallery is a folder with `theme.css` inside
+    /// it, not a flat `<name>.css`; both must load.
+    #[test]
+    fn a_theme_loads_from_either_layout() {
+        let vault = tempfile::tempdir().expect("a temp vault");
+        let themes = vault.path().join(".obsidian/themes");
+        std::fs::create_dir_all(themes.join("Folded")).expect("folder theme");
+        std::fs::write(
+            themes.join("Folded/theme.css"),
+            ":root { --background-primary: #123456; }",
+        )
+        .expect("theme.css");
+        std::fs::write(themes.join("Flat.css"), ":root { --background-primary: #654321; }")
+            .expect("flat theme");
+
+        let folded = load_css_theme(vault.path(), "Folded", true).expect("folder theme loads");
+        assert_eq!(
+            folded.vars.get("--background-primary").map(String::as_str),
+            Some("#123456")
+        );
+        let flat = load_css_theme(vault.path(), "Flat", true).expect("flat theme loads");
+        assert_eq!(
+            flat.vars.get("--background-primary").map(String::as_str),
+            Some("#654321")
+        );
     }
 
     /// A symlink where a theme should be is refused rather than followed, and

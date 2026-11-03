@@ -32,7 +32,10 @@ impl Locale {
         &[("English", "en"), ("Bahasa Indonesia", "id")];
 
     /// The value stored in `app.json`'s `locale`, which is what
-    /// [`Locale::from_code`] reads back.
+    /// [`Locale::from_code`] reads back. The roundtrip is what the tests
+    /// assert; nothing in the app writes it back out yet, so it is
+    /// `cfg(test)` rather than dead weight in the binary.
+    #[cfg(test)]
     pub fn code(self) -> &'static str {
         match self {
             Locale::English => "en",
@@ -129,6 +132,7 @@ const INDONESIAN: &[(&str, &str)] = &[
 ];
 
 /// The table's entries that are the same word in both languages.
+#[cfg(test)]
 const LOANWORDS: &[&str] = &["Editor", "Vault", "Display"];
 
 #[cfg(test)]

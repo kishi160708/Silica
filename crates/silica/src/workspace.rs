@@ -96,9 +96,11 @@ enum SidePaneTarget {
     /// An outline heading row: right-click opens the heading in its note.
     /// Holds the note path and the heading's byte offset.
     Heading { path: String, offset: usize },
-    /// The empty space below the last row: no items.
-    Blank,
 }
+
+/// What a right-click on a row does: it is handed the click point and the
+/// view's own context, and mutates the view in place.
+type RightClickHandler<V> = Box<dyn Fn(&mut V, gpui::Point<Pixels>, &mut Context<V>)>;
 
 /// One row of a side-pane context menu: what Obsidian draws, and the action
 /// Silica emits when it is clicked.
@@ -153,7 +155,6 @@ fn side_menu_items(target: &SidePaneTarget) -> Vec<SidePaneMenuItem> {
                 A::OpenHeadingToRight(path.clone()),
             ),
         ],
-        SidePaneTarget::Blank => vec![],
     }
 }
 
@@ -13273,7 +13274,7 @@ impl Workspace {
         active: bool,
         theme: &Theme,
         cx: &mut Context<Self>,
-        on_right_click: Option<Box<dyn Fn(&mut Self, gpui::Point<Pixels>, &mut Context<Self>)>>,
+        on_right_click: Option<RightClickHandler<Self>>,
     ) -> gpui::Stateful<gpui::Div> {
         let text_x = 24. + 17. * depth as f32;
         let gutter = match (fold, icon_name) {

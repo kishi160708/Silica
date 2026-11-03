@@ -370,8 +370,11 @@ mod tests {
     use super::{block, inline};
     use crate::reading::model::{InlineStyle, LinkTarget, RichBuilder};
 
-    /// The runs of a drawn block: `(text, styled?, has link?)`.
-    fn drawn(src: &str) -> Option<(String, Vec<(String, InlineStyle)>, Vec<LinkTarget>)> {
+    /// The runs of a drawn block: its plain text, the styled spans, and the
+    /// links it found.
+    type Drawn = Option<(String, Vec<(String, InlineStyle)>, Vec<LinkTarget>)>;
+
+    fn drawn(src: &str) -> Drawn {
         let rich = block(src, 1)?;
         let runs = rich
             .runs

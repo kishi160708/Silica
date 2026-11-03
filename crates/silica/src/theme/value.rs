@@ -443,17 +443,6 @@ impl Table {
         }
         Resolved { values: out }
     }
-
-    /// Resolve one free-standing expression against the table.
-    #[cfg(test)]
-    pub fn resolve(&self, expr: &Expr) -> Value {
-        let mut r = Resolver {
-            table: self,
-            memo: HashMap::new(),
-            stack: Vec::new(),
-        };
-        r.eval(expr)
-    }
 }
 
 fn canonical(name: &str) -> String {

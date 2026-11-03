@@ -403,11 +403,19 @@ fn read_excerpt(
     let f = open_digest_file(&backend.config.digest_root, &file)?;
     #[cfg(windows)]
     let f = {
-        let root = &backend.config.digest_root;
+        // * `digest_path` returned the canonical path, which on Windows carries
+        // * the `\\?\` verbatim prefix; the configured root does not, so the two
+        // * cannot be compared directly. Both are canonicalized before the
+        // * relative path is cut, and `open_inside` then re-checks the handle.
+        let root = backend
+            .config
+            .digest_root
+            .canonicalize()
+            .map_err(|e| format!("cannot resolve the digest root: {e}"))?;
         let relative = file
-            .strip_prefix(root)
+            .strip_prefix(&root)
             .map_err(|_| format!("{} is not under the digest root", file.display()))?;
-        silica_vault::win_fs::open_inside(root, relative)
+        silica_vault::win_fs::open_inside(&root, relative)
             .map_err(|e| format!("cannot read {path}: {e}"))?
     };
 

@@ -3968,22 +3968,6 @@ impl Editor {
                     }
                 }
             }
-            PropertyAction::Toggle { key } => {
-                let on = self
-                    .property_rows()
-                    .into_iter()
-                    .find(|r| r.key == key)
-                    .map(|r| matches!(r.value, properties::Display::Checkbox(true)))
-                    .unwrap_or(false);
-                self.apply_property_changes(
-                    &[props::Change::Set {
-                        key,
-                        value: props::Value::Checkbox(!on),
-                    }],
-                    Some(window),
-                    cx,
-                );
-            }
             PropertyAction::Remove { key } => {
                 self.property_field = None;
                 self.apply_property_changes(&[props::Change::Remove { key }], Some(window), cx);

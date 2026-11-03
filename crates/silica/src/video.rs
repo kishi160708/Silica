@@ -41,7 +41,7 @@ impl Info {
     /// The size frames are decoded at: the file's aspect, no wider than
     /// [`MAX_WIDTH`], both sides even (H.264's chroma wants that).
     pub fn decode_size(&self) -> (u32, u32) {
-        let width = self.width.min(MAX_WIDTH).max(2);
+        let width = self.width.clamp(2, MAX_WIDTH);
         let height = ((width as f32) * (self.height as f32) / (self.width.max(1) as f32)).round();
         let even = |n: u32| (n.max(2) / 2) * 2;
         (even(width), even(height as u32))
