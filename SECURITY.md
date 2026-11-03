@@ -103,6 +103,19 @@ Out of scope: problems that need an attacker who already controls your user
 account or the vault folder's permissions, and the behaviour of Obsidian
 itself.
 
+## Independent verification
+
+The project's own test suite covers the security fixes with unit tests and
+graphical end-to-end tests. What it does not cover is a review by someone
+outside the project. That independent audit remains outstanding; no external
+security review has been commissioned or completed.
+
+Until then, every push is verified by CI on Linux, Windows, and macOS: the
+workspace suite, `cargo clippy -D warnings`, a supply-chain audit
+(`cargo audit`), and graphical end-to-end tests driven against the real
+binary over its control socket under Xvfb. The Windows job is the one that
+proves the non-`openat` write path holds without Unix primitives.
+
 ## Supported versions
 
 Only the latest tagged release gets fixes. The binaries are built by the
