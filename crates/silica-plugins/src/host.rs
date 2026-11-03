@@ -201,6 +201,26 @@ impl Shared {
         if !out.starts_with(&self.root) {
             return Err(format!("'{path}' points outside the vault"));
         }
+        // A lexical check cannot see a symbolic link: `notes/plan.md` is
+        // inside the vault as a string, and the `notes` beside it may point
+        // anywhere. Every component is inspected instead, so a link anywhere
+        // along the way is refused rather than followed.
+        let mut walked = self.root.clone();
+        for part in trimmed.split('/').filter(|p| !p.is_empty() && *p != ".") {
+            walked.push(part);
+            match std::fs::symlink_metadata(&walked) {
+                Ok(meta) if meta.file_type().is_symlink() => {
+                    return Err(format!(
+                        "'{path}' goes through a symbolic link, which a plugin may not follow"
+                    ));
+                }
+                // A component that is not there yet is the normal case for a
+                // file a plugin is about to create; the rest of the walk
+                // cannot exist either.
+                Err(_) => break,
+                _ => {}
+            }
+        }
         Ok(out)
     }
 
@@ -211,7 +231,29 @@ impl Shared {
             .unwrap_or(&resolved)
             .to_string_lossy()
             .replace('\\', "/");
-        if self.open_note.as_deref() == Some(relative.as_str()) {
+        // Both paths are canonicalised before comparing, because the editor's
+        // idea of the open note and the plugin's idea of the file it is about
+        // to write are two strings that can name one file: a case-insensitive
+        // filesystem folds them, and a resolved link can too. Comparison
+        // ignores case as well, which over-refuses on a case-sensitive
+        // filesystem — the safe direction, since the alternative is losing
+        // unsaved edits.
+        let open = self.open_note.as_deref().map(|note| {
+            self.root
+                .join(note)
+                .canonicalize()
+                .unwrap_or_else(|_| self.root.join(note))
+        });
+        let same = match open {
+            Some(open) => {
+                let target = resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
+                target == open
+                    || target.to_string_lossy().to_lowercase()
+                        == open.to_string_lossy().to_lowercase()
+            }
+            None => false,
+        };
+        if same {
             return Err(format!(
                 "'{relative}' is open in the editor; a plugin cannot write it while its unsaved changes are here"
             ));
@@ -476,6 +518,14 @@ impl PluginHost {
     }
 
     /// Runs a command the plugin registered, by id.
+    /// The note the editor has open, as the app sees it. Set before a
+    /// command runs, because the host is built long before any note is open
+    /// and the protection has to hold at the moment of the write, not at the
+    /// moment of loading.
+    pub fn set_open_note(&self, note: Option<String>) {
+        self.shared.borrow_mut().open_note = note;
+    }
+
     pub fn run_command(&self, id: &str) -> Result<(), String> {
         let command = self
             .registrations
@@ -602,7 +652,7 @@ fn install<'js>(
             .borrow()
             .writable(&path)
             .map_err(|error| Exception::throw_message(&ctx, &error))?;
-        std::fs::write(&resolved, text)
+        silica_vault::write_no_follow(&resolved, text.as_bytes())
             .map_err(|error| Exception::throw_message(&ctx, &format!("'{path}' could not be written: {error}")))
     });
 
@@ -613,10 +663,31 @@ fn install<'js>(
             .borrow()
             .writable(&path)
             .map_err(|error| Exception::throw_message(&ctx, &error))?;
-        let mut existing = std::fs::read_to_string(&resolved).unwrap_or_default();
+        // A failed read is not an empty file. Substituting "" here would
+        // replace the file's real contents with only the appended text, so a
+        // file that cannot be decoded stops the append instead.
+        let mut existing = match std::fs::read(&resolved) {
+            Ok(bytes) => match String::from_utf8(bytes) {
+                Ok(text) => text,
+                Err(_) => {
+                    return Err(Exception::throw_message(
+                        &ctx,
+                        &format!("'{path}' is not valid UTF-8, so it cannot be appended to"),
+                    ))
+                }
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(error) => {
+                return Err(Exception::throw_message(
+                    &ctx,
+                    &format!("'{path}' could not be read before appending: {error}"),
+                ))
+            }
+        };
         existing.push_str(&text);
-        std::fs::write(&resolved, existing)
-            .map_err(|error| Exception::throw_message(&ctx, &format!("'{path}' could not be written: {error}")))
+        silica_vault::write_no_follow(&resolved, existing.as_bytes()).map_err(|error| {
+            Exception::throw_message(&ctx, &format!("'{path}' could not be written: {error}"))
+        })
     });
 
     let s = Rc::clone(&shared);
@@ -636,7 +707,7 @@ fn install<'js>(
             std::fs::create_dir_all(parent)
                 .map_err(|error| Exception::throw_message(&ctx, &error.to_string()))?;
         }
-        std::fs::write(&resolved, text)
+        silica_vault::write_no_follow(&resolved, text.as_bytes())
             .map_err(|error| Exception::throw_message(&ctx, &format!("'{path}' could not be written: {error}")))
     });
 
@@ -915,5 +986,84 @@ fn yaml_to_json(value: &serde_yaml::Value) -> Value {
                 .collect(),
         ),
         serde_yaml::Value::Tagged(tagged) => yaml_to_json(&tagged.value),
+    }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    /// A vault on disk plus a `Shared` whose open note is `open_note`.
+    fn vault(open_note: Option<&str>) -> (tempfile::TempDir, Rc<RefCell<Shared>>) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let shared = Shared {
+            root: root.clone(),
+            data_path: root.join(".obsidian/plugins/example/data.json"),
+            id: "example".into(),
+            files: Vec::new(),
+            files_stale: false,
+            notices: Vec::new(),
+            active_file: None,
+            open_note: open_note.map(str::to_string),
+            post_processors: Vec::new(),
+        };
+        (dir, Rc::new(RefCell::new(shared)))
+    }
+
+    #[test]
+    fn a_symlinked_folder_cannot_be_written_through() {
+        let (dir, shared) = vault(None);
+        let root = dir.path().canonicalize().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        // `escape` is inside the vault by every string measure and points out.
+        std::os::unix::fs::symlink(outside.path(), root.join("escape")).unwrap();
+
+        let err = shared
+            .borrow()
+            .writable("escape/planted.md")
+            .expect_err("a write through a symlink must be refused");
+        assert!(err.contains("symbolic link"), "{err}");
+        assert!(!outside.path().join("planted.md").exists());
+    }
+
+    #[test]
+    fn a_symlinked_file_cannot_be_written() {
+        let (_dir, shared) = vault(None);
+        let root = shared.borrow().root.clone();
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("real.md");
+        std::fs::write(&target, "outside").unwrap();
+        std::os::unix::fs::symlink(&target, root.join("link.md")).unwrap();
+
+        assert!(shared.borrow().writable("link.md").is_err());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "outside");
+    }
+
+    #[test]
+    fn the_open_note_cannot_be_written_under_another_capitalisation() {
+        let (_dir, shared) = vault(Some("Notes/Plan.md"));
+        let root = shared.borrow().root.clone();
+        std::fs::create_dir_all(root.join("notes")).unwrap();
+        std::fs::write(root.join("notes/plan.md"), "saved").unwrap();
+
+        // Same file as the open note on a case-insensitive filesystem.
+        let err = shared
+            .borrow()
+            .writable("notes/plan.md")
+            .expect_err("a differently capitalised open note must be refused");
+        assert!(err.contains("open in the editor"), "{err}");
+        // The exact spelling is still refused too.
+        assert!(shared.borrow().writable("Notes/Plan.md").is_err());
+        // A different note is not.
+        assert!(shared.borrow().writable("Other.md").is_ok());
+    }
+
+    #[test]
+    fn traversal_and_absolute_paths_still_bounce() {
+        let (_dir, shared) = vault(None);
+        assert!(shared.borrow().writable("../outside.md").is_err());
+        assert!(shared.borrow().writable("/etc/passwd").is_ok(), "a leading slash is vault-relative");
+        assert!(!shared.borrow().writable("/etc/passwd").unwrap().starts_with("/etc"));
     }
 }

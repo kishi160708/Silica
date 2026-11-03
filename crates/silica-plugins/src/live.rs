@@ -100,6 +100,10 @@ pub fn run(id: &str, ctx: &PluginContext<'_>) -> Option<(Result<(), String>, Vec
         let loaded = loaded.as_ref()?;
         let hosts = &loaded.hosts;
         let host = hosts.iter().find(|host| host.has_command(id))?;
+        // Tell the host which note is open right before it runs. Without
+        // this the open-note guard compares against `None` and never fires,
+        // so a plugin could overwrite unsaved edits.
+        host.set_open_note((ctx.current_note)());
         Some((host.run_command(id), host.take_notices()))
     })
 }
@@ -293,5 +297,65 @@ module.exports = Counter;
     /// Clears native registrations so tests stay isolated.
     fn forget_native() {
         NATIVE.with(|native| *native.borrow_mut() = Vec::new());
+    }
+
+    /// The guard is only real if the host is told what is open. `ensure`
+    /// builds hosts with no note open, so a command that writes the open
+    /// note must be stopped at call time — the hole this test exists for.
+    #[test]
+    fn a_command_cannot_write_the_note_open_right_now() {
+        let root = std::env::temp_dir().join(format!("silica-live-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".obsidian/plugins/w")).expect("dirs");
+        std::fs::write(
+            root.join(".obsidian/plugins/w/manifest.json"),
+            r#"{"id":"w","name":"W","version":"1.0.0"}"#,
+        )
+        .expect("manifest");
+        std::fs::write(
+            root.join(".obsidian/plugins/w/main.js"),
+            r#"
+const { Plugin } = require("obsidian");
+class W extends Plugin {
+  onload() { this.addCommand({ id: "hit", name: "Hit",
+    callback: () => this.app.vault.modify("Note.md", "clobbered") }); }
+}
+module.exports = W;
+"#,
+        )
+        .expect("source");
+        std::fs::write(root.join("Note.md"), "original").expect("the note");
+        std::fs::write(root.join(".obsidian/community-plugins.json"), r#"["w"]"#).expect("enabled");
+
+        let vault = silica_vault::Vault::open(&root).expect("vault");
+        let registry = Registry::scan(&vault);
+        forget();
+        ensure(&root, vault.config_dir(), &registry);
+
+        let open = "Note.md".to_string();
+        let ctx = PluginContext {
+            vault_root: &root,
+            read_file: Box::new(|_| Ok(String::new())),
+            write_file: Box::new(|_, _| Ok(())),
+            append_file: Box::new(|_, _| Ok(())),
+            create_file: Box::new(|_, _| Ok(())),
+            create_folder: Box::new(|_| Ok(())),
+            delete_file: Box::new(|_| Ok(())),
+            rename_file: Box::new(|_, _| Ok(())),
+            list_dir: Box::new(|_| Ok(Vec::new())),
+            file_exists: Box::new(|_| Ok(true)),
+            metadata_cache: Box::new(|_| Ok("{}".into())),
+            open_note: Box::new(|_| Ok(())),
+            current_note: Box::new(move || Some(open.clone())),
+        };
+        let (outcome, _) = run("w:hit", &ctx).expect("the plugin owns it");
+        assert!(outcome.is_err(), "the write was allowed: {outcome:?}");
+        assert_eq!(
+            std::fs::read_to_string(root.join("Note.md")).unwrap(),
+            "original",
+            "the open note was clobbered"
+        );
+        forget();
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -31,9 +31,13 @@ pub fn apply(state: &VaultState, cx: &mut gpui::App) {
         cx.set_menus(Vec::new());
         return;
     }
-    let registry = cx.global::<crate::workspace::Commands>().0.clone();
+    // Only the macOS branch reads it; on the others the lookup would be dead
+    // work on every settings write.
     #[cfg(target_os = "macos")]
-    cx.set_menus(build(&registry));
+    {
+        let registry = cx.global::<crate::workspace::Commands>().0.clone();
+        cx.set_menus(build(&registry));
+    }
     #[cfg(not(target_os = "macos"))]
     {
         // Nothing would draw it. Clearing keeps a stale bar from a previous
@@ -45,6 +49,7 @@ pub fn apply(state: &VaultState, cx: &mut gpui::App) {
 /// The menus and their entries. Split out from [`apply`] so the shape is
 /// testable without a window, and so a Mac build's list can be checked on
 /// Linux.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn build(registry: &silica_commands::CommandRegistry) -> Vec<gpui::Menu> {
     // One entry per id the app really has: an id the registry does not know
     // is left out rather than added dead, because a menu of items that do
@@ -84,7 +89,10 @@ pub fn build(registry: &silica_commands::CommandRegistry) -> Vec<gpui::Menu> {
                 "editor:paste",
             ][..],
         ),
-        ("View", &["graph:open", "app:reload", "markdown:toggle-preview"][..]),
+        (
+            "View",
+            &["graph:open", "app:reload", "markdown:toggle-preview"][..],
+        ),
         ("Navigate", &["app:go-back", "app:go-forward"][..]),
     ] {
         let items = group(ids);

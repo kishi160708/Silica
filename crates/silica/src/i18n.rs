@@ -25,19 +25,14 @@ pub enum Locale {
 }
 
 impl Locale {
-    /// Every locale the dropdown offers, in the order Obsidian lists them.
-    pub const ALL: &'static [Locale] = &[Locale::English, Locale::Indonesian];
+    /// Every locale there is, as (label, code) in the order a dropdown
+    /// lists them. Settings builds its options from this, so adding a
+    /// language here is the whole of adding it to the row.
+    pub const ALL: &'static [(&'static str, &'static str)] =
+        &[("English", "en"), ("Bahasa Indonesia", "id")];
 
-    /// The name the dropdown shows, in the language itself — as Obsidian
-    /// lists languages, and as every app does so a reader can find their own.
-    pub fn label(self) -> &'static str {
-        match self {
-            Locale::English => "English",
-            Locale::Indonesian => "Bahasa Indonesia",
-        }
-    }
-
-    /// The value stored in `app.json`'s `locale`.
+    /// The value stored in `app.json`'s `locale`, which is what
+    /// [`Locale::from_code`] reads back.
     pub fn code(self) -> &'static str {
         match self {
             Locale::English => "en",
@@ -88,8 +83,7 @@ pub fn current() -> Locale {
 
 /// What is translated today, for the Settings row's own description: the
 /// chrome of the Settings modal, which is where the choice is made.
-pub const COVERED: &str =
-    "The Settings window's own labels are translated; note text, the file \
+pub const COVERED: &str = "The Settings window's own labels are translated; note text, the file \
      explorer and the other views are still English.";
 
 /// The string `key` names, in the locale in force, or the English original
@@ -145,15 +139,27 @@ const LOANWORDS: &[&str] = &["Editor", "Vault", "Display"];
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// The locale is process-wide, so tests that set it would otherwise
+    /// race each other and read a language another test just switched to.
+    static SERIAL: Mutex<()> = Mutex::new(());
+
+    fn serial() -> std::sync::MutexGuard<'static, ()> {
+        SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 
     #[test]
     fn english_answers_the_key_itself() {
+        let _guard = serial();
+        set(Locale::English);
         assert_eq!(t("Settings"), "Settings");
         assert_eq!(translated(Locale::English, "Settings"), None);
     }
 
     #[test]
     fn a_translation_replaces_the_english() {
+        let _guard = serial();
         set(Locale::Indonesian);
         assert_eq!(t("Settings"), "Pengaturan");
         assert_eq!(t("Files and links"), "Berkas dan tautan");
@@ -163,6 +169,7 @@ mod tests {
 
     #[test]
     fn an_untranslated_string_falls_back_rather_than_emptying() {
+        let _guard = serial();
         set(Locale::Indonesian);
         // A row name, deliberately not in the table.
         assert_eq!(t("Default view for new tabs"), "Default view for new tabs");
@@ -179,8 +186,11 @@ mod tests {
 
     #[test]
     fn codes_round_trip_and_unknown_ones_are_english() {
-        for locale in Locale::ALL {
-            assert_eq!(Locale::from_code(locale.code()), *locale);
+        for (label, code) in Locale::ALL {
+            // Every code resolves to exactly the locale it names; "en" is
+            // English, so the check is against the pair, not "not English".
+            assert_eq!(Locale::from_code(code).code(), *code);
+            assert!(!label.is_empty());
         }
         assert_eq!(Locale::from_code("id-ID"), Locale::Indonesian);
         assert_eq!(Locale::from_code("in"), Locale::Indonesian);
@@ -207,7 +217,8 @@ mod tests {
     fn the_labels_are_their_own_names() {
         // A language name is never translated: a reader looking for their
         // own language needs to see it written the way they write it.
-        assert_eq!(Locale::Indonesian.label(), "Bahasa Indonesia");
-        assert_eq!(Locale::English.label(), "English");
+        let labels: Vec<&str> = Locale::ALL.iter().map(|(label, _)| *label).collect();
+        assert!(labels.contains(&"Bahasa Indonesia"));
+        assert!(labels.contains(&"English"));
     }
 }

@@ -26,12 +26,35 @@ the properties a report is measured against:
   following a link in its place (`O_NOFOLLOW` on Unix). The only writes
   outside the folder are a file moved to the system trash when `trashOption`
   asks for it, and nothing else.
-- **No network.** Silica makes no network connections. A remote image in a
-  note is shown as a link, not fetched; a web link opens in the system browser
-  only when clicked.
-- **No code from the vault runs.** Community plugins, themes and CSS snippets
-  are read as data (names, manifests, settings) and never executed or
-  evaluated.
+- **Network access happens only for a remote image you can see.** The app
+  installs an HTTP client (`src/http_client.rs`) and the reading view asks it
+  for every remote image a note displays (`EmbedKind::RemoteImage`), through
+  the host's `curl`, with a 30-second limit, following redirects, caching the
+  bytes under `$XDG_CACHE_HOME/silica/remote_images`. A remote image inside
+  code, a link, or a note that is not open is not fetched. Nothing else in the
+  app spends the client: a web link still opens in the system browser only
+  when clicked, and no telemetry, update check or feed request exists.
+  What a fetch therefore reveals to the image's host is your IP address and
+  the time you opened that note, plus the URL itself.
+- **Code from the vault runs only when you enable a community plugin.** Themes,
+  CSS snippets, manifests and settings are read as data and never evaluated.
+  An *enabled* tier-1 plugin is different: `silica-plugins` loads its
+  `main.js` into a QuickJS runtime and runs it (`src/host.rs`). What that
+  runtime can do:
+  - **Filesystem** — read and write paths inside the vault only. Every path is
+    resolved against the vault root, refused if it contains `..` or a symbolic
+    link anywhere along the way, and written with `O_NOFOLLOW`. Writes to the
+    note open in the editor are refused so unsaved edits cannot be lost, and a
+    delete moves the file to `.trash` rather than unlinking it.
+  - **Network** — none. The plugin runtime has no network primitive, and the
+    app's HTTP client is not exposed to the shim.
+  - **Process, threads, dynamic code from outside** — none. No `eval` of
+    fetched text, no shell, no `require`.
+  - **Budgets** — 64 MB heap, 5 seconds to load, 10 seconds per command;
+    a plugin that exceeds one is stopped with an error.
+  - A plugin cannot write the app's own binary, cannot write outside the vault,
+    and cannot reach the control socket.
+  Disabling a plugin stops it being loaded at all.
 - **The control socket is local and private.** `--control <path>` binds a Unix
   domain socket with mode `0600`; it accepts no path that leaves the vault.
   It is off unless asked for, and it is as powerful as the keyboard — anyone

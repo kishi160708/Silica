@@ -282,3 +282,97 @@ fn the_metadata_cache_answers_in_obsidians_shape() {
         .any(|link| link["link"] == "Other"));
     assert!(cache["sections"].as_array().expect("sections").len() >= 2);
 }
+
+/// The security policy is a promise; these pin it to the code that keeps it.
+mod security_policy {
+    use super::*;
+
+    /// `SECURITY.md` says the runtime has no network primitive, and
+    /// `requestUrl` is the one a plugin would reach for.
+    #[test]
+    fn a_plugin_has_no_network() {
+        let fixture = fixture(
+            r#"
+const { Plugin, Notice, requestUrl } = require("obsidian");
+class Net extends Plugin {
+  onload() {
+    this.addCommand({ id: "go", name: "Go", callback: () => {
+      try { requestUrl("https://example.com/") }
+      catch (e) { new Notice("REFUSED: " + e.message) }
+    }});
+  }
+}
+module.exports = Net;
+"#,
+        );
+        let host = load(&fixture, None);
+        host.run_command("counter:go").expect("the command ran");
+        let notices = host.take_notices().join(" ");
+        assert!(
+            notices.contains("REFUSED") && notices.contains("no network calls"),
+            "requestUrl answered instead of refusing: {notices:?}"
+        );
+    }
+
+    /// A plugin cannot name a module outside the bundle.
+    #[test]
+    fn require_refuses_anything_it_does_not_ship() {
+        let fixture = fixture(
+            r#"
+const { Plugin, Notice } = require("obsidian");
+class Mod extends Plugin {
+  onload() {
+    this.addCommand({ id: "evil", name: "Evil", callback: () => {
+      try { require("fs") }
+      catch (e) { new Notice("REFUSED: " + e.message) }
+    }});
+  }
+}
+module.exports = Mod;
+"#,
+        );
+        let host = load(&fixture, None);
+        host.run_command("counter:evil").expect("the command ran");
+        let notices = host.take_notices().join(" ");
+        assert!(
+            notices.contains("REFUSED") && notices.contains("require"),
+            "require('fs') answered: {notices:?}"
+        );
+    }
+
+    /// Appending to a file that is not valid UTF-8 must fail rather than
+    /// replace the file with only the new text.
+    #[test]
+    fn append_refuses_an_undecodable_file_instead_of_emptying_it() {
+        let fixture = fixture(
+            r#"
+const { Plugin, Notice } = require("obsidian");
+class App extends Plugin {
+  onload() {
+    this.addCommand({ id: "bump", name: "Bump", callback: () => {
+      try { vault.append("Bad.md", "appended\\n") }
+      catch (e) { new Notice("REFUSED: " + e.message) }
+    }});
+  }
+}
+module.exports = App;
+"#,
+        );
+        let bad = fixture.vault.join("Bad.md");
+        fs::write(&bad, [0xff, 0xfe, 0x00, 0x41]).expect("a non-UTF-8 file");
+        let before = fs::read(&bad).expect("the file is still readable");
+
+        let host = load(&fixture, None);
+        host.run_command("counter:bump").expect("the command ran");
+        let notices = host.take_notices().join(" ");
+        assert!(
+            notices.contains("REFUSED"),
+            "the append did not refuse the file: {notices:?}"
+        );
+        assert_eq!(
+            fs::read(&bad).expect("the file is still there"),
+            before,
+            "the file's bytes changed"
+        );
+    }
+}

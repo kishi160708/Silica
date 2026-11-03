@@ -64,14 +64,53 @@ const SKIP: &[&str] = &["script", "style", "head", "title", "noscript", "templat
 
 /// Elements that open a line of their own.
 const BLOCK: &[&str] = &[
-    "p", "div", "section", "article", "header", "footer", "main", "aside", "nav", "figure",
-    "figcaption", "form", "fieldset", "address", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol",
-    "li", "blockquote", "pre", "hr", "table", "thead", "tbody", "tfoot", "tr", "td", "th", "dl",
-    "dt", "dd", "details", "summary",
+    "p",
+    "div",
+    "section",
+    "article",
+    "header",
+    "footer",
+    "main",
+    "aside",
+    "nav",
+    "figure",
+    "figcaption",
+    "form",
+    "fieldset",
+    "address",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "ul",
+    "ol",
+    "li",
+    "blockquote",
+    "pre",
+    "hr",
+    "table",
+    "thead",
+    "tbody",
+    "tfoot",
+    "tr",
+    "td",
+    "th",
+    "dl",
+    "dt",
+    "dd",
+    "details",
+    "summary",
 ];
 
-/// Elements that are their own line but hold no text of their own.
-const VOID_BLOCK: &[&str] = &["hr", "br"];
+/// Every HTML void element: these never have a close tag, so a parser that
+/// waits for `</img>` swallows everything after it. The list is the whole
+/// standard set, because a browser's clipboard is full of them.
+const VOID: &[&str] = &[
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source",
+    "track", "wbr",
+];
 
 fn is_block(tag: &str) -> bool {
     BLOCK.contains(&tag)
@@ -79,9 +118,17 @@ fn is_block(tag: &str) -> bool {
 
 // ---------------------------------------------------------------- the parser
 
+/// How deeply elements may nest before the parser stops descending. The
+/// parser recurses once per open element, so an input nested thousands deep
+/// would exhaust the stack and take the app with it; a real page nests a few
+/// dozen at most. Deeper elements are read as empty, which loses their text
+/// rather than the whole paste.
+const MAX_DEPTH: usize = 100;
+
 struct Parser<'a> {
     src: &'a [u8],
     pos: usize,
+    depth: usize,
 }
 
 impl<'a> Parser<'a> {
@@ -89,6 +136,7 @@ impl<'a> Parser<'a> {
         Parser {
             src: src.as_bytes(),
             pos: 0,
+            depth: 0,
         }
     }
 
@@ -146,16 +194,30 @@ impl<'a> Parser<'a> {
                 children: Vec::new(),
             });
         }
-        // `br` and `hr` need no close tag; nor do the ones a browser closes
-        // on its own. Treating them as empty is what Markdown wants.
-        if VOID_BLOCK.contains(&tag.as_str()) {
+        // A void element has no children by definition: treating it as empty
+        // is both what Markdown wants and what stops it eating the next
+        // paragraph.
+        if VOID.contains(&tag.as_str()) {
             return Some(Element {
                 tag,
                 attrs,
                 children: Vec::new(),
             });
         }
+        if self.depth >= MAX_DEPTH {
+            // Past the limit: consume this element's content without
+            // recursing into it, so the input is still read to the end and
+            // the elements around it survive.
+            self.skip_past_close(&tag);
+            return Some(Element {
+                tag,
+                attrs,
+                children: Vec::new(),
+            });
+        }
+        self.depth += 1;
         let children = self.parse_nodes(Some(&tag));
+        self.depth -= 1;
         Some(Element {
             tag,
             attrs,
@@ -163,13 +225,41 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Consumes through the matching `</tag>`, counting nested opens of the
+    /// same name so the right close is the one that stops it.
+    fn skip_past_close(&mut self, tag: &str) {
+        let mut open = 1usize;
+        while self.pos < self.src.len() {
+            if self.starts_with("</") {
+                let name = self.peek_tag_name(2);
+                self.skip_past(">");
+                if name.eq_ignore_ascii_case(tag) {
+                    open -= 1;
+                    if open == 0 {
+                        return;
+                    }
+                }
+                continue;
+            }
+            if self.starts_with("<") {
+                let name = self.peek_tag_name(1);
+                self.skip_past(">");
+                if name.eq_ignore_ascii_case(tag) && !VOID.contains(&tag) {
+                    open += 1;
+                }
+                continue;
+            }
+            self.pos += 1;
+        }
+    }
+
     /// Reads `<tag` … `>` and answers the attributes plus whether the tag
     /// closed itself. Leaves `pos` after the `>`.
     fn parse_attrs(&mut self) -> (Vec<(String, String)>, bool) {
         let mut attrs = Vec::new();
         self.pos += 1; // the '<'
-        // Skip the tag name, stopping at the `>` or `/` that ends it: a tag
-        // with no attributes has no whitespace to stop on.
+                       // Skip the tag name, stopping at the `>` or `/` that ends it: a tag
+                       // with no attributes has no whitespace to stop on.
         while self.pos < self.src.len() {
             let c = self.src[self.pos];
             if is_space(c) || c == b'>' || c == b'/' {
@@ -248,7 +338,9 @@ impl<'a> Parser<'a> {
             decode_entities(&v)
         } else {
             let start = self.pos;
-            while self.pos < self.src.len() && !is_space(self.src[self.pos]) && self.src[self.pos] != b'>'
+            while self.pos < self.src.len()
+                && !is_space(self.src[self.pos])
+                && self.src[self.pos] != b'>'
             {
                 self.pos += 1;
             }
@@ -549,7 +641,10 @@ fn write_pre(el: &Element, out: &mut String) {
     while body.ends_with('\n') {
         body.pop();
     }
-    push_block(out, &format!("```{lang}\n{body}\n```"));
+    // A fence must be longer than any run of backticks inside the body, or
+    // the code closes the fence and the rest leaks out as Markdown.
+    let fence = "`".repeat(longest_backtick_run(&body).max(2) + 1);
+    push_block(out, &format!("{fence}{lang}\n{body}\n{fence}"));
 }
 
 fn write_list(el: &Element, out: &mut String, depth: usize) {
@@ -673,9 +768,10 @@ fn write_table(el: &Element, out: &mut String) {
         return;
     }
     // A `th` row is the header even without a `<thead>`.
-    let has_th = el.children.iter().any(|n| {
-        matches!(n, Node::Element(s) if s.tag == "thead")
-    });
+    let has_th = el
+        .children
+        .iter()
+        .any(|n| matches!(n, Node::Element(s) if s.tag == "thead"));
     let header_at = if has_th { 0 } else { header_rows };
     let mut lines: Vec<String> = Vec::new();
     for (ix, row) in rows.iter().enumerate() {
@@ -701,9 +797,7 @@ fn table_row(tr: &Element) -> Vec<String> {
     tr.children
         .iter()
         .filter_map(|n| match n {
-            Node::Element(td) if td.tag == "td" || td.tag == "th" => {
-                Some(inline_of(&td.children))
-            }
+            Node::Element(td) if td.tag == "td" || td.tag == "th" => Some(inline_of(&td.children)),
             _ => None,
         })
         .collect()
@@ -726,9 +820,16 @@ fn write_inline(el: &Element, out: &mut String) {
             let text = raw_text(&el.children);
             let text = text.trim();
             if !text.is_empty() {
-                // A backtick inside the code needs a longer fence.
-                let fence = if text.contains('`') { "``" } else { "`" };
-                out.push_str(&format!("{fence}{text}{fence}"));
+                // Same rule as a block fence, one level down: one backtick
+                // more than the longest run inside, and a space on each side
+                // when the text itself starts or ends with one.
+                let fence = "`".repeat(longest_backtick_run(text) + 1);
+                let pad = if text.starts_with('`') || text.ends_with('`') {
+                    " "
+                } else {
+                    ""
+                };
+                out.push_str(&format!("{fence}{pad}{text}{pad}{fence}"));
             }
         }
         "a" => {
@@ -737,7 +838,7 @@ fn write_inline(el: &Element, out: &mut String) {
             if text.is_empty() {
                 return;
             }
-            if href.is_empty() || href.starts_with('#') || href.starts_with("javascript:") {
+            if href.is_empty() || href.starts_with('#') || is_unsafe_target(href) {
                 out.push_str(&text);
             } else if is_image_target(href) && text == href {
                 out.push_str(&format!("![]({})", escape_target(href)));
@@ -797,7 +898,8 @@ fn wrap(el: &Element, out: &mut String, marker: &str) {
     }
     // Leading or trailing spaces inside emphasis are lost by every Markdown
     // parser; move them outside the markers.
-    let lead = collapsed_inline(&el.children).len() - collapsed_inline(&el.children).trim_start().len();
+    let lead =
+        collapsed_inline(&el.children).len() - collapsed_inline(&el.children).trim_start().len();
     let spaced = " ".repeat(lead);
     out.push_str(&spaced);
     out.push_str(marker);
@@ -814,8 +916,41 @@ fn is_image_target(href: &str) -> bool {
 
 /// A link or image target: spaces and parentheses would end the target
 /// early, so they are escaped or encoded.
+/// Whether a URL carries a scheme that must not survive into a Markdown link.
+///
+/// Schemes are case-insensitive (RFC 3986), so `JaVaScRiPt:` is the same
+/// scheme as `javascript:`. `data:` is refused too: a `data:text/html` link
+/// is a document in a wrapper, and nothing a clipboard needs to carry.
+fn is_unsafe_target(href: &str) -> bool {
+    let scheme = match href.split_once(':') {
+        Some((scheme, _)) => scheme.trim().to_ascii_lowercase(),
+        None => return false,
+    };
+    // A colon before any `/`, `?` or `#` opens a scheme; anything else is a
+    // path segment that happens to contain a colon.
+    if scheme.contains('/') || scheme.contains('?') || scheme.contains('#') {
+        return false;
+    }
+    matches!(scheme.as_str(), "javascript" | "vbscript" | "data")
+}
+
 fn escape_target(href: &str) -> String {
     href.replace(' ', "%20").replace(')', "%29")
+}
+
+/// The longest run of consecutive backticks in `text`.
+fn longest_backtick_run(text: &str) -> usize {
+    let mut longest = 0;
+    let mut run = 0;
+    for ch in text.chars() {
+        if ch == '`' {
+            run += 1;
+            longest = longest.max(run);
+        } else {
+            run = 0;
+        }
+    }
+    longest
 }
 
 /// The plain text of `nodes`, with inline markup flattened.
@@ -940,12 +1075,92 @@ mod tests {
     }
 
     #[test]
+    fn every_void_element_stops_where_it_ends() {
+        // A void element must not eat what follows it. The second paragraph
+        // is the canary: it only survives if `<img>`, `<input>`, `<wbr>` and
+        // the rest are recognised as childless.
+        assert_eq!(
+            md(r##"<p>first</p><img src="p.png" alt="p"><p>second</p>"##),
+            "first\n\n![p](p.png)\n\nsecond"
+        );
+        for void in [
+            "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param",
+            "source", "track", "wbr",
+        ] {
+            let html = format!("<div><{void}><p>after</p></div>");
+            let out = md(&html);
+            assert!(
+                out.contains("after"),
+                "<{void}> swallowed the paragraph after it: {out:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn dangerous_url_schemes_are_refused_whatever_their_case() {
+        for scheme in ["javascript", "JAVASCRIPT", "JaVaScRiPt", "vbscript", "data"] {
+            let html = format!(r##"<a href="{scheme}:alert(1)">click</a>"##);
+            assert_eq!(md(&html), "click", "{scheme} survived as a link");
+        }
+        // An ordinary scheme and a path containing a colon are untouched.
+        assert_eq!(
+            md(r##"<a href="HTTPS://example.com/a:b">x</a>"##),
+            "[x](HTTPS://example.com/a:b)"
+        );
+    }
+
+    #[test]
+    fn deep_nesting_does_not_blow_the_stack() {
+        // Far past MAX_DEPTH; a recursive parser without a limit dies here.
+        let mut html = String::new();
+        for _ in 0..5_000 {
+            html.push_str("<div>");
+        }
+        html.push_str("deep");
+        for _ in 0..5_000 {
+            html.push_str("</div>");
+        }
+        // Nothing beyond the limit is kept, so there is nothing to convert —
+        // `None` is the honest answer, and the point is that it returns.
+        let out = convert(&html).unwrap_or_default();
+        assert!(out.len() < 64, "the limit did not hold: {out:?}");
+        // Shallow-but-deep input still converts: the limit is not a hair
+        // trigger.
+        let mut shallow = String::new();
+        for _ in 0..40 {
+            shallow.push_str("<div>");
+        }
+        shallow.push_str("kept");
+        for _ in 0..40 {
+            shallow.push_str("</div>");
+        }
+        assert_eq!(convert(&shallow).unwrap_or_default(), "kept");
+    }
+
+    #[test]
+    fn a_fence_outgrows_the_backticks_it_holds() {
+        // Three backticks in the body would close a three-backtick fence.
+        assert_eq!(
+            md("<pre><code>a```b</code></pre>"),
+            "````\na```b\n````",
+            "the fence must be longer than the run inside it"
+        );
+        assert_eq!(md("<pre>plain</pre>"), "```\nplain\n```");
+        // Inline code likewise, and it pads when the text touches a backtick.
+        assert_eq!(md("<code>a``b</code>"), "```a``b```");
+        assert_eq!(md("<code>`x`</code>"), "`` `x` ``");
+    }
+
+    #[test]
     fn lists_nest() {
         assert_eq!(
             md("<ul><li>one</li><li>two<ul><li>inner</li></ul></li></ul>"),
             "- one\n- two\n    - inner"
         );
-        assert_eq!(md("<ol><li>first</li><li>second</li></ol>"), "1. first\n1. second");
+        assert_eq!(
+            md("<ol><li>first</li><li>second</li></ol>"),
+            "1. first\n1. second"
+        );
     }
 
     #[test]
@@ -982,10 +1197,7 @@ mod tests {
 
     #[test]
     fn images_and_breaks() {
-        assert_eq!(
-            md(r#"<p><img src="a.png" alt="pic"></p>"#),
-            "![pic](a.png)"
-        );
+        assert_eq!(md(r#"<p><img src="a.png" alt="pic"></p>"#), "![pic](a.png)");
         assert_eq!(md("<p>one<br>two</p>"), "one\ntwo");
         assert_eq!(md("<p>a</p><hr><p>b</p>"), "a\n\n---\n\nb");
     }

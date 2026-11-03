@@ -1122,7 +1122,7 @@ fn dropdown(name: &str, desc: &str, value: impl Into<SharedString>) -> Item {
 /// window's chrome so far, and the row's description says so.
 const LANGUAGE: Typed = Typed {
     key: "locale",
-    options: &[("English", "en"), ("Bahasa Indonesia", "id")],
+    options: crate::i18n::Locale::ALL,
     read: |state| {
         state
             .app()
