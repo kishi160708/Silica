@@ -49,11 +49,17 @@ impl App {
         loop {
             match Client::connect(&socket, Duration::from_millis(200)) {
                 Ok(client) => {
-                    return Some(Self {
+                    let mut app = Self {
                         _child: child,
                         socket,
                         client,
-                    })
+                    };
+                    // ! Typing goes to the focused window. On a bare X server
+                    // ! (xvfb in CI) nothing is focused yet, so the keystrokes
+                    // ! would be dropped and the buffer would stay empty.
+                    let _ = app.client.call("window", json!({"action": "activate"}));
+                    let _ = app.client.call("focus", json!({}));
+                    return Some(app);
                 }
                 Err(_) => {
                     if child.try_wait().ok().flatten().is_some() {
