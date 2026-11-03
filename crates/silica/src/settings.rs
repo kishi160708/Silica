@@ -985,8 +985,8 @@ impl Honored {
     fn tag(self) -> Option<&'static str> {
         match self {
             Honored::Live => None,
-            Honored::OnRestart => Some("on restart"),
-            Honored::No => Some("not in Silica yet"),
+            Honored::OnRestart => Some(crate::i18n::t("on restart")),
+            Honored::No => Some(crate::i18n::t("not in Silica yet")),
         }
     }
 }
@@ -1116,6 +1116,27 @@ fn switcher_toggle(name: &str, desc: &str, switcher: &SwitcherConfig, flag: Swit
 fn dropdown(name: &str, desc: &str, value: impl Into<SharedString>) -> Item {
     item(name, desc, Control::Dropdown(value.into()))
 }
+
+/// "Language": `app.json`'s `locale`, read by [`crate::i18n`] at startup and
+/// on the click that changes it. The table only covers the Settings
+/// window's chrome so far, and the row's description says so.
+const LANGUAGE: Typed = Typed {
+    key: "locale",
+    options: &[("English", "en"), ("Bahasa Indonesia", "id")],
+    read: |state| {
+        state
+            .app()
+            .locale
+            .clone()
+            .unwrap_or_else(|| "en".to_string())
+    },
+    write: |state, value| {
+        let mut next = state.app().clone();
+        next.locale = Some(value.to_string());
+        SettingChange::App(next)
+    },
+    shape: None,
+};
 
 /// "Window frame style": the one dropdown whose value lives outside the
 /// vault, in the per-user store. Its closures ignore the vault they are
@@ -1646,7 +1667,12 @@ impl SettingsView {
                 "Silica reads this vault the way Obsidian 1.14.4 does.",
                 Control::Button("Check for updates".into()),
             ),
-            dropdown("Language", "Change the display language.", "English").not_yet(),
+            choice(
+                "Language",
+                "Change the display language. The Settings window's labels follow it; notes and the other views are still English.",
+                state,
+                LANGUAGE,
+            ),
             item(
                 "Help",
                 "Learn how to use Obsidian and get help from the community.",
@@ -1773,10 +1799,12 @@ impl SettingsView {
             heading("Advanced"),
             appearance_toggle(
                 "Native menus",
-                "Menus throughout the app will match the operating system. They will not be affected by your theme.",
+                // Said plainly, because the answer differs by platform and
+                // a row that promised a menu bar on Linux would be lying.
+                "Menus throughout the app will match the operating system. They will not be affected by your theme. macOS gets the system menu bar; Linux and Windows draw their menus in the window, so this changes nothing there.",
                 a,
                 NATIVE_MENUS,
-            ).not_yet(),
+            ),
             // Obsidian keeps this one outside the vault: changing it wrote
             // nothing under `.obsidian` (probed 2026-10-20), so it lives in
             // the per-user store beside the vault list — the same place
@@ -1921,7 +1949,7 @@ impl SettingsView {
                 "Automatically convert HTML to Markdown when pasting and drag-and-drop from web pages.",
                 app,
                 AUTO_CONVERT_HTML,
-            ).not_yet(),
+            ),
             app_toggle(
                 "Vim key bindings",
                 "Use Vim key bindings when editing.",
@@ -1933,7 +1961,6 @@ impl SettingsView {
 
     fn files_items(state: &VaultState) -> Vec<Item> {
         let app = &state.app();
-        let config_dir = state.vault().config_dir().to_string();
         let mut items = vec![
             app_toggle(
                 "Always focus new tabs",
@@ -2259,7 +2286,7 @@ impl SettingsView {
                             ),
                     ),
             )
-            .child(group_title("Options", theme));
+            .child(group_title(crate::i18n::t("Options"), theme));
         for tab in Tab::OPTIONS {
             nav = nav.child(self.nav_item(*tab, theme, cx));
         }
@@ -2308,7 +2335,7 @@ impl SettingsView {
                 }
                 this.select_tab(tab, window, cx)
             }))
-            .child(tab.name())
+            .child(crate::i18n::t(tab.name()))
     }
 
     fn render_control(
@@ -2994,7 +3021,7 @@ impl Render for SettingsView {
                                     .text_size(px(18.))
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(theme.text)
-                                    .child(tab.name()),
+                                    .child(crate::i18n::t(tab.name())),
                             )
                             .child(
                                 div()
@@ -3085,7 +3112,7 @@ fn hotkey_from_keystroke(stroke: &Keystroke) -> Option<Hotkey> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn stroke(s: &str) -> Keystroke {
@@ -3625,7 +3652,7 @@ mod tests {
 
     /// A vault to build the tabs against; `VaultState::load` wants a real
     /// folder.
-    fn vault() -> (tempfile::TempDir, VaultState) {
+    pub(crate) fn vault() -> (tempfile::TempDir, VaultState) {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         std::fs::create_dir_all(root.join(".obsidian")).unwrap();
@@ -3669,6 +3696,7 @@ mod tests {
             [
                 "Show tab title bar",
                 "Show ribbon",
+                "Native menus",
                 "Show editing mode in status bar",
                 "Inline title",
                 "Readable line length",
@@ -3683,6 +3711,7 @@ mod tests {
                 "Auto-pair Markdown syntax",
                 "Smart lists",
                 "Indent using tabs",
+                "Convert pasted HTML to Markdown",
                 "Vim key bindings",
                 "Always focus new tabs",
                 "Automatically update internal links",

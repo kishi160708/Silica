@@ -2909,6 +2909,18 @@ impl Editor {
         let Some(text) = item.text() else {
             return;
         };
+        // "Convert pasted HTML to Markdown": a page puts both forms on the
+        // clipboard, and the plain one has lost the markup. gpui never asks
+        // for the HTML, so it is read from the desktop's paste tool, and
+        // only when the clipboard really holds markup — a copy from a
+        // terminal leaves the text alone.
+        let text = self
+            .suggest_vault
+            .as_ref()
+            .filter(|state| state.app().auto_convert_html.unwrap_or(false))
+            .and_then(|_| crate::clipboard_html::read())
+            .and_then(|html| crate::html_to_markdown::convert(&html))
+            .unwrap_or(text);
         if self.buf.paste(&text) {
             self.after_edit(Some(window), cx);
         }

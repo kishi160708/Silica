@@ -13,6 +13,10 @@ pub const DEFAULT_CONFIG_DIR: &str = ".obsidian";
 /// `app.json`: Editor plus Files & links settings (key names exactly as Obsidian writes them).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AppConfig {
+    /// The interface language: `en`, `id`, or whatever a newer build wrote.
+    /// Absent means English.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locale: Option<String>,
     // Editor
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spellcheck: Option<bool>,

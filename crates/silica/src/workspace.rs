@@ -3411,6 +3411,10 @@ impl Workspace {
     /// open. Called when the vault loads and again whenever Settings
     /// writes.
     fn apply_app_config(&mut self, state: &VaultState, cx: &mut Context<Self>) {
+        // "Language": the locale is process-wide, read once here — this runs
+        // at startup and on every settings write, so the two cannot drift.
+        let locale = crate::i18n::Locale::from_code(state.app().locale.as_deref().unwrap_or("en"));
+        crate::i18n::set(locale);
         let readable = state.app().readable_line_length.unwrap_or(true);
         let properties =
             PropertiesInDocument::from_config(state.app().properties_in_document.as_deref());
@@ -3501,6 +3505,11 @@ impl Workspace {
             }
             SettingChange::CorePlugins(_) => self.rebuild_commands(&state, None, cx),
             _ => {}
+        }
+        // "Native menus" lives in appearance.json and only macOS has a menu
+        // bar to install, so it is applied wherever an appearance change is.
+        if matches!(&change, SettingChange::Appearance(_)) {
+            crate::native_menus::apply(&state, cx);
         }
         // Recompute the global theme live when appearance changes
         // (dark/light, fonts, accent, CSS theme, CSS snippets).
