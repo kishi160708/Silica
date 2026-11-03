@@ -12,9 +12,12 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
-/// The pieces of an `http://host:port/prefix` URL.
+use native_tls::TlsConnector;
+
+/// The pieces of a `http://` or `https://` URL.
 #[derive(Debug)]
 pub struct Url {
+    pub scheme: String,
     pub host: String,
     pub port: u16,
     /// The path prefix, with no trailing slash; empty for the root.
@@ -22,23 +25,16 @@ pub struct Url {
 }
 
 impl Url {
-    /// Parse `http://host[:port][/prefix]`. `https` is refused rather than
-    /// silently downgraded: this client has no TLS, and a local model server
-    /// does not need it.
+    /// Parse `http://host[:port][/prefix]` or `https://host[:port][/prefix]`.
     pub fn parse(url: &str) -> Result<Url, String> {
         let url = url.trim();
         // * The scheme comes off before any trailing slash does: trimming first
         // * turns a bare `http://` into `http:`, which then reads as a host.
-        let rest = match url.split_once("://") {
-            Some(("http", rest)) => rest,
-            Some(("https", _)) => {
-                return Err(format!(
-                    "{url}: this client speaks plain HTTP only, so point it at \
-                     a model server on this machine"
-                ))
-            }
+        let (scheme, rest) = match url.split_once("://") {
+            Some(("http", rest)) => ("http".to_string(), rest),
+            Some(("https", rest)) => ("https".to_string(), rest),
             Some((scheme, _)) => return Err(format!("{url}: unknown scheme `{scheme}`")),
-            None => url,
+            None => ("http".to_string(), url),
         };
         let rest = rest.trim_end_matches('/');
         let (authority, prefix) = match rest.split_once('/') {
@@ -51,12 +47,13 @@ impl Url {
                 port.parse::<u16>()
                     .map_err(|_| format!("{url}: `{port}` is not a port"))?,
             ),
-            None => (authority, 80),
+            None => (authority, if scheme == "https" { 443 } else { 80 }),
         };
         if host.is_empty() {
             return Err(format!("{url}: no host"));
         }
         Ok(Url {
+            scheme,
             host: host.to_string(),
             port,
             prefix: prefix.trim_end_matches('/').to_string(),
@@ -69,7 +66,7 @@ impl Url {
     }
 
     pub fn origin(&self) -> String {
-        format!("http://{}:{}{}", self.host, self.port, self.prefix)
+        format!("{}://{}:{}{}", self.scheme, self.host, self.port, self.prefix)
     }
 }
 
@@ -120,7 +117,7 @@ pub fn request(
         env!("CARGO_PKG_VERSION"),
     );
     if let Some(bearer) = bearer {
-        head.push_str(&format!("Authorization: Bearer {bearer}\r\n"));
+        head.push_str(&format!("Authorization: Bearer {bearer}"));
     }
     if let Some(body) = body {
         head.push_str(&format!(
@@ -129,22 +126,48 @@ pub fn request(
         ));
     }
     head.push_str("\r\n");
+
+    if url.scheme == "https" {
+        return https_request(stream, url, &head, body, &address);
+    }
+
     stream
         .write_all(head.as_bytes())
         .and_then(|()| stream.write_all(body.unwrap_or_default().as_bytes()))
         .and_then(|()| stream.flush())
         .map_err(|e| format!("{address}: writing the request failed: {e}"))?;
+    read_response(&mut stream, &address)
+}
 
-    read_response(&mut stream, &address, timeout)
+/// Send the request over a TLS connection: `native-tls` uses the operating
+/// system's native trust store, so a remote model server is reached over an
+/// encrypted, authenticated connection rather than plaintext HTTP.
+fn https_request(
+    stream: TcpStream,
+    url: &Url,
+    head: &str,
+    body: Option<&str>,
+    address: &str,
+) -> Result<Response, String> {
+    let connector = TlsConnector::new().map_err(|e| {
+        format!("{address}: could not build a TLS connector: {e}")
+    })?;
+    let mut tls = connector
+        .connect(url.host.as_str(), stream)
+        .map_err(|e| format!("{address}: TLS handshake failed: {e}"))?;
+    tls.write_all(head.as_bytes())
+        .and_then(|()| tls.write_all(body.unwrap_or_default().as_bytes()))
+        .and_then(|()| tls.flush())
+        .map_err(|e| format!("{address}: writing the TLS request failed: {e}"))?;
+    read_response(&mut tls, address)
 }
 
 /// Read until the message is complete rather than until EOF: a server that
 /// ignores `Connection: close` would otherwise hold the socket open until the
 /// read timeout, turning every call into a stall.
-fn read_response(
-    stream: &mut TcpStream,
+fn read_response<S: Read>(
+    stream: &mut S,
     address: &str,
-    timeout: Duration,
 ) -> Result<Response, String> {
     let mut raw: Vec<u8> = Vec::with_capacity(8 << 10);
     let mut chunk = [0u8; 8 << 10];
@@ -173,7 +196,7 @@ fn read_response(
                             let len = value.parse().ok();
                             if let Some(len) = len.filter(|n| *n > MAX_RESPONSE_BYTES) {
                                 return Err(format!(
-                                    "{address}: Content-Length {len} exceeds the                                      {MAX_RESPONSE_BYTES} byte response cap"
+                                    "{address}: Content-Length {len} exceeds the {MAX_RESPONSE_BYTES} byte response cap"
                                 ));
                             }
                             length = len;
@@ -190,13 +213,11 @@ fn read_response(
         if let Some(start) = head_end {
             let body = &raw[start..];
             let done = if chunked {
-                // * The terminal zero-length chunk; good enough without parsing
-                // * every chunk header, since the de-chunker below does that.
                 find(body, b"\r\n0\r\n").is_some() || body.starts_with(b"0\r\n")
             } else if let Some(length) = length {
                 body.len() >= length
             } else {
-                false // * No framing: only EOF ends it.
+                false
             };
             if done {
                 return Ok(Response {
@@ -206,10 +227,9 @@ fn read_response(
             }
         }
         let read = stream.read(&mut chunk).map_err(|e| {
-            format!("{address}: reading the response failed: {e} (after {timeout:?})")
+            format!("{address}: reading the response failed: {e}")
         })?;
         if read == 0 {
-            // * EOF. Everything that arrived is the message.
             let start = head_end
                 .ok_or_else(|| format!("{address}: closed before sending a complete header"))?;
             return Ok(Response {
@@ -226,8 +246,6 @@ fn read_response(
     }
 }
 
-/// The body as text: de-chunked when chunked, truncated to `Content-Length`
-/// when one was given, and lossy because an error page may be any encoding.
 fn decode(body: &[u8], chunked: bool, length: Option<usize>) -> String {
     if !chunked {
         let end = length.unwrap_or(body.len()).min(body.len());
@@ -285,10 +303,14 @@ mod tests {
     }
 
     #[test]
+    fn accepts_https_urls() {
+        let u = Url::parse("https://api.example.test/v1").unwrap();
+        assert_eq!(u.scheme.as_str(), "https");
+        assert_eq!((u.host.as_str(), u.port), ("api.example.test", 443));
+    }
+
+    #[test]
     fn refuses_what_it_cannot_do() {
-        assert!(Url::parse("https://api.example.test")
-            .unwrap_err()
-            .contains("plain HTTP"));
         assert!(Url::parse("ftp://x")
             .unwrap_err()
             .contains("unknown scheme"));

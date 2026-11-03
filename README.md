@@ -73,7 +73,14 @@ cargo test --workspace
 Two Model Context Protocol servers ship with the workspace:
 
 - `silica-mcp` launches Silica and drives it through the control socket, so an agent can open notes, run commands, and screenshot the app. Register it as `{"mcpServers": {"silica": {"command": "target/release/silica-mcp"}}}`.
-- `silica-llm-mcp` talks to a local OpenAI-compatible model server over plain HTTP. Its `llm_digest` tool reads a file here and returns only the model's summary, so large logs never enter the caller's context. `llm_generate` and `llm_models` round it out. Configure it with `SILICA_LLM_URL` (default `http://127.0.0.1:11434/v1`); an optional `SILICA_LLM_DIGEST_ROOT` confines `llm_digest` to a directory tree.
+- `silica-llm-mcp` talks to a local OpenAI-compatible model server over
+  plain HTTP or TLS (`https://` URLs are encrypted via the OS trust store).
+  Its `llm_digest` tool reads a file here and returns only the model's
+  summary, so large logs never enter the caller's context.
+  `llm_generate` and `llm_models` round it out. Configure it with
+  `SILICA_LLM_URL` (default `http://127.0.0.1:11434/v1`); `SILICA_LLM_DIGEST_ROOT`
+  bounds the files `llm_digest` may read and defaults to a `digest` folder
+  next to the server's working directory (there is no unrestricted mode).
 
 ## Limitations
 

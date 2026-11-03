@@ -13,3 +13,8 @@ path = "src/main.rs"
 
 [dependencies]
 serde_json.workspace = true
+# Blocking TLS for `https://` model-server endpoints. native-tls uses the
+# operating system's native trust store (no bundled root store, no async
+# runtime), so a remote model server can be reached over an encrypted
+# connection.
+native-tls = "0.2"

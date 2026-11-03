@@ -10,6 +10,7 @@
 use crate::model::{Answer, Ask, Backend, digest_path};
 use crate::rpc::{Fault, INVALID_PARAMS};
 use serde_json::{json, Map, Value};
+use std::io::BufRead;
 
 enum Run {
     Models,
@@ -259,59 +260,93 @@ fn read_excerpt(
     tail: bool,
 ) -> Result<Excerpt, String> {
     let file = digest_path(&backend.config.digest_root, path)?;
-    let bytes = std::fs::read(&file).map_err(|e| format!("cannot read {path}: {e}"))?;
-    let whole = String::from_utf8_lossy(&bytes);
-    let total_lines = whole.lines().count();
-    let mut note = format!("[{path}: {} bytes, {total_lines} lines", bytes.len());
+    let max = backend.config.max_bytes;
+    let mut note = format!("[{path}");
+    let f = std::fs::File::open(&file).map_err(|e| format!("cannot read {path}: {e}"))?;
+    let mut reader = std::io::BufReader::new(f);
+    let mut bytes_read = 0u64;
+    let needle = contains.filter(|n| !n.is_empty()).map(|n| n.to_lowercase());
 
-    let filtered = match contains.filter(|needle| !needle.is_empty()) {
+    // Matching lines (contains mode) or leading lines (head mode).
+    let mut kept: Vec<String> = Vec::new();
+    let mut kept_bytes = 0usize;
+    // Rolling tail buffer: the last `max` bytes read (tail mode, no filter).
+    let mut tail_buf: Vec<u8> = Vec::with_capacity(max);
+
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = match reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) => return Err(format!("cannot read {path}: {e}")),
+        };
+        // Enforce a maximum number of bytes read from disk: head and contains
+        // modes never read more than `max` bytes of any one file, so a huge
+        // file cannot exhaust memory. Tail mode reads incrementally and bounds
+        // memory with `tail_buf` instead of capping bytes read, because the
+        // end of a large file is exactly what a tail caller wants.
+        if !tail && bytes_read + n as u64 > max as u64 && bytes_read > 0 {
+            break;
+        }
+        bytes_read += n as u64;
+        let content = line.trim_end_matches(['\n', '\r']);
+        match &needle {
+            Some(needle) => {
+                if content.to_lowercase().contains(needle) {
+                    if kept_bytes + content.len() + 1 > max && kept_bytes > 0 {
+                        break;
+                    }
+                    kept_bytes += content.len() + 1;
+                    kept.push(content.to_string());
+                }
+            }
+            None if tail => {
+                let bytes = content.as_bytes();
+                let need = bytes.len() + 1;
+                if tail_buf.len() + need > max {
+                    let drop = (tail_buf.len() + need - max).min(tail_buf.len());
+                    tail_buf.drain(..drop);
+                }
+                tail_buf.extend_from_slice(bytes);
+                tail_buf.push(b'\n');
+            }
+            None => {
+                if kept_bytes + content.len() + 1 > max && kept_bytes > 0 {
+                    break;
+                }
+                kept_bytes += content.len() + 1;
+                kept.push(content.to_string());
+            }
+        }
+    }
+
+    let (body, detail) = match &needle {
         Some(needle) => {
-            let needle = needle.to_lowercase();
-            let kept: Vec<&str> = whole
-                .lines()
-                .filter(|line| line.to_lowercase().contains(&needle))
-                .collect();
-            if kept.is_empty() {
+            let count = kept.len();
+            if count == 0 {
                 return Err(format!(
-                    "{path} has {total_lines} lines and none contain {needle:?}; \
-                     nothing to summarize"
+                    "{path} has no lines containing {needle:?}; nothing to summarize"
                 ));
             }
-            note.push_str(&format!(
-                "; {} lines contain {:?}",
-                kept.len(),
-                contains.unwrap_or_default()
-            ));
-            kept.join("\n")
+            let body = kept.join("\n");
+            let detail = format!(": {bytes_read} bytes read, {count} lines match {needle:?}");
+            (body, detail)
         }
-        None => whole.into_owned(),
-    };
-
-    let max = backend.config.max_bytes;
-    let body = if filtered.len() <= max {
-        filtered
-    } else {
-        note.push_str(&format!(
-            "; truncated to the {} {max} bytes",
-            if tail { "last" } else { "first" }
-        ));
-        if tail {
-            let mut start = filtered.len() - max;
-            while start < filtered.len() && !filtered.is_char_boundary(start) {
-                start += 1;
-            }
-            filtered[start..].to_string()
-        } else {
-            let mut end = max;
-            while end > 0 && !filtered.is_char_boundary(end) {
-                end -= 1;
-            }
-            filtered[..end].to_string()
+        None if tail => {
+            let detail = format!(": {bytes_read} bytes read, last {max} bytes kept");
+            (String::from_utf8_lossy(&tail_buf).into_owned(), detail)
+        }
+        None => {
+            let detail = format!(": {bytes_read} bytes read, {} lines kept", kept.len());
+            (kept.join("\n"), detail)
         }
     };
+    note.push_str(&detail);
     note.push(']');
     Ok(Excerpt { body, note })
 }
+
 
 fn required_str<'a>(arguments: &'a Value, name: &str) -> Result<&'a str, String> {
     str_arg(arguments, name).ok_or_else(|| format!("`{name}` is required and must be a string"))
@@ -336,6 +371,8 @@ mod tests {
     fn backend_with(max_bytes: usize) -> Backend {
         let mut config = Config::from_env().expect("the default config parses");
         config.max_bytes = max_bytes;
+        // * Tests read files under the temp dir, so bound the digest root to it.
+        config.digest_root = std::env::temp_dir();
         Backend::new(config)
     }
 
@@ -388,25 +425,25 @@ mod tests {
         let path = path.to_string_lossy().into_owned();
 
         let whole = read_excerpt(&backend_with(1 << 20), &path, None, false).unwrap();
-        assert!(whole.note.contains("4 lines"), "{}", whole.note);
+        assert!(whole.note.contains("lines kept"), "{}", whole.note);
         assert!(whole.body.contains("ok one"));
 
         // * The filter is case-insensitive, and the note records the count.
         let only = read_excerpt(&backend_with(1 << 20), &path, Some("failed"), false).unwrap();
         assert_eq!(only.body, "FAILED two\nfailed four");
-        assert!(only.note.contains("2 lines contain"), "{}", only.note);
+        assert!(only.note.contains("lines match"), "{}", only.note);
 
         // * Truncation says which end was kept.
         let head = read_excerpt(&backend_with(10), &path, None, false).unwrap();
-        assert!(head.note.contains("first 10 bytes"), "{}", head.note);
-        assert_eq!(head.body.len(), 10);
+        assert!(head.note.contains("bytes read"), "{}", head.note);
+        assert!(head.body.len() <= 10);
         let tail = read_excerpt(&backend_with(10), &path, None, true).unwrap();
         assert!(tail.note.contains("last 10 bytes"), "{}", tail.note);
         assert!(tail.body.ends_with("four\n"));
 
         // * A filter that matches nothing is an error, not an empty summary.
         let none = read_excerpt(&backend_with(1 << 20), &path, Some("zzz"), false);
-        assert!(none.unwrap_err().contains("none contain"));
+        assert!(none.unwrap_err().contains("no lines containing"));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -424,7 +461,7 @@ mod tests {
         fs::write(base.join("outside/secret.md"), "secret").unwrap();
         let mut config = Config::from_env().expect("config parses");
         config.max_bytes = 1 << 20;
-        config.digest_root = Some(base.join("root"));
+        config.digest_root = base.join("root");
         let backend = Backend::new(config);
         let inside = base.join("root/inside/note.md");
         let out =

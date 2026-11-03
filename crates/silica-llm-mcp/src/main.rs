@@ -24,7 +24,13 @@
 //!
 //! Configuration, all environment variables: `SILICA_LLM_URL`,
 //! `SILICA_LLM_MODEL`, `SILICA_LLM_KEY`, `SILICA_LLM_TIMEOUT_MS`,
-//! `SILICA_LLM_MAX_BYTES`.
+//! `SILICA_LLM_MAX_BYTES` and `SILICA_LLM_DIGEST_ROOT`.
+//!
+//! `SILICA_LLM_URL` may be `https://` as well as `http://`; `native-tls` uses
+//! the operating system's native trust store, so remote model servers are
+//! reached over an encrypted connection. `SILICA_LLM_DIGEST_ROOT` bounds the
+//! files `llm_digest` may read (defaults to a `digest` folder next to the
+//! server's working directory; there is no unrestricted mode).
 //!
 //! Two properties of that router shape how these tools behave, and both belong
 //! in the code rather than only in a note. It keeps **one** model resident

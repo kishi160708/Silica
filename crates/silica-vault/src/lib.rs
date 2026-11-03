@@ -144,6 +144,14 @@ pub fn write_no_follow(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
             )));
         }
     }
+    // * On Windows the reparse-point check above is a check-then-act: a
+    // * hostile process could swap the target for a junction between the
+    // * check and the open below. Windows has no `openat` equivalent, so a
+    // * handle-based walk (opening each parent directory and operating through
+    // * its handle) would be needed to close the race entirely; that requires
+    // * Windows handle-based file APIs and is not available in std. The check
+    // * above is the best available protection there, and it at least refuses a
+    // * reparse point that exists at the time of the check.
     // * Unique per write, so two saves of one note cannot share a scratch file.
     let unique = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -656,9 +664,15 @@ impl Vault {
     pub fn write_bytes(&self, rel: &str, bytes: &[u8]) -> Result<(), VaultError> {
         let path = self.write_path(rel)?;
         // * Snapshot the existing file before replacing it, so an interrupted
-        //   or failed write cannot destroy prior content.
-        if path.exists() {
-            snapshot_before_overwrite(&path);
+        //   or failed write cannot destroy prior content. On Unix `write_at`
+        //   does not snapshot, so do it here. On Windows `write_no_follow`
+        //   snapshots internally, so doing it here too would write a duplicate
+        //   snapshot for a single save.
+        #[cfg(unix)]
+        {
+            if path.exists() {
+                snapshot_before_overwrite(&path);
+            }
         }
         // * On Unix, write through the `openat` walk so directory handles are
         //   held throughout and no parent directory can be swapped for a link

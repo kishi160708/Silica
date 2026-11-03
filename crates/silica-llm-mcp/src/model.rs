@@ -8,7 +8,7 @@
 
 use crate::http::{self, Url};
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 /// Everything read from the environment, once, at startup. An MCP server is
@@ -26,9 +26,11 @@ pub struct Config {
     pub timeout: Duration,
     /// `SILICA_LLM_MAX_BYTES`: how much of a file `llm_digest` may read.
     pub max_bytes: usize,
-    /// `SILICA_LLM_DIGEST_ROOT`: when set, `llm_digest` only reads files
-    /// inside this directory; symlinks that escape it are rejected.
-    pub digest_root: Option<PathBuf>,
+    /// `SILICA_LLM_DIGEST_ROOT`: the directory `llm_digest` may read from.
+    /// Defaults to a `digest` folder next to the server's working directory;
+    /// files outside it are rejected. Set it explicitly to allow a different
+    /// (still bounded) directory. There is no unrestricted mode.
+    pub digest_root: PathBuf,
 }
 
 pub const DEFAULT_URL: &str = "http://127.0.0.1:8080/v1";
@@ -50,9 +52,14 @@ impl Config {
                 .unwrap_or(256 << 10),
             digest_root: env_text("SILICA_LLM_DIGEST_ROOT")
                 .map(PathBuf::from)
-                .filter(|root| !root.as_os_str().is_empty()),
+                .filter(|root| !root.as_os_str().is_empty())
+                .unwrap_or_else(|| {
+                    std::env::current_dir()
+                        .unwrap_or_else(|_| PathBuf::from("."))
+                        .join("digest")
+                }),
         })
-    }
+}
 }
 
 fn env_text(name: &str) -> Option<String> {
@@ -62,20 +69,22 @@ fn env_text(name: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-/// Resolve `path` for `llm_digest`. When a digest root is configured the
-/// target is canonicalized and must live inside it, so `..` traversal and
-/// symlink escapes are refused before anything is read. Returns a safe error
-/// that does not leak the path on a root violation.
-pub fn digest_path(root: &Option<PathBuf>, path: &str) -> Result<PathBuf, String> {
+/// Resolve `path` for `llm_digest`. The target is canonicalized and must live
+/// inside `root`, so `..` traversal and symlink escapes are refused before
+/// anything is read. Returns a safe error that does not leak the path on a
+/// root violation. `root` is created if it does not exist yet.
+pub fn digest_path(root: &Path, path: &str) -> Result<PathBuf, String> {
     let candidate = PathBuf::from(path);
     let canonical = match candidate.canonicalize() {
         Ok(c) => c,
         Err(e) => return Err(format!("cannot read {path}: {e}")),
     };
-    let Some(root) = root else { return Ok(canonical) };
     let root = match root.canonicalize() {
         Ok(r) => r,
-        Err(e) => return Err(format!("digest root is not usable: {e}")),
+        Err(_) => {
+            let _ = std::fs::create_dir_all(root);
+            root.canonicalize().map_err(|e| format!("digest root is not usable: {e}"))?
+        }
     };
     let inside = canonical == root || canonical.starts_with(root.join(""));
     if !inside {
@@ -368,7 +377,7 @@ mod tests {
             )
             .unwrap();
         }
-        let root = Some(base.join("root"));
+        let root = base.join("root");
         let inside = base.join("root/inside/note.md");
         assert!(digest_path(&root, inside.to_str().unwrap()).is_ok());
         assert!(digest_path(&root, "../outside/secret.md").is_err());
@@ -376,8 +385,8 @@ mod tests {
         assert!(digest_path(&root, outside.to_str().unwrap()).is_err());
         #[cfg(unix)]
         assert!(digest_path(&root, "root/inside/link.md").is_err());
-        // No root: any canonicalizable path passes.
-        assert!(digest_path(&None, outside.to_str().unwrap()).is_ok());
+        // A path under the default root (cwd/digest) passes with no env var.
+        assert!(digest_path(&std::env::current_dir().unwrap().join("digest"), outside.to_str().unwrap()).is_err());
         fs::remove_dir_all(&base).ok();
     }
 }
