@@ -104,8 +104,8 @@ impl Prompt {
             i.set_placeholder(self.spec.placeholder.clone());
             let prefilled = !initial.is_empty();
             i.set_text(initial, cx);
-            // Rename opens on the current name, and Obsidian's inline rename
-            // selects the whole basename so the first keystroke replaces it.
+            // * Rename opens on the current name, and Obsidian's inline rename
+            //   selects the whole basename so the first keystroke replaces it.
             if prefilled {
                 i.select_all(cx);
             }
@@ -252,10 +252,10 @@ impl Render for Prompt {
         let theme = cx.global::<Theme>().clone();
         let count = self.filtered.len();
         let rows = (count.min(10) as f32) * 30.;
-        // The id and the click listener belong on the painted button rather
-        // than on a bare wrapper around it: gpui hit-tests the element that
-        // registered the listener, and the wrapper's box is not the box the
-        // user aims at.
+        // * The id and the click listener belong on the painted button rather
+        //   than on a bare wrapper around it: gpui hit-tests the element that
+        //   registered the listener, and the wrapper's box is not the box the
+        //   user aims at.
         let button = |id: &'static str, label: SharedString, primary: bool, theme: &Theme| {
             div()
                 .id(id)
@@ -275,12 +275,12 @@ impl Render for Prompt {
         div()
             .id("prompt")
             .key_context("Prompt")
-            // gpui focuses a tracked handle on every mouse-down inside the
-            // element, so this has to be the same handle `Focusable` hands
-            // out: tracking the box's own handle while the field held the
-            // keyboard meant a click anywhere in the prompt — on the field
-            // itself, on a button — took the keyboard away from the field and
-            // left the prompt typeable only after Escape and a fresh F2.
+            // * gpui focuses a tracked handle on every mouse-down inside the
+            //   element, so this has to be the same handle `Focusable` hands
+            //   out: tracking the box's own handle while the field held the
+            //   keyboard meant a click anywhere in the prompt — on the field
+            //   itself, on a button — took the keyboard away from the field and
+            //   left the prompt typeable only after Escape and a fresh F2.
             .track_focus(&self.focus_handle(cx))
             .on_action(cx.listener(Self::confirm))
             .on_action(cx.listener(Self::dismiss))

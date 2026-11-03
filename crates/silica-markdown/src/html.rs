@@ -247,14 +247,14 @@ impl<'r, 'a> Renderer<'r, 'a> {
                     .as_deref()
                     .and_then(|i| i.split_whitespace().next())
                     .unwrap_or("");
-                // Obsidian resolves the info string's first word to a
-                // highlighter language: the token is lowercased, and a token
-                // holding anything but `[A-Za-z0-9_-]` resolves to `none` --
-                // which is what `c#`, `f#`, `C++` and `.net` all do -- with the
-                // raw token kept on the `<code>` beside `language-none`.
-                // CommonMark has neither rule, and puts the token on the
-                // `<code>` as written. Observed against Obsidian 1.14.4
-                // (tools/probe-gen, 2026-10-29).
+                // ? Obsidian resolves the info string's first word to a
+                // ? highlighter language: the token is lowercased, and a token
+                // ? holding anything but `[A-Za-z0-9_-]` resolves to `none` --
+                // ? which is what `c#`, `f#`, `C++` and `.net` all do -- with the
+                // ? raw token kept on the `<code>` beside `language-none`.
+                // ? CommonMark has neither rule, and puts the token on the
+                // ? `<code>` as written. Observed against Obsidian 1.14.4
+                // ? (tools/probe-gen, 2026-10-29).
                 let obsidian = self.obsidian();
                 let resolves = !lang.is_empty()
                     && lang
@@ -325,8 +325,8 @@ impl<'r, 'a> Renderer<'r, 'a> {
                 if title.is_empty() {
                     escape_html(&crate::callout_default_title(callout_type), &mut self.out);
                 } else {
-                    // Tight, so the usual one-paragraph title renders as bare
-                    // text while a heading or a list in it renders as itself.
+                    // * Tight, so the usual one-paragraph title renders as bare
+                    // * text while a heading or a list in it renders as itself.
                     self.blocks(title, true);
                 }
                 self.out.push_str("</div></div>");
@@ -371,7 +371,7 @@ impl<'r, 'a> Renderer<'r, 'a> {
                                 self.out.push_str(" is-checked");
                             }
                             self.out.push_str("\">");
-                            // In a loose list the checkbox sits inside the first paragraph.
+                            // * In a loose list the checkbox sits inside the first paragraph.
                             let loose_paragraph = !*tight
                                 && matches!(
                                     children.first(),
@@ -520,8 +520,8 @@ impl<'r, 'a> Renderer<'r, 'a> {
                 kind,
                 children,
             } => {
-                // Only an inline `![alt](src)` without a scheme is a vault embed;
-                // reference-style images render as `<img>` whatever the path.
+                // * Only an inline `![alt](src)` without a scheme is a vault embed;
+                // * reference-style images render as `<img>` whatever the path.
                 if self.obsidian() && *kind == LinkKind::Inline && !has_scheme(destination) {
                     let alt = self.raw(children);
                     let alt = alt.split('|').next().unwrap_or("").trim_end();
@@ -552,8 +552,8 @@ impl<'r, 'a> Renderer<'r, 'a> {
                 let link = crate::parse_linktext(body);
                 let target = crate::link_target(body);
                 if *embed {
-                    // The alt is the first alias part that is not a size hint
-                    // (`200`, `200x100`), else the display text.
+                    // * The alt is the first alias part that is not a size hint
+                    // * (`200`, `200x100`), else the display text.
                     let alt = match link
                         .alias
                         .and_then(|a| a.split('|').map(str::trim).find(|p| !is_size_hint(p)))

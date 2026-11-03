@@ -68,8 +68,8 @@ fn observed() {
             r#""Frothed basalt".contains(/zz/)"#,
             "Type error in \"contains\", parameter \"value\". Expected String, given RegExp.",
         ),
-        // Two and three arguments answer the *type* error, not "too many
-        // arguments." — the parameters are checked before the count.
+        // * Two and three arguments answer the *type* error, not "too many
+        // * arguments." — the parameters are checked before the count.
         (
             r#""Frothed basalt".contains(/zz/, /zz/)"#,
             "Type error in \"contains\", parameter \"value\". Expected String, given RegExp.",
@@ -78,9 +78,9 @@ fn observed() {
             r#""Frothed basalt".contains(/zz/, /zz/, /zz/)"#,
             "Type error in \"contains\", parameter \"value\". Expected String, given RegExp.",
         ),
-        // --- String: containsAll / containsAny are variadic -------------
-        // With no arguments at all they answer, rather than refusing: the
-        // vacuous true and false.
+        // * --- String: containsAll / containsAny are variadic -------------
+        // * With no arguments at all they answer, rather than refusing: the
+        // * vacuous true and false.
         (r#""Frothed basalt".containsAll()"#, "true"),
         (r#""Frothed basalt".containsAny()"#, "false"),
         // --- String: endsWith / startsWith ------------------------------
@@ -142,9 +142,9 @@ fn observed() {
             r#""Frothed basalt".repeat(/zz/, /zz/, /zz/)"#,
             "Type error in \"repeat\", parameter \"count\". Expected Number, given RegExp.",
         ),
-        // --- String: replace --------------------------------------------
-        // One argument is still "not enough": the minimum is two. A RegExp
-        // *pattern* is accepted — the refusal names `replacement`.
+        // * --- String: replace --------------------------------------------
+        // * One argument is still "not enough": the minimum is two. A RegExp
+        // * *pattern* is accepted — the refusal names `replacement`.
         (
             r#""Frothed basalt".replace()"#,
             "Cannot call function \"replace\", not enough arguments.",
@@ -178,10 +178,10 @@ fn observed() {
             r#""Frothed basalt".slice(/zz/, /zz/, /zz/)"#,
             "Type error in \"slice\", parameter \"start\". Expected Number, given RegExp.",
         ),
-        // --- String: split ----------------------------------------------
-        // A RegExp separator is accepted, and one that never matches gives
-        // back the whole string as a single-element List, which renders as
-        // the string itself.
+        // * --- String: split ----------------------------------------------
+        // * A RegExp separator is accepted, and one that never matches gives
+        // * back the whole string as a single-element List, which renders as
+        // * the string itself.
         (
             r#""Frothed basalt".split()"#,
             "Cannot call function \"split\", not enough arguments.",
@@ -233,8 +233,8 @@ fn observed() {
         ),
         ("/ba(s)alt/.isTruthy()", "true"),
         ("/ba(s)alt/.toString()", "/ba(s)alt/"),
-        // The RegExp completion list is `isTruthy`, `isType`, `matches` and
-        // `toString`: a RegExp is not a String receiver.
+        // * The RegExp completion list is `isTruthy`, `isType`, `matches` and
+        // * `toString`: a RegExp is not a String receiver.
         (
             "/ba(s)alt/.lower()",
             "Cannot find function \"lower\" on type RegExp",
@@ -257,8 +257,8 @@ fn observed() {
 #[test]
 fn chosen() {
     check(&[
-        // contains / containsAll / containsAny do the obvious thing with
-        // real arguments; values are case-sensitive.
+        // * contains / containsAll / containsAny do the obvious thing with
+        // * real arguments; values are case-sensitive.
         (r#""Frothed basalt".contains("basalt")"#, "true"),
         (r#""Frothed basalt".contains("BASALT")"#, "false"),
         (r#""Frothed basalt".containsAll("Frothed", "basalt")"#, "true"),
@@ -274,13 +274,13 @@ fn chosen() {
         (r#""".isEmpty()"#, "true"),
         (r#""  padded  ".trim()"#, "padded"),
         ("spaced.trim()", "padded"),
-        // A zero-argument name refuses an argument it has no parameter for.
+        // * A zero-argument name refuses an argument it has no parameter for.
         (
             r#""Frothed basalt".trim(1)"#,
             "Cannot call function \"trim\", too many arguments.",
         ),
-        // repeat: a fractional count truncates, zero and a negative count
-        // give nothing.
+        // * repeat: a fractional count truncates, zero and a negative count
+        // * give nothing.
         (r#""ab".repeat(3)"#, "ababab"),
         (r#""ab".repeat(2.9)"#, "abab"),
         (r#""ab".repeat(0)"#, ""),
@@ -289,8 +289,8 @@ fn chosen() {
             r#""ab".repeat(1, 2)"#,
             "Cannot call function \"repeat\", too many arguments.",
         ),
-        // replace: every occurrence, for a String pattern and a RegExp one
-        // alike, and the replacement is literal text.
+        // * replace: every occurrence, for a String pattern and a RegExp one
+        // * alike, and the replacement is literal text.
         (r#""a-b-c".replace("-", "+")"#, "a+b+c"),
         (r#""a-b-c".replace(/-/, "+")"#, "a+b+c"),
         (r#""Frothed basalt".replace(/BA/i, "x")"#, "Frothed xsalt"),
@@ -300,12 +300,12 @@ fn chosen() {
             r#""a-b".replace(1, "+")"#,
             "Type error in \"replace\", parameter \"pattern\". Expected String,RegExp, given Number.",
         ),
-        // A pattern Rust's regex cannot compile matches nothing: a
-        // divergence, documented in funcs::text.
+        // * A pattern Rust's regex cannot compile matches nothing: a
+        // * divergence, documented in funcs::text.
         (r#""Frothed basalt".replace(/(?<=x)y/, "!")"#, "Frothed basalt"),
         ("/(?<=x)y/.matches(\"xy\")", "false"),
-        // slice: inclusive start, exclusive end, negatives from the end, and
-        // out of range clamps.
+        // * slice: inclusive start, exclusive end, negatives from the end, and
+        // * out of range clamps.
         (r#""Frothed basalt".slice(8)"#, "basalt"),
         (r#""Frothed basalt".slice(0, 7)"#, "Frothed"),
         (r#""Frothed basalt".slice(-6)"#, "basalt"),
@@ -321,8 +321,8 @@ fn chosen() {
             r#""abc".slice(0, /zz/)"#,
             "Type error in \"slice\", parameter \"end\". Expected Number, given RegExp.",
         ),
-        // split: a List, rendered by joining with ", "; `n` caps how many
-        // substrings come back.
+        // * split: a List, rendered by joining with ", "; `n` caps how many
+        // * substrings come back.
         (r#""a,b,c".split(",")"#, "a, b, c"),
         (r#""a,b,c".split(",", 2)"#, "a, b"),
         (r#""a,b,c".split(",", 0)"#, ""),
@@ -337,20 +337,20 @@ fn chosen() {
             r#""a,b".split(1)"#,
             "Type error in \"split\", parameter \"separator\". Expected String,RegExp, given Number.",
         ),
-        // title: the first letter of each whitespace-delimited word, and the
-        // rest of a word is left as written.
+        // * title: the first letter of each whitespace-delimited word, and the
+        // * rest of a word is left as written.
         (r#""frothed basalt".title()"#, "Frothed Basalt"),
         (r#""FROTHED basalt".title()"#, "FROTHED Basalt"),
         (r#""  two  words ".title()"#, "  Two  Words "),
         (r#""ignimbrite".title()"#, "Ignimbrite"),
-        // matches searches, it does not anchor.
+        // * matches searches, it does not anchor.
         ("/basalt/.matches(\"Frothed basalt\")", "true"),
         ("/BASALT/.matches(\"Frothed basalt\")", "false"),
         ("/BASALT/i.matches(\"Frothed basalt\")", "true"),
         ("/pumice/.matches(\"Frothed basalt\")", "false"),
-        // A Link argument is a String argument.
+        // * A Link argument is a String argument.
         ("\"Pumice and basalt\".contains(linkish)", "true"),
-        // A Link receiver takes the whole String set.
+        // * A Link receiver takes the whole String set.
         ("linkish.slice(0, 3)", "Pum"),
         ("linkish.split(\"m\")", "Pu, ice"),
         ("linkish.title()", "Pumice"),

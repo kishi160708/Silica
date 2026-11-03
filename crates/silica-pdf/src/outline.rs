@@ -59,7 +59,7 @@ pub(crate) fn outline(pdf: &Pdf) -> Vec<OutlineItem> {
                 continue;
             }
         }
-        // The sibling goes under the child so the child pops first.
+        // * The sibling goes under the child so the child pops first.
         if let Some(next) = item.get::<Dict<'_>>(b"Next") {
             stack.push((next, depth));
         }
@@ -129,7 +129,7 @@ impl<'a> Dests<'a, '_> {
     }
 
     fn named(&self, key: &[u8], hops: usize) -> Option<usize> {
-        // PDF 1.1 kept named destinations in a plain dictionary.
+        // * PDF 1.1 kept named destinations in a plain dictionary.
         if let Some(dests) = self.catalog.get::<Dict<'a>>(b"Dests") {
             if let Some(dest) = dests.get::<Object<'a>>(key) {
                 return self.resolve(dest, hops + 1);

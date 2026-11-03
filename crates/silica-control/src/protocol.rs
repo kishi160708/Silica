@@ -180,7 +180,7 @@ mod tests {
         let line = Response::err(4, "no vault open").line();
         let back: Response = serde_json::from_str(line.trim_end()).expect("parses");
         assert_eq!(back.error.as_deref(), Some("no vault open"));
-        // Exactly one of the two keys is on the wire.
+        // ! Exactly one of the two keys is on the wire.
         assert!(!line.contains("result"));
     }
 
@@ -207,10 +207,10 @@ mod tests {
         assert!(e.contains("array of strings"), "{e}");
         let e = r.str_list("rows").expect_err("rejected");
         assert!(e.contains("array of strings"), "{e}");
-        // A flag never fails; a non-bool falls back to the default.
+        // ! A flag never fails; a non-bool falls back to the default.
         assert!(r.bool_param("text", true));
         assert!(!r.bool_param("text", false));
-        // Missing params name themselves and the method.
+        // * Missing params name themselves and the method.
         let e = r.str_param("name").expect_err("rejected");
         assert!(e.contains("state") && e.contains("name"), "{e}");
     }

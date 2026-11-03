@@ -431,15 +431,15 @@ impl ReadingView {
                 .map(|v| (v.playing, v.info, v.at))
         };
         match (open, share) {
-            // A seek on the playing file.
+            // * A seek on the playing file.
             (Some((_, info, _)), Some(share)) => {
                 self.video_start(path, info, info.duration * share.clamp(0.0, 1.0), cx)
             }
-            // The button or the picture: pause, or resume where it stopped.
+            // * The button or the picture: pause, or resume where it stopped.
             (Some((true, _, _)), None) => self.video_pause(&path, cx),
             (Some((false, info, at)), None) => {
-                // A file that played to its end starts again from the top,
-                // as a player's button does.
+                // * A file that played to its end starts again from the top,
+                //   as a player's button does.
                 let at = if info.duration > 0.0 && at >= info.duration - 0.05 {
                     0.0
                 } else {
@@ -447,13 +447,13 @@ impl ReadingView {
                 };
                 self.video_start(path, info, at, cx)
             }
-            // Nothing open yet.
+            // * Nothing open yet.
             (None, share) => match crate::video::probe(&path) {
                 Some(info) => {
                     let at = share.map_or(0.0, |s| info.duration * s.clamp(0.0, 1.0));
                     self.video_start(path, info, at, cx);
                 }
-                // Not a video after all: the system player, as before.
+                // * Not a video after all: the system player, as before.
                 None => cx.open_url(&format!("file://{}", path.display())),
             },
         }
@@ -526,7 +526,7 @@ impl ReadingView {
                     .await;
                 decoder = Some(back);
                 let Some(frame) = frame else {
-                    // End of file: the last frame stays up, stopped.
+                    // * End of file: the last frame stays up, stopped.
                     if let Some(video) = slot.borrow_mut().as_mut().filter(|v| v.path == path) {
                         video.playing = false;
                         video.at = info.duration;
@@ -542,8 +542,8 @@ impl ReadingView {
                     .filter(|v| v.path == path && v.playing)
                 {
                     Some(video) => {
-                        // A frame's texture outlives its frame unless gpui is
-                        // told; the old one goes with the new one's arrival.
+                        // * A frame's texture outlives its frame unless gpui is
+                        //   told; the old one goes with the new one's arrival.
                         if let Some(stale) = video.frame.replace(frame) {
                             stale_to_drop = Some(stale);
                         }
@@ -573,18 +573,18 @@ impl ReadingView {
         self.path = path;
         self.list.reset(model.blocks.len());
         if same {
-            // A reload after a change on disk keeps the reader's place.
+            // * A reload after a change on disk keeps the reader's place.
             self.list.scroll_to(top);
         }
         self.model = Arc::new(model);
         if !same {
-            // Another note: whatever was playing belongs to the old one.
+            // * Another note: whatever was playing belongs to the old one.
             if let Some(old) = self.video.borrow_mut().take() {
                 crate::video::drop_frame(old.frame, cx);
             }
-            // ... and the folds they opened: the watcher re-enters this on
-            // every autosave, so clearing them unconditionally collapsed an
-            // expanded callout 1.5 s after any save of the note being read.
+            // * ... and the folds they opened: the watcher re-enters this on
+            //   every autosave, so clearing them unconditionally collapsed an
+            //   expanded callout 1.5 s after any save of the note being read.
             self.toggled.clear();
             self.folds.clear();
         }
@@ -686,8 +686,8 @@ impl ReadingView {
     }
 
     pub fn scroll_to_block(&mut self, ix: usize, cx: &mut Context<Self>) {
-        // A jump into a collapsed section expands it, as a link into a
-        // folded section was observed doing in the editor.
+        // * A jump into a collapsed section expands it, as a link into a
+        //   folded section was observed doing in the editor.
         if self.hidden.get(ix).copied().unwrap_or(false) {
             let heads = self.headings();
             let hiding: Vec<FoldKey> = heads
@@ -791,11 +791,11 @@ impl ReadingView {
                 "item": top.item_ix,
                 "offset": f32::from(top.offset_in_item),
             },
-            // An embedded base draws no chrome of its own, so this is the
-            // only way one is visible from outside the app.
+            // * An embedded base draws no chrome of its own, so this is the
+            //   only way one is visible from outside the app.
             "bases": crate::bases::embed::describe_all(&self.model.blocks),
-            // And an embedded PDF likewise: its pages are images and its
-            // box has no title, so the dump is what names it.
+            // * And an embedded PDF likewise: its pages are images and its
+            //   box has no title, so the dump is what names it.
             "pdfs": crate::pdf::embed::describe_all(&self.model.blocks),
         })
     }
@@ -838,11 +838,11 @@ impl ReadingView {
             return div().into_any_element();
         };
         if self.hidden.get(ix).copied().unwrap_or(false) {
-            // Collapsed content takes no room at all.
+            // * Collapsed content takes no room at all.
             return div().into_any_element();
         }
-        // The block's inner width: the view minus its padding, capped at the
-        // readable line length.
+        // * The block's inner width: the view minus its padding, capped at the
+        //   readable line length.
         let mut available = f32::from(self.width) - 64.;
         if self.readable_line_length {
             available = available.min(700.);
@@ -884,8 +884,8 @@ impl ReadingView {
                 });
             }
         });
-        // A click inside a video embed calls back into this view, which owns
-        // the player.
+        // * A click inside a video embed calls back into this view, which owns
+        //   the player.
         let view_for_video = view.clone();
         let on_video: VideoHandler = Rc::new(move |path, share, _window, cx| {
             let path = path.to_path_buf();
@@ -905,9 +905,9 @@ impl ReadingView {
                 .clone()
                 .unwrap_or_else(|| Rc::new(missing_canvas)),
         };
-        // The reading view's properties block is now editable: clicks on
-        // rows come back as PropertyChanged events that the workspace
-        // writes to the vault file.
+        // * The reading view's properties block is now editable: clicks on
+        //   rows come back as PropertyChanged events that the workspace
+        //   writes to the vault file.
         let path_for_prop = self.path.clone().unwrap_or_default();
         let view_for_prop = view.clone();
         let on_property_action: PropertyHandler = Rc::new(move |action, _window, cx| {
@@ -945,13 +945,13 @@ impl ReadingView {
         )
         .with_reading_host(&host);
         let mut inner = r.block(block, false);
-        // A heading carries Obsidian's `heading-collapse-indicator`: a
-        // chevron in the margin to its left, shown on hover or while
-        // collapsed, that only its own click toggles (the heading's text
-        // and the space beside it were observed doing nothing). `foldHeading`
-        // off hides the affordance. The heading is drawn here rather than
-        // by the renderer so that its margins sit outside the box the
-        // chevron is placed in.
+        // * A heading carries Obsidian's `heading-collapse-indicator`: a
+        //   chevron in the margin to its left, shown on hover or while
+        //   collapsed, that only its own click toggles (the heading's text
+        //   and the space beside it were observed doing nothing). `foldHeading`
+        //   off hides the affordance. The heading is drawn here rather than
+        //   by the renderer so that its margins sit outside the box the
+        //   chevron is placed in.
         if let RBlock::Heading { level, text, .. } = block {
             if self.fold_headings {
                 if let Some((_, _, key)) = self.headings().into_iter().find(|(at, _, _)| *at == ix)
@@ -966,10 +966,10 @@ impl ReadingView {
                     };
                     let line_px = base * size * line_height;
                     let view = view.clone();
-                    // The box reaches 28 px into the left margin, where the
-                    // chevron sits, so that hovering the chevron itself
-                    // counts as hovering the heading; the padding puts the
-                    // text back where it was.
+                    // * The box reaches 28 px into the left margin, where the
+                    //   chevron sits, so that hovering the chevron itself
+                    //   counts as hovering the heading; the padding puts the
+                    //   text back where it was.
                     inner = div()
                         .mt(px(base * top))
                         .mb(px(base))
@@ -1084,7 +1084,7 @@ impl Render for ReadingView {
                 ),
             )
             .child(
-                // Records the painted width; a change lays the blocks out again.
+                // * Records the painted width; a change lays the blocks out again.
                 canvas(
                     {
                         let view = cx.entity();
@@ -1114,11 +1114,11 @@ pub(crate) struct Renderer<'a> {
     /// is assigned rather than only the one its value infers.
     property_types: &'a PropertyTypes,
     /// The vault-relative path of the note being rendered, so the reading
-    // view can write property changes back to the vault file. Empty for
-    // Live Preview, which edits through its own buffer.
+    // * view can write property changes back to the vault file. Empty for
+    //   Live Preview, which edits through its own buffer.
     path: String,
     /// Weak handle to the reading view, so property changes can be emitted
-    // as events for the workspace to write to the vault.
+    // * as events for the workspace to write to the vault.
     view: WeakEntity<ReadingView>,
     /// Set by Live Preview to make the properties block editable.
     properties_host: Option<&'a PropertiesHost>,
@@ -1268,8 +1268,8 @@ impl<'a> Renderer<'a> {
             max[ix] = max[ix].max(width);
             min[ix] = min[ix].max(width);
         }
-        // Two pixels of slack: the wrapper measures advances a little
-        // differently from the shaper and must not break a line that fits.
+        // * Two pixels of slack: the wrapper measures advances a little
+        //   differently from the shaper and must not break a line that fits.
         let max: Vec<f32> = max.iter().map(|m| m.ceil() + 2. + PADDING).collect();
         let min: Vec<f32> = min
             .iter()
@@ -1307,9 +1307,9 @@ impl<'a> Renderer<'a> {
                 .children(segments.iter().map(|s| self.segment(s)))
                 .into_any_element(),
             RBlock::Heading { level, text, .. } => {
-                // Obsidian's scale: h1 1.618em at 700, down to h6 1em at
-                // 600, with 1.2 line heights at the top; a 40 px gap above
-                // an h2 and 16 px below every heading, the body margin.
+                // * Obsidian's scale: h1 1.618em at 700, down to h6 1em at
+                //   600, with 1.2 line heights at the top; a 40 px gap above
+                //   an h2 and 16 px below every heading, the body margin.
                 let (size, weight, line_height) = crate::theme::heading_style(*level);
                 let top = match level {
                     1 => 1.0,
@@ -1347,7 +1347,7 @@ impl<'a> Renderer<'a> {
                     .text_size(px(base * 0.875))
                     .line_height(px(base * 0.875 * 1.5))
                     .child(
-                        // Code keeps its columns: long lines scroll sideways.
+                        // * Code keeps its columns: long lines scroll sideways.
                         div().id(("code", id)).overflow_x_scroll().px_3().child(
                             div()
                                 .whitespace_nowrap()
@@ -1355,9 +1355,9 @@ impl<'a> Renderer<'a> {
                         ),
                     )
                     .child(
-                        // Obsidian draws no language name on a rendered
-                        // block; the only thing on it is a copy button,
-                        // and only while the block is hovered.
+                        // * Obsidian draws no language name on a rendered
+                        //   block; the only thing on it is a copy button,
+                        //   and only while the block is hovered.
                         div()
                             .id(("copy-code", id))
                             .absolute()
@@ -1371,23 +1371,23 @@ impl<'a> Renderer<'a> {
                             .group_hover("code-block", |s| s.visible())
                             .cursor_pointer()
                             .hover(|s| s.bg(t.bg_secondary))
-                            // `lucide-copy`, and `lucide-check` for as long
-                            // as the check shows. A 16 px icon in this box
-                            // is the 31.98 x 27.97 px button Obsidian paints.
+                            // * `lucide-copy`, and `lucide-check` for as long
+                            //   as the check shows. A 16 px icon in this box
+                            //   is the 31.98 x 27.97 px button Obsidian paints.
                             .child(icon(
                                 if copied { "check" } else { "copy" },
                                 16.,
                                 t.text_muted,
                             ))
                             .on_click(move |_, _, cx| {
-                                // An empty fence's button writes nothing at
-                                // all -- a click on one in Obsidian left the
-                                // clipboard holding what it already had, so
-                                // an empty body is not copied as an empty
-                                // string. Whether its check still flashes is
-                                // unobserved; flashing one for a copy that
-                                // did not happen would be a lie, so it does
-                                // not.
+                                // * An empty fence's button writes nothing at
+                                //   all -- a click on one in Obsidian left the
+                                //   clipboard holding what it already had, so
+                                //   an empty body is not copied as an empty
+                                //   string. Whether its check still flashes is
+                                //   unobserved; flashing one for a copy that
+                                //   did not happen would be a lie, so it does
+                                //   not.
                                 if payload.is_empty() {
                                     return;
                                 }
@@ -1400,14 +1400,14 @@ impl<'a> Renderer<'a> {
                     .into_any_element()
             }
             RBlock::Html(text) => {
-                // Run every registered markdown post-processor so a plugin
-                // can inspect the rendered output. The hook is in place;
-                // the DOM element itself is not yet available to a native
-                // renderer, so the callback receives no element.
+                // * Run every registered markdown post-processor so a plugin
+                //   can inspect the rendered output. The hook is in place;
+                //   the DOM element itself is not yet available to a native
+                //   renderer, so the callback receives no element.
                 let _ = live::run_all_post_processors();
-                // Tags the renderer drew are prose now; a fragment it kept
-                // as source carries the `html` style on its run, which is
-                // what still paints it mono and muted.
+                // * Tags the renderer drew are prose now; a fragment it kept
+                //   as source carries the `html` style on its run, which is
+                //   what still paints it mono and muted.
                 div().mb(gap).child(self.rich(text)).into_any_element()
             }
             RBlock::Quote(children) => div()
@@ -1452,14 +1452,14 @@ impl<'a> Renderer<'a> {
                             .gap_2()
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(color)
-                            // Mouse-down rather than click, and blocking the
-                            // mouse rather than letting it through: in Live
-                            // Preview the editor's own window listener runs
-                            // ahead of this element and would put the caret
-                            // on the title line, which reveals the source
-                            // and takes the widget — chevron and all — away
-                            // before the button-up that a click needs. Scroll
-                            // still falls through to the editor behind.
+                            // * Mouse-down rather than click, and blocking the
+                            //   mouse rather than letting it through: in Live
+                            //   Preview the editor's own window listener runs
+                            //   ahead of this element and would put the caret
+                            //   on the title line, which reveals the source
+                            //   and takes the widget — chevron and all — away
+                            //   before the button-up that a click needs. Scroll
+                            //   still falls through to the editor behind.
                             .when(foldable, |d| {
                                 d.cursor_pointer()
                                     .block_mouse_except_scroll()
@@ -1467,17 +1467,17 @@ impl<'a> Renderer<'a> {
                                         on_toggle(id, cx)
                                     })
                             })
-                            // The type's Lucide icon, in the callout's own
-                            // colour, which is where Obsidian puts it and
-                            // what Obsidian paints it (see [`callout_icon`]).
+                            // * The type's Lucide icon, in the callout's own
+                            //   colour, which is where Obsidian puts it and
+                            //   what Obsidian paints it (see [`callout_icon`]).
                             .child(icon(callout_icon(kind), 16., color))
                             .child(
                                 div().flex_1().child(
-                                    // Where the title holds a link the link
-                                    // wins: Obsidian navigates and leaves the
-                                    // fold alone, so the text keeps the
-                                    // mouse-down to itself. The chevron and the
-                                    // rest of the row still fold.
+                                    // * Where the title holds a link the link
+                                    //   wins: Obsidian navigates and leaves the
+                                    //   fold alone, so the text keeps the
+                                    //   mouse-down to itself. The chevron and the
+                                    //   rest of the row still fold.
                                     match foldable && !title.links.is_empty() {
                                         true => div()
                                             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
@@ -1490,13 +1490,13 @@ impl<'a> Renderer<'a> {
                                 ),
                             )
                             .when(foldable, |d| {
-                                // Obsidian's `.callout-fold` holds
-                                // `lucide-chevron-down` collapsed and
-                                // expanded alike, turned a quarter turn when
-                                // collapsed by something that is not a
-                                // transform on that element;
-                                // `chevron-right` is the same drawing
-                                // already turned.
+                                // * Obsidian's `.callout-fold` holds
+                                //   `lucide-chevron-down` collapsed and
+                                //   expanded alike, turned a quarter turn when
+                                //   collapsed by something that is not a
+                                //   transform on that element;
+                                //   `chevron-right` is the same drawing
+                                //   already turned.
                                 d.child(icon(
                                     if collapsed {
                                         "chevron-right"
@@ -1533,8 +1533,8 @@ impl<'a> Renderer<'a> {
             } => {
                 let font_size = base * 0.9375;
                 let host = self.table_host;
-                // The column holding the open cell measures the text in
-                // hand, so it grows as the cell is typed into.
+                // * The column holding the open cell measures the text in
+                //   hand, so it grows as the cell is typed into.
                 let editing = host.and_then(|h| h.cell.as_ref()).and_then(|(at, f)| {
                     spans
                         .iter()
@@ -1543,14 +1543,14 @@ impl<'a> Renderer<'a> {
                 });
                 let columns = self.column_widths(header, rows, font_size, editing);
                 let table_width: f32 = columns.iter().sum();
-                // `row` is 0 for the header, so the span of every cell is
-                // where the model put it.
+                // * `row` is 0 for the header, so the span of every cell is
+                //   where the model put it.
                 let cell = |text: &RichText, row: usize, ix: usize, head: bool| -> AnyElement {
                     let align = alignments.get(ix).copied().unwrap_or(Alignment::None);
                     let width = columns.get(ix).copied().unwrap_or(80.);
                     let span = spans.get(row).and_then(|r| r.get(ix)).cloned();
-                    // The cell being typed into shows the text in hand with
-                    // a caret, the way a property row's field does.
+                    // * The cell being typed into shows the text in hand with
+                    //   a caret, the way a property row's field does.
                     let editing = host
                         .and_then(|h| h.cell.as_ref())
                         .filter(|(at, _)| Some(at) == span.as_ref())
@@ -1572,7 +1572,7 @@ impl<'a> Renderer<'a> {
                             Some(field) => d.child(self.property_field(field, false)),
                             None => d.child(self.rich(text)),
                         });
-                    // A cell is clicked into, the way a property row is.
+                    // * A cell is clicked into, the way a property row is.
                     match (host, span) {
                         (Some(host), Some(span)) => {
                             let on_action = host.on_action.clone();
@@ -1587,7 +1587,7 @@ impl<'a> Renderer<'a> {
                         _ => drawn.into_any_element(),
                     }
                 };
-                // The table is as wide as its columns, like an HTML table.
+                // * The table is as wide as its columns, like an HTML table.
                 div()
                     .mb(gap)
                     .flex()
@@ -1684,9 +1684,9 @@ impl<'a> Renderer<'a> {
                     .text_size(px(11.))
                     .text_color(t.bg)
                     .when(checked, |d| d.child("✓"));
-                // Clicking the box rewrites its line, the way it does in
-                // Live Preview. An item that came out of an embed has no
-                // marker and stays inert: those bytes are another file's.
+                // * Clicking the box rewrites its line, the way it does in
+                //   Live Preview. An item that came out of an embed has no
+                //   marker and stays inert: those bytes are another file's.
                 match (self.reading_host, item.marker) {
                     (Some(host), Some(marker)) => {
                         let on_task = host.on_task.clone();
@@ -1725,8 +1725,8 @@ impl<'a> Renderer<'a> {
                     .min_w_0()
                     .flex()
                     .flex_col()
-                    // Obsidian's default theme dims a done task and
-                    // strikes it through (`--checklist-done-decoration`).
+                    // * Obsidian's default theme dims a done task and
+                    //   strikes it through (`--checklist-done-decoration`).
                     .when(done, |d| d.text_color(t.text_muted).line_through())
                     .children(self.blocks(&item.children, tight)),
             )
@@ -1737,8 +1737,8 @@ impl<'a> Renderer<'a> {
         match segment {
             Segment::Text(text) => self.rich(text),
             Segment::Embed(embed) => self.embed(embed),
-            // Display math inside a paragraph is a block of its own; the
-            // paragraph's own gap follows the paragraph, not this.
+            // * Display math inside a paragraph is a block of its own; the
+            //   paragraph's own gap follows the paragraph, not this.
             Segment::Math(tex) => self.math_block(tex, px(0.)),
         }
     }
@@ -1864,8 +1864,8 @@ impl<'a> Renderer<'a> {
             None => (false, 0.0, info.duration),
         };
         let (w, h) = info.display_size(self.available);
-        // The frame: the player's, or the file's first, so the embed is not
-        // a black box before it is ever clicked.
+        // * The frame: the player's, or the file's first, so the embed is not
+        //   a black box before it is ever clicked.
         let frame = match playing_state.and_then(|(_, _, _, frame)| frame) {
             Some(frame) => Some(frame),
             None => crate::video::still(path, &info, 0.0),
@@ -1937,7 +1937,7 @@ impl<'a> Renderer<'a> {
                     )
                     .child(SharedString::from(clock(at)))
                     .child(
-                        // The position bar: the share played so far.
+                        // * The position bar: the share played so far.
                         div()
                             .flex_1()
                             .h(px(4.))
@@ -2061,11 +2061,11 @@ impl<'a> Renderer<'a> {
                     .children(self.blocks(blocks, false))
                     .into_any_element()
             }
-            // `![[x.base]]`: the base's own drawing is `bases::embed`, which
-            // takes the view resolved by the same engine the open view uses.
-            // Every click inside it is an internal link by vault path — the
-            // title opens the `.base`, a row opens the file that row came
-            // from — which is how every other embed opens its target.
+            // * `![[x.base]]`: the base's own drawing is `bases::embed`, which
+            //   takes the view resolved by the same engine the open view uses.
+            //   Every click inside it is an internal link by vault path — the
+            //   title opens the `.base`, a row opens the file that row came
+            //   from — which is how every other embed opens its target.
             EmbedKind::Base(base) => {
                 let on_link = self.on_link.clone();
                 let open: crate::bases::embed::OpenPath =
@@ -2074,10 +2074,10 @@ impl<'a> Renderer<'a> {
                     });
                 crate::bases::embed::render(base, t, open)
             }
-            // `![[x.pdf]]`: the pages are drawn by `pdf::embed`, which asks
-            // the document cache for them when it is painted; the model
-            // carried only the path and the subpath. A click opens the file
-            // by vault path, as every other embed's target is opened.
+            // * `![[x.pdf]]`: the pages are drawn by `pdf::embed`, which asks
+            //   the document cache for them when it is painted; the model
+            //   carried only the path and the subpath. A click opens the file
+            //   by vault path, as every other embed's target is opened.
             EmbedKind::Pdf(pdf) => {
                 let on_link = self.on_link.clone();
                 let open: crate::pdf::embed::OpenPath =
@@ -2086,11 +2086,11 @@ impl<'a> Renderer<'a> {
                     });
                 crate::pdf::embed::render(pdf, t, self.available, open)
             }
-            // `![[x.mp3]]` local audio plays in Silica's own player (rodio).
-            // Local video and remote media open in the system's default player.
-            // `![[x.mp4]]` plays in Silica's own player: ffmpeg decodes,
-            // gpui draws. With no handler (Live Preview's widget) or no
-            // ffmpeg on the machine, the card opens the system player.
+            // * `![[x.mp3]]` local audio plays in Silica's own player (rodio).
+            //   Local video and remote media open in the system's default player.
+            //   `![[x.mp4]]` plays in Silica's own player: ffmpeg decodes,
+            //   gpui draws. With no handler (Live Preview's widget) or no
+            //   ffmpeg on the machine, the card opens the system player.
             EmbedKind::Canvas(path) => {
                 let vault_path = path.to_string_lossy().into_owned();
                 let width = embed.width.unwrap_or(0.0);
@@ -2184,12 +2184,12 @@ impl<'a> Renderer<'a> {
                     .child(SharedString::from(label))
                     .into_any_element()
             }
-            // A missing attachment is Obsidian's `file-embed
-            // mod-empty-attachment` box (observed on `![[missing.pdf]]`,
-            // `tools/obsidian-probe/results/2026-10-26-pdf.json` s08): a
-            // block padded 8 px with an 8 px radius on the alternate
-            // ground, 14 px muted text saying `“missing.pdf” could not be
-            // found.` A missing note keeps the shell's own line.
+            // * A missing attachment is Obsidian's `file-embed
+            //   mod-empty-attachment` box (observed on `![[missing.pdf]]`,
+            //   `tools/obsidian-probe/results/2026-10-26-pdf.json` s08): a
+            //   block padded 8 px with an 8 px radius on the alternate
+            //   ground, 14 px muted text saying `“missing.pdf” could not be
+            //   found.` A missing note keeps the shell's own line.
             EmbedKind::Missing
                 if FileKind::from_path(silica_markdown::parse_linktext(&embed.link).path)
                     != FileKind::Markdown =>
@@ -2253,8 +2253,8 @@ impl<'a> Renderer<'a> {
                 .reading_host
                 .is_some_and(|h| h.properties == PropertiesInDocument::Hidden);
         if hidden {
-            // "Hide" in `propertiesInDocument`: the YAML stays in the file,
-            // and neither the editor nor the rendered text shows it.
+            // * "Hide" in `propertiesInDocument`: the YAML stays in the file,
+            //   and neither the editor nor the rendered text shows it.
             return div().into_any_element();
         }
         let folded = self.toggled.contains(&PROPERTIES_FOLD_ID);
@@ -2301,8 +2301,8 @@ impl<'a> Renderer<'a> {
                 host.and_then(|h| h.field.clone())
                     .filter(|f| f.target == Target::New && !folded),
                 |d, field| {
-                    // The row "Add file property" opened: a key field with
-                    // nothing written to the note behind it yet.
+                    // * The row "Add file property" opened: a key field with
+                    //   nothing written to the note behind it yet.
                     d.child(
                         div()
                             .flex()
@@ -2329,8 +2329,8 @@ impl<'a> Renderer<'a> {
                         })
                 }),
                 |d, on_action| {
-                    // The row Obsidian's "Add file property" opens. Nothing is
-                    // written until it is named.
+                    // * The row Obsidian's "Add file property" opens. Nothing is
+                    //   written until it is named.
                     d.child(
                         div()
                             .id("properties-add")
@@ -2389,8 +2389,8 @@ impl<'a> Renderer<'a> {
             .gap_2()
             .py_1()
             .child(
-                // The type glyph and the key share the left column, as the
-                // properties UI lays them out.
+                // * The type glyph and the key share the left column, as the
+                //   properties UI lays them out.
                 div()
                     .w(px(160.))
                     .flex_shrink_0()
@@ -2471,8 +2471,8 @@ impl<'a> Renderer<'a> {
                         None => self.property_value_cell(&row, host),
                     })
                     .when(row.mismatched, |d| {
-                        // Obsidian marks a value that does not fit its type
-                        // and keeps the text as written.
+                        // * Obsidian marks a value that does not fit its type
+                        //   and keeps the text as written.
                         d.child(
                             div()
                                 .flex_shrink_0()
@@ -2611,10 +2611,10 @@ impl<'a> Renderer<'a> {
                 .into_any_element();
         }
         let key = row.key.clone();
-        // A list value is never opened whole: a click in the cell lands in
-        // the empty input after the pills, so what is typed becomes one
-        // more item however many commas it holds. Only a scalar opens on
-        // its whole text.
+        // * A list value is never opened whole: a click in the cell lands in
+        //   the empty input after the pills, so what is typed becomes one
+        //   more item however many commas it holds. Only a scalar opens on
+        //   its whole text.
         let append = row.is_list_valued().then_some(row.items.len());
         div()
             .id(("property-value", row.id))
@@ -2650,15 +2650,15 @@ impl<'a> Renderer<'a> {
             crate::properties::Display::Pills(items) if !row.is_blank() => {
                 self.property_pills(row, items, open)
             }
-            // A value with no items still takes a new one, and then the
-            // field for it is the only thing the cell has to draw.
+            // * A value with no items still takes a new one, and then the
+            //   field for it is the only thing the cell has to draw.
             crate::properties::Display::Empty | crate::properties::Display::Pills(_)
                 if open.is_some() =>
             {
                 self.property_pills(row, &[], open)
             }
-            // The box keeps its own size; the cell around it takes the width,
-            // so the row's affordances still sit at the right edge.
+            // * The box keeps its own size; the cell around it takes the width,
+            //   so the row's affordances still sit at the right edge.
             crate::properties::Display::Checkbox(checked) => div()
                 .flex_1()
                 .flex()
@@ -2682,9 +2682,9 @@ impl<'a> Renderer<'a> {
                         }),
                 )
                 .into_any_element(),
-            // `aliases: []` lands here along with a key that has no value:
-            // both are blank, and a blank cell that drew nothing would have
-            // no height and so take no click at all.
+            // * `aliases: []` lands here along with a key that has no value:
+            //   both are blank, and a blank cell that drew nothing would have
+            //   no height and so take no click at all.
             crate::properties::Display::Empty | crate::properties::Display::Pills(_) => div()
                 .text_color(t.text_faint)
                 .child(SharedString::from("Empty"))
@@ -2716,12 +2716,12 @@ impl<'a> Renderer<'a> {
     ) -> AnyElement {
         let t = self.theme;
         let on_action = self.properties_host.map(|h| h.on_action.clone());
-        // The pill a Backspace selected, drawn focused until the second
-        // press removes it. It belongs to the open field's row, so it only
-        // means anything while a field of this row is open.
+        // * The pill a Backspace selected, drawn focused until the second
+        //   press removes it. It belongs to the open field's row, so it only
+        //   means anything while a field of this row is open.
         let selected = open.and_then(|_| self.properties_host.and_then(|h| h.selected_pill));
-        // A click inside the open field is not a click on the cell behind
-        // it, which would commit this item and open a fresh one.
+        // * A click inside the open field is not a click on the cell behind
+        //   it, which would commit this item and open a fresh one.
         let item_field = |field: &Field| {
             div()
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -2746,8 +2746,8 @@ impl<'a> Renderer<'a> {
                     .px_1p5()
                     .rounded_sm()
                     .bg(t.code_bg)
-                    // The border is the pill's own colour until the pill is
-                    // the selected one, so taking focus moves nothing.
+                    // * The border is the pill's own colour until the pill is
+                    //   the selected one, so taking focus moves nothing.
                     .border_1()
                     .border_color(if selected == Some(ix) {
                         t.border_focus
@@ -2761,8 +2761,8 @@ impl<'a> Renderer<'a> {
                         let remove_key = row.key.clone();
                         d.cursor_text()
                             .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
-                                // The cell behind opens the append input;
-                                // this pill opens itself instead.
+                                // * The cell behind opens the append input;
+                                //   this pill opens itself instead.
                                 cx.stop_propagation();
                                 on_action(
                                     PropertyAction::EditItem {
@@ -2779,10 +2779,10 @@ impl<'a> Renderer<'a> {
                                     .flex()
                                     .items_center()
                                     .cursor_pointer()
-                                    // Obsidian's `.multi-select-pill-remove-button`
-                                    // holds a `lucide-x`, 14 px wide, and it
-                                    // is always drawn rather than revealed on
-                                    // hover.
+                                    // * Obsidian's `.multi-select-pill-remove-button`
+                                    //   holds a `lucide-x`, 14 px wide, and it
+                                    //   is always drawn rather than revealed on
+                                    //   hover.
                                     .child(crate::assets::icon(
                                         "x",
                                         t.base_font_size * 0.875,
@@ -2808,9 +2808,9 @@ impl<'a> Renderer<'a> {
             );
         }
         if let Some((_, field)) = open.filter(|(at, _)| *at >= items.len()) {
-            // A selected pill has the focus, so the input does not: it is
-            // empty by then (the gesture only starts from an empty one), so
-            // dropping its caret leaves nothing of it to draw.
+            // * A selected pill has the focus, so the input does not: it is
+            //   empty by then (the gesture only starts from an empty one), so
+            //   dropping its caret leaves nothing of it to draw.
             if selected.is_none() {
                 cells.push(item_field(field));
             }
@@ -2834,8 +2834,8 @@ impl<'a> Renderer<'a> {
     /// Inline content set at `size` pixels: one `InteractiveText`, with
     /// inline formulas typeset over placeholders when the text has any.
     pub(crate) fn rich_at(&self, text: &RichText, size: f32) -> AnyElement {
-        // Each `$x$` run, typeset in text style. A formula that does not
-        // parse stays as its source, in the error red (`highlight`).
+        // * Each `$x$` run, typeset in text style. A formula that does not
+        //   parse stays as its source, in the error red (`highlight`).
         let formulas: Vec<(Range<usize>, Arc<silica_math::Formula>)> = text
             .runs
             .iter()
@@ -2860,8 +2860,8 @@ impl<'a> Renderer<'a> {
             style: FontStyle::Normal,
         };
         let spaces = SpaceWidths::measure(&self.text_system, &font, em);
-        // Rebuild the string with a placeholder where each formula was,
-        // and carry the other runs and the links across the edits.
+        // * Rebuild the string with a placeholder where each formula was,
+        //   and carry the other runs and the links across the edits.
         let mut edits: Vec<(Range<usize>, usize)> = Vec::new();
         let mut shaped = String::with_capacity(text.text.len());
         let mut inlines = Vec::new();
@@ -2887,7 +2887,7 @@ impl<'a> Renderer<'a> {
                     break;
                 }
                 if offset < range.end {
-                    // Inside a formula: its start.
+                    // * Inside a formula: its start.
                     return (range.start as isize + shift) as usize;
                 }
                 shift += *len as isize - range.len() as isize;
@@ -3003,7 +3003,7 @@ impl<'a> Renderer<'a> {
             h.background_color = Some(t.code_bg);
         }
         if s.math {
-            // Only a formula that failed to typeset is still text here.
+            // * Only a formula that failed to typeset is still text here.
             h.color = Some(math::error_color());
         }
         if s.html {
@@ -3033,12 +3033,12 @@ mod tests {
 
     #[test]
     fn a_page_is_the_viewport_less_a_strip_of_overlap() {
-        // Tall viewport: the overlap is the 40 px cap.
+        // * Tall viewport: the overlap is the 40 px cap.
         assert_eq!(page_distance(800.), 760.);
-        // Short viewport: the overlap is an eighth of it, so the page keys
-        // still move most of a view rather than a fixed 40 px.
+        // * Short viewport: the overlap is an eighth of it, so the page keys
+        //   still move most of a view rather than a fixed 40 px.
         assert_eq!(page_distance(160.), 140.);
-        // The cap and the eighth meet at 320 px.
+        // * The cap and the eighth meet at 320 px.
         assert_eq!(page_distance(320.), 280.);
     }
 
@@ -3061,21 +3061,21 @@ mod tests {
     fn a_line_is_the_rendered_line_height() {
         assert_eq!(line_distance(16.), 16. * LINE_HEIGHT);
         assert_eq!(line_distance(20.), 32.);
-        // An arrow key moves less than a page key for every viewport a
-        // window can have.
+        // * An arrow key moves less than a page key for every viewport a
+        //   window can have.
         assert!(line_distance(16.) < page_distance(200.));
     }
 
     #[test]
     fn only_a_reload_of_the_same_note_is_the_same_note() {
-        // The reload the watcher drives on every autosave: the reader's
-        // place and their folds are kept.
+        // * The reload the watcher drives on every autosave: the reader's
+        //   place and their folds are kept.
         assert!(same_note(Some("Notes/A.md"), Some("Notes/A.md")));
-        // Another note, or no note: both are dropped.
+        // * Another note, or no note: both are dropped.
         assert!(!same_note(Some("Notes/A.md"), Some("Notes/B.md")));
         assert!(!same_note(Some("Notes/A.md"), None));
         assert!(!same_note(None, Some("Notes/A.md")));
-        // Clearing the view twice is not a reload of a note.
+        // * Clearing the view twice is not a reload of a note.
         assert!(!same_note(None, None));
     }
 }

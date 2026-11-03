@@ -72,8 +72,8 @@ impl Registry {
                 if manifest.id.is_empty() {
                     manifest.id = folder.clone();
                 }
-                // Silica's own marker: a plugin that targets Silica, not
-                // Obsidian, and runs in-process.
+                // * Silica's own marker: a plugin that targets Silica, not
+                // * Obsidian, and runs in-process.
                 let native = e.path().join("silica.json").exists();
                 let source = read_prefix(&e.path().join("main.js"), SCAN_PREFIX);
                 let tier = classify(&manifest, &source, native);

@@ -331,8 +331,8 @@ impl Vault {
             return Ok(Vec::new());
         }
         let to_abs = self.entry_path(to)?;
-        // A case-only rename of the same entry is allowed; anything else
-        // already at the destination is not.
+        // * A case-only rename of the same entry is allowed; anything else
+        // * already at the destination is not.
         let same_entry = from.eq_ignore_ascii_case(to)
             && std::fs::canonicalize(&from_abs).ok() == std::fs::canonicalize(&to_abs).ok();
         if to_abs.exists() && !same_entry {
@@ -371,8 +371,8 @@ impl Vault {
             TrashOption::Local => self.trash_locally(path)?,
             TrashOption::System => {
                 if let Err(err) = system_trash(&abs) {
-                    // No system trash here (another platform, or a read-only
-                    // data directory): the vault's own trash is the fallback.
+                    // * No system trash here (another platform, or a read-only
+                    // * data directory): the vault's own trash is the fallback.
                     if err.kind() == std::io::ErrorKind::Unsupported {
                         self.trash_locally(path)?;
                     } else {
@@ -510,7 +510,7 @@ fn utc_timestamp() -> String {
         .unwrap_or(0);
     let days = (secs / 86_400) as i64;
     let rem = secs % 86_400;
-    // Civil-from-days (Howard Hinnant's algorithm).
+    // * Civil-from-days (Howard Hinnant's algorithm).
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z.rem_euclid(146_097);
@@ -712,7 +712,7 @@ mod tests {
             v.rename("Nope.md", "X.md"),
             Err(OpError::NotFound(_))
         ));
-        // A case-only rename keeps the same file.
+        // * A case-only rename keeps the same file.
         v.rename("Renamed A.md", "renamed a.md").unwrap();
         assert!(paths(&v).contains(&"renamed a.md"));
         assert!(v.rename("renamed a.md", "renamed a.md").unwrap().is_empty());
@@ -814,8 +814,8 @@ pub mod daily {
             return Err(DailyError::Unsupported(unsupported));
         }
         let rendered = moment::format(format, at);
-        // A format may name folders of its own, which are created; each
-        // segment still has to be a legal name.
+        // * A format may name folders of its own, which are created; each
+        // * segment still has to be a legal name.
         for segment in rendered.split('/') {
             if validate_file_name(segment).is_err() {
                 return Err(DailyError::BadName(rendered.clone()));
@@ -932,12 +932,12 @@ mod daily_tests {
             daily::path("YYYY-MM-DD", "", &at()).unwrap(),
             "2026-10-18.md"
         );
-        // A format may name folders of its own.
+        // * A format may name folders of its own.
         assert_eq!(
             daily::path("YYYY/MM/YYYY-MM-DD", "Journal", &at()).unwrap(),
             "Journal/2026/10/2026-10-18.md"
         );
-        // A slash around the folder is not part of it.
+        // * A slash around the folder is not part of it.
         assert_eq!(
             daily::path("YYYY-MM-DD", "/Journal/", &at()).unwrap(),
             "Journal/2026-10-18.md"
@@ -946,12 +946,12 @@ mod daily_tests {
 
     #[test]
     fn a_format_silica_cannot_render_is_refused() {
-        // Writing the wrong path would be a note in the wrong place, so a
-        // token the formatter does not know stops the whole thing.
+        // * Writing the wrong path would be a note in the wrong place, so a
+        // * token the formatter does not know stops the whole thing.
         let err = daily::path("GGGG-[W]ww", "Journal", &at()).unwrap_err();
         assert!(matches!(err, DailyError::Unsupported(_)), "{err:?}");
         assert!(err.to_string().contains("GGGG"));
-        // A format rendering a forbidden character is refused too.
+        // * A format rendering a forbidden character is refused too.
         let err = daily::path("YYYY:MM", "Journal", &at()).unwrap_err();
         assert!(matches!(err, DailyError::BadName(_)), "{err:?}");
     }
@@ -963,7 +963,7 @@ mod daily_tests {
             vault.daily_note("YYYY-MM-DD", "Journal", &at()).unwrap(),
             ("Journal/2026-10-18.md".to_string(), false)
         );
-        // Obsidian writes nothing and says so; it does not create it.
+        // * Obsidian writes nothing and says so; it does not create it.
         let err = vault
             .daily_note("YYYY-MM-DD", "MadeByProbe", &at())
             .unwrap_err();
@@ -972,7 +972,7 @@ mod daily_tests {
             err.to_string(),
             "Failed to create daily note. Folder \u{201c}MadeByProbe\u{201d} not found."
         );
-        // The root is always there.
+        // * The root is always there.
         assert!(vault.daily_note("YYYY-MM-DD", "", &at()).is_ok());
     }
 
@@ -985,8 +985,8 @@ mod daily_tests {
 
     #[test]
     fn stepping_skips_the_days_that_have_no_note() {
-        // The gappy set the probe used: from the 10th, previous is the 2nd
-        // and next is the 20th.
+        // * The gappy set the probe used: from the 10th, previous is the 2nd
+        // * and next is the 20th.
         let (_dir, vault) = vault(
             &["Journal"],
             &[
@@ -1012,7 +1012,7 @@ mod daily_tests {
             vault.step_daily_note("YYYY-MM-DD", "Journal", &tenth, true),
             Some("Journal/2026-03-20.md".to_string())
         );
-        // Nothing beyond the last one.
+        // * Nothing beyond the last one.
         let twentieth = Stamp { day: 20, ..tenth };
         assert_eq!(
             vault.step_daily_note("YYYY-MM-DD", "Journal", &twentieth, true),
@@ -1023,12 +1023,12 @@ mod daily_tests {
     #[test]
     fn a_note_s_own_day_is_found_by_rendering_rather_than_parsing() {
         let (_dir, vault) = vault(&["Journal"], &["Journal/18-10-2026.md"]);
-        // A format that does not sort chronologically still resolves.
+        // * A format that does not sort chronologically still resolves.
         let day = vault
             .daily_note_day("DD-MM-YYYY", "Journal", "Journal/18-10-2026.md", &at())
             .expect("the note's own day");
         assert_eq!((day.year, day.month, day.day), (2026, 10, 18));
-        // A note that is not a daily note at all has no day.
+        // * A note that is not a daily note at all has no day.
         assert_eq!(
             vault.daily_note_day("DD-MM-YYYY", "Journal", "Journal/Meeting.md", &at()),
             None

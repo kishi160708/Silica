@@ -140,10 +140,10 @@ fn runtime_dir() -> PathBuf {
 fn private_dir() -> PathBuf {
     let base = std::env::temp_dir();
     let uid = our_uid();
-    // The stable name first, so an app started by hand with `--control` can be
-    // reached by its default socket. The others are for a name somebody else
-    // owns: a pid nobody could have pre-empted, then a timestamped one in case
-    // a dead run of ours left that behind too.
+    // * The stable name first, so an app started by hand with `--control` can be
+    // * reached by its default socket. The others are for a name somebody else
+    // * owns: a pid nobody could have pre-empted, then a timestamped one in case
+    // * a dead run of ours left that behind too.
     let names = [
         match uid {
             Some(uid) => format!("silica-{uid}"),
@@ -158,15 +158,15 @@ fn private_dir() -> PathBuf {
         builder.mode(0o700);
         match builder.create(&candidate) {
             Ok(()) => return candidate,
-            // Ours from an earlier run: keep using it.
+            // * Ours from an earlier run: keep using it.
             Err(e) if e.kind() == ErrorKind::AlreadyExists && is_ours(&candidate, uid) => {
                 return candidate
             }
             Err(_) => {}
         }
     }
-    // Nothing private could be had here. A path still goes back, so the bind
-    // or the connect fails naming it, which is the honest error.
+    // * Nothing private could be had here. A path still goes back, so the bind
+    // * or the connect fails naming it, which is the honest error.
     base.join(&names[names.len() - 1])
 }
 
@@ -195,8 +195,8 @@ fn nanos() -> u32 {
 #[cfg(unix)]
 fn is_ours(path: &Path, uid: Option<u32>) -> bool {
     let Some(uid) = uid else {
-        // Without a uid to compare against, only a directory we just created
-        // ourselves counts as private.
+        // * Without a uid to compare against, only a directory we just created
+        // * ourselves counts as private.
         return false;
     };
     match std::fs::symlink_metadata(path) {
@@ -295,8 +295,8 @@ impl App {
             _ => return Err("give `width` and `height` together, or neither".to_string()),
         }
 
-        // Only now the environment: a bad argument should not be reported as a
-        // missing binary, and a missing binary should not have spawned.
+        // * Only now the environment: a bad argument should not be reported as a
+        // * missing binary, and a missing binary should not have spawned.
         let shell = self.config.bin.contains(char::is_whitespace);
         if !shell && !Path::new(&self.config.bin).is_file() {
             return Err(format!(
@@ -331,8 +331,8 @@ impl App {
         if let Some(mode) = arguments.get("mode").and_then(Value::as_str) {
             self.call("set_mode", json!({"mode": mode}))?;
         }
-        // One row per list: the summary reads scalars, and a full dump of a
-        // real vault is thousands of lines the model did not ask for.
+        // * One row per list: the summary reads scalars, and a full dump of a
+        // * real vault is thousands of lines the model did not ask for.
         let state = self.call("state", json!({"rows": 1}))?;
         Ok(summary(&state, &loaded, pid, &self.config.socket))
     }
@@ -347,10 +347,10 @@ impl App {
         }
         let asked = self.call("quit", json!({}));
         let reaped = self.reap(QUIT_GRACE);
-        // The app removes its own socket file on a clean exit; a killed one
-        // leaves it behind, and a stale file makes the next launch look alive.
-        // An app that is still running keeps its name: unlinking that would
-        // leave a live window nothing can reach again.
+        // * The app removes its own socket file on a clean exit; a killed one
+        // * leaves it behind, and a stale file makes the next launch look alive.
+        // * An app that is still running keeps its name: unlinking that would
+        // * leave a live window nothing can reach again.
         if asked.is_ok() || reaped.is_some() {
             let _ = std::fs::remove_file(&self.config.socket);
         }
@@ -380,8 +380,8 @@ impl App {
         };
         match answer {
             Ok(result) => Ok(result),
-            // A child that died mid-call explains the transport error better
-            // than the transport error does.
+            // * A child that died mid-call explains the transport error better
+            // * than the transport error does.
             Err(e) => match self.exited() {
                 Some(status) => {
                     self.reap(Duration::ZERO);
@@ -389,8 +389,8 @@ impl App {
                         "silica exited ({status}) during `{method}`; call silica_launch again"
                     ))
                 }
-                // A client that is out of step cannot be reused: drop it so
-                // the next call reconnects instead of reading a stale reply.
+                // ! A client that is out of step cannot be reused: drop it so
+                // ! the next call reconnects instead of reading a stale reply.
                 None => {
                     if self.client.as_ref().is_some_and(Client::is_broken) {
                         self.client = None;
@@ -449,8 +449,8 @@ impl App {
                  -crop {{crop}} {{path}}`"
             )),
             (Some(crop), true) => {
-                // The template is run through `sh -c`, so a crop that is not a
-                // geometry is a shell injection, not a mistake.
+                // * The template is run through `sh -c`, so a crop that is not a
+                // * geometry is a shell injection, not a mistake.
                 if crop.is_empty() || !crop.bytes().all(is_geometry) {
                     return Err(format!(
                         "`crop` must be an ImageMagick geometry like `800x600+0+0`, not {crop:?}"
@@ -478,8 +478,8 @@ impl App {
         command
             .current_dir(&self.config.repo)
             .stdin(Stdio::null())
-            // This server's stdout carries the protocol: anything the app
-            // prints there would be read as a JSON-RPC message.
+            // * This server's stdout carries the protocol: anything the app
+            // * prints there would be read as a JSON-RPC message.
             .stdout(Stdio::null())
             .stderr(Stdio::inherit())
             .spawn()
@@ -730,8 +730,8 @@ mod tests {
 
         fn app(&self) -> App {
             App::new(Config {
-                // Short enough that `hang` times out while its reply is still
-                // in flight, which is the whole point of these tests.
+                // ! Short enough that `hang` times out while its reply is still
+                // ! in flight, which is the whole point of these tests.
                 timeout: Duration::from_millis(60),
                 ..Config::for_test(self.path.clone())
             })
@@ -759,15 +759,15 @@ mod tests {
         builder.create(&private).expect("creates 0700");
         assert!(is_ours(&private, uid));
 
-        // A directory anyone can enter is a directory anyone can plant a
-        // socket name in.
+        // * A directory anyone can enter is a directory anyone can plant a
+        // * socket name in.
         let open = base.join("open");
         let mut builder = std::fs::DirBuilder::new();
         builder.mode(0o755);
         builder.create(&open).expect("creates 0755");
         assert!(!is_ours(&open, uid));
 
-        // Not a directory at all, and a symlink pointing at a good one.
+        // * Not a directory at all, and a symlink pointing at a good one.
         let file = base.join("file");
         std::fs::write(&file, b"").expect("writes");
         assert!(!is_ours(&file, uid));
@@ -775,7 +775,7 @@ mod tests {
         std::os::unix::fs::symlink(&private, &link).expect("links");
         assert!(!is_ours(&link, uid));
 
-        // With no uid to compare against, nothing pre-existing qualifies.
+        // * With no uid to compare against, nothing pre-existing qualifies.
         assert!(!is_ours(&private, None));
 
         std::fs::remove_dir_all(&base).expect("cleans up");
@@ -792,7 +792,7 @@ mod tests {
             plain(PathBuf::from(r"\\?\UNC\nas\share\vault")),
             PathBuf::from(r"\\nas\share\vault")
         );
-        // Anything else is left alone, including a device path.
+        // * Anything else is left alone, including a device path.
         assert_eq!(
             plain(PathBuf::from(r"\\?\Volume{guid}\vault")),
             PathBuf::from(r"\\?\Volume{guid}\vault")
@@ -810,8 +810,8 @@ mod tests {
 
         let e = app.call("hang", json!({})).expect_err("times out");
         assert!(e.contains("reading hang"), "{e}");
-        // The reply to `hang` is still coming, so that connection is out of
-        // step for good; the next call has to get a new one.
+        // * The reply to `hang` is still coming, so that connection is out of
+        // * step for good; the next call has to get a new one.
         assert!(app.client.is_none(), "the broken client was kept");
 
         let reply = app.call("ping", json!({})).expect("a fresh connection");
@@ -821,8 +821,8 @@ mod tests {
 
     #[test]
     fn quit_leaves_the_socket_of_an_app_that_did_not_answer() {
-        // An app too busy to answer `quit` inside the timeout, and no child
-        // of ours to reap: all this server knows is that it is still there.
+        // * An app too busy to answer `quit` inside the timeout, and no child
+        // * of ours to reap: all this server knows is that it is still there.
         let fake = Slow::start("live-quit", &["quit"]);
         let mut app = fake.app();
 

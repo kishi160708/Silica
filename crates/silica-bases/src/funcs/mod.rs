@@ -33,9 +33,9 @@ use crate::value::{Type, Value};
 pub fn call(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Expr]) -> EvalResult {
     let lower = name.to_ascii_lowercase();
 
-    // Null answers every call with null. Three names differ, and they are the
-    // only three: `isEmpty()` is true, `isTruthy()` is false, `toString()` is
-    // the String "null".
+    // * Null answers every call with null. Three names differ, and they are the
+    // * only three: `isEmpty()` is true, `isTruthy()` is false, `toString()` is
+    // * the String "null".
     if subject.is_null() {
         return Ok(match lower.as_str() {
             "isempty" => Value::Bool(true),
@@ -45,7 +45,7 @@ pub fn call(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Expr]) 
         });
     }
 
-    // Every type has these three.
+    // * Every type has these three.
     match lower.as_str() {
         "istruthy" => {
             arity(name, args, 0, 0)?;
@@ -61,9 +61,9 @@ pub fn call(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Expr]) 
             let Value::Str(want) = want else {
                 return Err(type_error(name, "type", "String", want.ty()));
             };
-            // Which names `isType` accepts is unprobed; the type tag's own
-            // name, case-insensitively, is the reading the error strings
-            // support.
+            // ? Which names `isType` accepts is unprobed; the type tag's own
+            // ? name, case-insensitively, is the reading the error strings
+            // ? support.
             return Ok(Value::Bool(
                 want.eq_ignore_ascii_case(subject.ty().as_str()),
             ));
@@ -77,8 +77,8 @@ pub fn call(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Expr]) 
         Type::List | Type::Tags => list::call(ev, subject, name, args),
         Type::Object => list::call_object(ev, subject, name, args),
         Type::Date | Type::DateTime | Type::Duration => time::call(ev, subject, name, args),
-        // A Link is a String receiver as well as a Link, so `file` owns the
-        // two names of its own and hands everything else to `text`.
+        // * A Link is a String receiver as well as a Link, so `file` owns the
+        // * two names of its own and hands everything else to `text`.
         Type::Link => file::call_link(ev, subject, name, args),
         Type::File => file::call(ev, subject, name, args),
         ty => Err(unknown_function(name, ty)),
@@ -87,7 +87,7 @@ pub fn call(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Expr]) 
 
 /// A property access, `subject.name`.
 pub fn property(ev: &mut Evaluator<'_>, subject: &Value, name: &str) -> EvalResult {
-    // Null answers every property access with null.
+    // * Null answers every property access with null.
     if subject.is_null() {
         return Ok(Value::Null);
     }
@@ -96,7 +96,7 @@ pub fn property(ev: &mut Evaluator<'_>, subject: &Value, name: &str) -> EvalResu
         Value::Link(l) => length_or_unknown(name, l.text().chars().count(), Type::Link),
         Value::List(items) => length_or_unknown(name, items.len(), Type::List),
         Value::Tags(tags) => length_or_unknown(name, tags.len(), Type::Tags),
-        // Any key of the map; an unknown key is null.
+        // * Any key of the map; an unknown key is null.
         Value::Object(map) => Ok(lookup_ci(map, name).unwrap_or(Value::Null)),
         Value::Date(_) | Value::Duration(_) => time::property(subject, name),
         Value::File(_) => file::property(ev, subject, name),

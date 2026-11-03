@@ -79,12 +79,12 @@ pub fn call(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Expr]) 
     };
 
     match name.to_ascii_lowercase().as_str() {
-        // `file.asLink()` is a Link to the file's own path with no alias: the
-        // cell renders `Silica.md`, which is the path, and a Link renders its
-        // alias when it has one. What a `display` argument does is
-        // `unprobed` — the run only ever called it with none — so it becomes
-        // the alias, as `link(path, display)` does, and a null one is no alias
-        // at all.
+        // ? `file.asLink()` is a Link to the file's own path with no alias: the
+        // ? cell renders `Silica.md`, which is the path, and a Link renders its
+        // ? alias when it has one. What a `display` argument does is
+        // ? `unprobed` — the run only ever called it with none — so it becomes
+        // ? the alias, as `link(path, display)` does, and a null one is no alias
+        // ? at all.
         "aslink" => {
             let display = match args.first() {
                 None => None,
@@ -105,14 +105,14 @@ pub fn call(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Expr]) 
             }))
         }
 
-        // "Returns true if `file` links to `otherFile`." Both sides are
-        // resolved through the host, because the two spellings differ in the
-        // run itself: `file.links` holds the written target (`Pumice`) while a
-        // File holds the path (`Pumice.md`).
+        // * "Returns true if `file` links to `otherFile`." Both sides are
+        // * resolved through the host, because the two spellings differ in the
+        // * run itself: `file.links` holds the written target (`Pumice`) while a
+        // * File holds the path (`Pumice.md`).
         //
-        // `unprobed`: whether an *embed* counts as a link. It does not here —
-        // `links` and `embeds` are separate properties, and the File value
-        // carries a separate reader for each.
+        // * `unprobed`: whether an *embed* counts as a link. It does not here —
+        // * `links` and `embeds` are separate properties, and the File value
+        // * carries a separate reader for each.
         "haslink" => {
             if args.is_empty() {
                 return Err(not_enough(name));
@@ -127,11 +127,11 @@ pub fn call(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Expr]) 
             ))
         }
 
-        // "Returns true if the note has the given file property." The name is
-        // matched case-insensitively, as every name in the language is
-        // (`file.properties.STATUS` is `todo`). A property that is present and
-        // null still counts: `unprobed`, but it is the note's own key set that
-        // the sentence asks about.
+        // ? "Returns true if the note has the given file property." The name is
+        // ? matched case-insensitively, as every name in the language is
+        // ? (`file.properties.STATUS` is `todo`). A property that is present and
+        // ? null still counts: `unprobed`, but it is the note's own key set that
+        // ? the sentence asks about.
         "hasproperty" => {
             if args.is_empty() {
                 return Err(not_enough(name));
@@ -148,9 +148,9 @@ pub fn call(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Expr]) 
             ))
         }
 
-        // "Returns true if the file has any of the tags in `values`", and with
-        // no values at all it is false. Every argument is type-checked even
-        // once one has matched, so a refusal does not depend on the data.
+        // * "Returns true if the file has any of the tags in `values`", and with
+        // * no values at all it is false. Every argument is type-checked even
+        // * once one has matched, so a refusal does not depend on the data.
         "hastag" => {
             let given = ev.eval_args(args)?;
             let mut hit = false;
@@ -161,7 +161,7 @@ pub fn call(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Expr]) 
             Ok(Value::Bool(hit))
         }
 
-        // "Returns true if the file is in the specified folder."
+        // * "Returns true if the file is in the specified folder."
         "infolder" => {
             if args.is_empty() {
                 return Err(not_enough(name));
@@ -193,10 +193,10 @@ pub fn call_link(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Ex
     };
 
     match name.to_ascii_lowercase().as_str() {
-        // `linkish.asFile()` is the File `Pumice.md` and
-        // `linkish.asFile().name` is `Pumice`. A target the host cannot
-        // resolve is null: `unprobed`, and the only answer null absorption
-        // leaves room for.
+        // ? `linkish.asFile()` is the File `Pumice.md` and
+        // ? `linkish.asFile().name` is `Pumice`. A target the host cannot
+        // ? resolve is null: `unprobed`, and the only answer null absorption
+        // ? leaves room for.
         "asfile" => {
             arity(name, args, 0, 0)?;
             Ok(resolve(ev, &link.path)
@@ -204,10 +204,10 @@ pub fn call_link(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Ex
                 .unwrap_or(Value::Null))
         }
 
-        // "Returns true if the link points to `file`". Only a File is
-        // accepted — `linkish.linksTo(/zz/)` is `Expected File, given RegExp`
-        // — and whether a Link or a String would be is `unprobed`, so the
-        // signature is taken at its word.
+        // ? "Returns true if the link points to `file`". Only a File is
+        // ? accepted — `linkish.linksTo(/zz/)` is `Expected File, given RegExp`
+        // ? — and whether a Link or a String would be is `unprobed`, so the
+        // ? signature is taken at its word.
         "linksto" => {
             if args.is_empty() {
                 return Err(not_enough(name));
@@ -239,20 +239,20 @@ pub fn property(_ev: &mut Evaluator<'_>, subject: &Value, name: &str) -> EvalRes
         "path" => Value::Str(file.path.clone()),
         "folder" => Value::Str(file.folder.clone()),
         "ext" => Value::Str(file.ext.clone()),
-        // Bytes, not characters: the run's `483` is exactly the byte
-        // length of the fixture note in `tools/obsidian-probe/bases-expr.mjs`.
+        // * Bytes, not characters: the run's `483` is exactly the byte
+        // * length of the fixture note in `tools/obsidian-probe/bases-expr.mjs`.
         "size" => Value::Number(file.size),
-        // Both are DateTimes (`lucide-clock`), not Dates. A file without one
-        // is null: `unprobed`, since every real file has both.
+        // ? Both are DateTimes (`lucide-clock`), not Dates. A file without one
+        // ? is null: `unprobed`, since every real file has both.
         "ctime" => file.ctime.map(Value::Date).unwrap_or(Value::Null),
         "mtime" => file.mtime.map(Value::Date).unwrap_or(Value::Null),
-        // Its own type tag, `lucide-tags`, and the `#` is part of each tag.
+        // * Its own type tag, `lucide-tags`, and the `#` is part of each tag.
         "tags" => Value::Tags(file.tags.clone()),
         "links" => links_of(&file.links),
         "embeds" => links_of(&file.embeds),
         "backlinks" => links_of(&file.backlinks),
         "properties" => Value::Object(file.properties.clone()),
-        // The File itself: `file.file` renders `Silica.md` with the File icon.
+        // * The File itself: `file.file` renders `Silica.md` with the File icon.
         "file" => Value::File(Arc::clone(file)),
         _ => return Err(unknown_property(name, subject.ty())),
     })

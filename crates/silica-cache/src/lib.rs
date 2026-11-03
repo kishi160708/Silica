@@ -294,8 +294,8 @@ impl<'a> Indexer<'a> {
             BlockKind::Callout {
                 title, children, ..
             } => {
-                // The title is a block tree; its inlines still carry the links
-                // and tags a title can hold.
+                // * The title is a block tree; its inlines still carry the links
+                // * and tags a title can hold.
                 for run in silica_markdown::inline_runs(title) {
                     self.inlines(run);
                 }
@@ -569,7 +569,7 @@ mod tests {
             .iter()
             .map(|i| (i.parent, i.task, i.id.as_deref()))
             .collect();
-        // The list starts on line 16; the nested item's parent is line 16.
+        // * The list starts on line 16; the nested item's parent is line 16.
         assert_eq!(
             items,
             vec![

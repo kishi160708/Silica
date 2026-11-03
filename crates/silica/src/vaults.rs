@@ -175,8 +175,8 @@ impl VaultManager {
                     ..Default::default()
                 }),
                 app_id: Some("silica".into()),
-                // The desktop's own frame, as the Help window has: a
-                // dialog has no tab strip to put window buttons in.
+                // * The desktop's own frame, as the Help window has: a
+                //   dialog has no tab strip to put window buttons in.
                 window_decorations: Some(WindowDecorations::Server),
                 window_background: WindowBackgroundAppearance::Opaque,
                 window_min_size: Some(size(px(640.), px(480.))),
@@ -232,8 +232,8 @@ impl VaultManager {
 
     fn go(&mut self, go: Go, window: &mut Window, cx: &mut Context<Self>) {
         match go {
-            // The desktop's save dialog: the user says where the vault
-            // goes and what the folder is called in one step.
+            // * The desktop's save dialog: the user says where the vault
+            //   goes and what the folder is called in one step.
             Go::Create => {
                 let picked = cx.prompt_for_new_path(&home_dir(), Some("New vault"));
                 cx.spawn_in(window, async move |this, cx| {
@@ -385,8 +385,8 @@ impl VaultManager {
                     .on_hover(cx.listener(move |this, over: &bool, _, _| {
                         this.over_dots = if *over { Some(ix) } else { None };
                     }))
-                    // The row under it opens the vault: a click on the
-                    // ellipsis must not do both.
+                    // * The row under it opens the vault: a click on the
+                    //   ellipsis must not do both.
                     .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.menu = if this.menu == Some(ix) {
@@ -399,10 +399,10 @@ impl VaultManager {
                     }))
                     .child(icon("ellipsis-vertical", 16., theme.text_muted)),
             )
-            // The menu's anchor is this box, pinned at the row's top
-            // right corner, where Obsidian drops it from the ellipsis: an
-            // absolute element left to the row's own flow would hang off
-            // whatever the last child laid out to.
+            // * The menu's anchor is this box, pinned at the row's top
+            //   right corner, where Obsidian drops it from the ellipsis: an
+            //   absolute element left to the row's own flow would hang off
+            //   whatever the last child laid out to.
             .child(
                 div()
                     .absolute()
@@ -439,8 +439,8 @@ impl VaultManager {
             .text_color(theme.text)
             .occlude()
             .on_mouse_down_out(cx.listener(move |this, _, _, cx| {
-                // The ellipsis closes the menu itself, on the click that
-                // ends the same press.
+                // * The ellipsis closes the menu itself, on the click that
+                //   ends the same press.
                 if this.over_dots == Some(ix) {
                     return;
                 }
@@ -451,9 +451,9 @@ impl VaultManager {
             if separator {
                 list = list.child(div().my_1().h(px(1.)).bg(theme.border));
             }
-            // Obsidian draws "Remove from list" in `--text-error`, which
-            // its default theme takes from `--color-red`: the first of the
-            // canvas presets Silica already reads from the same place.
+            // * Obsidian draws "Remove from list" in `--text-error`, which
+            //   its default theme takes from `--color-red`: the first of the
+            //   canvas presets Silica already reads from the same place.
             let color = if item.warning() {
                 theme.canvas.presets[0]
             } else {

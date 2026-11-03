@@ -259,8 +259,8 @@ impl SearchPane {
     pub fn new(cx: &mut Context<Self>) -> SearchPane {
         let input = cx.new(|cx| {
             let mut input = TextInput::new("Search...", cx);
-            // Obsidian's `search-input-container`: the text starts 30 px
-            // in, behind the magnifier.
+            // * Obsidian's `search-input-container`: the text starts 30 px
+            //   in, behind the magnifier.
             input.set_pad_left(px(30.));
             input
         });
@@ -272,9 +272,9 @@ impl SearchPane {
         let mut subscriptions = vec![cx.subscribe(&input, |this, _, event: &InputEvent, cx| {
             match event {
                 InputEvent::Changed => {
-                    // A new query builds a new result list, the way
-                    // Obsidian's startSearch empties its own; only a re-run
-                    // over the same query keeps the folds.
+                    // * A new query builds a new result list, the way
+                    //   Obsidian's startSearch empties its own; only a re-run
+                    //   over the same query keeps the folds.
                     this.toggled.clear();
                     this.expanded.clear();
                     this.focused = None;
@@ -480,8 +480,8 @@ impl SearchPane {
     /// count beside its name does too.
     pub fn describe(&self, rows: usize, cx: &App) -> Value {
         let total: usize = self.results.iter().map(FileResult::results).sum();
-        // The note text turns a match's byte offset into a line number; it is
-        // absent for a file the vault dropped since the search ran.
+        // * The note text turns a match's byte offset into a line number; it is
+        //   absent for a file the vault dropped since the search ran.
         let texts = self.state.as_ref().map(|state| state.texts());
         let results: Vec<Value> = self
             .results
@@ -501,9 +501,9 @@ impl SearchPane {
                         })
                     })
                     .collect();
-                // One note can hold more hits than the dump carries, so it
-                // says how many it has, the same way every other capped list
-                // in the dump does: `null` when nothing was dropped.
+                // * One note can hold more hits than the dump carries, so it
+                //   says how many it has, the same way every other capped list
+                //   in the dump does: `null` when nothing was dropped.
                 let shown = matches.len();
                 json!({
                     "path": file.path,
@@ -574,9 +574,9 @@ impl SearchPane {
             }
         };
         if search.is_empty() {
-            // `(`, `"`, a bare `OR`: the parser read what it could and found
-            // no term. Obsidian's startSearch returns before adding a result
-            // rather than listing the vault.
+            // * `(`, `"`, a bare `OR`: the parser read what it could and found
+            //   no term. Obsidian's startSearch returns before adding a result
+            //   rather than listing the vault.
             self.results.clear();
             self.error = None;
             self.replace_rows();
@@ -612,7 +612,7 @@ impl SearchPane {
     }
 
     fn rebuild_rows(&mut self) {
-        // A file the new results dropped forgets its fold and its context.
+        // * A file the new results dropped forgets its fold and its context.
         let live: HashSet<&str> = self.results.iter().map(|f| f.path.as_str()).collect();
         self.toggled.retain(|p| live.contains(p.as_str()));
         self.expanded.retain(|(p, _), _| live.contains(p.as_str()));
@@ -631,8 +631,8 @@ impl SearchPane {
         } else if let Some(f) = self.focused.as_mut() {
             *f = (*f).min(self.rows.len() - 1);
         }
-        // Replacing the items keeps the scroll position where a reset would
-        // not; every row is measured again at the next paint.
+        // * Replacing the items keeps the scroll position where a reset would
+        //   not; every row is measured again at the next paint.
         self.list.splice(0..old, self.rows.len());
     }
 
@@ -696,7 +696,7 @@ impl SearchPane {
         if self.is_collapsed(&path) == collapse {
             return true;
         }
-        // Focus follows the file row, which is the one left on screen.
+        // * Focus follows the file row, which is the one left on screen.
         if collapse {
             self.focused = self
                 .rows
@@ -761,7 +761,7 @@ impl SearchPane {
 
     fn set_extra_context(&mut self, on: bool, cx: &mut Context<Self>) {
         self.extra_context = on;
-        // Every match's height changes: measure them again.
+        // * Every match's height changes: measure them again.
         self.list.splice(0..self.rows.len(), self.rows.len());
         cx.emit(SearchEvent::StateChanged);
         cx.notify();
@@ -848,7 +848,7 @@ impl SearchPane {
         if self.input.read(cx).text().trim().is_empty() && !self.has_run {
             return SharedString::default();
         }
-        // The count names no file count; a file name hit counts as one.
+        // * The count names no file count; a file name hit counts as one.
         format!("{total} results").into()
     }
 
@@ -966,8 +966,8 @@ impl SearchPane {
                 }),
             )
             .child(
-                // `tree-item-icon collapse-icon`: 16 px wide in the row's
-                // left gutter, the 10 px chevron faint at 85 %.
+                // * `tree-item-icon collapse-icon`: 16 px wide in the row's
+                //   left gutter, the 10 px chevron faint at 85 %.
                 div()
                     .absolute()
                     .left(px(4.))
@@ -1037,8 +1037,8 @@ impl SearchPane {
         let last = m + 1 == file.matches.len();
         let text = StyledText::new(SharedString::from(shown.snippet.clone()))
             .with_highlights(highlights(&shown.ranges, Highlight::Match, theme));
-        // Whether the note goes on above and below this line, which is
-        // when a chevron has something to show.
+        // * Whether the note goes on above and below this line, which is
+        //   when a chevron has something to show.
         let (has_above, has_below) = {
             let texts = self.state.as_ref().map(|s| s.texts());
             let text = texts.as_ref().and_then(|t| t.get(&file.path));
@@ -1097,8 +1097,8 @@ impl SearchPane {
             .bg(theme.bg)
             .when(first, |d| d.mt(px(4.)).rounded_t(px(4.)))
             .when(last, |d| d.mb(px(8.)).rounded_b(px(4.)))
-            // The light theme rings the card with a hairline; the dark one
-            // has only the hairlines between rows.
+            // * The light theme rings the card with a hairline; the dark one
+            //   has only the hairlines between rows.
             .when(light, |d| {
                 d.border_l_1().border_r_1().border_color(theme.border)
             })
@@ -1132,8 +1132,8 @@ impl SearchPane {
     /// clear button, then the Search settings button, 4 px apart.
     fn render_search_row(&mut self, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
         let has_text = !self.input.read(cx).text().is_empty();
-        // Room for the decorators the field's text must not run under:
-        // the clear button only shows with text.
+        // ! Room for the decorators the field's text must not run under:
+        //   the clear button only shows with text.
         let pad = if has_text { 60. } else { 32. };
         self.input
             .update(cx, |input, _| input.set_pad_right(px(pad)));
@@ -1511,7 +1511,7 @@ impl SearchPane {
             }))
             .child(div().whitespace_nowrap().child(count))
             .child(
-                // `more-options-icon`: the ellipsis in a filled disc.
+                // * `more-options-icon`: the ellipsis in a filled disc.
                 div()
                     .size(px(14.))
                     .rounded_full()
@@ -1729,8 +1729,8 @@ impl Render for SearchPane {
             .child(info)
             .children(self.render_menu(&theme, cx))
             .child(
-                // `.search-result-container`: 12 px of padding; the list
-                // is virtualised since a match wraps to its own height.
+                // * `.search-result-container`: 12 px of padding; the list
+                //   is virtualised since a match wraps to its own height.
                 div()
                     .flex_1()
                     .min_h(px(0.))
@@ -1797,7 +1797,7 @@ pub(crate) fn menu(id: &'static str, theme: &Theme) -> gpui::Stateful<gpui::Div>
         .shadow_lg()
         .text_size(px(FONT_UI_SMALL))
         .text_color(theme.text)
-        // Keeps a click on an item from reaching what is under it.
+        // * Keeps a click on an item from reaching what is under it.
         .occlude()
 }
 
@@ -2190,9 +2190,9 @@ mod tests {
         sort_results(&mut results, SortOrder::AlphabeticalReverse);
         let names: Vec<&str> = results.iter().map(|r| r.name.as_str()).collect();
         assert_eq!(names, vec!["Note 10", "Note 2", "9 needle", "_needle"]);
-        // Same basename: the tie is the full path descending, so a note in a
-        // folder comes ahead of a root note of the same name. This is the
-        // probe's own eight-`apple` case and its observed order.
+        // * Same basename: the tie is the full path descending, so a note in a
+        //   folder comes ahead of a root note of the same name. This is the
+        //   probe's own eight-`apple` case and its observed order.
         let paths = [
             "zzz/apple.md",
             "z/apple.md",
@@ -2219,8 +2219,8 @@ mod tests {
 
     #[test]
     fn time_orders_keep_the_order_of_a_tie() {
-        // The probe: created time put nine files in one group, and inside
-        // it the rows kept the order they had before the switch.
+        // * The probe: created time put nine files in one group, and inside
+        //   it the rows kept the order they had before the switch.
         let mut results: Vec<FileResult> = ["c.md", "a.md", "b.md", "d.md"]
             .iter()
             .map(|p| result(p))
@@ -2242,7 +2242,7 @@ mod tests {
 
     #[test]
     fn name_hits_are_cut_at_the_extension_and_counted_once() {
-        // Ranges are against "Needle.md", the row shows "Needle".
+        // * Ranges are against "Needle.md", the row shows "Needle".
         assert_eq!(clamp(&[0..6], 6), vec![0..6]);
         assert_eq!(clamp(&[4..9], 6), vec![4..6], "a hit over `.md` is cut");
         assert!(

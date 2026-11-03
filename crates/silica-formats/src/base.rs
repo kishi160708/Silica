@@ -207,7 +207,7 @@ pub struct View {
 }
 
 // ---------------------------------------------------------------------------
-// Parsing
+// * Parsing
 // ---------------------------------------------------------------------------
 
 fn as_str(v: &Value) -> Option<String> {
@@ -241,8 +241,8 @@ impl Filter {
         let Some(m) = v.as_mapping() else {
             return Err(BaseError::FilterConjunction);
         };
-        // Exactly one of the three, and nothing beside it: a stray key here is
-        // the one unknown key Obsidian refuses.
+        // ? Exactly one of the three, and nothing beside it: a stray key here is
+        // ? the one unknown key Obsidian refuses.
         if m.len() != 1 {
             return Err(BaseError::FilterConjunction);
         }
@@ -464,14 +464,14 @@ impl PropertyConfig {
 }
 
 // ---------------------------------------------------------------------------
-// Writing
+// * Writing
 // ---------------------------------------------------------------------------
 //
-// Obsidian builds a plain object in `getSerializable()` and hands it to a YAML
-// emitter, so this does the same: [`Base::to_value`] puts the keys in the
-// observed order and [`emit`] writes them. One emitter covers the modelled
-// keys and the preserved ones alike, which is what makes a plugin's nested
-// unknown value come back re-indented the way the fixture's did.
+// * Obsidian builds a plain object in `getSerializable()` and hands it to a YAML
+// * emitter, so this does the same: [`Base::to_value`] puts the keys in the
+// * observed order and [`emit`] writes them. One emitter covers the modelled
+// * keys and the preserved ones alike, which is what makes a plugin's nested
+// * unknown value come back re-indented the way the fixture's did.
 
 fn key(name: &str) -> Value {
     Value::String(name.to_string())
@@ -573,9 +573,9 @@ impl Base {
         let mut m = serde_yaml::Mapping::new();
         for name in self.key_order() {
             let v = match name.as_str() {
-                // `summaries` is in the preserved map as well, but what is
-                // written is always the re-serialized statements, not the
-                // bytes the file had.
+                // * `summaries` is in the preserved map as well, but what is
+                // * written is always the re-serialized statements, not the
+                // * bytes the file had.
                 "summaries" => string_map_value(self.summaries.as_ref().unwrap()),
                 "filters" => self
                     .filters
@@ -635,9 +635,9 @@ fn is_plain(s: &str) -> bool {
     if s.contains('\n') || s.contains(": ") || s.contains(" #") || s.ends_with(':') {
         return false;
     }
-    // A plain scalar may not open with an indicator. `-`, `?` and `:` are
-    // indicators only when a space follows, which `trim` has already ruled
-    // out for a one-character string.
+    // * A plain scalar may not open with an indicator. `-`, `?` and `:` are
+    // * indicators only when a space follows, which `trim` has already ruled
+    // * out for a one-character string.
     let first = s.chars().next().unwrap_or(' ');
     if "[]{},#&*!|>'\"%@`".contains(first) {
         return false;
@@ -645,7 +645,7 @@ fn is_plain(s: &str) -> bool {
     if "-?:".contains(first) && s[first.len_utf8()..].starts_with(' ') {
         return false;
     }
-    // Would it come back as something other than a string?
+    // * Would it come back as something other than a string?
     !matches!(
         serde_yaml::from_str::<Value>(s),
         Ok(Value::Null | Value::Bool(_) | Value::Number(_))
@@ -682,7 +682,7 @@ fn scalar(v: &Value) -> String {
             out.push('"');
             out
         }
-        // A mapping or sequence never reaches here: emit handles them.
+        // ! A mapping or sequence never reaches here: emit handles them.
         other => serde_yaml::to_string(other)
             .unwrap_or_default()
             .trim_end()
@@ -764,8 +764,8 @@ fn emit_sequence(items: &[Value], indent: usize, out: &mut String) {
                 out.push_str(is_empty_collection(item).unwrap());
                 out.push('\n');
             }
-            // A mapping in a sequence item puts its first key on the dash's
-            // own line and the rest at the item's text column.
+            // * A mapping in a sequence item puts its first key on the dash's
+            // * own line and the rest at the item's text column.
             Value::Mapping(m) => {
                 let mut first = true;
                 for (k, v) in m {
@@ -839,8 +839,8 @@ newItemFolder: Notes
         let b = Base::from_yaml(SCRAMBLED).unwrap();
         assert!(matches!(b.filters, Some(Filter::And(ref v)) if v.len() == 2));
         assert_eq!(b.formulas["ppu"], "(density / silica).toFixed(2)");
-        // The statement's double space survives, because Obsidian's own
-        // round trip keeps the text rather than re-printing the parse tree.
+        // * The statement's double space survives, because Obsidian's own
+        // * round trip keeps the text rather than re-printing the parse tree.
         assert_eq!(b.formulas["label"], r#"type + " "  + file.name"#);
         assert_eq!(
             b.summaries.as_ref().unwrap()["customAverage"],
@@ -855,16 +855,16 @@ newItemFolder: Notes
     #[test]
     fn formula_and_summary_order_is_the_file_order() {
         let b = Base::from_yaml(SCRAMBLED).unwrap();
-        // A sorted map would put `label` first and rewrite the file on the
-        // next save, which is the reason this is an IndexMap.
+        // * A sorted map would put `label` first and rewrite the file on the
+        // * next save, which is the reason this is an IndexMap.
         assert_eq!(b.formulas.keys().collect::<Vec<_>>(), ["ppu", "label"]);
     }
 
     #[test]
     fn preserved_keys_are_spread_first_and_summaries_is_one_of_them() {
         let b = Base::from_yaml(SCRAMBLED).unwrap();
-        // `summaries` is parsed AND left among the preserved keys, so it keeps
-        // the position the file gave it; `filters` is consumed, so it does not.
+        // * `summaries` is parsed AND left among the preserved keys, so it keeps
+        // * the position the file gave it; `filters` is consumed, so it does not.
         assert_eq!(
             b.preserved.keys().collect::<Vec<_>>(),
             ["summaries", "unknownTopKey"]
@@ -914,8 +914,8 @@ newItemFolder: Notes
     #[test]
     fn an_empty_property_config_is_dropped_and_takes_the_key_with_it() {
         let b = Base::from_yaml(SCRAMBLED).unwrap();
-        // `note.unused: {}` parses, but Obsidian's serialize() returns null for
-        // it and a null is left out of the written map.
+        // * `note.unused: {}` parses, but Obsidian's serialize() returns null for
+        // * it and a null is left out of the written map.
         assert!(b.properties["note.unused"].is_dropped());
         assert!(!b.properties["status"].is_dropped());
 
@@ -926,12 +926,12 @@ newItemFolder: Notes
 
     #[test]
     fn a_view_must_have_a_non_empty_name() {
-        // The one hard structural rule the published schema does not state.
+        // * The one hard structural rule the published schema does not state.
         let err = Base::from_yaml("views:\n  - type: table\n").unwrap_err();
         assert_eq!(err.to_string(), "Missing or invalid \"name\" in view 1");
         let err = Base::from_yaml("views:\n  - type: table\n    name: ''\n").unwrap_err();
         assert_eq!(err.to_string(), "Missing or invalid \"name\" in view 1");
-        // The index is 1-based and names the offending view.
+        // * The index is 1-based and names the offending view.
         let two = "views:\n  - type: table\n    name: Fine\n  - type: table\n";
         assert_eq!(
             Base::from_yaml(two).unwrap_err().to_string(),
@@ -946,22 +946,22 @@ newItemFolder: Notes
             err.to_string(),
             "\"filters\" may only have one of an \"and\", \"or\", or \"not\" keys."
         );
-        // ... while an unknown key anywhere else is kept.
+        // ? ... while an unknown key anywhere else is kept.
         let b = Base::from_yaml("unknown: 1\nviews: []\n").unwrap();
         assert_eq!(b.preserved["unknown"], Value::Number(1.into()));
     }
 
     #[test]
     fn an_unknown_view_type_parses_and_is_kept() {
-        // Obsidian says "Unknown view type: nonsense" in the view and keeps
-        // the file: it is not a parse error.
+        // ? Obsidian says "Unknown view type: nonsense" in the view and keeps
+        // ? the file: it is not a parse error.
         let b = Base::from_yaml("views:\n  - type: nonsense\n    name: V\n").unwrap();
         assert_eq!(b.views[0].kind, "nonsense");
     }
 
     #[test]
     fn an_empty_file_is_an_empty_base() {
-        // What `bases:new-file` creates is zero bytes.
+        // * What `bases:new-file` creates is zero bytes.
         let b = Base::from_yaml("").unwrap();
         assert_eq!(b, Base::default());
         assert!(b.key_order().is_empty());

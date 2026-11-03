@@ -87,7 +87,7 @@ pub fn call(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Expr]) 
         return Err(unknown_function(name, subject.ty()));
     };
     match name.to_ascii_lowercase().as_str() {
-        // "Returns a date object with the time removed."
+        // * "Returns a date object with the time removed."
         "date" => {
             arity(name, args, 0, 0)?;
             Ok(Value::Date(DateValue {
@@ -95,11 +95,11 @@ pub fn call(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Expr]) 
                 has_time: false,
             }))
         }
-        // Obsidian type-checks the format *before* it counts the arguments:
-        // `format(/zz/, /zz/)` answers the type error, not "too many
-        // arguments", where `format()` answers "not enough arguments". The
-        // order below is the observed one; that a second argument is refused
-        // at all once the first is a String is `unprobed`.
+        // * Obsidian type-checks the format *before* it counts the arguments:
+        // * `format(/zz/, /zz/)` answers the type error, not "too many
+        // * arguments", where `format()` answers "not enough arguments". The
+        // * order below is the observed one; that a second argument is refused
+        // * at all once the first is a String is `unprobed`.
         "format" => {
             if args.is_empty() {
                 return Err(not_enough(name));
@@ -111,17 +111,17 @@ pub fn call(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Expr]) 
             }
             Ok(Value::Str(format_moment(date, &pattern)))
         }
-        // "Returns false." A Date is never empty.
+        // * "Returns false." A Date is never empty.
         "isempty" => {
             arity(name, args, 0, 0)?;
             Ok(Value::Bool(false))
         }
-        // "Returns a readable comparison of the date to the current datetime."
+        // * "Returns a readable comparison of the date to the current datetime."
         "relative" => {
             arity(name, args, 0, 0)?;
             Ok(Value::Relative(relative(date, ev.context().now())))
         }
-        // "Returns the time." Observed as `15:28:49` — `HH:mm:ss`, a String.
+        // * "Returns the time." Observed as `15:28:49` — `HH:mm:ss`, a String.
         "time" => {
             arity(name, args, 0, 0)?;
             Ok(Value::Str(format!(
@@ -160,11 +160,11 @@ fn date_property(date: &DateValue, name: &str) -> Option<f64> {
         "minute" => f64::from(at.minute()),
         "second" => f64::from(at.second()),
         "millisecond" => f64::from(at.nanosecond() / 1_000_000),
-        // `unprobed`: the run lists `timestamp` in the completion set but
-        // never read one. Epoch milliseconds is what the neighbouring
-        // `millisecond` makes of it, and the civil time is read as UTC —
-        // the crate knows no zone, so a real Obsidian would differ by the
-        // viewer's offset.
+        // ? `unprobed`: the run lists `timestamp` in the completion set but
+        // ? never read one. Epoch milliseconds is what the neighbouring
+        // ? `millisecond` makes of it, and the civil time is read as UTC —
+        // ? the crate knows no zone, so a real Obsidian would differ by the
+        // ? viewer's offset.
         "timestamp" => at.and_utc().timestamp_millis() as f64,
         _ => return None,
     })
@@ -213,7 +213,7 @@ pub fn parse_date(s: &str) -> Option<DateValue> {
         });
     }
 
-    // A separator, then at least `HH:mm`.
+    // * A separator, then at least `HH:mm`.
     let sep = rest.as_bytes()[0];
     if sep != b'T' && sep != b't' && sep != b' ' {
         return None;
@@ -285,7 +285,7 @@ pub fn parse_duration(s: &str) -> Option<DurationValue> {
     let unit = unit.trim();
     let mut out = DurationValue::default();
     let field = if unit.chars().count() == 1 {
-        // Case-sensitive, and the whole point of the family.
+        // ! Case-sensitive, and the whole point of the family.
         match unit {
             "y" => Unit::Years,
             "M" => Unit::Months,
@@ -672,7 +672,7 @@ pub fn format_moment(date: &DateValue, pattern: &str) -> String {
     let mut i = 0;
     while i < chars.len() {
         if chars[i] == '[' {
-            // An escape runs to the next `]`; an unclosed one is literal text.
+            // ? An escape runs to the next `]`; an unclosed one is literal text.
             if let Some(end) = chars[i + 1..].iter().position(|c| *c == ']') {
                 out.extend(&chars[i + 1..i + 1 + end]);
                 i += end + 2;

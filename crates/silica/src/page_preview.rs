@@ -58,7 +58,6 @@ pub fn render_preview_card(data: &PagePreviewData, theme: &Theme) -> Div {
         .flex_col()
         .gap_2();
 
-    // Header
     let mut header = div()
         .flex()
         .flex_row()
@@ -112,7 +111,6 @@ pub fn render_preview_card(data: &PagePreviewData, theme: &Theme) -> Div {
 
     card = card.child(header);
 
-    // Body
     if let Some(img_path) = &data.image_path {
         card = card.child(
             div()

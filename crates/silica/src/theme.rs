@@ -251,15 +251,15 @@ impl Theme {
         let mut theme = match config.theme.as_deref() {
             Some("moonstone") => Theme::light(),
             Some("obsidian") => Theme::dark(),
-            // `system` and anything else Obsidian does not know.
+            // * `system` and anything else Obsidian does not know.
             _ if system_dark => Theme::dark(),
             _ => Theme::light(),
         };
         if let Some(size) = config.base_font_size {
-            // Obsidian's own slider offers 10 to 30, but it neither clamps
-            // nor rewrites a file that holds something else — 99 was left
-            // alone across a whole session — so the file's value is
-            // honoured. The floor only keeps a zero out of the layout.
+            // * Obsidian's own slider offers 10 to 30, but it neither clamps
+            //   nor rewrites a file that holds something else — 99 was left
+            //   alone across a whole session — so the file's value is
+            //   honoured. The floor only keeps a zero out of the layout.
             theme.base_font_size = size.max(1) as f32;
         }
         if let Some(f) = first_font(config.text_font_family.as_deref()) {
@@ -274,8 +274,8 @@ impl Theme {
         if let Some(css) = css_theme {
             theme.apply_css_theme(css);
         }
-        // CSS snippets apply last, so they override both base theme and
-        // community theme colors.
+        // * CSS snippets apply last, so they override both base theme and
+        //   community theme colors.
         for css in css_snippets {
             theme.apply_css_theme(css);
         }
@@ -295,8 +295,8 @@ impl Theme {
             C::Orange => presets[1],
             C::Yellow => presets[2],
             C::Green => presets[3],
-            // `--color-blue`: not a canvas preset (cyan is), so its own
-            // pair of values.
+            // * `--color-blue`: not a canvas preset (cyan is), so its own
+            //   pair of values.
             C::Blue => rgb(if self.dark { 0x027aff } else { 0x086ddd }).into(),
             C::Purple => presets[5],
         };
@@ -322,9 +322,9 @@ impl Theme {
             "question" | "warning" => presets[1],
             "failure" | "danger" | "bug" => presets[0],
             "example" => presets[5],
-            // Obsidian's grey is a flat value in both themes.
+            // * Obsidian's grey is a flat value in both themes.
             "quote" => rgb(0x9e9e9e).into(),
-            // `note`, `info`, `todo` and anything Obsidian does not know.
+            // * `note`, `info`, `todo` and anything Obsidian does not know.
             _ => rgb(if self.dark { 0x027aff } else { 0x086ddd }).into(),
         }
     }
@@ -362,7 +362,7 @@ pub struct CssTheme {
 /// string and interpreted when applied.
 pub fn parse_css_theme(css: &str) -> CssTheme {
     let mut vars = BTreeMap::new();
-    // Strip comments.
+    // * Strip comments.
     let css = css.replace("/*", "").replace("*/", "");
     for line in css.lines() {
         let line = line.trim();
@@ -409,7 +409,7 @@ impl Theme {
     pub fn apply_css_theme(&mut self, css: &CssTheme) {
         for (name, value) in &css.vars {
             match name.as_str() {
-                // Colours
+                // * Colours
                 "--background-primary" => {
                     if let Some(c) = parse_colour(value) {
                         self.bg = c.into();
@@ -465,7 +465,7 @@ impl Theme {
                         self.accent = c.into();
                     }
                 }
-                // Canvas colour presets
+                // * Canvas colour presets
                 "--color-red" => {
                     if let Some(c) = parse_colour(value) {
                         self.canvas.presets[0] = c.into();
@@ -496,7 +496,7 @@ impl Theme {
                         self.canvas.presets[5] = c.into();
                     }
                 }
-                // Fonts
+                // * Fonts
                 "--font-interface" => {
                     self.ui_font = SharedString::from(value.trim_matches('"').trim_matches('\''));
                 }
@@ -600,8 +600,8 @@ mod tests {
             ("example", 0xa882ff),
             ("quote", 0x9e9e9e),
             ("cite", 0x9e9e9e),
-            // An unknown type falls back to note's pair, which it reaches as
-            // `note` by way of the canonical type.
+            // * An unknown type falls back to note's pair, which it reaches as
+            //   `note` by way of the canonical type.
             ("nosuchtype", 0x027aff),
         ];
         for (written, want) in table {
@@ -653,7 +653,7 @@ mod tests {
                 "[!{kind}] is the same in both themes"
             );
         }
-        // Grey is the exception: one value for both.
+        // * Grey is the exception: one value for both.
         assert_eq!(
             Theme::dark().callout_color("quote"),
             Theme::light().callout_color("quote")

@@ -235,8 +235,8 @@ impl Bookmarks {
     /// Returns whether one was found.
     pub fn remove_last_file(&mut self, path: &str) -> bool {
         fn remove(items: &mut Vec<Bookmark>, path: &str) -> bool {
-            // Groups first in reverse order, so the deepest latest member
-            // goes before an earlier top-level one.
+            // * Groups first in reverse order, so the deepest latest member
+            // * goes before an earlier top-level one.
             for ix in (0..items.len()).rev() {
                 if items[ix].kind() == "group" {
                     let mut members = items[ix].items();
@@ -395,7 +395,7 @@ mod tests {
         let mut parsed: Bookmarks = serde_json::from_str(OBSERVED).unwrap();
         assert!(parsed.has_file("A.md"));
         assert!(parsed.remove_last_file("A.md"));
-        // The copy inside the group went; the top-level one and the heading stayed.
+        // * The copy inside the group went; the top-level one and the heading stayed.
         assert_eq!(parsed.items[3].items().len(), 1);
         assert!(parsed.items[0].is_file("A.md"));
         assert!(parsed.remove_last_file("A.md"));

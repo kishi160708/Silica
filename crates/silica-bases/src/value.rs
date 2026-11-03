@@ -50,16 +50,16 @@ impl Type {
             Type::Boolean => "Boolean",
             Type::List => "List",
             Type::Object => "Object",
-            // Obsidian's value carries `time: true|false` on one Date class and
-            // names both "Date" in an error.
+            // * Obsidian's value carries `time: true|false` on one Date class and
+            // * names both "Date" in an error.
             Type::Date | Type::DateTime => "Date",
             Type::Duration => "Duration",
             Type::Link => "Link",
             Type::File => "File",
             Type::RegExp => "RegExp",
-            // Observed: a Tags value names itself `List` in a refusal —
-            // `tags.includes()` is `Cannot find function "includes" on type
-            // List`. The icon is its own; the error name is not.
+            // * Observed: a Tags value names itself `List` in a refusal —
+            // * `tags.includes()` is `Cannot find function "includes" on type
+            // * List`. The icon is its own; the error name is not.
             Type::Tags => "List",
             Type::Formulas => "Formulas",
             Type::Rendered => "Object",
@@ -75,9 +75,9 @@ impl Type {
             Type::Number => "lucide-binary",
             Type::Boolean => "lucide-check-square",
             Type::List | Type::Object => "lucide-list",
-            // Only `html()` keeps the generic tag; `icon()` and `image()` are
-            // `lucide-image`, which [`Value::icon`] answers because the tag
-            // depends on the kind rather than on the type.
+            // * Only `html()` keeps the generic tag; `icon()` and `image()` are
+            // * `lucide-image`, which [`Value::icon`] answers because the tag
+            // * depends on the kind rather than on the type.
             Type::Rendered => "lucide-list",
             Type::Date => "lucide-calendar",
             Type::DateTime => "lucide-clock",
@@ -231,7 +231,7 @@ impl Value {
                 RenderKind::Icon | RenderKind::Image => "lucide-image",
                 RenderKind::Html => Type::Rendered.icon(),
             },
-            // `relative()` answers the humanized wording under a clock tag.
+            // * `relative()` answers the humanized wording under a clock tag.
             Value::Relative(_) => Type::DateTime.icon(),
             other => other.ty().icon(),
         }
@@ -302,7 +302,7 @@ impl fmt::Display for Value {
             Value::Bool(b) => write!(f, "{b}"),
             Value::Number(n) => f.write_str(&js_number(*n)),
             Value::Str(s) => f.write_str(s),
-            // Observed: `List.toString()` joins with ", ".
+            // * Observed: `List.toString()` joins with ", ".
             Value::List(items) => {
                 let parts: Vec<String> = items.iter().map(|v| v.to_string()).collect();
                 f.write_str(&parts.join(", "))
@@ -316,9 +316,9 @@ impl fmt::Display for Value {
                     write!(f, "{}", d.at.format("%Y-%m-%d"))
                 }
             }
-            // Humanized, and `funcs::time` owns the wording.
+            // * Humanized, and `funcs::time` owns the wording.
             Value::Duration(d) => f.write_str(&crate::funcs::time::humanize(d)),
-            // Observed: `Link.toString()` is `[[Pumice]]`.
+            // * Observed: `Link.toString()` is `[[Pumice]]`.
             Value::Link(l) => match &l.display {
                 Some(alias) => write!(f, "[[{}|{}]]", l.path, alias),
                 None => write!(f, "[[{}]]", l.path),
@@ -347,7 +347,7 @@ pub fn js_number(n: f64) -> String {
         };
     }
     if n == 0.0 {
-        // -0 prints as 0.
+        // ! -0 prints as 0.
         return "0".into();
     }
     let mut s = format!("{n}");
@@ -404,7 +404,7 @@ pub fn loose_eq(a: &Value, b: &Value) -> bool {
         (Value::Bool(x), Value::Bool(y)) => x == y,
         (Value::Number(x), Value::Number(y)) => x == y,
         (Value::Str(x), Value::Str(y)) => x == y,
-        // A Date against a String parses the String as a date.
+        // * A Date against a String parses the String as a date.
         (Value::Date(_), Value::Str(s)) | (Value::Str(s), Value::Date(_)) => {
             match crate::funcs::time::parse_date(s) {
                 Some(parsed) => {
@@ -427,8 +427,8 @@ pub fn loose_eq(a: &Value, b: &Value) -> bool {
         }
         (Value::Link(x), Value::Link(y)) => x == y,
         (Value::File(x), Value::File(y)) => x.path == y.path,
-        // Boolean coerces to a number against anything but a boolean, as in
-        // JavaScript: `true == 1` is true.
+        // * Boolean coerces to a number against anything but a boolean, as in
+        // * JavaScript: `true == 1` is true.
         (Value::Bool(x), other) => loose_eq(&Value::Number(if *x { 1.0 } else { 0.0 }), other),
         (other, Value::Bool(y)) => loose_eq(other, &Value::Number(if *y { 1.0 } else { 0.0 })),
         (Value::Number(x), Value::Str(s)) => str_as_number(s).is_some_and(|y| *x == y),
@@ -472,7 +472,7 @@ pub fn compare(a: &Value, b: &Value) -> Cmp {
         (Value::Null, _) | (_, Value::Null) => Cmp::Null,
         (Value::Str(x), Value::Str(y)) => Cmp::Ordered(x.cmp(y)),
         (Value::Date(x), Value::Date(y)) => Cmp::Ordered(x.at.cmp(&y.at)),
-        // A Date against a String parses the String as a date.
+        // * A Date against a String parses the String as a date.
         (Value::Date(x), Value::Str(s)) => {
             Cmp::of(crate::funcs::time::parse_date(s).map(|y| x.at.cmp(&y.at)))
         }
@@ -484,8 +484,8 @@ pub fn compare(a: &Value, b: &Value) -> Cmp {
         ),
         (Value::Link(l), other) => compare(&Value::Str(l.text().to_string()), other),
         (other, Value::Link(l)) => compare(other, &Value::Str(l.text().to_string())),
-        // Everything else compares as numbers, and a side that is not one
-        // compares as NaN does: false, whichever way the operator points.
+        // * Everything else compares as numbers, and a side that is not one
+        // * compares as NaN does: false, whichever way the operator points.
         _ => match (numeric(a), numeric(b)) {
             (Some(x), Some(y)) => Cmp::of(x.partial_cmp(&y)),
             _ => Cmp::Unordered,

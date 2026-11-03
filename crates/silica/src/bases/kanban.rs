@@ -174,9 +174,9 @@ impl BasesView {
         let grouped = self.view().is_some_and(|v| v.group_by.is_some());
         let layout = match self.layout() {
             Layout::Kanban(kanban) => kanban.clone(),
-            // A kanban board of another layout's keys is every default; this
-            // is only reachable through the rebuild dispatch, which already
-            // matched the layout.
+            // * A kanban board of another layout's keys is every default; this
+            //   is only reachable through the rebuild dispatch, which already
+            //   matched the layout.
             _ => KanbanLayout::default(),
         };
         let columns = self.table().map(board_columns).unwrap_or_default();
@@ -205,9 +205,9 @@ impl BasesView {
         if self.table().is_none() {
             return Vec::new();
         }
-        // No column holding a card is the same nothing the table draws for a
-        // view that resolved to no rows — an ungrouped view still has its one
-        // group, so the count is what says the board is empty.
+        // * No column holding a card is the same nothing the table draws for a
+        //   view that resolved to no rows — an ungrouped view still has its one
+        //   group, so the count is what says the board is empty.
         if self.kanban.columns.iter().all(|column| column.rows == 0) {
             return vec![self.render_empty(theme)];
         }
@@ -318,9 +318,9 @@ impl BasesView {
             .cells
             .first()
             .map(cell_text)
-            // A view whose columns came out empty has nothing to name a card
-            // with; the file's own base name is the only thing left, and is
-            // itself **unprobed**.
+            // ? A view whose columns came out empty has nothing to name a card
+            //   with; the file's own base name is the only thing left, and is
+            //   itself **unprobed**.
             .filter(|text| !text.is_empty())
             .unwrap_or_else(|| row.file.basename.clone());
         let title_is_link = match (columns.first(), row.cells.first()) {
@@ -391,8 +391,8 @@ impl BasesView {
                                 .overflow_hidden()
                                 .text_size(px(FONT_UI_SMALLER));
                             match cell.kind {
-                                // A boolean is a disabled checkbox, so there
-                                // is no text even when the value is `true`.
+                                // * A boolean is a disabled checkbox, so there
+                                //   is no text even when the value is `true`.
                                 CellKind::Checkbox => line.child(checkbox(
                                     matches!(cell.value, Value::Bool(true)),
                                     theme,
@@ -420,9 +420,9 @@ impl BasesView {
                         .collect::<Vec<_>>(),
                 ),
         );
-        // The gap lives inside the item: a uniform list measures one item and
-        // lays the rest out on that measurement, so a margin between items is
-        // not something it can see.
+        // * The gap lives inside the item: a uniform list measures one item and
+        //   lays the rest out on that measurement, so a margin between items is
+        //   not something it can see.
         div()
             .w_full()
             .h(px(self.kanban.card_height + CARD_GAP))
@@ -656,8 +656,8 @@ mod tests {
     #[test]
     fn a_board_is_one_column_a_group() {
         let (a, b, c) = (row("A.md"), row("B.md"), row("C.md"));
-        // The order is the engine's: the no-value group leads under an
-        // ascending `groupBy`, and this layout never reorders it.
+        // * The order is the engine's: the no-value group leads under an
+        //   ascending `groupBy`, and this layout never reorders it.
         let table = table_of(
             vec![a.clone(), b.clone(), c.clone()],
             vec![
@@ -677,7 +677,7 @@ mod tests {
     #[test]
     fn a_view_with_no_group_by_is_one_column_of_every_row() {
         let rows = vec![row("A.md"), row("B.md")];
-        // What the engine hands over for an ungrouped view: one group, no key.
+        // * What the engine hands over for an ungrouped view: one group, no key.
         let table = table_of(rows.clone(), vec![group(None, rows.clone())]);
         let columns = board_columns(&table);
         assert_eq!(columns.len(), 1);
@@ -700,8 +700,8 @@ mod tests {
     fn a_view_that_resolved_to_nothing_has_no_columns() {
         let table = table_of(Vec::new(), Vec::new());
         assert!(board_columns(&table).is_empty());
-        // And the empty group an ungrouped view hands over is still a column,
-        // which is what the render reads the row count for.
+        // * And the empty group an ungrouped view hands over is still a column,
+        //   which is what the render reads the row count for.
         let table = table_of(Vec::new(), vec![group(None, Vec::new())]);
         assert_eq!(board_columns(&table).len(), 1);
         assert_eq!(board_columns(&table)[0].rows, 0);
@@ -712,8 +712,8 @@ mod tests {
         assert_eq!(column_title(Some("todo"), true), Some("todo"));
         assert_eq!(column_title(None, true), Some(EMPTY_GROUP));
         assert_eq!(column_title(None, false), None);
-        // An ungrouped board's one column is still named when the key is
-        // somehow there, which only a hand-built table can do.
+        // * An ungrouped board's one column is still named when the key is
+        //   somehow there, which only a hand-built table can do.
         assert_eq!(column_title(Some("todo"), false), Some("todo"));
     }
 
@@ -725,7 +725,7 @@ mod tests {
             ..KanbanLayout::default()
         };
         assert_eq!(column_width(&wide), 440.);
-        // Taken as written past the slider's own 500, floored above zero.
+        // * Taken as written past the slider's own 500, floored above zero.
         let silly = KanbanLayout {
             column_width: 4000.,
             ..KanbanLayout::default()
@@ -747,8 +747,8 @@ mod tests {
             image: Some("note.cover".to_string()),
             ..KanbanLayout::default()
         };
-        // The default ratio is 0.5, read as width over height, so the box is
-        // twice as tall as the card is wide.
+        // * The default ratio is 0.5, read as width over height, so the box is
+        //   twice as tall as the card is wide.
         assert_eq!(image_height(264., &with_image), Some(528.));
         let square = KanbanLayout {
             image: Some("note.cover".to_string()),
@@ -760,16 +760,16 @@ mod tests {
 
     #[test]
     fn every_card_of_a_board_is_the_same_height() {
-        // One column is the title's line and nothing else, inside the card's
-        // padding and its border.
+        // * One column is the title's line and nothing else, inside the card's
+        //   padding and its border.
         assert_eq!(
             card_height(1, None),
             2. * CARD_BORDER + 2. * CELL_PAD + CARD_TITLE_HEIGHT
         );
-        // A view with no columns still has the title's line.
+        // * A view with no columns still has the title's line.
         assert_eq!(card_height(0, None), card_height(1, None));
-        // Every further column is one more line, whether its cell has text or
-        // not — which is what keeps the cards one height.
+        // * Every further column is one more line, whether its cell has text or
+        //   not — which is what keeps the cards one height.
         assert_eq!(
             card_height(3, None),
             card_height(1, None) + 2. * CARD_LINE_HEIGHT

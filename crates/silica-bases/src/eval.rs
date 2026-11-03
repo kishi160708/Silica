@@ -154,9 +154,9 @@ impl<'a> Evaluator<'a> {
                 let idx = self.eval(index)?;
                 Ok(index_into(&receiver, &idx))
             }
-            // A statement that did not parse renders as an empty cell, not as
-            // an error: Obsidian keeps the `invalid` node and evaluates it to
-            // nothing.
+            // * A statement that did not parse renders as an empty cell, not as
+            // * an error: Obsidian keeps the `invalid` node and evaluates it to
+            // * nothing.
             Expr::Invalid { .. } => Ok(Value::Null),
         }
     }
@@ -177,8 +177,8 @@ impl<'a> Evaluator<'a> {
     }
 
     fn ident(&mut self, name: &str) -> EvalResult {
-        // The magic idents first: they are bound only while a per-element
-        // expression runs, so they cannot shadow a property outside one.
+        // * The magic idents first: they are bound only while a per-element
+        // * expression runs, so they cannot shadow a property outside one.
         if let Some(scope) = self.scopes.last() {
             let bound = match name.to_ascii_lowercase().as_str() {
                 "value" => scope.value.clone(),
@@ -194,19 +194,19 @@ impl<'a> Evaluator<'a> {
         }
         match name.to_ascii_lowercase().as_str() {
             "file" => Ok(self.ctx.file().map(Value::File).unwrap_or(Value::Null)),
-            // **`this` is the base file, not the row** — and it is a context
-            // of its own rather than a File: `this.file.name` is the base
-            // file's name, `this.note` an Object and `this.formula`
-            // `Formulas[]`, while `this.status` is null even when the row has
-            // one. The completion list for `this.` offers `file`, `note`,
-            // `formula`, `this` and the vault's frontmatter names, and none of
-            // the File properties, so a bare `Value::File` would answer
-            // `this.path` where Obsidian answers nothing.
+            // ! **`this` is the base file, not the row** — and it is a context
+            // ! of its own rather than a File: `this.file.name` is the base
+            // ! file's name, `this.note` an Object and `this.formula`
+            // ! `Formulas[]`, while `this.status` is null even when the row has
+            // ! one. The completion list for `this.` offers `file`, `note`,
+            // ! `formula`, `this` and the vault's frontmatter names, and none of
+            // ! the File properties, so a bare `Value::File` would answer
+            // ! `this.path` where Obsidian answers nothing.
             "this" => Ok(self.this_value()),
             "note" => Ok(Value::Object(self.ctx.properties())),
             "formula" => Ok(Value::Formulas),
-            // An unknown ident is null, not an error: `nums.map(item * 2)` is
-            // a list of nulls.
+            // * An unknown ident is null, not an error: `nums.map(item * 2)` is
+            // * a list of nulls.
             _ => Ok(self.ctx.property(name).unwrap_or(Value::Null)),
         }
     }
@@ -244,7 +244,7 @@ impl<'a> Evaluator<'a> {
     }
 
     fn binary(&mut self, op: BinaryOp, left: &Expr, right: &Expr) -> EvalResult {
-        // `&&` and `||` coerce through truthiness and answer a Boolean.
+        // * `&&` and `||` coerce through truthiness and answer a Boolean.
         match op {
             BinaryOp::And => {
                 let l = self.eval(left)?;
@@ -269,10 +269,10 @@ impl<'a> Evaluator<'a> {
             BinaryOp::Ne => Ok(Value::Bool(!loose_eq(&l, &r))),
             BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
                 let ord = match compare(&l, &r) {
-                    // A null operand makes the comparison null.
+                    // * A null operand makes the comparison null.
                     Cmp::Null => return Ok(Value::Null),
-                    // Two values that do not order answer false, as a NaN
-                    // comparison does: `"abc" > 1` is false.
+                    // * Two values that do not order answer false, as a NaN
+                    // * comparison does: `"abc" > 1` is false.
                     Cmp::Unordered => return Ok(Value::Bool(false)),
                     Cmp::Ordered(ord) => ord,
                 };
@@ -322,14 +322,14 @@ fn index_into(receiver: &Value, index: &Value) -> Value {
 /// are both errors. `+` with a String on either side concatenates.
 pub fn arithmetic(op: BinaryOp, l: &Value, r: &Value) -> EvalResult {
     use BinaryOp::*;
-    // Null absorbs: `nosuchprop + 1` is null, with no error.
+    // * Null absorbs: `nosuchprop + 1` is null, with no error.
     if l.is_null() || r.is_null() {
         return Ok(Value::Null);
     }
-    // `+` with a String on either side concatenates — `1 + "2"` is the String
-    // `12` — **except** against a Date, where the String is a Duration:
-    // `when + "1 month"` moves the date on. A Date never concatenates; a
-    // String it cannot read as a Duration is the same refusal `-` gives.
+    // * `+` with a String on either side concatenates — `1 + "2"` is the String
+    // * `12` — **except** against a Date, where the String is a Duration:
+    // * `when + "1 month"` moves the date on. A Date never concatenates; a
+    // * String it cannot read as a Duration is the same refusal `-` gives.
     if op == Add
         && !matches!(l, Value::Date(_))
         && !matches!(r, Value::Date(_))
@@ -349,7 +349,7 @@ pub fn arithmetic(op: BinaryOp, l: &Value, r: &Value) -> EvalResult {
         (Value::Date(d), Value::Duration(dur)) if matches!(op, Add | Sub) => {
             Ok(Value::Date(crate::funcs::time::shift(d, dur, op == Sub)))
         }
-        // A String in a Duration's position is parsed as one: `now() - "1 week"`.
+        // * A String in a Duration's position is parsed as one: `now() - "1 week"`.
         (Value::Date(d), Value::Str(s)) if matches!(op, Add | Sub) => {
             match crate::funcs::time::parse_duration(s) {
                 Some(dur) => Ok(Value::Date(crate::funcs::time::shift(d, &dur, op == Sub))),

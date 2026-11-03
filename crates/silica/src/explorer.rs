@@ -658,9 +658,9 @@ fn menu_items(target: &Target) -> Vec<MenuItem> {
             item("Delete", "trash-2", S::Danger, E::Delete(path.clone())),
         ],
         Target::Folder(folder) => vec![
-            // Obsidian draws `lucide-edit` here, which is the current
-            // `square-pen`; `lucide-edit-3` on Rename is `pen-line`. Both
-            // renames come from Lucide's own alias data, not a guess.
+            // * Obsidian draws `lucide-edit` here, which is the current
+            //   `square-pen`; `lucide-edit-3` on Rename is `pen-line`. Both
+            //   renames come from Lucide's own alias data, not a guess.
             item(
                 "New note",
                 "square-pen",
@@ -1328,8 +1328,8 @@ impl FileExplorer {
                 })),
             )
             .child(
-                // The menu hangs off this wrapper, so it opens under the
-                // button wherever the dock is.
+                // * The menu hangs off this wrapper, so it opens under the
+                //   button wherever the dock is.
                 div()
                     .relative()
                     .child(
@@ -1389,7 +1389,7 @@ impl FileExplorer {
             .shadow_lg()
             .text_size(px(13.))
             .text_color(theme.text)
-            // Keeps a click on an item from reaching the row under it.
+            // * Keeps a click on an item from reaching the row under it.
             .occlude()
             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                 this.sort_menu_open = false;
@@ -1457,8 +1457,8 @@ impl FileExplorer {
                 });
                 let name: SharedString = row.name.clone().into();
                 let tag: Option<SharedString> = row.tag.clone().map(Into::into);
-                // A file no view can open stays faint; a canvas or an image
-                // reads like a note, its tag saying what it is.
+                // * A file no view can open stays faint; a canvas or an image
+                //   reads like a note, its tag saying what it is.
                 let faint = !row.is_folder && row.kind == FileKind::Other;
                 let drag = FileDrag {
                     path: row.path.clone(),
@@ -1474,8 +1474,8 @@ impl FileExplorer {
                         .unwrap_or("")
                         .to_string()
                 };
-                // Obsidian's row: 13 px text in a 25 px row with an 8 px
-                // radius, muted until it is active or under the pointer.
+                // * Obsidian's row: 13 px text in a 25 px row with an 8 px
+                //   radius, muted until it is active or under the pointer.
                 Some(
                     div()
                         .id(("row", ix))
@@ -1485,9 +1485,9 @@ impl FileExplorer {
                         .flex()
                         .flex_row()
                         .items_center()
-                        // The 2 px border is the keyboard's ring (Obsidian's
-                        // `has-focus`), transparent on every other row so the
-                        // text does not move when the ring arrives.
+                        // * The 2 px border is the keyboard's ring (Obsidian's
+                        //   `has-focus`), transparent on every other row so the
+                        //   text does not move when the ring arrives.
                         .border_2()
                         .border_color(if focused {
                             theme.border_focus
@@ -1517,9 +1517,9 @@ impl FileExplorer {
                         .on_mouse_down(
                             MouseButton::Right,
                             cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
-                                // The empty space below the rows has its own
-                                // right-click; without this the row's menu
-                                // would open and then be replaced by that one.
+                                // * The empty space below the rows has its own
+                                //   right-click; without this the row's menu
+                                //   would open and then be replaced by that one.
                                 cx.stop_propagation();
                                 this.open_menu(ix, event.position, cx)
                             }),
@@ -1561,8 +1561,8 @@ impl FileExplorer {
                                 .child(name),
                         )
                         .children(tag.map(|tag| {
-                            // Obsidian's `nav-file-tag`: small upper-case
-                            // text at the row's right end.
+                            // * Obsidian's `nav-file-tag`: small upper-case
+                            //   text at the row's right end.
                             div()
                                 .flex_shrink_0()
                                 .ml_2()
@@ -1598,10 +1598,10 @@ impl Render for FileExplorer {
             .on_action(cx.listener(Self::rename_focused))
             .on_action(cx.listener(Self::delete_focused))
             .child(header)
-            // The list is wrapped so that the space below the last row
-            // takes a right-click of its own: `uniform_list` hands an event
-            // outside every row straight through, and a row's own handler
-            // stops propagation so only one of the two menus opens.
+            // * The list is wrapped so that the space below the last row
+            //   takes a right-click of its own: `uniform_list` hands an event
+            //   outside every row straight through, and a row's own handler
+            //   stops propagation so only one of the two menus opens.
             .child(
                 div()
                     .flex_1()
@@ -1824,7 +1824,7 @@ mod tests {
             assert_eq!(names(&tree), rows, "{}", order.as_str());
             assert_eq!(SortOrder::parse(order.as_str()), Some(order));
         }
-        // A collapsed folder stays collapsed across a re-sort.
+        // * A collapsed folder stays collapsed across a re-sort.
         tree.toggle("Projects");
         tree.set_sort(SortOrder::Alphabetical);
         assert!(tree.is_collapsed("Projects"));

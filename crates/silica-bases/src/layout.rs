@@ -351,8 +351,8 @@ impl ListLayout {
     pub fn of(view: &View) -> ListLayout {
         ListLayout {
             markers: Markers::of(str_key(view, "markers")),
-            // A `separator: ""` is a separator: only an absent key — or one
-            // whose value is not a string — falls back to the default.
+            // ! A `separator: ""` is a separator: only an absent key — or one
+            // ! whose value is not a string — falls back to the default.
             separator: str_key(view, "separator")
                 .map(str::to_string)
                 .unwrap_or_else(|| SEPARATOR_DEFAULT.to_string()),
@@ -419,9 +419,9 @@ pub fn snap(v: f64, (min, max, step): (f64, f64, f64)) -> f64 {
     let clamped = v.clamp(min, max);
     let steps = ((clamped - min) / step).round();
     let snapped = min + steps * step;
-    // 0.25 + 35 * 0.05 is 2.0000000000000004 in binary floating point, and
-    // the key is written from this number, so the step's own precision is
-    // what comes back.
+    // * 0.25 + 35 * 0.05 is 2.0000000000000004 in binary floating point, and
+    // * the key is written from this number, so the step's own precision is
+    // * what comes back.
     let places = if step.fract() == 0. { 0 } else { 2 };
     let scale = 10f64.powi(places);
     (snapped * scale).round() / scale
@@ -647,8 +647,8 @@ mod tests {
 
     #[test]
     fn a_layout_reads_none_of_another_layouts_keys() {
-        // Observed: picking Kanban for a list view rewrote `type` and left
-        // the list keys in place, so a kanban view may carry `markers`.
+        // * Observed: picking Kanban for a list view rewrote `type` and left
+        // * the list keys in place, so a kanban view may carry `markers`.
         let mut v = view_of(
             "views:\n  - type: list\n    name: V\n    markers: number\n    separator: \"; \"\n",
         );
@@ -759,8 +759,8 @@ mod tests {
 
     #[test]
     fn a_layout_key_is_written_after_every_other_key() {
-        // `preserved` is written last and in file order, so a key the UI
-        // writes lands after a plugin's unknown key.
+        // * `preserved` is written last and in file order, so a key the UI
+        // * writes lands after a plugin's unknown key.
         let mut v = view_of(
             "views:\n  - type: table\n    name: V\n    pluginKey: x\n    order:\n      - file.name\n",
         );

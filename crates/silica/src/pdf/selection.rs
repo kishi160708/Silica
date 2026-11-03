@@ -88,14 +88,14 @@ impl Selection {
             };
             let run = &glyphs[first..=last];
             let mut iter = run.iter().enumerate();
-            let mut band: Option<(f32, f32, f32, f32)> = None; // x0, x1, y0, y1
+            let mut band: Option<(f32, f32, f32, f32)> = None; // * x0, x1, y0, y1
             for (_, glyph) in iter.by_ref() {
                 let (x0, x1) = (glyph.x * scale, (glyph.x + glyph.width) * scale);
                 let (y0, y1) = (glyph.y * scale, (glyph.y + glyph.height) * scale);
                 match band {
                     Some((bx0, bx1, by0, by1)) => {
-                        // Same line: the boxes overlap vertically by half a
-                        // glyph or more. Otherwise the band is done.
+                        // * Same line: the boxes overlap vertically by half a
+                        //   glyph or more. Otherwise the band is done.
                         let overlap = by1.min(y1) - by0.max(y0);
                         let shortest = (by1 - by0).min(y1 - y0).max(0.1);
                         if overlap > shortest * 0.5 && x0 <= bx1 + shortest {
@@ -148,7 +148,7 @@ impl Selection {
                     let moved_line = (glyph.y - last.y).abs() > size * 0.5;
                     let went_back = glyph.x < last.x - size;
                     if moved_line || went_back {
-                        // A line break copies as one space, as Obsidian's does.
+                        // * A line break copies as one space, as Obsidian's does.
                         if !out.ends_with(' ') {
                             out.push(' ');
                         }
@@ -178,7 +178,7 @@ pub fn glyph_at(glyphs: &[PdfGlyph], x: f32, y: f32) -> usize {
     if glyphs.is_empty() {
         return 0;
     }
-    // The line: glyphs whose band contains y, else the nearest band.
+    // * The line: glyphs whose band contains y, else the nearest band.
     let mut best_line: Vec<usize> = Vec::new();
     let mut best_distance = f32::INFINITY;
     for (ix, glyph) in glyphs.iter().enumerate() {
@@ -200,8 +200,8 @@ pub fn glyph_at(glyphs: &[PdfGlyph], x: f32, y: f32) -> usize {
         }
     }
     best_line.sort_unstable();
-    // Within the line: the glyph the x falls in, else the nearest to its left,
-    // else the first.
+    // * Within the line: the glyph the x falls in, else the nearest to its left,
+    //   else the first.
     let mut chosen = best_line[0];
     for ix in best_line {
         let glyph = &glyphs[ix];
@@ -314,12 +314,12 @@ mod tests {
     #[test]
     fn glyph_at_picks_the_line_under_the_pointer() {
         let glyphs = page();
-        // Inside "there" second line.
+        // * Inside "there" second line.
         assert_eq!(glyph_at(&glyphs, 20.0, 122.0), 9);
-        // Past the end of the first line: the last glyph of it.
+        // * Past the end of the first line: the last glyph of it.
         assert_eq!(glyph_at(&glyphs, 500.0, 101.0), 6);
-        // Between the lines: whichever is nearer; 110 is equidistant, the
-        // earlier line wins by the `<` tie rule.
+        // * Between the lines: whichever is nearer; 110 is equidistant, the
+        //   earlier line wins by the `<` tie rule.
         assert_eq!(glyph_at(&glyphs, 0.0, 109.0), 0);
     }
 

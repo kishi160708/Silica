@@ -16,8 +16,8 @@ fn row() -> SimpleContext {
     let mut properties = IndexMap::new();
     properties.insert("density".into(), Value::Number(2.4));
     properties.insert("status".into(), Value::Str("todo".into()));
-    // A text property whose text looks like a number: `numish + 1` is the
-    // String "421", not 43.
+    // * A text property whose text looks like a number: `numish + 1` is the
+    // * String "421", not 43.
     properties.insert("numish".into(), Value::Str("42".into()));
     properties.insert("empty".into(), Value::Str(String::new()));
     properties.insert(
@@ -143,7 +143,7 @@ fn null_comparison_is_three_valued() {
     shows("nosuchprop == null", "true");
     shows("nosuchprop == \"\"", "false");
     shows("nosuchprop == 0", "false");
-    // An empty string is not null.
+    // * An empty string is not null.
     shows("empty == null", "false");
     shows("empty.length", "0");
 }

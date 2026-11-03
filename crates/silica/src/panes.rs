@@ -229,7 +229,7 @@ pub fn tag_rows(
                 out.push(row_of(node, depth, false));
                 let is_collapsed = collapsed.contains(&node.key);
                 let kept_below = if is_collapsed {
-                    // Hidden children still decide whether the parent stays.
+                    // * Hidden children still decide whether the parent stays.
                     descendant_hits(node, hit)
                 } else {
                     walk(&node.children, depth + 1, collapsed, hit, out)
@@ -412,7 +412,7 @@ pub fn outline_rows(
     let depths = outline_depths(headings);
     let query = query.trim().to_lowercase();
     let n = headings.len();
-    // Which headings the filter keeps: a match and its ancestors.
+    // * Which headings the filter keeps: a match and its ancestors.
     let mut kept = vec![query.is_empty(); n];
     if !query.is_empty() {
         for ix in 0..n {
@@ -485,7 +485,7 @@ fn find_all(text: &str, query: &str) -> Vec<Range<usize>> {
         else {
             break;
         };
-        // The end is where the lowercased chars have covered the query.
+        // * The end is where the lowercased chars have covered the query.
         let mut end = start;
         let mut covered = 0;
         for (i, c) in text[start..].char_indices() {
@@ -700,7 +700,7 @@ mod tests {
                 "project/beta/deep"
             ]
         );
-        // A child match keeps its ancestors on the list.
+        // * A child match keeps its ancestors on the list.
         let rows = tag_rows(&tree, PaneSort::Frequency, true, &HashSet::new(), "DEEP");
         let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
         assert_eq!(keys, ["project", "project/beta", "project/beta/deep"]);
@@ -835,8 +835,8 @@ mod tests {
         assert_eq!(heading_at(&hs, 9999), Some(8));
         let rows = outline_rows(&hs, &HashSet::new(), "", Some(3));
         assert!(rows[3].active && !rows[0].active);
-        // Folding Top heading hides Fourth level: nothing is marked, the
-        // parent included.
+        // * Folding Top heading hides Fourth level: nothing is marked, the
+        //   parent included.
         let folded: HashSet<usize> = [0].into_iter().collect();
         let rows = outline_rows(&hs, &folded, "", Some(3));
         assert_eq!(rows.len(), 4);

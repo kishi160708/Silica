@@ -72,8 +72,8 @@ fn context() -> SimpleContext {
         .insert("when".into(), Value::Date(date("2026-01-02")));
     file.properties
         .insert("stamp".into(), Value::Date(datetime("2026-01-02T03:04:05")));
-    // `(now() - when)` as the run's `e14` recorded its value object, so a
-    // Duration is reachable from a statement without `duration()`.
+    // * `(now() - when)` as the run's `e14` recorded its value object, so a
+    // * Duration is reachable from a statement without `duration()`.
     file.properties
         .insert("gap".into(), Value::Duration(millis(25_626_530_125.0)));
     SimpleContext::new().with_file(file).with_now(probe_now())
@@ -141,7 +141,7 @@ fn a_month_is_a_calendar_month_from_the_epoch() {
         number(&time::property(&Value::Duration(one_year), "years").unwrap()),
         1.0
     );
-    // And the SI units stay SI: `duration("1 week")` is `{days: 7}`.
+    // * And the SI units stay SI: `duration("1 week")` is `{days: 7}`.
     assert_eq!(
         time::total_millis(&time::parse_duration("1 week").unwrap()),
         604_800_000.0
@@ -169,7 +169,7 @@ fn duration_has_properties_but_no_functions() {
         show("gap.nosuch"),
         "Cannot find \"nosuch\" on type Duration"
     );
-    // The dispatcher owns these three, and they reach a Duration.
+    // * The dispatcher owns these three, and they reach a Duration.
     assert_eq!(show("gap.toString()"), "10 months");
     assert_eq!(show("gap.isTruthy()"), "true");
 }
@@ -179,23 +179,23 @@ fn duration_has_properties_but_no_functions() {
 #[test]
 fn durations_humanize_as_recorded() {
     let cases: &[(DurationValue, &str)] = &[
-        // `duration("1s")`, `("1m")`, `("1h")`, `("1d")`, `("1M")`, `("1y")`.
+        // * `duration("1s")`, `("1m")`, `("1h")`, `("1d")`, `("1M")`, `("1y")`.
         (unit(0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0), "a few seconds"),
         (unit(0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0), "a minute"),
         (unit(0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0), "an hour"),
         (unit(0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0), "a day"),
         (unit(0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0), "a month"),
         (unit(1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0), "a year"),
-        // `duration("1w")` and `duration("1 week")`, both `{days: 7}`: there
-        // is no week rung.
+        // * `duration("1w")` and `duration("1 week")`, both `{days: 7}`: there
+        // * is no week rung.
         (unit(0.0, 0.0, 7.0, 0.0, 0.0, 0.0, 0.0), "7 days"),
-        // `duration("-1d")`: the sign does not reach the wording.
+        // * `duration("-1d")`: the sign does not reach the wording.
         (unit(0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0), "a day"),
-        // `duration("1d") + duration("1d")` and `duration("1d") * 2`.
+        // * `duration("1d") + duration("1d")` and `duration("1d") * 2`.
         (unit(0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0), "2 days"),
-        // `date("2026-01-02") - date("2026-01-01")`.
+        // * `date("2026-01-02") - date("2026-01-01")`.
         (millis(86_400_000.0), "a day"),
-        // `now() - when`, as `e07` and `e14` each recorded its value object.
+        // * `now() - when`, as `e07` and `e14` each recorded its value object.
         (millis(25_626_529_922.0), "10 months"),
         (millis(25_626_530_125.0), "10 months"),
     ];
@@ -235,7 +235,7 @@ fn relative_reads_against_the_clock() {
         has_time: true,
     };
     assert_eq!(time::relative(&now, probe_now()), "a few seconds ago");
-    // The future half of the same phrasing is unprobed; this pins the choice.
+    // ? The future half of the same phrasing is unprobed; this pins the choice.
     assert_eq!(
         time::relative(&datetime("2026-10-26T15:28:50.125"), probe_now()),
         "in a day"
@@ -260,10 +260,10 @@ fn durations_parse_one_number_and_one_unit() {
         ("1 month", Some(unit(0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0))),
         ("1 day", Some(unit(0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0))),
         ("1 minute", Some(unit(0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0))),
-        // Compound durations are not supported.
+        // * Compound durations are not supported.
         ("1y 2M 3d", None),
         ("not a date", None),
-        // Which is why `when - "2026-01-01"` is an operator error.
+        // * Which is why `when - "2026-01-01"` is an operator error.
         ("2026-01-01", None),
         ("", None),
         ("1", None),
@@ -285,7 +285,7 @@ fn dates_parse_as_written() {
         time::parse_date("2026-01-02 03:04"),
         Some(datetime("2026-01-02T03:04:00"))
     );
-    // A zone is accepted and dropped: nothing in this crate knows one.
+    // * A zone is accepted and dropped: nothing in this crate knows one.
     assert_eq!(
         time::parse_date("2026-01-02T03:04:05Z"),
         Some(datetime("2026-01-02T03:04:05"))
@@ -305,20 +305,20 @@ fn date_arithmetic_and_comparison() {
     let cases: &[(&str, &str)] = &[
         ("when", "2026-01-02"),
         ("stamp", "2026-01-02T03:04:05"),
-        // A String on the Date side of a comparison is parsed as a date.
+        // * A String on the Date side of a comparison is parsed as a date.
         ("when > \"2026-01-01\"", "true"),
         ("when == \"2026-01-02\"", "true"),
         ("stamp > when", "true"),
-        // But arithmetic wants a Duration, and a date string is not one.
+        // * But arithmetic wants a Duration, and a date string is not one.
         (
             "when - \"2026-01-01\"",
             "Invalid operator between Date and String",
         ),
-        // A String in a Duration's position is parsed as one.
+        // * A String in a Duration's position is parsed as one.
         ("when + \"1 month\"", "2026-02-02"),
         ("when - \"1M\"", "2025-12-02"),
-        // `M` is a month where `m` is a minute, and the minute promotes the
-        // Date to a DateTime.
+        // * `M` is a month where `m` is a minute, and the minute promotes the
+        // * Date to a DateTime.
         ("when - \"1m\"", "2026-01-01T23:59:00"),
         ("when.year", "2026"),
         ("when.format(\"YYYY\")", "2026"),
@@ -333,8 +333,8 @@ fn date_arithmetic_and_comparison() {
         ("stamp.minute", "4"),
         ("stamp.second", "5"),
         ("stamp.millisecond", "0"),
-        // Obsidian type-checks `format`'s parameter before it counts the
-        // arguments: `e14` recorded all three of these.
+        // * Obsidian type-checks `format`'s parameter before it counts the
+        // * arguments: `e14` recorded all three of these.
         (
             "stamp.format()",
             "Cannot call function \"format\", not enough arguments.",
@@ -374,7 +374,7 @@ fn durations_combine_scale_and_shift() {
         "a few seconds"
     );
 
-    // `now() + duration("1d")` → 2026-10-26T15:28:50, still a DateTime.
+    // * `now() + duration("1d")` → 2026-10-26T15:28:50, still a DateTime.
     let now = DateValue {
         at: probe_now(),
         has_time: true,
@@ -382,13 +382,13 @@ fn durations_combine_scale_and_shift() {
     let tomorrow = time::shift(&now, &day, false);
     assert!(tomorrow.has_time);
     assert_eq!(tomorrow.at, at("2026-10-26T15:28:50.125"));
-    // `now() - "1 week"`.
+    // * `now() - "1 week"`.
     let week = time::parse_duration("1 week").unwrap();
     assert_eq!(
         time::shift(&now, &week, true).at,
         at("2026-10-18T15:28:50.125")
     );
-    // `when + duration("1M")` keeps the Date, `when - "1m"` does not.
+    // * `when + duration("1M")` keeps the Date, `when - "1m"` does not.
     let when = date("2026-01-02");
     let month = time::parse_duration("1M").unwrap();
     assert_eq!(
@@ -405,8 +405,8 @@ fn durations_combine_scale_and_shift() {
             has_time: true
         }
     );
-    // A month shift clamps to the shorter month rather than overflowing it.
-    // Unprobed, and the only answer that stays inside the month.
+    // ? A month shift clamps to the shorter month rather than overflowing it.
+    // ? Unprobed, and the only answer that stays inside the month.
     assert_eq!(
         time::shift(&date("2026-01-31"), &month, false).at,
         at("2026-02-28")
@@ -481,13 +481,13 @@ fn format_renders_moment_tokens() {
         ("L", "01/02/2026"),
         ("LT", "3:04 AM"),
         ("LLLL", "Friday, January 2, 2026 3:04 AM"),
-        // Every letter that is a token is one, so plain prose needs escaping.
+        // * Every letter that is a token is one, so plain prose needs escaping.
         ("[no tokens here]", "no tokens here"),
         ("ko", "3o"),
     ];
     for (pattern, want) in cases {
         assert_eq!(&time::format_moment(&stamp, pattern), want, "{pattern}");
     }
-    // A Date with no time still formats its midnight.
+    // * A Date with no time still formats its midnight.
     assert_eq!(time::format_moment(&date("2026-01-02"), "HH:mm"), "00:00");
 }

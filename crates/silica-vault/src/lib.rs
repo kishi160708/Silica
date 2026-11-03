@@ -111,9 +111,9 @@ pub fn write_no_follow(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    // A symlink target is never written through: the link itself is refused,
-    // not followed and not replaced. The write below lands on `path` only
-    // when `path` is a regular file or does not exist yet.
+    // ! A symlink target is never written through: the link itself is refused,
+    // ! not followed and not replaced. The write below lands on `path` only
+    // ! when `path` is a regular file or does not exist yet.
     if path
         .symlink_metadata()
         .map(|m| m.file_type().is_symlink())
@@ -127,11 +127,11 @@ pub fn write_no_follow(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
             ),
         ));
     }
-    // On Windows a junction and other reparse points redirect a path the same
-    // way a symlink does, but `is_symlink` does not report them. The attribute
-    // is the only way to see one, and a reparse point at the target is refused
-    // for the same reason the Unix `O_NOFOLLOW` open exists. `write_at` cannot
-    // be used there: the `openat` walk it relies on has no Windows equivalent.
+    // ! On Windows a junction and other reparse points redirect a path the same
+    // ! way a symlink does, but `is_symlink` does not report them. The attribute
+    // ! is the only way to see one, and a reparse point at the target is refused
+    // ! for the same reason the Unix `O_NOFOLLOW` open exists. `write_at` cannot
+    // ! be used there: the `openat` walk it relies on has no Windows equivalent.
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
@@ -150,7 +150,7 @@ pub fn write_no_follow(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
             ));
         }
     }
-    // Unique per write, so two saves of one note cannot share a scratch file.
+    // * Unique per write, so two saves of one note cannot share a scratch file.
     let unique = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.subsec_nanos())
@@ -167,7 +167,7 @@ pub fn write_no_follow(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         {
             use std::os::unix::fs::OpenOptionsExt;
             options.custom_flags(libc::O_NOFOLLOW);
-            // A note keeps the mode it had; a new file gets the usual one.
+            // * A note keeps the mode it had; a new file gets the usual one.
             let mode = std::fs::metadata(path).map(|m| {
                 use std::os::unix::fs::PermissionsExt;
                 m.permissions().mode() & 0o777
@@ -176,8 +176,8 @@ pub fn write_no_follow(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         }
         let mut file = options.open(&temp)?;
         file.write_all(bytes)?;
-        // Flushed to the device before the rename, so the name never points at
-        // bytes that are still only in the page cache.
+        // * Flushed to the device before the rename, so the name never points at
+        // * bytes that are still only in the page cache.
         file.sync_all()?;
         Ok(())
     };
@@ -185,15 +185,15 @@ pub fn write_no_follow(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         let _ = std::fs::remove_file(&temp);
         return Err(error);
     }
-    // A snapshot of what is being replaced, so an accidental save can be
-    // undone. Best effort: the save proceeds even if the snapshot cannot be
-    // made.
+    // * A snapshot of what is being replaced, so an accidental save can be
+    // * undone. Best effort: the save proceeds even if the snapshot cannot be
+    // * made.
     if path.exists() {
         snapshot_before_overwrite(path);
     }
     match std::fs::rename(&temp, path) {
         Ok(()) => {
-            // The directory entry itself is what a crash could lose.
+            // * The directory entry itself is what a crash could lose.
             #[cfg(unix)]
             {
                 if let Ok(dir) = std::fs::File::open(parent) {
@@ -249,12 +249,12 @@ pub fn snapshot_before_overwrite(path: &Path) {
     };
     let snapshots = parent.join(".trash").join(".snapshots");
     // ! Create the snapshot directory through openat so no component can be
-    //   swapped for a link between the check and the write.
+    // ! swapped for a link between the check and the write.
     if create_dir_all_at(parent, Path::new(".trash/.snapshots")).is_err() {
         return;
     }
     // * Write the snapshot with a collision-proof name; best effort — the
-    //   save proceeds even if the snapshot cannot be made.
+    // * save proceeds even if the snapshot cannot be made.
     if write_snapshot(&snapshots, stem, ext, &bytes).is_ok() {
         // * Prune old snapshots so the folder cannot grow without bound.
         let _ = prune_snapshots(&snapshots, stem, 10);
@@ -276,7 +276,7 @@ fn write_snapshot(snapshots: &Path, stem: &str, ext: &str, bytes: &[u8]) -> std:
     loop {
         let target = snapshots.join(format!("{stem}.{stamp}.{counter}.{ext}"));
         // ! Refuse to write through a symlink: an attacker who plants a link
-        //   at the target path must not redirect the snapshot.
+        // ! at the target path must not redirect the snapshot.
         if target
             .symlink_metadata()
             .map(|m| m.file_type().is_symlink())
@@ -286,8 +286,8 @@ fn write_snapshot(snapshots: &Path, stem: &str, ext: &str, bytes: &[u8]) -> std:
             continue;
         }
         // * Skip names that already exist so two sequential saves never
-        //   collide; a concurrent race is acceptable — losing a snapshot is
-        //   acceptable, losing the note is not.
+        // * collide; a concurrent race is acceptable — losing a snapshot is
+        // * acceptable, losing the note is not.
         if target.exists() {
             counter += 1;
             continue;
@@ -416,7 +416,6 @@ pub fn create_dir_all_at(root: &Path, relative: &Path) -> std::io::Result<()> {
         let part_c = CString::new(part.as_bytes()).map_err(|_| {
             std::io::Error::new(std::io::ErrorKind::InvalidInput, "a NUL in a path")
         })?;
-        // Already there: step into it.
         let mut next = unsafe { libc::openat(dir.as_raw_fd(), part_c.as_ptr(), DIR_FLAGS) };
         if next < 0 {
             let made = unsafe { libc::mkdirat(dir.as_raw_fd(), part_c.as_ptr(), 0o755) };
@@ -558,7 +557,7 @@ impl Vault {
                 Ok(meta) if meta.file_type().is_symlink() => {
                     return Err(VaultError::Symlink(absolute));
                 }
-                // What does not exist yet is created below the vault.
+                // * What does not exist yet is created below the vault.
                 _ => {}
             }
         }
@@ -734,8 +733,8 @@ impl Vault {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(source) => return Err(VaultError::Io { path, source }),
         };
-        // A byte order mark is not JSON. Windows editors leave one, and a
-        // file carrying one is otherwise perfectly readable.
+        // * A byte order mark is not JSON. Windows editors leave one, and a
+        // * file carrying one is otherwise perfectly readable.
         serde_json::from_str(text.strip_prefix('\u{feff}').unwrap_or(&text))
             .map(Some)
             .map_err(|source| VaultError::Json { path, source })
@@ -791,9 +790,9 @@ impl Vault {
             path: path.clone(),
             source,
         })?;
-        // A byte order mark is not JSON, so the file has to be parsed
-        // without it — and put back with it, since it is the user's byte
-        // and not ours to drop.
+        // * A byte order mark is not JSON, so the file has to be parsed
+        // * without it — and put back with it, since it is the user's byte
+        // * and not ours to drop.
         let (bom, merged) = match std::fs::read_to_string(&path) {
             Ok(text) => {
                 let bom = text.starts_with('\u{feff}');
@@ -801,12 +800,12 @@ impl Vault {
                 match serde_json::from_str::<serde_json::Value>(body) {
                     Ok(old) if merge => (bom, merge_config(old, fresh)),
                     Ok(_) => (bom, fresh),
-                    // A file nobody can parse is a file nobody may
-                    // overwrite. Reading it gave defaults, so writing it
-                    // would put those defaults on disk in place of
-                    // everything the user had -- the one thing the vault
-                    // being the source of truth forbids. The bytes stay as
-                    // they are and the caller is told which file it was.
+                    // ! A file nobody can parse is a file nobody may
+                    // ! overwrite. Reading it gave defaults, so writing it
+                    // ! would put those defaults on disk in place of
+                    // ! everything the user had -- the one thing the vault
+                    // ! being the source of truth forbids. The bytes stay as
+                    // ! they are and the caller is told which file it was.
                     Err(_) => return Err(VaultError::Unparseable(path)),
                 }
             }
@@ -930,8 +929,8 @@ fn merge_config(old: serde_json::Value, fresh: serde_json::Value) -> serde_json:
                 match merged.get(&key) {
                     Some(prev) if same_config_value(prev, &value) => {}
                     Some(prev) if prev.is_object() && value.is_object() => {
-                        // In place: `Map::remove` would move the key to the
-                        // end of the file.
+                        // * In place: `Map::remove` would move the key to the
+                        // * end of the file.
                         if let Some(slot) = merged.get_mut(&key) {
                             let prev = std::mem::replace(slot, Value::Null);
                             *slot = merge_config(prev, value);
@@ -944,8 +943,8 @@ fn merge_config(old: serde_json::Value, fresh: serde_json::Value) -> serde_json:
             }
             Value::Object(merged)
         }
-        // Not both objects (`community-plugins.json` is an array): there
-        // is nothing to merge into, so the typed value is the file.
+        // * Not both objects (`community-plugins.json` is an array): there
+        // * is nothing to merge into, so the typed value is the file.
         (_, fresh) => fresh,
     }
 }
@@ -1164,8 +1163,8 @@ mod tests {
 
     #[test]
     fn a_plugin_config_that_was_never_written_is_the_default() {
-        // Neither file exists until a setting is changed, and a vault
-        // without one is not an error.
+        // * Neither file exists until a setting is changed, and a vault
+        // * without one is not an error.
         let dir = sample_vault();
         let vault = Vault::open(dir.path()).unwrap();
         assert_eq!(
@@ -1180,7 +1179,7 @@ mod tests {
 
     #[test]
     fn a_cleared_templates_field_keeps_its_key() {
-        // Obsidian writes the empty string rather than dropping the key.
+        // * Obsidian writes the empty string rather than dropping the key.
         let dir = sample_vault();
         let cleared = r#"{
   "folder": "TProbeB",
@@ -1231,8 +1230,8 @@ mod tests {
     #[test]
     fn a_key_the_model_does_not_write_is_kept() {
         let dir = sample_vault();
-        // `colorGroups` is skipped when empty, and `theme` is a key no
-        // graph config models at all. Both have to survive a write.
+        // * `colorGroups` is skipped when empty, and `theme` is a key no
+        // * graph config models at all. Both have to survive a write.
         fs::write(
             dir.path().join(".obsidian/graph.json"),
             "{\n  \"colorGroups\": [],\n  \"theme\": \"moonstone\",\n  \"scale\": 1\n}",
@@ -1400,7 +1399,7 @@ mod tests {
             fs::write(outside.path().join("secret"), "s").unwrap();
             std::os::unix::fs::symlink(outside.path(), r.join("Link")).unwrap();
             std::os::unix::fs::symlink(outside.path().join("secret"), r.join("note.md")).unwrap();
-            // A linked folder on the way, and a linked file at the end.
+            // * A linked folder on the way, and a linked file at the end.
             assert!(matches!(
                 vault.write_path("Link/x.md"),
                 Err(VaultError::Symlink(_))
@@ -1410,7 +1409,7 @@ mod tests {
                 Err(VaultError::Symlink(_))
             ));
             assert!(vault.write_bytes("note.md", b"x").is_err());
-            // Nothing outside changed, and the link itself is still a link.
+            // * Nothing outside changed, and the link itself is still a link.
             assert_eq!(
                 fs::read_to_string(outside.path().join("secret")).unwrap(),
                 "s"
@@ -1419,13 +1418,13 @@ mod tests {
                 .unwrap()
                 .file_type()
                 .is_symlink());
-            // A link may be moved or removed as an entry, not written through.
+            // * A link may be moved or removed as an entry, not written through.
             assert!(vault.entry_path("note.md").is_ok());
             assert!(matches!(
                 vault.entry_path("Link/x.md"),
                 Err(VaultError::Symlink(_))
             ));
-            // The open itself refuses a link that appears after the check.
+            // * The open itself refuses a link that appears after the check.
             assert!(write_no_follow(&r.join("note.md"), b"x").is_err());
         }
         vault.write_bytes("Sub/a.md", b"b").unwrap();
@@ -1445,7 +1444,7 @@ mod tests {
             "written"
         );
 
-        // A link where a directory should be is refused, not followed.
+        // * A link where a directory should be is refused, not followed.
         let outside = tempfile::tempdir().unwrap();
         std::os::unix::fs::symlink(outside.path(), root.join("escape")).unwrap();
         let err = write_at(&root, Path::new("escape/planted.md"), b"pwned").unwrap_err();
@@ -1477,7 +1476,6 @@ mod tests {
         let root = dir.path().canonicalize().unwrap();
         create_dir_all_at(&root, Path::new("x/y/z")).unwrap();
         assert!(root.join("x/y/z").is_dir());
-        // Idempotent.
         create_dir_all_at(&root, Path::new("x/y/z")).unwrap();
 
         let outside = tempfile::tempdir().unwrap();
@@ -1494,8 +1492,8 @@ mod tests {
 
         write_no_follow(&path, b"new").unwrap();
 
-        // The note holds the new bytes, and a snapshot lives under .trash;
-        // nothing else is left at the top level of the directory.
+        // * The note holds the new bytes, and a snapshot lives under .trash;
+        // * nothing else is left at the top level of the directory.
         let names: Vec<String> = std::fs::read_dir(dir.path())
             .unwrap()
             .flatten()
@@ -1515,7 +1513,6 @@ mod tests {
         assert!(snapshots.is_dir());
         assert!(!std::fs::read_dir(&snapshots).unwrap().next().is_none());
 
-        // A write replaces rather than appends.
         write_no_follow(&path, b"newer").unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "newer");
     }
@@ -1530,8 +1527,8 @@ mod tests {
         let link = dir.path().join("link.md");
         std::os::unix::fs::symlink(&target, &link).unwrap();
 
-        // The rename would replace the *link*, not follow it — but the temp
-        // file lands beside it either way, so the outside file is untouched.
+        // * The rename would replace the *link*, not follow it — but the temp
+        // * file lands beside it either way, so the outside file is untouched.
         let _ = write_no_follow(&link, b"pwned");
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "outside");
     }
@@ -1602,8 +1599,8 @@ mod tests {
         let path = dir.path().join("note.md");
         std::fs::write(&path, "v0").unwrap();
 
-        // Save 15 times in quick succession — each must produce a distinct
-        // snapshot, none overwriting an earlier one.
+        // * Save 15 times in quick succession — each must produce a distinct
+        // * snapshot, none overwriting an earlier one.
         for n in 1..=15u32 {
             std::fs::write(&path, format!("v{n}")).unwrap();
             let _ = write_no_follow(&path, format!("v{n}").as_bytes());
@@ -1625,8 +1622,8 @@ mod tests {
         let link = root.join("note.md");
         std::os::unix::fs::symlink(&target, &link).unwrap();
 
-        // The snapshot must refuse to write through the symlink, and the
-        // outside file must be untouched.
+        // * The snapshot must refuse to write through the symlink, and the
+        // * outside file must be untouched.
         snapshot_before_overwrite(&link);
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "outside");
         assert!(!root.join(".trash").join(".snapshots").exists());
@@ -1646,9 +1643,9 @@ mod tests {
         std::fs::write(outside.path().join("real.md"), "outside").unwrap();
         let link = dir.path().join("note.md");
 
-        // `mklink /J` creates a junction, which needs no elevation, unlike a
-        // symlink. A junction is a reparse point and is what a hostile vault
-        // can ship without any special privilege.
+        // * `mklink /J` creates a junction, which needs no elevation, unlike a
+        // * symlink. A junction is a reparse point and is what a hostile vault
+        // * can ship without any special privilege.
         let made = std::process::Command::new("cmd")
             .args(["/C", "mklink", "/J"])
             .arg(&link)

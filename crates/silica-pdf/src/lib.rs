@@ -154,7 +154,7 @@ impl Document {
         let height = ((page_height * scale).ceil() as u32).clamp(1, MAX_BITMAP_SIDE);
 
         let rendered = catch_unwind(AssertUnwindSafe(|| {
-            // The cache holds `Rc`s, so it lives for this call only.
+            // * The cache holds `Rc`s, so it lives for this call only.
             let cache = RenderCache::new();
             let mut ctx = RenderContext::new(width as u16, height as u16);
             let transform = Affine::scale(scale as f64) * page.initial_transform(true).to_kurbo();

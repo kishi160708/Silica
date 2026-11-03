@@ -503,9 +503,9 @@ impl PdfView {
             cx.subscribe(
                 &page_input,
                 |this, input, event: &InputEvent, cx| match event {
-                    // Observed: Enter on a number in range goes there; 0, a
-                    // number past the end and letters do nothing, and the box
-                    // shows the page again.
+                    // * Observed: Enter on a number in range goes there; 0, a
+                    //   number past the end and letters do nothing, and the box
+                    //   shows the page again.
                     InputEvent::Submit => {
                         let text = input.read(cx).text().trim().to_string();
                         if let Ok(n) = text.parse::<usize>() {
@@ -936,10 +936,10 @@ impl PdfView {
         self.ensure_glyphs(cx);
         let layout = self.layout.as_ref()?;
         let scale = layout.scale;
-        // Window -> column: the pages area's origin, then the scroll.
+        // * Window -> column: the pages area's origin, then the scroll.
         let x = f32::from(position.x) - self.origin.x + self.scroll.x;
         let y = f32::from(position.y) - self.origin.y + self.scroll.y;
-        // The page whose box is nearest the pointer, preferring one it is in.
+        // * The page whose box is nearest the pointer, preferring one it is in.
         let mut best: Option<(usize, f32)> = None;
         for (ix, b) in layout.pages.iter().enumerate() {
             if self.glyphs.get(ix).is_none_or(|g| g.is_empty()) {
@@ -969,8 +969,8 @@ impl PdfView {
         let (page, _) = best?;
         let glyphs = self.glyphs.get(page)?;
         let bounds = layout.pages.get(page)?;
-        // Column pixels -> page points: subtract the page's own origin, and
-        // divide out the scale.
+        // * Column pixels -> page points: subtract the page's own origin, and
+        //   divide out the scale.
         let (px_, py) = ((x - bounds.origin.x) / scale, (y - bounds.origin.y) / scale);
         Some(Mark {
             page,
@@ -1040,7 +1040,7 @@ impl PdfView {
             .map(|(ix, g)| (ix, g.as_slice()))
             .collect();
         let mut out = selection.boxes(&pages, layout.scale);
-        // A box at a page's edge can spill past the border; clamp to the page.
+        // * A box at a page's edge can spill past the border; clamp to the page.
         for highlight in &mut out {
             if let Some(bounds) = layout.pages.get(highlight.page) {
                 highlight.x = highlight.x.clamp(0.0, bounds.size.width);
@@ -1165,8 +1165,8 @@ impl PdfView {
                 }
                 find.searching = false;
                 find.matches = matches;
-                // The first match on or after the page the view is on, as
-                // pdf.js starts from the current page.
+                // * The first match on or after the page the view is on, as
+                //   pdf.js starts from the current page.
                 let from = view.page;
                 find.current = find.matches.iter().position(|&p| p >= from).unwrap_or(0);
                 if let Some(&page) = find.matches.get(find.current) {
@@ -1217,7 +1217,7 @@ impl PdfView {
         self.origin = Point::new(f32::from(bounds.origin.x), f32::from(bounds.origin.y));
         let size = Size::new(f32::from(bounds.size.width), f32::from(bounds.size.height));
         if size != self.viewport {
-            // Keep the page at the top where it is across the resize.
+            // * Keep the page at the top where it is across the resize.
             if self.pending.is_none() {
                 if let Some(layout) = &self.layout {
                     let (page, frac) = layout.locate(self.scroll.y);
@@ -1272,8 +1272,8 @@ impl PdfView {
             .iter()
             .rposition(|item| item.page.is_some_and(|p| p <= self.page));
         if let Some(ix) = target {
-            // Expand every ancestor: the nearest shallower item before it,
-            // and so on up.
+            // * Expand every ancestor: the nearest shallower item before it,
+            //   and so on up.
             let mut depth = loaded.outline[ix].depth;
             for (jx, item) in loaded.outline[..ix].iter().enumerate().rev() {
                 if item.depth < depth {
@@ -1291,7 +1291,7 @@ impl PdfView {
     /// hidden under a collapsed ancestor.
     fn outline_visibility(items: &[OutlineItem], expanded: &HashSet<usize>) -> Vec<(bool, bool)> {
         let mut out = Vec::with_capacity(items.len());
-        // The collapsed depth, if any: items deeper than it are hidden.
+        // * The collapsed depth, if any: items deeper than it are hidden.
         let mut hidden_below: Option<usize> = None;
         for (ix, item) in items.iter().enumerate() {
             if let Some(d) = hidden_below {
@@ -1346,14 +1346,14 @@ impl PdfView {
                     Target::Anchor { page, frac, offset } => {
                         if let Some(b) = layout.pages.get(page) {
                             self.scroll.y = if frac < 0.0 {
-                                // In the border above the page: so many
-                                // pixels above it, whatever the zoom.
+                                // * In the border above the page: so many
+                                //   pixels above it, whatever the zoom.
                                 b.top() + frac.max(-1.0) * PAGE_BORDER - offset
                             } else {
                                 b.top() + frac * b.size.height - offset
                             };
                         }
-                        // The column re-centres under a zoom change.
+                        // * The column re-centres under a zoom change.
                         self.scroll.x = (layout.content.width - self.viewport.width).max(0.0) / 2.0;
                     }
                 }
@@ -1668,11 +1668,11 @@ impl PdfView {
                     cx,
                 ))
                 .child(Self::menu_separator(theme))
-                // The spreads and the theme adaptation are drawn as
-                // observed and say so when asked for; single page is the
-                // one spread this build draws. Obsidian's two-page rows
-                // carry its own `rectangle-vertical-double` icon, which is
-                // not Lucide's; the single rectangle stands in.
+                // * The spreads and the theme adaptation are drawn as
+                //   observed and say so when asked for; single page is the
+                //   one spread this build draws. Obsidian's two-page rows
+                //   carry its own `rectangle-vertical-double` icon, which is
+                //   not Lucide's; the single rectangle stands in.
                 .child(self.menu_row(
                     "pdf-display-menu-item",
                     2,
@@ -1813,7 +1813,7 @@ impl PdfView {
                                 cx.stop_propagation();
                                 if let Some(find) = this.find.as_mut() {
                                     find.case_sensitive = !find.case_sensitive;
-                                    // A new search with the other rule.
+                                    // * A new search with the other rule.
                                     find.query.clear();
                                 }
                                 let text = this.find_input.read(cx).text().to_string();
@@ -1937,7 +1937,7 @@ impl PdfView {
                 }
             })
             .collect();
-        // Each row: the bordered thumbnail and the gap under it.
+        // * Each row: the bordered thumbnail and the gap under it.
         let mut tops = Vec::with_capacity(heights.len());
         let mut y = THUMBNAIL_PAD;
         for h in &heights {
@@ -1948,7 +1948,7 @@ impl PdfView {
         let view_h = f32::from(bounds.size.height);
         let mut top = -f32::from(self.sidebar_scroll.offset().y);
         if self.sidebar_followed != Some(self.page) && view_h > 0.0 {
-            // Bring the current page's thumbnail into view.
+            // * Bring the current page's thumbnail into view.
             if let (Some(&t), Some(&h)) = (tops.get(self.page), heights.get(self.page)) {
                 let outer = h + 2.0 * THUMBNAIL_BORDER;
                 if t < top || t + outer > top + view_h {
@@ -2209,8 +2209,8 @@ impl PdfView {
             .w(px(layout.content.width))
             .h(px(layout.content.height));
         for (ix, b) in layout.pages.iter().enumerate() {
-            // Boxes are made for a viewport either side; images asked for
-            // half a viewport either side.
+            // * Boxes are made for a viewport either side; images asked for
+            //   half a viewport either side.
             let near = b.bottom() >= top - vh && b.top() <= top + 2.0 * vh;
             if !near {
                 continue;
@@ -2238,7 +2238,7 @@ impl PdfView {
                         .object_fit(ObjectFit::Fill),
                 );
             }
-            // The selection, over the page's image, clipped by the box.
+            // * The selection, over the page's image, clipped by the box.
             let mut overlay = div().absolute().inset_0().overflow_hidden();
             for highlight in highlights.iter().filter(|h| h.page == ix) {
                 overlay = overlay.child(
@@ -2274,8 +2274,8 @@ impl Render for PdfView {
             window.focus(&self.focus, cx);
         }
         self.prepare(cx);
-        // A file that will not open, or one not yet read, is the toolbar
-        // over nothing: observed for a broken file ("of 0", no message).
+        // * A file that will not open, or one not yet read, is the toolbar
+        //   over nothing: observed for a broken file ("of 0", no message).
         let sidebar = (self.sidebar && self.loaded.is_some())
             .then(|| self.render_sidebar(&theme, window, cx));
         let pages = self.render_pages(&theme, window, cx);
@@ -2355,8 +2355,8 @@ mod tests {
         assert_eq!(step_out(0.9), 0.8, "0.818 rounds down");
         assert_eq!(step_in(9.95), MAX_SCALE);
         assert_eq!(step_out(0.1), MIN_SCALE);
-        // Observed: Zoom in from page-width at 0.791 goes 0.9, 1, 1.1, 1.3,
-        // 1.5, 1.7; Zoom out goes 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.1.
+        // * Observed: Zoom in from page-width at 0.791 goes 0.9, 1, 1.1, 1.3,
+        //   1.5, 1.7; Zoom out goes 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.1.
         let mut scale = 0.79123;
         let mut seen = Vec::new();
         for _ in 0..6 {
@@ -2375,13 +2375,13 @@ mod tests {
 
     #[test]
     fn the_fit_zooms_are_the_observed_formulas() {
-        // Observed: a 668 px wide, 672 px tall viewer fits A4's width at
-        // 0.7912, and a 683 px tall one fits its height at 0.5844.
+        // * Observed: a 668 px wide, 672 px tall viewer fits A4's width at
+        //   0.7912, and a 683 px tall one fits its height at 0.5844.
         let viewport = Size::new(668.0, 672.0);
         let sizes = [a4(), landscape(), a4()];
         let scale = Zoom::FitWidth.resolve(&sizes, 0, viewport);
         assert!((scale - 0.79123).abs() < 1e-4, "{scale}");
-        // Set on the landscape page it fits that one: observed 0.5595.
+        // * Set on the landscape page it fits that one: observed 0.5595.
         let scale = Zoom::FitWidth.resolve(&sizes, 1, viewport);
         assert!((scale - 0.55946).abs() < 1e-4, "{scale}");
         let fit_height = Zoom::FitHeight.resolve(&[a4()], 0, Size::new(668.0, 683.0));
@@ -2410,7 +2410,7 @@ mod tests {
         );
         assert_eq!(layout.content.width, 1000.0);
         assert_eq!(layout.pages[0].origin.x, (1000.0 - 595.2756) / 2.0);
-        // A page wider than the viewport widens the column instead.
+        // * A page wider than the viewport widens the column instead.
         let wide = Layout::new(&[landscape(), a4()], 1.0, 700.0);
         assert_eq!(wide.content.width, 841.8898 + 2.0 * PAGE_BORDER);
         assert_eq!(wide.pages[0].origin.x, PAGE_BORDER);
@@ -2419,7 +2419,7 @@ mod tests {
             (700.0 - 595.2756) / 2.0,
             "a narrow page beside a wide one still centres in the viewport"
         );
-        // Observed: a link to a page lands with its border at the top.
+        // * Observed: a link to a page lands with its border at the top.
         assert_eq!(layout.top_of(0), 0.0);
         assert_eq!(layout.top_of(1), layout.pages[1].top() - PAGE_BORDER);
     }
@@ -2445,7 +2445,7 @@ mod tests {
         let page2_middle = layout.pages[1].top() + layout.pages[1].size.height / 2.0;
         assert_eq!(at(page2_middle), 1);
         assert_eq!(at(0.0), 0);
-        // The page the view is on stays while it is wholly in view.
+        // * The page the view is on stays while it is wholly in view.
         let tall = Size::new(668.0, 3000.0);
         assert_eq!(layout.current_page(Point::new(0.0, 0.0), tall, 1), 1);
         assert_eq!(layout.current_page(Point::new(0.0, 0.0), tall, 4), 0);
@@ -2457,8 +2457,8 @@ mod tests {
         let (page, frac) = layout.locate(layout.pages[1].top() + 841.8898 / 2.0);
         assert_eq!(page, 1);
         assert!((frac - 0.5).abs() < 1e-6);
-        // In the border above the first page is the first page, before its
-        // top.
+        // * In the border above the first page is the first page, before its
+        //   top.
         let (page, frac) = layout.locate(0.0);
         assert_eq!(page, 0);
         assert!(frac < 0.0);

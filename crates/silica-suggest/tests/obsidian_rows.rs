@@ -115,7 +115,7 @@ impl Fixture {
         opts: &Options,
     ) -> String {
         let (line, col) = match line.find('|') {
-            // A `|` in the case marks the cursor when it is not at the end.
+            // * A `|` in the case marks the cursor when it is not at the end.
             Some(ix) if line.ends_with("]]") => (line.replace('|', ""), ix),
             _ => (line.to_string(), line.len()),
         };
@@ -164,7 +164,7 @@ fn wikilinks_in_the_shortest_format() {
     let at = |line, want| f.accept("Scratch.md", line, want, Accept::Whole, &o);
     assert_eq!(at("[[beta no", "Beta"), "[[Beta Note]]");
     assert_eq!(at("[[ga", "Gamma"), "[[Gamma]]");
-    // A path with a folder takes the basename as display text.
+    // * A path with a folder takes the basename as display text.
     assert_eq!(at("[[al", "Sub/Alpha"), "[[Sub/Alpha|Alpha]]");
     assert_eq!(at("[[al", "Alpha"), "[[Alpha]]");
     assert_eq!(at("[[alpha ali", "Alpha Alias"), "[[Alpha|Alpha Alias]]");
@@ -175,11 +175,11 @@ fn wikilinks_in_the_shortest_format() {
         at("[[Alpha#first", "First Heading"),
         "[[Alpha#First Heading]]"
     );
-    // An attachment never takes display text.
+    // ! An attachment never takes display text.
     assert_eq!(at("[[pi", "pic.png"), "[[pic.png]]");
     assert_eq!(at("![[beta no", "Beta"), "![[Beta Note]]");
     assert_eq!(at("![[pi", "pic.png"), "![[pic.png]]");
-    // Nothing matched: the query is linked as typed, and no note is created.
+    // * Nothing matched: the query is linked as typed, and no note is created.
     assert_eq!(
         at("[[No Such Note At All", "No Such"),
         "[[No Such Note At All]]"
@@ -195,9 +195,9 @@ fn a_heading_keeps_the_path_as_typed() {
         LinkFormat::Absolute,
     ] {
         let o = wiki(format);
-        // `shortest` would write `Gamma`, and `absolute` `Sub/Gamma`; a
-        // heading pick writes back exactly what was typed, with no display
-        // text however deep the folder.
+        // * `shortest` would write `Gamma`, and `absolute` `Sub/Gamma`; a
+        // * heading pick writes back exactly what was typed, with no display
+        // * text however deep the folder.
         assert_eq!(
             f.accept(
                 "Scratch.md",
@@ -228,7 +228,7 @@ fn wikilinks_in_the_other_formats() {
     let abs = wiki(LinkFormat::Absolute);
     let at = |o: &Options, source, line, want| f.accept(source, line, want, Accept::Whole, o);
 
-    // From the root, `relative` and `absolute` both name the folder.
+    // * From the root, `relative` and `absolute` both name the folder.
     assert_eq!(
         at(&rel, "Scratch.md", "[[ga", "Gamma"),
         "[[Sub/Gamma|Gamma]]"
@@ -238,7 +238,7 @@ fn wikilinks_in_the_other_formats() {
         "[[Sub/Gamma|Gamma]]"
     );
 
-    // From inside `Sub`, only `relative` climbs out.
+    // * From inside `Sub`, only `relative` climbs out.
     assert_eq!(
         at(&rel, "Sub/Source.md", "[[beta no", "Beta"),
         "[[../Beta Note|Beta Note]]"
@@ -249,7 +249,7 @@ fn wikilinks_in_the_other_formats() {
         at(&rel, "Sub/Source.md", "[[al", "Alpha"),
         "[[../Alpha|Alpha]]"
     );
-    // An attachment keeps its extension and still takes no display text.
+    // * An attachment keeps its extension and still takes no display text.
     assert_eq!(
         at(&rel, "Sub/Source.md", "[[pi", "pic.png"),
         "[[../pic.png]]"
@@ -269,8 +269,8 @@ fn markdown_links() {
     let f = Fixture::new();
     let o = md(LinkFormat::Shortest);
     let at = |line, want| f.accept("Scratch.md", line, want, Accept::Whole, &o);
-    // The text is the basename, the destination keeps `.md`, and only
-    // spaces are encoded.
+    // * The text is the basename, the destination keeps `.md`, and only
+    // * spaces are encoded.
     assert_eq!(at("[[beta no", "Beta"), "[Beta Note](Beta%20Note.md)");
     assert_eq!(at("[[ga", "Gamma"), "[Gamma](Gamma.md)");
     assert_eq!(at("[[al", "Sub/Alpha"), "[Alpha](Sub/Alpha.md)");
@@ -279,11 +279,11 @@ fn markdown_links() {
         at("[[Alpha#first", "First Heading"),
         "[First Heading](Alpha.md#First%20Heading)"
     );
-    // An attachment's text drops the extension; the destination keeps it.
+    // * An attachment's text drops the extension; the destination keeps it.
     assert_eq!(at("[[pi", "pic.png"), "[pic](pic.png)");
     assert_eq!(at("![[beta no", "Beta"), "![Beta Note](Beta%20Note.md)");
     assert_eq!(at("![[pi", "pic.png"), "![pic](pic.png)");
-    // With no file behind it: no `.md`, and no text.
+    // * With no file behind it: no `.md`, and no text.
     assert_eq!(
         at("[[No Such Note At All", "No Such"),
         "[](No%20Such%20Note%20At%20All)"
@@ -308,7 +308,7 @@ fn the_three_accept_keys_differ() {
     let case = |accept| f.accept("Scratch.md", "[[beta no", "Beta", accept, &o);
     assert_eq!(case(Accept::Whole), "[[Beta Note]]");
     assert_eq!(case(Accept::Inside), "[[Beta Note]]");
-    // Shift+Enter ignores the row and links the query as typed.
+    // * Shift+Enter ignores the row and links the query as typed.
     assert_eq!(case(Accept::Typed), "[[beta no]]");
     assert_eq!(
         f.accept(
@@ -345,8 +345,8 @@ fn the_cursor_lands_where_obsidian_leaves_it() {
         .expect("Beta Note is offered")
         .item;
     let o = wiki(LinkFormat::Shortest);
-    // Enter sits after the brackets; Tab inside them, so a `#heading` can
-    // follow what was just accepted.
+    // * Enter sits after the brackets; Tab inside them, so a `#heading` can
+    // * follow what was just accepted.
     assert_eq!(
         insert(&t, item, Accept::Whole, &v, &o).cursor,
         "[[Beta Note]]".len()
@@ -355,7 +355,7 @@ fn the_cursor_lands_where_obsidian_leaves_it() {
         insert(&t, item, Accept::Inside, &v, &o).cursor,
         "[[Beta Note".len()
     );
-    // A markdown link has nowhere to stand, so Tab lands where Enter does.
+    // * A markdown link has nowhere to stand, so Tab lands where Enter does.
     let o = md(LinkFormat::Shortest);
     let whole = insert(&t, item, Accept::Whole, &v, &o);
     assert_eq!(whole.cursor, whole.text.len());
@@ -363,7 +363,7 @@ fn the_cursor_lands_where_obsidian_leaves_it() {
         insert(&t, item, Accept::Inside, &v, &o).cursor,
         whole.text.len()
     );
-    // With no text to show the cursor goes between the brackets.
+    // * With no text to show the cursor goes between the brackets.
     let typed = insert(&t, &Item::Literal, Accept::Whole, &v, &o);
     assert_eq!((typed.text.as_str(), typed.cursor), ("[](beta%20no)", 1));
 }
@@ -372,7 +372,7 @@ fn the_cursor_lands_where_obsidian_leaves_it() {
 fn an_existing_closing_pair_is_consumed() {
     let f = Fixture::new();
     let o = wiki(LinkFormat::Shortest);
-    // The `|` marks the cursor: `[[be|]]`.
+    // * The `|` marks the cursor: `[[be|]]`.
     assert_eq!(
         f.accept("Scratch.md", "[[be|]]", "Beta", Accept::Whole, &o),
         "[[Beta Note]]"
@@ -396,7 +396,7 @@ fn tags_are_written_with_a_space_on_enter_only() {
         f.accept("Scratch.md", "#inl", "inline-tag", Accept::Inside, &o),
         "#inline-tag"
     );
-    // The bare `#` offers every tag alphabetically, parents included.
+    // * The bare `#` offers every tag alphabetically, parents included.
     assert_eq!(f.first("Scratch.md", "#", &o), "#beta-tag ");
     let v = f.vault("Scratch.md");
     let t = trigger("#", 1).expect("triggers");
@@ -416,8 +416,8 @@ fn an_empty_query_is_ordered_by_modification_time() {
     let v = f.vault("Scratch.md");
     let t = trigger("[[", 2).expect("triggers");
     let items = suggestions(&t, &v);
-    // Scratch.md is the newest of the fixture, and the aliases of a file
-    // follow it.
+    // * Scratch.md is the newest of the fixture, and the aliases of a file
+    // * follow it.
     assert_eq!(items[0].label, "Scratch");
     assert_eq!(items[1].label, "Sub/Source");
     let labels: Vec<&str> = items.iter().map(|s| s.label.as_str()).collect();
@@ -429,7 +429,7 @@ fn an_empty_query_is_ordered_by_modification_time() {
         labels.contains(&"pic.png"),
         "attachments are offered: {labels:?}"
     );
-    // Unlike the quick switcher, no unresolved link target is offered.
+    // * Unlike the quick switcher, no unresolved link target is offered.
     assert!(!labels.contains(&"No Such Note At All"));
     assert_eq!(items.len(), 6 + 1 + 3);
 }
@@ -444,7 +444,7 @@ fn headings_come_in_document_order_with_the_h1() {
         .map(|s| s.label.clone())
         .collect();
     assert_eq!(labels, ["Alpha", "First Heading", "Nested Heading"]);
-    // `[[#` is the note being edited.
+    // * `[[#` is the note being edited.
     let v = f.vault("Alpha.md");
     let t = trigger("[[#", 3).expect("triggers");
     let labels: Vec<String> = suggestions(&t, &v)
@@ -460,7 +460,7 @@ fn every_block_is_offered_in_document_order() {
     let v = f.vault("Scratch.md");
     let t = trigger("[[Alpha#^", 9).expect("triggers");
     let rows = suggestions(&t, &v);
-    // The rows Obsidian offered for this note, in this order.
+    // * The rows Obsidian offered for this note, in this order.
     let labels: Vec<String> = rows.iter().map(|s| s.label.clone()).collect();
     assert_eq!(
         labels,
@@ -473,8 +473,8 @@ fn every_block_is_offered_in_document_order() {
             "Another paragraph.",
         ]
     );
-    // An id a block already carries is stripped from its label and shown
-    // beside it; a block without one shows nothing there.
+    // * An id a block already carries is stripped from its label and shown
+    // * beside it; a block without one shows nothing there.
     let detail: Vec<String> = rows.iter().filter_map(|s| s.detail.clone()).collect();
     assert_eq!(detail, ["^blockone", "^block-two"]);
 }
@@ -490,9 +490,9 @@ fn a_block_query_matches_the_text_or_the_id() {
             .map(|s| s.label.clone())
             .collect::<Vec<_>>()
     };
-    // Substring of the text, anywhere in it.
+    // * Substring of the text, anywhere in it.
     assert_eq!(rows("[[Alpha#^ara"), ["A paragraph.", "Another paragraph."]);
-    // The id itself, whatever its case.
+    // * The id itself, whatever its case.
     assert_eq!(rows("[[Alpha#^blockone"), ["A paragraph."]);
     assert_eq!(rows("[[Alpha#^BLOCKONE"), ["A paragraph."]);
     assert!(rows("[[Alpha#^zzz").is_empty());
@@ -502,8 +502,8 @@ fn a_block_query_matches_the_text_or_the_id() {
 fn a_block_keeps_the_path_as_typed_and_shows_no_text() {
     let f = Fixture::new();
     let o = wiki(LinkFormat::Shortest);
-    // `Gamma` is ambiguous in the fixture, and a block pick still writes
-    // back exactly what was typed, like a heading pick.
+    // * `Gamma` is ambiguous in the fixture, and a block pick still writes
+    // * back exactly what was typed, like a heading pick.
     assert_eq!(
         f.accept(
             "Scratch.md",
@@ -524,7 +524,7 @@ fn a_block_keeps_the_path_as_typed_and_shows_no_text() {
         ),
         "[[Alpha#^block-two]]"
     );
-    // Markdown style: `.md` kept, no display text, cursor in the brackets.
+    // * Markdown style: `.md` kept, no display text, cursor in the brackets.
     let md = md(LinkFormat::Shortest);
     assert_eq!(
         f.accept(

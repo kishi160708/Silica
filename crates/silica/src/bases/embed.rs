@@ -132,10 +132,10 @@ impl EmbeddedBase {
 pub fn render(base: &EmbeddedBase, theme: &Theme, open: OpenPath) -> AnyElement {
     let title = base.view_name.clone().unwrap_or_else(|| base.path.clone());
     let body: Vec<AnyElement> = match (&base.error, &base.table) {
-        // A file that does not parse says what the view says, banner and all.
+        // * A file that does not parse says what the view says, banner and all.
         (Some(message), _) => vec![error_block(true, message, theme)],
         (None, Some(table)) => match &table.unknown_kind {
-            // The file parsed; only the layout is one nothing can draw.
+            // * The file parsed; only the layout is one nothing can draw.
             Some(kind) => vec![error_block(
                 false,
                 &format!("Unknown view type: {kind}"),
@@ -143,7 +143,7 @@ pub fn render(base: &EmbeddedBase, theme: &Theme, open: OpenPath) -> AnyElement 
             )],
             None => table_body(base, table, theme, open.clone()),
         },
-        // No table and no error is a base that was never resolved.
+        // * No table and no error is a base that was never resolved.
         (None, None) => Vec::new(),
     };
     let path = base.path.clone();
@@ -185,16 +185,16 @@ fn table_body(
 ) -> Vec<AnyElement> {
     let layout = base.table_layout();
     let widths = column_widths(&table.columns, &layout);
-    // The same column metrics the open view draws: a `columnSize` the file
-    // carries is honoured, an unsized last column takes the rest of the width,
-    // and one the map names keeps the width it names.
+    // * The same column metrics the open view draws: a `columnSize` the file
+    //   carries is honoured, an unsized last column takes the rest of the width,
+    //   and one the map names keeps the width it names.
     let stretch = stretches_last(&table.columns, &layout);
     let height = ROW_HEIGHT * layout.row_height.mult();
     let (rows, more) = base.drawn_rows();
     let mut out = vec![header_row(&table.columns, &widths, stretch, theme)];
     if rows.is_empty() {
-        // Observed on `BadFilter.base`: a view that empties keeps its header
-        // row and shows no banner, only the count.
+        // * Observed on `BadFilter.base`: a view that empties keeps its header
+        //   row and shows no banner, only the count.
         out.push(empty_row(theme));
         return out;
     }
@@ -279,14 +279,14 @@ fn row_element(
             let link = columns.get(c).is_some_and(|col| renders_as_link(col, cell));
             let box_ = cell_box(c, metrics.stretch && c == last, width, theme);
             match cell.kind {
-                // A boolean is a disabled checkbox, so there is no text even
-                // when the value is `true`.
+                // * A boolean is a disabled checkbox, so there is no text even
+                //   when the value is `true`.
                 CellKind::Checkbox => {
                     box_.child(checkbox(matches!(cell.value, Value::Bool(true)), theme))
                 }
-                // **Unprobed**, as in the open view: no number column's
-                // alignment was measured; right is the convention a number
-                // column reads in.
+                // ? **Unprobed**, as in the open view: no number column's
+                //   alignment was measured; right is the convention a number
+                //   column reads in.
                 CellKind::Number => box_.justify_end().text_color(theme.text).child(
                     div()
                         .min_w_0()
@@ -389,8 +389,8 @@ fn error_block(banner: bool, message: &str, theme: &Theme) -> AnyElement {
                 .text_size(px(FONT_UI_SMALL))
                 .text_color(theme.text_muted)
                 .children(message.lines().map(|line| {
-                    // An empty line still needs a line box, or the caret
-                    // under the snippet climbs onto the text above it.
+                    // * An empty line still needs a line box, or the caret
+                    //   under the snippet climbs onto the text above it.
                     div().child(SharedString::from(if line.is_empty() {
                         " ".to_string()
                     } else {
@@ -538,8 +538,8 @@ mod tests {
 
     #[test]
     fn a_base_that_does_not_parse_keeps_the_views_own_message() {
-        // One engine: the embed resolves through `rows::resolve`, so a file
-        // the view refuses is refused here with the same text.
+        // * One engine: the embed resolves through `rows::resolve`, so a file
+        //   the view refuses is refused here with the same text.
         let resolved = rows::resolve(None, None, "views:\n  - type: table\n", 0);
         let base = EmbeddedBase {
             path: "Broken.base".to_string(),
@@ -571,8 +571,8 @@ mod tests {
 
     #[test]
     fn a_cards_view_sizes_its_columns_at_the_table_defaults() {
-        // A layout that is not a table carries no `columnSize`, and its rows
-        // are drawn at the widths an unsized table column takes.
+        // * A layout that is not a table carries no `columnSize`, and its rows
+        //   are drawn at the widths an unsized table column takes.
         let mut base = embedded(vec![row("N.md")]);
         base.layout = Layout::Cards(Default::default());
         let widths = column_widths(&base.table.as_ref().unwrap().columns, &base.table_layout());
@@ -616,8 +616,8 @@ mod tests {
         let one = std::time::Instant::now();
         let base = resolve(&state, "Main.base").expect("the base resolves");
         let resolve_ms = one.elapsed().as_secs_f64() * 1000.;
-        // The note holding the embed is a note of the vault too, so it is a
-        // row of the base like any other.
+        // * The note holding the embed is a note of the vault too, so it is a
+        //   row of the base like any other.
         let rows = base.table.as_ref().unwrap().rows.len();
         assert_eq!(rows, 20_001);
         assert_eq!(base.drawn_rows().0.len(), EMBED_ROWS);
@@ -633,8 +633,8 @@ mod tests {
         let model_ms = both.elapsed().as_secs_f64() * 1000.;
         println!("resolve {resolve_ms:.0} ms, a note with two embeds {model_ms:.0} ms");
         assert_eq!(model.blocks.len(), 2);
-        // Two embeds, one resolve: the model's own cache answers the second,
-        // so a note full of the same base costs one view over the vault.
+        // * Two embeds, one resolve: the model's own cache answers the second,
+        //   so a note full of the same base costs one view over the vault.
         assert!(
             model_ms < resolve_ms * 1.8,
             "two embeds cost {model_ms:.0} ms against {resolve_ms:.0} ms for one resolve"

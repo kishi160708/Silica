@@ -96,15 +96,15 @@ pub fn env_for(state: &VaultState, base_path: &str) -> Env {
     let vault = state.vault();
     let cache = state.cache();
     let types = state.property_types();
-    // Rows are notes. A `.base` draws a table of markdown files, and the
-    // vault's attachments are not candidates for one.
+    // * Rows are notes. A `.base` draws a table of markdown files, and the
+    //   vault's attachments are not candidates for one.
     let files: Vec<Arc<FileData>> = vault
         .markdown_files()
         .map(|file| Arc::new(build(file, &cache, &types)))
         .collect();
-    // The base file is not a note, so it is never among the rows; `this`
-    // still has to answer `Main.base` for it. A base the vault has not
-    // indexed yet -- one created a moment ago -- still gets its name.
+    // * The base file is not a note, so it is never among the rows; `this`
+    //   still has to answer `Main.base` for it. A base the vault has not
+    //   indexed yet -- one created a moment ago -- still gets its name.
     let base_file = Some(file_data(state, base_path).unwrap_or_else(|| Arc::new(bare(base_path))));
     Env {
         files,
@@ -130,8 +130,8 @@ pub fn file_data(state: &VaultState, path: &str) -> Option<Arc<FileData>> {
 fn build(file: &VaultFile, cache: &MetadataCache, types: &PropertyTypes) -> FileData {
     let path = file.path.as_str();
     let mut data = names(path);
-    // The vault scan already stat'ed every file, so `size` is free here; it
-    // is the one field that would otherwise cost a read per row.
+    // * The vault scan already stat'ed every file, so `size` is free here; it
+    //   is the one field that would otherwise cost a read per row.
     data.size = file.size as f64;
     data.ctime = civil(file.ctime);
     data.mtime = civil(file.mtime);
@@ -293,8 +293,8 @@ fn property(key: &str, value: &serde_yaml::Value, types: &PropertyTypes) -> Valu
             serde_yaml::Value::Bool(b) => Value::Bool(*b),
             other => scalar(other),
         },
-        // An assigned date type keeps the time flag the type asks for, even
-        // where the written value carries the other one.
+        // * An assigned date type keeps the time flag the type asks for, even
+        //   where the written value carries the other one.
         Some(ty @ (PropertyType::Date | PropertyType::DateTime)) => {
             match value.as_str().and_then(parse_date) {
                 Some(at) => Value::Date(DateValue {
@@ -453,7 +453,7 @@ mod tests {
         let (_dir, state) = vault();
         let silica = one(&state, "Silica.md");
         assert_eq!(silica.folder, "/");
-        // A note in a folder gets the folder's own vault-relative path.
+        // * A note in a folder gets the folder's own vault-relative path.
         assert_eq!(one(&state, "Rocks/Deep/Basalt.md").folder, "Rocks/Deep");
     }
 
@@ -484,7 +484,7 @@ mod tests {
         let note = one(&state, "Silica.md");
         let on_disk = fs::metadata(state.root.join("Silica.md")).unwrap().len();
         assert_eq!(note.size, on_disk as f64);
-        // No disk read: the scan row is where all three of these come from.
+        // * No disk read: the scan row is where all three of these come from.
         let (size, ctime, mtime_ms) = {
             let vault = state.vault();
             let row = vault
@@ -506,7 +506,7 @@ mod tests {
     fn tags_carry_their_hash_frontmatter_first_and_merge_case_insensitively() {
         let (_dir, state) = vault();
         let note = one(&state, "Silica.md");
-        // `rock` is written in the properties and again inline; one value.
+        // * `rock` is written in the properties and again inline; one value.
         assert_eq!(
             note.tags,
             vec!["#rock", "#Igneous/extrusive", "#new"],
@@ -526,23 +526,23 @@ mod tests {
         assert_eq!(
             links,
             vec![
-                // The property link comes first, as observed.
+                // * The property link comes first, as observed.
                 ("Pumice", Some("Pumice")),
                 ("Pumice", Some("Foam")),
                 ("Pumice", Some("Pumice")),
                 ("Rocks/Deep/Basalt", Some("deep")),
             ]
         );
-        // An embed is its own list and is not among the links.
+        // * An embed is its own list and is not among the links.
         let embeds: Vec<&str> = note.embeds.iter().map(|l| l.path.as_str()).collect();
         assert_eq!(embeds, vec!["pic.png"]);
-        // `[[Pumice]]` renders as `[[Pumice|Pumice]]`, which is observed.
+        // * `[[Pumice]]` renders as `[[Pumice|Pumice]]`, which is observed.
         assert_eq!(
             Value::Link(note.links[0].clone()).to_string(),
             "[[Pumice|Pumice]]"
         );
 
-        // A backlink names the *linking file's* full path.
+        // * A backlink names the *linking file's* full path.
         let pumice = one(&state, "Pumice.md");
         let back: Vec<(&str, Option<&str>)> = pumice
             .backlinks
@@ -565,7 +565,7 @@ mod tests {
         assert_eq!(p("density"), Value::Number(1.21));
         assert_eq!(p("flag"), Value::Bool(true));
         assert_eq!(p("text"), Value::Str("Frothed basalt".into()));
-        // A quoted number stays text: `numish + 1` is the String "421".
+        // * A quoted number stays text: `numish + 1` is the String "421".
         assert_eq!(p("numish"), Value::Str("42".into()));
         assert_eq!(p("empty"), Value::Str(String::new()));
         assert_eq!(p("nothing"), Value::Null);
@@ -582,19 +582,19 @@ mod tests {
             Value::List(vec![Value::str("Cinder")]),
             "a reserved key is still a list of its own strings"
         );
-        // Dates: `YYYY-MM-DD` is a Date, an ISO date-time a DateTime.
+        // * Dates: `YYYY-MM-DD` is a Date, an ISO date-time a DateTime.
         let when = parse_date("2026-01-02").unwrap();
         assert_eq!(p("when"), Value::Date(when));
         assert!(!when.has_time);
         let stamp = parse_date("2026-01-02T03:04:05").unwrap();
         assert_eq!(p("stamp"), Value::Date(stamp));
         assert!(stamp.has_time);
-        // Tags keep their `#`, which the file does not write.
+        // * Tags keep their `#`, which the file does not write.
         assert_eq!(
             p("tags"),
             Value::Tags(vec!["#rock".into(), "#Igneous/extrusive".into()])
         );
-        // A whole wikilink is a Link; an alias is its display.
+        // * A whole wikilink is a Link; an alias is its display.
         assert_eq!(
             p("linkish"),
             Value::Link(LinkValue {
@@ -609,9 +609,9 @@ mod tests {
                 display: Some("Foam".into())
             })
         );
-        // A nested mapping is an Object.
+        // * A nested mapping is an Object.
         assert!(matches!(p("shelf"), Value::Object(_)));
-        // File order, as the note writes them.
+        // * File order, as the note writes them.
         let keys: Vec<&str> = note.properties.keys().map(String::as_str).collect();
         assert_eq!(keys[..4], ["status", "density", "flag", "when"]);
     }
@@ -627,17 +627,16 @@ mod tests {
         let state = Arc::new(VaultState::load(&dir.path().to_path_buf()).unwrap());
         let note = one(&state, "Silica.md");
         let p = |key: &str| note.properties.get(key).cloned().unwrap();
-        // The written value is a bare date; the assigned type says date-time.
+        // * The written value is a bare date; the assigned type says date-time.
         match p("when") {
             Value::Date(d) => assert!(d.has_time),
             other => panic!("expected a date, got {other:?}"),
         }
-        // A quoted "42" assigned `number` is still text, as Obsidian keeps
-        // what was typed: the YAML value is a string.
+        // * A quoted "42" assigned `number` is still text, as Obsidian keeps
+        //   what was typed: the YAML value is a string.
         assert_eq!(p("numish"), Value::Str("42".into()));
-        // A number assigned `text` keeps its number value.
         assert_eq!(p("density"), Value::Number(1.21));
-        // A list assigned `text` is still the list the YAML holds.
+        // * A list assigned `text` is still the list the YAML holds.
         assert_eq!(
             p("listish"),
             Value::List(vec![Value::str("alpha"), Value::str("beta")])
@@ -698,13 +697,13 @@ mod tests {
             files: env.files.clone(),
             ..Default::default()
         };
-        // A bare ident is a frontmatter property, case-insensitively.
+        // * A bare ident is a frontmatter property, case-insensitively.
         assert_eq!(ctx.property("STATUS"), Some(Value::Str("todo".into())));
         assert_eq!(ctx.property("nosuchprop"), None);
-        // `this` is the base file, never the row.
+        // * `this` is the base file, never the row.
         assert_eq!(ctx.base_file().unwrap().name, "Main.base");
         assert_eq!(ctx.file().unwrap().name, "Silica");
-        // A link target resolves to a row's file.
+        // * A link target resolves to a row's file.
         assert_eq!(ctx.lookup_file("Pumice").unwrap().path, "Pumice.md");
     }
 

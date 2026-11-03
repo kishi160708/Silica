@@ -31,8 +31,8 @@ pub fn apply(state: &VaultState, cx: &mut gpui::App) {
         cx.set_menus(Vec::new());
         return;
     }
-    // Only the macOS branch reads it; on the others the lookup would be dead
-    // work on every settings write.
+    // * Only the macOS branch reads it; on the others the lookup would be dead
+    //   work on every settings write.
     #[cfg(target_os = "macos")]
     {
         let registry = cx.global::<crate::workspace::Commands>().0.clone();
@@ -40,8 +40,8 @@ pub fn apply(state: &VaultState, cx: &mut gpui::App) {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        // Nothing would draw it. Clearing keeps a stale bar from a previous
-        // run of a Mac build out of the way, which costs nothing.
+        // * Nothing would draw it. Clearing keeps a stale bar from a previous
+        //   run of a Mac build out of the way, which costs nothing.
         cx.set_menus(Vec::new());
     }
 }
@@ -51,9 +51,9 @@ pub fn apply(state: &VaultState, cx: &mut gpui::App) {
 /// Linux.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn build(registry: &silica_commands::CommandRegistry) -> Vec<gpui::Menu> {
-    // One entry per id the app really has: an id the registry does not know
-    // is left out rather than added dead, because a menu of items that do
-    // nothing is worse than a short menu.
+    // * One entry per id the app really has: an id the registry does not know
+    //   is left out rather than added dead, because a menu of items that do
+    //   nothing is worse than a short menu.
     let item = |id: &str| -> Option<gpui::MenuItem> {
         let entry = registry.get(id)?;
         Some(gpui::MenuItem::action(

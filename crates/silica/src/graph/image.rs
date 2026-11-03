@@ -82,7 +82,7 @@ pub fn svg(
         if a >= nodes.len() || b >= nodes.len() {
             continue;
         }
-        // Trim to the rims so a head does not sit inside its own disc.
+        // * Trim to the rims so a head does not sit inside its own disc.
         let (dx, dy) = (x[b] - x[a], y[b] - y[a]);
         let len = (dx * dx + dy * dy).sqrt();
         if len <= f32::EPSILON {
@@ -114,8 +114,8 @@ pub fn svg(
     }
 
     out.push_str(&format!(
-        // A generic `sans-serif` resolves to nothing in usvg, so the label
-        // carries a family the font database actually has.
+        // * A generic `sans-serif` resolves to nothing in usvg, so the label
+        //   carries a family the font database actually has.
         "<g font-size=\"11\" font-family=\"DejaVu Sans, Noto Sans, sans-serif\" fill=\"{}\" text-anchor=\"middle\">",
         palette.label
     ));
@@ -235,7 +235,7 @@ mod tests {
             },
         ];
         let doc = svg(60, 20, &nodes, &placed, &[(0, 1)], false, &palette());
-        // From x=14 to x=46 at y=10.
+        // * From x=14 to x=46 at y=10.
         assert!(doc.contains("x1=\"14.00\""), "{doc}");
         assert!(doc.contains("x2=\"46.00\""), "{doc}");
     }
@@ -309,7 +309,7 @@ mod tests {
         let doc = svg(120, 60, &nodes, &placed, &[], false, &palette());
         let bytes = png(&doc, 120, 60).unwrap();
         let image = image::load_from_memory(&bytes).unwrap().to_rgba8();
-        // The label sits under the node; count its bright pixels there.
+        // * The label sits under the node; count its bright pixels there.
         let label = (0..60u32)
             .flat_map(|x| (34..52u32).map(move |y| (x, y)))
             .filter(|(x, y)| image.get_pixel(x * 2, y * 2)[0] > 150)
@@ -329,7 +329,7 @@ mod tests {
         let doc = svg(30, 30, &nodes, &placed, &[], false, &palette());
         let bytes = png(&doc, 30, 30).unwrap();
         assert_eq!(&bytes[1..4], b"PNG");
-        // Twice size, as the metadata records.
+        // * Twice size, as the metadata records.
         let image = image::load_from_memory(&bytes).unwrap();
         assert_eq!((image.width(), image.height()), (60, 60));
     }

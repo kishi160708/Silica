@@ -56,8 +56,8 @@ impl<'a> Device<'a> for TextDevice {
                 BfString::Char(c) => c.to_string(),
                 BfString::String(s) => s,
             };
-            // The glyph transform maps 1000-unit glyph space to the page, so
-            // its scale is the font size over 1000.
+            // * The glyph transform maps 1000-unit glyph space to the page, so
+            // * its scale is the font size over 1000.
             let to_page = props.transform * glyph.transform();
             let origin = to_page * Point::ZERO;
             let size = (to_page.determinant().abs().sqrt() * 1000.0).max(0.1);

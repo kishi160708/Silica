@@ -17,7 +17,7 @@ pub struct AppConfig {
     /// Absent means English.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub locale: Option<String>,
-    // Editor
+    // * Editor
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spellcheck: Option<bool>,
     #[serde(
@@ -130,7 +130,7 @@ pub struct AppConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub focus_new_tab: Option<bool>,
-    // Files and links
+    // * Files and links
     #[serde(
         default,
         rename = "promptDelete",

@@ -83,7 +83,7 @@ impl Section {
     }
 
     fn of(label: &'static str, groups: Vec<Group>) -> Section {
-        // A Links row stands for one link; a mentions group for its matches.
+        // * A Links row stands for one link; a mentions group for its matches.
         let count = groups.iter().map(|g| g.matches.len().max(1)).sum();
         Section {
             label,
@@ -685,8 +685,8 @@ mod tests {
         };
         assert_eq!(link("Plan.md", "Plan", false), "[[Plan]]");
         assert_eq!(link("Plan.md", "plan", false), "[[Plan|plan]]");
-        // Two notes share the name: the one the short form does not
-        // reach is written with its folder, the text kept as the alias.
+        // * Two notes share the name: the one the short form does not
+        //   reach is written with its folder, the text kept as the alias.
         let far = if r.resolve("Deep", "A.md") == Some("Sub/Deep.md") {
             "Other/Deep.md"
         } else {

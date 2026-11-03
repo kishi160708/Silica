@@ -158,17 +158,17 @@ impl BasesView {
         self.table_state.widths = widths;
         self.table_state.stretch_last = stretch_last;
         self.table_state.row_height = ROW_HEIGHT * layout.row_height.mult();
-        // A rebuild under a header drag — the watcher re-resolving the table
-        // while a column is being pulled wider — must not snap the edge back
-        // to the width the file still has.
+        // ! A rebuild under a header drag — the watcher re-resolving the table
+        //   while a column is being pulled wider — must not snap the edge back
+        //   to the width the file still has.
         if let Some(resize) = self.table_state.resize {
             if let Some(slot) = self.table_state.widths.get_mut(resize.column) {
                 *slot = resize.width;
             }
         }
-        // An open cell field is kept only while the line it opened on still
-        // stands for the same note: a rebuild re-flattens the body, so a row
-        // can move or go away under it.
+        // * An open cell field is kept only while the line it opened on still
+        //   stands for the same note: a rebuild re-flattens the body, so a row
+        //   can move or go away under it.
         if let Some(edit) = self.editing.cell.as_ref() {
             let still_there = self
                 .table_state
@@ -312,8 +312,8 @@ impl BasesView {
                             cx.stop_propagation();
                             cx.new(|_| drag.clone())
                         })
-                        // The press that starts the drag is not a press on
-                        // the header, which would open its menu.
+                        // * The press that starts the drag is not a press on
+                        //   the header, which would open its menu.
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()),
                 )
             }))
@@ -363,7 +363,7 @@ impl BasesView {
     ) -> AnyElement {
         let last = row.cells.len().saturating_sub(1);
         let columns: Vec<Column> = self.table().map(|t| t.columns.clone()).unwrap_or_default();
-        // The column of this row a field is open over, if any.
+        // * The column of this row a field is open over, if any.
         let open = self
             .editing
             .cell
@@ -405,9 +405,9 @@ impl BasesView {
                 } else {
                     box_.flex_shrink_0().w(px(width))
                 };
-                // A field is open over this very cell: it draws instead of the
-                // value, and a press anywhere else commits it, the way the
-                // property editor's own field closes.
+                // * A field is open over this very cell: it draws instead of the
+                //   value, and a press anywhere else commits it, the way the
+                //   property editor's own field closes.
                 if open == Some(c) {
                     if let Some(field) = field.clone() {
                         return box_
@@ -420,7 +420,7 @@ impl BasesView {
                 }
                 let path = row.file.path.clone();
                 box_ = match (editable, cell.kind) {
-                    // A boolean has no text to type, so the click flips it.
+                    // * A boolean has no text to type, so the click flips it.
                     (true, CellKind::Checkbox) => box_.cursor_pointer().on_click(
                         cx.listener(move |this, _, _, cx| this.toggle_checkbox_cell(ix, c, cx)),
                     ),
@@ -435,13 +435,13 @@ impl BasesView {
                         .on_click(cx.listener(move |this, _, _, cx| this.open(path.clone(), cx))),
                 };
                 match cell.kind {
-                    // A boolean is a disabled checkbox, so there is no text
-                    // even when the value is `true`.
+                    // * A boolean is a disabled checkbox, so there is no text
+                    //   even when the value is `true`.
                     CellKind::Checkbox => {
                         box_.child(checkbox(matches!(cell.value, Value::Bool(true)), theme))
                     }
-                    // **Unprobed**: no number column's alignment was measured;
-                    // right is the convention a number column reads in.
+                    // ? **Unprobed**: no number column's alignment was measured;
+                    //   right is the convention a number column reads in.
                     CellKind::Number => box_.justify_end().text_color(theme.text).child(
                         div()
                             .min_w_0()
@@ -481,8 +481,8 @@ pub fn column_widths(columns: &[Column], layout: &TableLayout) -> Vec<f32> {
         .iter()
         .map(|col| match layout.width_of(&col.id) {
             Some(w) => w,
-            // ~7 px a glyph at 13 px of Inter, plus the cell's two pads
-            // and the room Obsidian leaves for a header's type icon.
+            // * ~7 px a glyph at 13 px of Inter, plus the cell's two pads
+            //   and the room Obsidian leaves for a header's type icon.
             None => (col.display.chars().count() as f32 * 7. + 2. * CELL_PAD + 24.)
                 .clamp(MIN_COLUMN_WIDTH, MAX_COLUMN_WIDTH),
         })

@@ -54,7 +54,7 @@ fn wikilinks_inside_code_and_links_without_alias() {
         html("`[[not a link]]` and [[A#B]]"),
         "<p><code>[[not a link]]</code> and <a data-href=\"A#B\" href=\"A#B\" class=\"internal-link\" target=\"_blank\" rel=\"noopener nofollow\">A &gt; B</a></p>\n"
     );
-    // Wikilinks are disabled in CommonMark mode and parse as bracketed text.
+    // * Wikilinks are disabled in CommonMark mode and parse as bracketed text.
     assert_eq!(
         render_html_with(
             &silica_markdown::parse_with("[[x]]", &silica_markdown::Options::commonmark()),
@@ -79,7 +79,7 @@ fn tags() {
         html("#tag"),
         "<p><a href=\"#tag\" class=\"tag\" target=\"_blank\" rel=\"noopener nofollow\">#tag</a></p>\n"
     );
-    // `#` followed by a space is a heading, not a tag.
+    // * `#` followed by a space is a heading, not a tag.
     assert_eq!(html("# Title"), "<h1 data-heading=\"Title\">Title</h1>\n");
 }
 
@@ -98,7 +98,7 @@ fn block_ids() {
         panic!("list")
     };
     assert_eq!(items[0].children[0].id.map(|i| i.id), Some("li"));
-    // The id is not part of the paragraph text.
+    // * The id is not part of the paragraph text.
     assert_eq!(html("para one ^abc-1"), "<p>para one</p>\n");
     assert_eq!(doc.blocks.len(), 3);
 }
@@ -118,7 +118,7 @@ fn callouts() {
     };
     assert_eq!(*callout_type, "tip");
     assert_eq!(*fold, Some(Fold::Collapsed));
-    // The title is a block tree now; one paragraph, in the ordinary case.
+    // * The title is a block tree now; one paragraph, in the ordinary case.
     assert_eq!(
         silica_markdown::plain_text(silica_markdown::inline_runs(title)[0]),
         "Fold me"
@@ -174,7 +174,7 @@ fn a_fence_info_string_resolves_to_a_language() {
     };
     let fence = |info: &str| format!("```{info}\ncode line\n```");
 
-    // Resolves: lowercased, on both elements.
+    // * Resolves: lowercased, on both elements.
     assert_eq!(
         classes(&fence("rust")),
         (
@@ -189,7 +189,7 @@ fn a_fence_info_string_resolves_to_a_language() {
             " class=\"language-js\"".into()
         )
     );
-    // Unregistered but resolvable keeps its own name.
+    // * Unregistered but resolvable keeps its own name.
     assert_eq!(
         classes(&fence("silica-made-up")),
         (
@@ -197,11 +197,11 @@ fn a_fence_info_string_resolves_to_a_language() {
             " class=\"language-silica-made-up\"".into()
         )
     );
-    // The first word only.
+    // * The first word only.
     assert_eq!(classes(&fence("foo bar")).0, " class=\"language-foo\"");
 
-    // Does not resolve: `language-none` on the pre, the raw word kept on the
-    // code. These are real fence words, not curiosities.
+    // * Does not resolve: `language-none` on the pre, the raw word kept on the
+    // * code. These are real fence words, not curiosities.
     for info in ["c#", "f#", "C++", ".net", "{python}", "a~b"] {
         let (pre, code) = classes(&fence(info));
         assert_eq!(pre, " class=\"language-none\"", "{info}");
@@ -212,11 +212,11 @@ fn a_fence_info_string_resolves_to_a_language() {
         );
     }
 
-    // No info string, no class at all.
+    // * No info string, no class at all.
     assert_eq!(classes(&fence("")), (String::new(), String::new()));
 
-    // CommonMark has neither rule: the word goes on the `code` as written, and
-    // the `pre` carries nothing.
+    // * CommonMark has neither rule: the word goes on the `code` as written, and
+    // * the `pre` carries nothing.
     let cm = render_html_with(
         &silica_markdown::parse_with(&fence("C#"), &silica_markdown::Options::commonmark()),
         &HtmlOptions::commonmark(),
@@ -232,14 +232,14 @@ fn a_fence_info_string_resolves_to_a_language() {
 /// it. Observed against Obsidian 1.14.4 (tools/probe-gen, 2026-10-29).
 #[test]
 fn underscore_emphasis_opens_inside_a_word() {
-    // Emphasised, where CommonMark leaves all four literal.
+    // * Emphasised, where CommonMark leaves all four literal.
     assert_eq!(html("a_b_"), "<p>a<em>b</em></p>\n");
     assert_eq!(html("__a__b"), "<p><strong>a</strong>b</p>\n");
     assert_eq!(html("a__b__"), "<p>a<strong>b</strong></p>\n");
     assert_eq!(html("x__y__z"), "<p>x<strong>y</strong>z</p>\n");
 
-    // A single `_` cannot close before an alphanumeric, so identifiers and
-    // ordinary prose are untouched -- the whole reason this is safe.
+    // ! A single `_` cannot close before an alphanumeric, so identifiers and
+    // ! ordinary prose are untouched -- the whole reason this is safe.
     for src in [
         "snake_case_word",
         "a_b_c",
@@ -254,12 +254,12 @@ fn underscore_emphasis_opens_inside_a_word() {
         assert_eq!(html(src), format!("<p>{src}</p>\n"), "{src}");
     }
 
-    // The ordinary forms still work.
+    // * The ordinary forms still work.
     assert_eq!(html("_both_"), "<p><em>both</em></p>\n");
     assert_eq!(html("__dunder__"), "<p><strong>dunder</strong></p>\n");
 
-    // CommonMark mode keeps CommonMark's rule: this is a parse-level quirk, so
-    // it needs `Options::commonmark`, not just the plain renderer.
+    // * CommonMark mode keeps CommonMark's rule: this is a parse-level quirk, so
+    // * it needs `Options::commonmark`, not just the plain renderer.
     let cm = |src: &str| {
         render_html_with(
             &silica_markdown::parse_with(src, &silica_markdown::Options::commonmark()),
@@ -279,28 +279,28 @@ fn underscore_emphasis_opens_inside_a_word() {
 /// `<span>`. Observed against Obsidian 1.14.4 (tools/probe-gen, 2026-10-29).
 #[test]
 fn a_link_ends_at_a_link_inside_it() {
-    // `md ` keeps its trailing space inside the anchor, the wikilink is a
-    // sibling anchor, and ` link` is outside both.
+    // * `md ` keeps its trailing space inside the anchor, the wikilink is a
+    // * sibling anchor, and ` link` is outside both.
     let rendered = html("[md [[Links]] link](https://e.com)");
     assert!(
         rendered.contains(r#">md </a><a data-href="Links""#),
         "{rendered}"
     );
     assert!(rendered.ends_with("Links</a> link</p>\n"), "{rendered}");
-    // Never two anchors deep.
+    // ! Never two anchors deep.
     assert_eq!(rendered.matches("<a ").count(), 2, "{rendered}");
 
-    // Once closed it stays closed: the text between two wikilinks is bare too.
+    // * Once closed it stays closed: the text between two wikilinks is bare too.
     let two = html("[md [[Links]] a [[Other]] b](https://e.com)");
     assert!(two.ends_with("Other</a> b</p>\n"), "{two}");
     assert!(two.contains("</a> a <a"), "{two}");
 
-    // A tag is an anchor, so it ends the link as well.
+    // * A tag is an anchor, so it ends the link as well.
     let tag = html("[md #tag link](https://e.com)");
-    // `r##` because the string itself contains `"#`.
+    // * `r##` because the string itself contains `"#`.
     assert!(tag.contains(r##">md </a><a href="#tag""##), "{tag}");
 
-    // An embed and an image are spans, so the link continues through them.
+    // * An embed and an image are spans, so the link continues through them.
     for src in [
         "[md ![[pic.png]] link](https://e.com)",
         "[md ![alt](a.png) link](https://e.com)",
@@ -309,10 +309,10 @@ fn a_link_ends_at_a_link_inside_it() {
         assert!(out.contains(" link</a>"), "{src}: {out}");
     }
 
-    // Nothing to split: the ordinary link is untouched.
+    // * Nothing to split: the ordinary link is untouched.
     assert_eq!(html("[plain](https://e.com)").matches("</a>").count(), 1);
-    // The split is Obsidian's rule, so CommonMark output is left as it was and
-    // still nests. Wikilinks do not occur in the CommonMark suite.
+    // ! The split is Obsidian's rule, so CommonMark output is left as it was and
+    // ! still nests. Wikilinks do not occur in the CommonMark suite.
     assert_eq!(
         plain_html("[md [[Links]] link](https://e.com)")
             .matches("</a>")
@@ -351,8 +351,8 @@ fn a_callout_title_is_block_parsed() {
         title_blocks("> [!note] > quote\n> body").as_slice(),
         [BlockKind::BlockQuote { .. }]
     ));
-    // A spaced `-` or `+` is title content, not a fold marker, and a lone list
-    // marker makes a list with one empty item.
+    // * A spaced `-` or `+` is title content, not a fold marker, and a lone list
+    // * marker makes a list with one empty item.
     for src in ["> [!note] -\n> body", "> [!note] +\n> body"] {
         let doc = parse(src);
         let BlockKind::Callout { fold, title, .. } = &doc.blocks[0].kind else {
@@ -361,15 +361,15 @@ fn a_callout_title_is_block_parsed() {
         assert_eq!(*fold, None, "{src:?}");
         assert!(matches!(title[0].kind, BlockKind::List { .. }), "{src:?}");
     }
-    // The fold markers that *are* markers still are.
+    // * The fold markers that *are* markers still are.
     let doc = parse("> [!note]- t\n> body");
     let BlockKind::Callout { fold, .. } = &doc.blocks[0].kind else {
         panic!("callout")
     };
     assert_eq!(*fold, Some(Fold::Collapsed));
 
-    // Rendering: an ordinary title stays bare, a heading title becomes an h1,
-    // and the spans stay absolute in the source despite the nested parse.
+    // * Rendering: an ordinary title stays bare, a heading title becomes an h1,
+    // * and the spans stay absolute in the source despite the nested parse.
     let rendered = html("> [!note] Hi\n> there");
     assert!(
         rendered.contains("callout-title-inner\">Hi</div>"),
@@ -385,7 +385,7 @@ fn a_callout_title_is_block_parsed() {
     let BlockKind::Heading { content, .. } = &title[0].kind else {
         panic!("heading")
     };
-    // `h` sits at byte 12 of the whole document, not byte 2 of the title.
+    // * `h` sits at byte 12 of the whole document, not byte 2 of the title.
     assert_eq!(&src[content[0].span.start..content[0].span.end], "h");
     assert_eq!(content[0].span.start, 12);
 }
@@ -416,8 +416,8 @@ fn a_quote_in_a_list_item_keeps_its_later_lines() {
             .collect()
     }
 
-    // One quote inside the item, holding both lines -- not a second quote
-    // outside the list.
+    // * One quote inside the item, holding both lines -- not a second quote
+    // * outside the list.
     let kinds = item_children("- item\n> quote\n> more");
     assert!(
         matches!(
@@ -441,19 +441,19 @@ fn a_quote_in_a_list_item_keeps_its_later_lines() {
         1
     );
 
-    // The same for a callout, whose body used to be left behind.
+    // * The same for a callout, whose body used to be left behind.
     let kinds = item_children("- item\n> [!tip] t\n> a\n> b");
     let [_, BlockKind::Callout { children, .. }] = kinds.as_slice() else {
         panic!("expected a callout in the item: {kinds:?}")
     };
     assert_eq!(children.len(), 1, "{children:?}");
 
-    // And nested one level further: a callout in a list item of a callout.
+    // * And nested one level further: a callout in a list item of a callout.
     let doc = parse("> [!note]\n> - item\n> > [!tip] nested\n> > body");
     let BlockKind::Callout { children, .. } = doc.blocks.into_iter().next().unwrap().kind else {
         panic!("outer callout")
     };
-    // Just the list -- no stray quote trailing it inside the outer callout.
+    // * Just the list -- no stray quote trailing it inside the outer callout.
     assert_eq!(children.len(), 1, "{children:?}");
     assert!(matches!(children[0].kind, BlockKind::List { .. }));
     let rendered = html("> [!note]\n> - item\n> > [!tip] nested\n> > body");
@@ -482,14 +482,14 @@ fn callout_type_and_its_default_title() {
         inner.to_string()
     }
 
-    // Whitespace between the brackets is a callout with an empty type; a bare
-    // `[!]` is not a callout at all.
+    // * Whitespace between the brackets is a callout with an empty type; a bare
+    // * `[!]` is not a callout at all.
     for src in ["> [! ]\n> body", "> [!   ]\n> body"] {
         let BlockKind::Callout { callout_type, .. } = parse(src).blocks.remove(0).kind else {
             panic!("expected a callout for {src:?}")
         };
         assert_eq!(callout_type, "", "{src:?}");
-        // An empty type has no default title, and shows an empty `data-callout`.
+        // * An empty type has no default title, and shows an empty `data-callout`.
         assert_eq!(title(src), "");
         assert!(html(src).contains("data-callout=\"\""), "{src:?}");
     }
@@ -497,24 +497,24 @@ fn callout_type_and_its_default_title() {
         parse("> [!]\n> body").blocks[0].kind,
         BlockKind::BlockQuote { .. }
     ));
-    // The type is trimmed, so this is a `bad` callout.
+    // * The type is trimmed, so this is a `bad` callout.
     let BlockKind::Callout { callout_type, .. } = parse("> [! bad]\n> b").blocks.remove(0).kind
     else {
         panic!("callout")
     };
     assert_eq!(callout_type, "bad");
 
-    // `-` becomes a space, the whole thing is lowercased, the first character
-    // is upper-cased, and `_` is left alone.
+    // * `-` becomes a space, the whole thing is lowercased, the first character
+    // * is upper-cased, and `_` is left alone.
     assert_eq!(title("> [!note]\n> b"), "Note");
     assert_eq!(title("> [!TIP]\n> b"), "Tip");
     assert_eq!(title("> [!bad-type-two]\n> b"), "Bad type two");
     assert_eq!(title("> [!NOTE-X]\n> b"), "Note x");
     assert_eq!(title("> [!bad_type]\n> b"), "Bad_type");
-    // A title that is written out is used as written, not derived.
+    // * A title that is written out is used as written, not derived.
     assert_eq!(title("> [!bad-type] Kept-as-is\n> b"), "Kept-as-is");
 
-    // The derivation is shared, so the helper and the renderer cannot drift.
+    // ! The derivation is shared, so the helper and the renderer cannot drift.
     assert_eq!(
         silica_markdown::callout_default_title("bad-type-two"),
         "Bad type two"
@@ -541,7 +541,7 @@ fn callout_body_starts_a_block_on_its_first_line() {
         children.into_iter().next().expect("a body block").kind
     }
 
-    // A table, with and without a title, a fold marker, or a space after `>`.
+    // * A table, with and without a title, a fold marker, or a space after `>`.
     for src in [
         "> [!note]\n> | a | b |\n> |---|---|",
         "> [!note] Title\n> | a | b |\n> |---|---|",
@@ -554,7 +554,7 @@ fn callout_body_starts_a_block_on_its_first_line() {
         assert_eq!(header.len(), 2, "{src:?}");
     }
 
-    // A setext underline, which reads the same paragraph-line count.
+    // * A setext underline, which reads the same paragraph-line count.
     for (src, level) in [
         ("> [!note]\n> text\n> ---", 2u8),
         ("> [!note]\n> text\n> ===", 1),
@@ -568,14 +568,14 @@ fn callout_body_starts_a_block_on_its_first_line() {
         assert_eq!((got, setext), (level, true), "{src:?}");
     }
 
-    // And a list, which asks whether it may interrupt a paragraph.
+    // * And a list, which asks whether it may interrupt a paragraph.
     assert!(matches!(
         first_child("> [!note]\n> - a\n> - b"),
         BlockKind::List { .. }
     ));
 
-    // Taking the header early must not cost the body its lazy continuation:
-    // an unprefixed line still belongs to the callout.
+    // ! Taking the header early must not cost the body its lazy continuation:
+    // ! an unprefixed line still belongs to the callout.
     let BlockKind::Callout { children, .. } = parse("> [!note]\ncontent").blocks.remove(0).kind
     else {
         panic!("callout")
@@ -583,10 +583,10 @@ fn callout_body_starts_a_block_on_its_first_line() {
     assert_eq!(children.len(), 1);
     assert!(matches!(children[0].kind, BlockKind::Paragraph { .. }));
 
-    // A header with nothing after it still has no body, so no content div.
+    // * A header with nothing after it still has no body, so no content div.
     assert!(!html("> [!note]").contains("callout-content"));
 
-    // The header belongs to the quote's first block and nowhere else.
+    // * The header belongs to the quote's first block and nowhere else.
     assert!(matches!(
         parse("> text\n> [!note]").blocks[0].kind,
         BlockKind::BlockQuote { .. }
@@ -621,7 +621,7 @@ fn a_colour_emoji_inside_a_highlight_is_the_colour() {
         html("==plain=="),
         "<p><mark data-highlight=\"\">plain</mark></p>\n"
     );
-    // Anywhere but directly after the opening pair the emoji is text.
+    // * Anywhere but directly after the opening pair the emoji is text.
     assert_eq!(
         html("==a \u{1f534}b=="),
         "<p><mark data-highlight=\"\">a \u{1f534}b</mark></p>\n"
@@ -634,7 +634,7 @@ fn a_colour_emoji_inside_a_highlight_is_the_colour() {
         panic!("a highlight");
     };
     assert_eq!(*color, Some(silica_markdown::HighlightColor::Yellow));
-    // The text node's span starts after the emoji.
+    // * The text node's span starts after the emoji.
     assert_eq!(children[0].span, Span::new(6, 8));
     assert!(matches!(&children[0].kind, InlineKind::Text(t) if t == "hi"));
 }
@@ -660,7 +660,7 @@ fn tables_with_escaped_pipes() {
     };
     assert_eq!(header.len(), 2);
     assert_eq!(rows.len(), 1);
-    // The body keeps `\|`; the resolvable target drops the backslash.
+    // * The body keeps `\|`; the resolvable target drops the backslash.
     assert!(
         matches!(&rows[0][0].content[0].kind, InlineKind::Wikilink { body, .. } if body == r"x\|y")
     );
@@ -683,7 +683,7 @@ fn task_lists() {
     };
     assert_eq!(*kind, ListKind::Bullet { marker: b'-' });
     let tasks: Vec<_> = items.iter().map(|i| i.task).collect();
-    // `- [ ]` with nothing after it is plain text in Obsidian.
+    // * `- [ ]` with nothing after it is plain text in Obsidian.
     assert_eq!(tasks, vec![Some(' '), Some('x'), Some('?'), None, None]);
     assert_eq!(items[1].marker, Span::new(11, 12));
     assert_eq!(
@@ -709,7 +709,7 @@ fn footnotes() {
         &doc.blocks[1].kind,
         BlockKind::FootnoteDefinition { label: "1", .. }
     ));
-    // An undefined reference renders as its label, as Obsidian does.
+    // ! An undefined reference renders as its label, as Obsidian does.
     assert_eq!(plain_html("x[^nope]"), "<p>xnope</p>\n");
 }
 

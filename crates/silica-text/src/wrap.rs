@@ -27,7 +27,7 @@ mod tests {
         let starts = || [4, 10];
         assert_eq!(row_of(starts(), 0), 0);
         assert_eq!(row_of(starts(), 3), 0);
-        // The wrap points themselves: the first byte of rows 1 and 2.
+        // * The wrap points themselves: the first byte of rows 1 and 2.
         assert_eq!(row_of(starts(), 4), 1);
         assert_eq!(row_of(starts(), 10), 2);
         assert_eq!(row_of(starts(), 7), 1);

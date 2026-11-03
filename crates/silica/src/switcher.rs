@@ -243,7 +243,7 @@ impl QuickSwitcher {
                 };
                 let best = match (by_label, by_path) {
                     (Some(l), Some((ps, _))) if l.score >= ps => Some((l.score, l.ranges)),
-                    // A path match highlights nothing in the label.
+                    // * A path match highlights nothing in the label.
                     (_, Some((ps, _))) => Some((ps, Vec::new())),
                     (Some(l), None) => Some((l.score, l.ranges)),
                     (None, None) => None,

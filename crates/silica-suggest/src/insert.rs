@@ -100,9 +100,9 @@ fn parts(t: &Triggered<'_>, item: &Item, v: &Vault<'_>, opts: &Options) -> Parts
         Item::File { path } => {
             let written = of_file(path);
             let markdown = FileKind::from_path(path).is_markdown();
-            // The display text is added exactly when the path part carries a
-            // folder, and only for notes: `[[Sub/Alpha|Alpha]]`, but
-            // `[[../pic.png]]` with none.
+            // * The display text is added exactly when the path part carries a
+            // * folder, and only for notes: `[[Sub/Alpha|Alpha]]`, but
+            // * `[[../pic.png]]` with none.
             let display = (markdown && written.contains('/')).then(|| basename(path).to_string());
             Parts {
                 path: written,
@@ -119,10 +119,10 @@ fn parts(t: &Triggered<'_>, item: &Item, v: &Vault<'_>, opts: &Options) -> Parts
             resolved: true,
             markdown: FileKind::from_path(path).is_markdown(),
         },
-        // A heading pick is the exception twice over: the path stays exactly
-        // as it was typed rather than being reformatted, and it never takes
-        // display text. `[[Sub/Gamma#` keeps `Sub/Gamma` even where
-        // `shortest` would have written `Gamma`.
+        // ! A heading pick is the exception twice over: the path stays exactly
+        // ! as it was typed rather than being reformatted, and it never takes
+        // ! display text. `[[Sub/Gamma#` keeps `Sub/Gamma` even where
+        // ! `shortest` would have written `Gamma`.
         Item::Heading { heading, .. } => Parts {
             path: parse_linktext(t.query).path.to_string(),
             subpath: format!("#{heading}"),
@@ -130,10 +130,10 @@ fn parts(t: &Triggered<'_>, item: &Item, v: &Vault<'_>, opts: &Options) -> Parts
             resolved: true,
             markdown: true,
         },
-        // A block pick follows the heading rule for the path, and writes no
-        // display text at all: `[](Gamma.md#^id)` in markdown style. A
-        // block with no id of its own cannot be linked until one is
-        // written, which the caller does before asking for the link.
+        // ! A block pick follows the heading rule for the path, and writes no
+        // ! display text at all: `[](Gamma.md#^id)` in markdown style. A
+        // ! block with no id of its own cannot be linked until one is
+        // ! written, which the caller does before asking for the link.
         Item::Block { id, .. } => Parts {
             path: parse_linktext(t.query).path.to_string(),
             subpath: match id {
@@ -144,9 +144,9 @@ fn parts(t: &Triggered<'_>, item: &Item, v: &Vault<'_>, opts: &Options) -> Parts
             resolved: true,
             markdown: true,
         },
-        // Nothing resolved: the query is linked as it was typed. A `|` in it
-        // still splits, so `[[Alpha|disp` keeps `disp` as the display text
-        // and links `Alpha` even though no file was picked.
+        // * Nothing resolved: the query is linked as it was typed. A `|` in it
+        // * still splits, so `[[Alpha|disp` keeps `disp` as the display text
+        // * and links `Alpha` even though no file was picked.
         Item::Tag { .. } | Item::Literal => {
             let parsed = parse_linktext(t.query);
             Parts {
@@ -168,7 +168,7 @@ fn link(
     opts: &Options,
 ) -> Insertion {
     let bang = if t.kind.is_embed() { "!" } else { "" };
-    // Shift+Enter links the text as typed, whatever is selected.
+    // * Shift+Enter links the text as typed, whatever is selected.
     let typed = accept == Accept::Typed;
     let p = if typed {
         Parts {
@@ -182,13 +182,13 @@ fn link(
         parts(t, item, v, opts)
     };
     let (text, cursor) = if opts.markdown_links {
-        // `[Beta Note](Beta%20Note.md)`: the text is the basename, the alias
-        // or the heading, and a pick with no file behind it writes none.
+        // * `[Beta Note](Beta%20Note.md)`: the text is the basename, the alias
+        // * or the heading, and a pick with no file behind it writes none.
         let shown = match (&p.display, &p.resolved, item) {
             (Some(d), _, _) => d.clone(),
             (None, true, Item::Heading { heading, .. }) => heading.clone(),
-            // A block reference has no text to show; the cursor lands
-            // between the brackets, which is the part left to fill in.
+            // * A block reference has no text to show; the cursor lands
+            // * between the brackets, which is the part left to fill in.
             (None, _, Item::Block { .. }) if !typed => String::new(),
             (None, true, _) => basename(&p.path).to_string(),
             (None, false, _) => String::new(),
@@ -199,9 +199,9 @@ fn link(
         }
         dest.push_str(&p.subpath);
         let text = format!("{bang}[{shown}]({})", encode(&dest));
-        // There is nowhere to stand inside a markdown link, so Tab lands
-        // where Enter does — except with no text to show, where the cursor
-        // goes between the brackets, that being the part left to fill in.
+        // * There is nowhere to stand inside a markdown link, so Tab lands
+        // * where Enter does — except with no text to show, where the cursor
+        // * goes between the brackets, that being the part left to fill in.
         let cursor = if shown.is_empty() {
             bang.len() + 1
         } else {
@@ -218,7 +218,7 @@ fn link(
         };
         (text, cursor)
     };
-    // Accepting inside `[[be|]]` must not leave four brackets.
+    // ! Accepting inside `[[be|]]` must not leave four brackets.
     let consume = if t.after.starts_with("]]") { 2 } else { 0 };
     Insertion {
         text,

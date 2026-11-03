@@ -1,10 +1,10 @@
 use super::*;
 
 // ---- fixtures ---------------------------------------------------------------
-// Copied from `crates/silica-formats/tests/canvas`: what the Obsidian probe
-// wrote into a scratch vault (`*.in`) and what Obsidian 1.14.4 wrote back
-// (`*.out`). The writer is silica-formats' job; what this crate owes is that
-// a `Scene` with no edits, or with an edit undone, hands it the same model.
+// * Copied from `crates/silica-formats/tests/canvas`: what the Obsidian probe
+// * wrote into a scratch vault (`*.in`) and what Obsidian 1.14.4 wrote back
+// * (`*.out`). The writer is silica-formats' job; what this crate owes is that
+// * a `Scene` with no edits, or with an edit undone, hands it the same model.
 
 const ORDER_IN: &str = r##"{
   "nodes": [
@@ -164,10 +164,10 @@ fn union_covers_both_and_intersection_is_the_overlap() {
     assert_eq!(b.union(&a), a.union(&b));
     assert_eq!(a.intersection(&b), Some(Rect::new(50.0, 0.0, 50.0, 50.0)));
     assert_eq!(b.intersection(&a), a.intersection(&b));
-    // Touching along an edge is no overlap, nor is being apart.
+    // * Touching along an edge is no overlap, nor is being apart.
     assert_eq!(a.intersection(&Rect::new(100.0, 0.0, 10.0, 10.0)), None);
     assert_eq!(a.intersection(&Rect::new(500.0, 500.0, 10.0, 10.0)), None);
-    // One inside the other: the inner one.
+    // * One inside the other: the inner one.
     let inner = Rect::new(10.0, 10.0, 20.0, 20.0);
     assert_eq!(a.intersection(&inner), Some(inner));
 }
@@ -233,7 +233,7 @@ fn the_viewport_position_is_the_canvas_point_at_the_centre_of_the_view() {
         vp.to_screen(Point::new(100.0, -50.0), size),
         Point::new(400.0, 300.0)
     );
-    // One canvas unit is `scale` pixels.
+    // * One canvas unit is `scale` pixels.
     assert_eq!(
         vp.to_screen(Point::new(101.0, -50.0), size),
         Point::new(402.0, 300.0)
@@ -282,7 +282,7 @@ fn fit_frames_the_rectangle_with_padding_and_clamps() {
     let size = (800.0, 600.0);
     let rect = Rect::new(0.0, 0.0, 1400.0, 500.0);
     let vp = Viewport::fit(rect, size, 50.0);
-    // Width is the tighter side: 700 px for 1400 units.
+    // * Width is the tighter side: 700 px for 1400 units.
     let raw = 0.5f64.log2();
     assert!(close(vp.zoom, raw.clamp(ZOOM_MIN, ZOOM_MAX)));
     assert_eq!(Point::new(vp.x, vp.y), rect.center());
@@ -291,10 +291,10 @@ fn fit_frames_the_rectangle_with_padding_and_clamps() {
         assert!(close(on_screen.x, 50.0) && close(on_screen.width, 700.0));
         assert!(close(on_screen.center().y, 300.0));
     }
-    // A tiny rectangle would zoom in without limit; the range stops it.
+    // * A tiny rectangle would zoom in without limit; the range stops it.
     let tiny = Viewport::fit(Rect::new(0.0, 0.0, 1.0, 1.0), size, 0.0);
     assert_eq!(tiny.zoom, ZOOM_MAX);
-    // A huge one zooms out no further than the range either.
+    // * A huge one zooms out no further than the range either.
     let huge = Viewport::fit(Rect::new(0.0, 0.0, 1e9, 1e9), size, 0.0);
     assert_eq!(huge.zoom, ZOOM_MIN);
 }
@@ -401,7 +401,7 @@ fn anchors_are_the_middles_of_the_sides() {
     for side in [Side::Top, Side::Right, Side::Bottom, Side::Left] {
         let n = side_normal(side);
         assert!(close(n.x * n.x + n.y * n.y, 1.0));
-        // Stepping along the normal from the anchor leaves the rectangle.
+        // * Stepping along the normal from the anchor leaves the rectangle.
         let a = anchor(&r, side);
         assert!(!r.contains(Point::new(a.x + n.x, a.y + n.y)));
     }
@@ -414,16 +414,16 @@ fn facing_side_is_the_side_the_target_lies_beyond() {
     assert_eq!(facing_side(&square, Point::new(-300.0, 50.0)), Side::Left);
     assert_eq!(facing_side(&square, Point::new(50.0, 300.0)), Side::Bottom);
     assert_eq!(facing_side(&square, Point::new(50.0, -300.0)), Side::Top);
-    // A point in a quadrant still picks by which side's cone it is in.
+    // * A point in a quadrant still picks by which side's cone it is in.
     assert_eq!(facing_side(&square, Point::new(300.0, 120.0)), Side::Right);
     assert_eq!(facing_side(&square, Point::new(-10.0, -300.0)), Side::Top);
-    // A wide card is reached from above or below for the same diagonal
-    // point that a tall card is reached from the side.
+    // * A wide card is reached from above or below for the same diagonal
+    // * point that a tall card is reached from the side.
     let wide = Rect::new(0.0, 0.0, 400.0, 100.0);
     let tall = Rect::new(0.0, 0.0, 100.0, 400.0);
     assert_eq!(facing_side(&wide, Point::new(300.0, 300.0)), Side::Bottom);
     assert_eq!(facing_side(&tall, Point::new(300.0, 300.0)), Side::Right);
-    // Inside the rectangle is still an answer.
+    // * Inside the rectangle is still an answer.
     assert_eq!(facing_side(&square, Point::new(60.0, 50.0)), Side::Right);
 }
 
@@ -434,8 +434,8 @@ fn a_straight_edge_runs_between_the_anchors() {
     let a = Rect::new(0.0, 0.0, 100.0, 100.0);
     let b = Rect::new(300.0, 0.0, 100.0, 100.0);
     let path = edge_path(&a, Side::Right, &b, Side::Left);
-    // The curve starts and ends `EDGE_INSET` out from the cards' edges; the
-    // stubs (or arrows) cover the rest.
+    // * The curve starts and ends `EDGE_INSET` out from the cards' edges; the
+    // * stubs (or arrows) cover the rest.
     assert_eq!(path.from, Point::new(100.0 + EDGE_INSET, 50.0));
     assert_eq!(path.to, Point::new(300.0 - EDGE_INSET, 50.0));
     assert_eq!(
@@ -483,17 +483,17 @@ fn tangents_follow_the_side_normals_at_the_ends() {
     let a = Rect::new(0.0, 0.0, 100.0, 100.0);
     let below_right = Rect::new(300.0, 300.0, 100.0, 100.0);
     let path = edge_path(&a, Side::Right, &below_right, Side::Left);
-    // Leaving a right side heads right; arriving at a left side heads right too.
+    // * Leaving a right side heads right; arriving at a left side heads right too.
     assert!(close_point(path.tangent_at(0.0), Point::new(1.0, 0.0)));
     assert!(close_point(path.tangent_at(1.0), Point::new(1.0, 0.0)));
     let down = edge_path(&a, Side::Bottom, &below_right, Side::Top);
     assert!(close_point(down.tangent_at(0.0), Point::new(0.0, 1.0)));
     assert!(close_point(down.tangent_at(1.0), Point::new(0.0, 1.0)));
-    // In between it is a unit vector pointing roughly from a towards b.
+    // * In between it is a unit vector pointing roughly from a towards b.
     let mid = path.tangent_at(0.5);
     assert!(close(mid.x * mid.x + mid.y * mid.y, 1.0));
     assert!(mid.x > 0.0 && mid.y > 0.0);
-    // A free end: the arrow head's base sits behind the tip along the tangent.
+    // * A free end: the arrow head's base sits behind the tip along the tangent.
     let head = arrow_head(path.to, path.tangent_at(1.0), ARROW);
     assert!(head[1].x < path.to.x && head[2].x < path.to.x);
 }
@@ -506,7 +506,7 @@ fn a_degenerate_curve_still_has_a_tangent() {
         c2: Point::new(10.0, 5.0),
         to: Point::new(10.0, 5.0),
     };
-    // Control points on the anchors: zero derivative at both ends, so the chord.
+    // * Control points on the anchors: zero derivative at both ends, so the chord.
     let chord = Point::new(10.0 / 125f64.sqrt(), 5.0 / 125f64.sqrt());
     assert!(close_point(flat.tangent_at(0.0), chord));
     assert!(close_point(flat.tangent_at(1.0), chord));
@@ -560,7 +560,7 @@ fn edge_path_points_is_the_curve_behind_edge_path() {
             Side::Left
         )
     );
-    // Two anchors on top of each other still get a drawable curve.
+    // * Two anchors on top of each other still get a drawable curve.
     let p = Point::new(5.0, 5.0);
     let tiny = edge_path_points(p, Side::Right, p, Side::Left);
     assert!(
@@ -579,8 +579,8 @@ fn arrow_heads_point_along_the_direction() {
     let down = arrow_head(Point::new(0.0, 0.0), Point::new(0.0, 1.0), ARROW);
     assert!(close_point(down[1], Point::new(-ARROW_WIDTH / 2.0, -ARROW)));
     assert!(close_point(down[2], Point::new(ARROW_WIDTH / 2.0, -ARROW)));
-    // The head at `from` points against the start tangent: its base lies
-    // further along the curve than the tip.
+    // * The head at `from` points against the start tangent: its base lies
+    // * further along the curve than the tip.
     let path = edge_path(
         &Rect::new(0.0, 0.0, 100.0, 100.0),
         Side::Right,
@@ -651,8 +651,8 @@ fn hit_edge_takes_the_nearest_within_tolerance() {
             card("d", 300.0, 100.0, 100.0, 100.0),
         ],
         vec![
-            sided("ab", "a", Side::Right, "b", Side::Left), // y = 50
-            sided("cd", "c", Side::Right, "d", Side::Left), // y = 150
+            sided("ab", "a", Side::Right, "b", Side::Left), // * y = 50
+            sided("cd", "c", Side::Right, "d", Side::Left), // * y = 150
             Edge::new("dangling", "a", "gone"),
         ],
     );
@@ -785,7 +785,7 @@ fn each_handle_moves_only_its_sides() {
     ];
     for (handle, expected) in cases {
         assert_eq!(handle.resize(&r, dx, dy, MIN_NODE), expected, "{handle:?}");
-        // The side opposite a moved one never moves.
+        // ! The side opposite a moved one never moves.
         let out = handle.resize(&r, dx, dy, MIN_NODE);
         match handle {
             Handle::Left | Handle::TopLeft | Handle::BottomLeft => {
@@ -817,7 +817,7 @@ fn resizing_past_the_opposite_side_stops_at_the_minimum() {
     assert_eq!(corner, Rect::new(r.right() - mw, r.bottom() - mh, mw, mh));
     let other = Handle::BottomRight.resize(&r, -1000.0, -1000.0, MIN_NODE);
     assert_eq!(other, Rect::new(100.0, 100.0, mw, mh));
-    // Exactly at the minimum is allowed.
+    // * Exactly at the minimum is allowed.
     let exact = Handle::Right.resize(&r, mw - 400.0, 0.0, MIN_NODE);
     assert_eq!(exact.width, mw);
 }
@@ -973,8 +973,8 @@ fn a_commit_without_change_records_nothing_and_begin_twice_keeps_the_first_snaps
         0.0,
         "one step back is the very start"
     );
-    // A mutator called with no `begin` still changes the canvas; it is
-    // simply not undoable, which is what a view that forgot `begin` gets.
+    // * A mutator called with no `begin` still changes the canvas; it is
+    // * simply not undoable, which is what a view that forgot `begin` gets.
     scene.move_selection(1.0, 0.0);
     scene.commit();
     assert!(!scene.can_undo());
@@ -1176,7 +1176,7 @@ fn adding_cards_uses_the_default_sizes_and_selects_them() {
         "added on top"
     );
     assert_eq!(scene.undo_depth(), 1);
-    // Ids are fresh and distinct.
+    // * Ids are fresh and distinct.
     let mut all = vec![t, f, plain, l];
     all.sort();
     all.dedup();
@@ -1255,7 +1255,7 @@ fn moving_a_group_carries_its_members_exactly_once() {
         ],
         vec![],
     ));
-    // The member is selected as well as its group; it still moves once.
+    // * The member is selected as well as its group; it still moves once.
     scene.selection = Selection {
         nodes: vec!["m".into(), "g".into()],
         edges: vec![],
@@ -1270,12 +1270,12 @@ fn moving_a_group_carries_its_members_exactly_once() {
         Rect::new(600.0, 600.0, 100.0, 100.0),
         "outside the group"
     );
-    // A selected card alone moves only itself.
+    // * A selected card alone moves only itself.
     scene.selection = Selection::only_node("o");
     scene.move_selection(-100.0, 0.0);
     assert_eq!(rect_of(&scene, "o").x, 500.0);
     assert_eq!(rect_of(&scene, "g").x, 10.0);
-    // Ids the canvas lacks are ignored.
+    // * Ids the canvas lacks are ignored.
     scene.selection = Selection::only_node("zzz");
     scene.move_selection(1.0, 1.0);
     assert_eq!(rect_of(&scene, "g").x, 10.0);
@@ -1370,7 +1370,7 @@ fn deleting_the_selection_takes_the_edges_that_touched_it() {
     assert!(scene.selection.is_empty());
     scene.undo();
     assert_eq!(scene.canvas.edges.len(), 3);
-    // Deleting an edge alone leaves its nodes.
+    // * Deleting an edge alone leaves its nodes.
     scene.selection = Selection::only_edge("ab");
     scene.delete_selection();
     assert_eq!(scene.canvas.nodes.len(), 3);
@@ -1595,7 +1595,7 @@ fn group_selection_makes_a_group_around_the_selection() {
     assert_eq!(group_members(&scene.canvas, 0), vec![1, 2]);
     scene.undo();
     assert_eq!(ids(&scene.canvas), ["a", "b"]);
-    // Nothing to group: no change and no step.
+    // * Nothing to group: no change and no step.
     scene.selection = Selection::only_edge("ab");
     scene.begin();
     assert_eq!(scene.group_selection(30.0), None);
@@ -1640,12 +1640,12 @@ fn copy_selection_takes_the_nodes_and_the_edges_among_them_with_ids_kept() {
         clip.nodes[0], scene.canvas.nodes[1],
         "a copy, byte for byte"
     );
-    // A selected group brings its members.
+    // * A selected group brings its members.
     scene.selection = Selection::only_node("g");
     let clip = scene.copy_selection();
     assert_eq!(ids(&clip), ["g", "a", "b"]);
     assert_eq!(clip.edges.len(), 1);
-    // Nothing selected, nothing copied; the original is untouched throughout.
+    // * Nothing selected, nothing copied; the original is untouched throughout.
     scene.selection.clear();
     assert_eq!(scene.copy_selection().nodes.len(), 0);
     assert_eq!(scene.canvas.nodes.len(), 4);
@@ -1686,7 +1686,7 @@ fn paste_gives_fresh_ids_remaps_edges_and_lands_at_the_point() {
     assert!(pasted
         .iter()
         .all(|id| id.len() == 16 && id != "a" && id != "b"));
-    // The clip's bounding box top-left (0, 0) lands at the point.
+    // * The clip's bounding box top-left (0, 0) lands at the point.
     assert_eq!(
         rect_of(&scene, &pasted[0]),
         Rect::new(1000.0, 2000.0, 100.0, 100.0)
@@ -1699,7 +1699,7 @@ fn paste_gives_fresh_ids_remaps_edges_and_lands_at_the_point() {
         scene.node(&pasted[0]).and_then(|n| n.text.as_deref()),
         Some("a")
     );
-    // The edge between them came along, onto the new ids, with its sides.
+    // * The edge between them came along, onto the new ids, with its sides.
     assert_eq!(scene.canvas.edges.len(), 3);
     let e = &scene.canvas.edges[2];
     assert_eq!(
@@ -1718,7 +1718,7 @@ fn paste_gives_fresh_ids_remaps_edges_and_lands_at_the_point() {
             edges: vec![]
         }
     );
-    // The originals are where they were, and one undo removes the paste.
+    // * The originals are where they were, and one undo removes the paste.
     assert_eq!(rect_of(&scene, "a"), Rect::new(0.0, 0.0, 100.0, 100.0));
     scene.undo();
     assert_eq!(scene.canvas.nodes.len(), 4);
@@ -1751,7 +1751,7 @@ fn paste_in_place_steps_one_grid_cell_and_drops_edges_to_nodes_outside_the_clip(
     );
     assert_eq!(scene.canvas.edges.len(), 3, "xq has no q to attach to");
     assert_eq!(scene.canvas.edges[2].to_node, pasted[1]);
-    // An empty clip does nothing.
+    // * An empty clip does nothing.
     let before = scene.canvas.clone();
     let selection = scene.selection.clone();
     assert!(scene.paste(&Canvas::default(), None).is_empty());
@@ -1767,7 +1767,7 @@ fn a_paste_from_the_clipboard_text_matches_the_copy_bar_ids_and_position() {
     let clip = Canvas::from_json(&text).expect("parses");
     let pasted = scene.paste(&clip, Some(Point::new(0.0, 1000.0)));
     assert_eq!(pasted.len(), 3);
-    // The group's top-left is the clip's top-left.
+    // * The group's top-left is the clip's top-left.
     assert_eq!(
         rect_of(&scene, &pasted[0]),
         Rect::new(0.0, 1000.0, 500.0, 200.0)
@@ -1782,7 +1782,7 @@ fn a_paste_from_the_clipboard_text_matches_the_copy_bar_ids_and_position() {
         .map(|n| n.kind)
         .collect();
     assert_eq!(kinds, [NodeType::Group, NodeType::Text, NodeType::Text]);
-    // The pasted group encloses its pasted members, so it moves them again.
+    // * The pasted group encloses its pasted members, so it moves them again.
     let gi = scene.node_index(&pasted[0]).expect("pasted");
     assert_eq!(group_members(&scene.canvas, gi).len(), 2);
 }
@@ -1822,7 +1822,7 @@ fn duplicate_selection_copies_with_an_offset_and_selects_the_copies() {
     );
     scene.undo();
     assert_eq!(scene.canvas.nodes.len(), 4);
-    // Nothing selected duplicates nothing.
+    // * Nothing selected duplicates nothing.
     scene.selection.clear();
     assert!(scene.duplicate_selection(Point::new(GRID, GRID)).is_empty());
     assert_eq!(scene.canvas.nodes.len(), 4);
@@ -1852,12 +1852,12 @@ fn moving_a_node_writes_what_obsidian_wrote() {
     let mut scene = scene_from(ORDER_IN);
     scene.selection = Selection::only_node("t3");
     scene.begin();
-    // t3 goes from (0, 200) to (10, 210), in two steps of one drag.
+    // * t3 goes from (0, 200) to (10, 210), in two steps of one drag.
     scene.move_selection(4.0, 7.0);
     scene.move_selection(6.0, 3.0);
     scene.commit();
     assert_eq!(scene.to_json(), ORDER_OUT);
-    // Undone, the file is what Obsidian would have written unedited.
+    // * Undone, the file is what Obsidian would have written unedited.
     let unmoved = ORDER_OUT.replace("\"x\":10,\"y\":210", "\"x\":0,\"y\":200");
     assert_ne!(unmoved, ORDER_OUT);
     assert!(scene.undo());
@@ -1901,14 +1901,14 @@ fn a_set_of_edits_undone_one_by_one_returns_to_the_file() {
 
 #[test]
 fn control_points_reach_half_the_span_within_obsidians_bounds() {
-    // Observed 2026-10-21: two 160 by 60 cards, right side to left side.
+    // ? Observed 2026-10-21: two 160 by 60 cards, right side to left side.
     let a = Rect::new(980.0, 0.0, 160.0, 60.0);
     let close_by = Rect::new(1320.0, 50.0, 160.0, 60.0);
     let path = edge_path(&a, Side::Right, &close_by, Side::Left);
     assert!(close(path.from.x, 1147.0) && close(path.to.x, 1313.0));
     assert!(close(path.c1.x, 1233.6833317310773));
     assert!(close(path.c2.x, 1226.3166682689227));
-    // Far apart the reach stops at 150; nearly touching it stays at 70.
+    // * Far apart the reach stops at 150; nearly touching it stays at 70.
     let far = edge_path(
         &a,
         Side::Right,

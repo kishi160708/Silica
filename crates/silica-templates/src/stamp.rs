@@ -41,7 +41,7 @@ impl Stamp {
 
     /// Sunday is 0, the way moment's `d` numbers the days.
     pub fn weekday(&self) -> u32 {
-        // 1970-01-01 was a Thursday.
+        // * 1970-01-01 was a Thursday.
         (self.days_from_epoch() + 4).rem_euclid(7) as u32
     }
 
@@ -108,7 +108,7 @@ mod tests {
 
     #[test]
     fn weekdays_match_the_ones_obsidian_rendered() {
-        // moment's `d` for the five probe dates.
+        // * moment's `d` for the five probe dates.
         let want = [4, 4, 4, 0, 1];
         for (ix, d) in want.iter().enumerate() {
             assert_eq!(stamp(ix).weekday(), *d, "for {:?}", PROBE[ix]);
@@ -117,7 +117,7 @@ mod tests {
 
     #[test]
     fn days_of_the_year_match() {
-        // moment's `DDD`, leap year included.
+        // * moment's `DDD`, leap year included.
         let want = [1, 60, 365, 291, 292];
         for (ix, d) in want.iter().enumerate() {
             assert_eq!(stamp(ix).day_of_year(), *d, "for {:?}", PROBE[ix]);
@@ -132,7 +132,7 @@ mod tests {
                 s.days_from_epoch() * 86_400 + (s.hour * 3600 + s.minute * 60 + s.second) as i64;
             assert_eq!(Stamp::from_unix(unix, 0), s, "for {:?}", PROBE[ix]);
         }
-        // The epoch itself, and a date before it.
+        // * The epoch itself, and a date before it.
         assert_eq!(
             Stamp::from_unix(0, 0),
             Stamp {
@@ -149,7 +149,7 @@ mod tests {
 
     #[test]
     fn an_offset_moves_the_civil_date() {
-        // Five past midnight UTC is the previous evening six hours west.
+        // * Five past midnight UTC is the previous evening six hours west.
         let utc = Stamp::from_unix(1_767_225_900, 0);
         let west = Stamp::from_unix(1_767_225_900, -6 * 3600);
         assert_eq!((utc.year, utc.month, utc.day, utc.hour), (2026, 1, 1, 0));

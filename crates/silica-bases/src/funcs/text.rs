@@ -49,7 +49,7 @@ const MAX_REPEAT_BYTES: usize = 1 << 20;
 pub fn call(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Expr]) -> EvalResult {
     let lower = name.to_ascii_lowercase();
 
-    // A RegExp carries one function of its own and is *not* a String receiver.
+    // * A RegExp carries one function of its own and is *not* a String receiver.
     if let Value::Regexp(re) = subject {
         if lower == "matches" {
             at_least(name, args, 1)?;
@@ -66,8 +66,8 @@ pub fn call(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Expr]) 
     };
 
     match lower.as_str() {
-        // `contains(value: String)` — "Returns true if the string contains
-        // `value`." Values are case-sensitive; only names are not.
+        // * `contains(value: String)` — "Returns true if the string contains
+        // * `value`." Values are case-sensitive; only names are not.
         "contains" => {
             at_least(name, args, 1)?;
             let vals = ev.eval_args(args)?;
@@ -76,10 +76,10 @@ pub fn call(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Expr]) 
             Ok(Value::Bool(text.contains(&needle)))
         }
 
-        // `containsAll(values: String)` and `containsAny(values: String)` are
-        // **variadic**: observed, because with no arguments at all they answer
-        // true and false respectively — the vacuous answers, which a fixed
-        // arity of one would have refused as "not enough arguments.".
+        // * `containsAll(values: String)` and `containsAny(values: String)` are
+        // * **variadic**: observed, because with no arguments at all they answer
+        // * true and false respectively — the vacuous answers, which a fixed
+        // * arity of one would have refused as "not enough arguments.".
         "containsall" => {
             let vals = ev.eval_args(args)?;
             let needles = strings(name, "values", &vals)?;
@@ -106,8 +106,8 @@ pub fn call(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Expr]) 
             Ok(Value::Bool(text.starts_with(&query)))
         }
 
-        // "Returns true if the string has no characters, or is not present."
-        // The "not present" half is the dispatcher's: null answers true.
+        // * "Returns true if the string has no characters, or is not present."
+        // * The "not present" half is the dispatcher's: null answers true.
         "isempty" => {
             super::arity(name, args, 0, 0)?;
             Ok(Value::Bool(text.is_empty()))
@@ -118,9 +118,9 @@ pub fn call(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Expr]) 
             Ok(Value::Str(text.to_lowercase()))
         }
 
-        // "Returns a string that is constructed from repeating this string the
-        // specified times." A fractional count truncates and a negative one is
-        // nothing; both `unprobed`.
+        // ? "Returns a string that is constructed from repeating this string the
+        // ? specified times." A fractional count truncates and a negative one is
+        // ? nothing; both `unprobed`.
         "repeat" => {
             at_least(name, args, 1)?;
             let vals = ev.eval_args(args)?;
@@ -129,12 +129,12 @@ pub fn call(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Expr]) 
             Ok(Value::Str(repeat(text, count)))
         }
 
-        // "Returns a string with occurrences of `pattern` replaced with the
-        // `replacement`." The plural is the only evidence of how many are
-        // replaced, so **every** occurrence is, for a String pattern as well
-        // as for a RegExp one, and a RegExp's `g` flag changes nothing.
-        // `unprobed`. The replacement is literal text: `$1` is not a group
-        // reference here. Also `unprobed`.
+        // ? "Returns a string with occurrences of `pattern` replaced with the
+        // ? `replacement`." The plural is the only evidence of how many are
+        // ? replaced, so **every** occurrence is, for a String pattern as well
+        // ? as for a RegExp one, and a RegExp's `g` flag changes nothing.
+        // ? `unprobed`. The replacement is literal text: `$1` is not a group
+        // ? reference here. Also `unprobed`.
         "replace" => {
             at_least(name, args, 2)?;
             let vals = ev.eval_args(args)?;
@@ -150,19 +150,19 @@ pub fn call(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Expr]) 
             }))
         }
 
-        // Observed: `"Frothed basalt".reverse()` is `tlasab dehtorF`. By
-        // Unicode scalar value, which is the unit `length` counts in; a
-        // combining mark or an astral pair is `unprobed`.
+        // ? Observed: `"Frothed basalt".reverse()` is `tlasab dehtorF`. By
+        // ? Unicode scalar value, which is the unit `length` counts in; a
+        // ? combining mark or an astral pair is `unprobed`.
         "reverse" => {
             super::arity(name, args, 0, 0)?;
             Ok(Value::Str(text.chars().rev().collect()))
         }
 
-        // "Returns a substring from `start` (inclusive) to `end` (exclusive)."
-        // A negative index counting from the end, and an out-of-range index
-        // clamping rather than refusing, are both `unprobed`: they are the
-        // reading `slice` carries wherever else it is spelled that way, and
-        // the alternative (a refusal) has no observed error string.
+        // ? "Returns a substring from `start` (inclusive) to `end` (exclusive)."
+        // ? A negative index counting from the end, and an out-of-range index
+        // ? clamping rather than refusing, are both `unprobed`: they are the
+        // ? reading `slice` carries wherever else it is spelled that way, and
+        // ? the alternative (a refusal) has no observed error string.
         "slice" => {
             at_least(name, args, 1)?;
             let vals = ev.eval_args(args)?;
@@ -182,13 +182,13 @@ pub fn call(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Expr]) 
             }))
         }
 
-        // "Returns an list of `n` substrings by splitting on `separator`."
-        // Observed: `"Frothed basalt".split(/zz/)` is a List (`lucide-list`)
-        // rendering as `Frothed basalt`, so a separator that never matches
-        // gives the whole string as one element. `n` is read as a cap on how
-        // many substrings come back; what a zero or negative `n` does is
-        // `unprobed` and answers an empty list here. An empty String separator
-        // splits into characters, also `unprobed`.
+        // ? "Returns an list of `n` substrings by splitting on `separator`."
+        // ? Observed: `"Frothed basalt".split(/zz/)` is a List (`lucide-list`)
+        // ? rendering as `Frothed basalt`, so a separator that never matches
+        // ? gives the whole string as one element. `n` is read as a cap on how
+        // ? many substrings come back; what a zero or negative `n` does is
+        // ? `unprobed` and answers an empty list here. An empty String separator
+        // ? splits into characters, also `unprobed`.
         "split" => {
             at_least(name, args, 1)?;
             let vals = ev.eval_args(args)?;
@@ -214,20 +214,20 @@ pub fn call(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Expr]) 
             Ok(Value::List(parts.into_iter().map(Value::Str).collect()))
         }
 
-        // "Converts the string to title case (first letter of each word
-        // capitalized)." Observed: `"Frothed basalt".title()` is
-        // `Frothed Basalt`. The seed's words were already lower case past
-        // their first letter, so whether the rest of a word is lowered is
-        // `unprobed`; the sentence claims only that the first letter is
-        // capitalized, and there is no `upper()` in the language, so the rest
-        // is left as written. A word starts at the string's start or after
-        // whitespace — a hyphen or an apostrophe mid-word is `unprobed`.
+        // * "Converts the string to title case (first letter of each word
+        // * capitalized)." Observed: `"Frothed basalt".title()` is
+        // * `Frothed Basalt`. The seed's words were already lower case past
+        // * their first letter, so whether the rest of a word is lowered is
+        // * `unprobed`; the sentence claims only that the first letter is
+        // * capitalized, and there is no `upper()` in the language, so the rest
+        // * is left as written. A word starts at the string's start or after
+        // * whitespace — a hyphen or an apostrophe mid-word is `unprobed`.
         "title" => {
             super::arity(name, args, 0, 0)?;
             Ok(Value::Str(title_case(text)))
         }
 
-        // "Removes whitespace from both ends of the string."
+        // * "Removes whitespace from both ends of the string."
         "trim" => {
             super::arity(name, args, 0, 0)?;
             Ok(Value::Str(text.trim().to_string()))
@@ -246,12 +246,12 @@ enum Pattern<'a> {
 fn want_pattern<'a>(name: &str, param: &str, v: &'a Value) -> Result<Pattern<'a>, EvalError> {
     match v {
         Value::Regexp(re) => Ok(Pattern::Regexp(re)),
-        // A Link is a String here as everywhere else.
+        // * A Link is a String here as everywhere else.
         other => match other.as_text() {
             Some(s) => Ok(Pattern::Text(s.to_string())),
-            // The expected-type name a two-type parameter prints is the
-            // signature's own spelling; `unprobed`, because the probe only
-            // ever passed this parameter a type it accepts.
+            // ? The expected-type name a two-type parameter prints is the
+            // ? signature's own spelling; `unprobed`, because the probe only
+            // ? ever passed this parameter a type it accepts.
             None => Err(type_error(name, param, "String,RegExp", other.ty())),
         },
     }

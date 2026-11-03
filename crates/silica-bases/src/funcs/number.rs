@@ -31,7 +31,7 @@ use crate::value::{js_number, Value};
 use super::{not_enough, too_many, unknown_function, want_number};
 
 pub fn call(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Expr]) -> EvalResult {
-    // Boolean reaches this module with Number, and has nothing of its own.
+    // * Boolean reaches this module with Number, and has nothing of its own.
     let Some(n) = subject.as_number() else {
         return Err(unknown_function(name, subject.ty()));
     };
@@ -53,16 +53,16 @@ pub fn call(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Expr]) 
             super::arity(name, args, 0, 0)?;
             Ok(Value::Number(round_half_up(n)))
         }
-        // Observed false for `12.345`. Whether `0` or `NaN` is "empty" is
-        // unprobed; a Number is never empty is the reading that matches the
-        // one observation and the String description ("has no characters").
+        // ? Observed false for `12.345`. Whether `0` or `NaN` is "empty" is
+        // ? unprobed; a Number is never empty is the reading that matches the
+        // ? one observation and the String description ("has no characters").
         "isempty" => {
             super::arity(name, args, 0, 0)?;
             Ok(Value::Bool(false))
         }
         "tofixed" => {
-            // Minimum arity, then the parameter's type, then the maximum: the
-            // order the three refusals above pin down.
+            // * Minimum arity, then the parameter's type, then the maximum: the
+            // * order the three refusals above pin down.
             if args.is_empty() {
                 return Err(not_enough(name));
             }
@@ -85,8 +85,8 @@ fn round_half_up(n: f64) -> f64 {
         return n;
     }
     let r = (n + 0.5).floor();
-    // `n + 0.5` can round up in binary and carry the floor with it; back the
-    // result off when the sum was not really big enough.
+    // * `n + 0.5` can round up in binary and carry the floor with it; back the
+    // * result off when the sum was not really big enough.
     if r - 0.5 > n {
         r - 1.0
     } else {
@@ -111,15 +111,15 @@ fn to_fixed(n: f64, precision: f64) -> String {
     } else {
         precision.trunc().clamp(0.0, 100.0) as usize
     };
-    // A magnitude this large has no fixed notation left to print.
+    // * A magnitude this large has no fixed notation left to print.
     if n.abs() >= 1e21 {
         return js_number(n);
     }
 
     let negative = n < 0.0;
-    // Rust prints the *exact* decimal expansion of the double, correctly
-    // rounded at the precision asked for, so asking for far more digits than
-    // are wanted and then cutting leaves the digit at `digits + 1` untouched.
+    // * Rust prints the *exact* decimal expansion of the double, correctly
+    // * rounded at the precision asked for, so asking for far more digits than
+    // * are wanted and then cutting leaves the digit at `digits + 1` untouched.
     let wide = format!("{:.*}", digits + 30, n.abs());
     let (int_part, frac) = wide
         .split_once('.')
@@ -132,8 +132,8 @@ fn to_fixed(n: f64, precision: f64) -> String {
         .collect();
     let mut int_len = int_part.len();
 
-    // Everything from the cut onward is at least a half exactly when the first
-    // cut digit is 5 or more.
+    // * Everything from the cut onward is at least a half exactly when the first
+    // * cut digit is 5 or more.
     if frac.as_bytes()[digits] >= b'5' {
         let mut i = out.len();
         loop {

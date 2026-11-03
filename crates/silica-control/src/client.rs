@@ -67,8 +67,8 @@ impl Client {
     ) -> Result<Value, String> {
         self.set_timeout(Some(timeout))?;
         let result = self.exchange(method, params);
-        // Leave the socket blocking again, so a later `call` is not silently
-        // bounded by whatever this one asked for.
+        // ! Leave the socket blocking again, so a later `call` is not silently
+        // ! bounded by whatever this one asked for.
         let _ = self.set_timeout(None);
         result
     }
@@ -84,9 +84,9 @@ impl Client {
     }
 
     fn set_timeout(&self, timeout: Option<Duration>) -> Result<(), String> {
-        // The handle that is read from. On Unix a clone shares the socket
-        // and its options; on Windows a duplicated handle keeps a receive
-        // timeout of its own, and one set on the writer never fires.
+        // ! The handle that is read from. On Unix a clone shares the socket
+        // ! and its options; on Windows a duplicated handle keeps a receive
+        // ! timeout of its own, and one set on the writer never fires.
         self.reader
             .get_ref()
             .set_read_timeout(timeout)
@@ -114,7 +114,7 @@ impl Client {
             .write_all(line.as_bytes())
             .and_then(|()| self.stream.flush())
         {
-            // A half-written request is a line the app will never complete.
+            // ! A half-written request is a line the app will never complete.
             self.broken = true;
             return Err(format!("control socket: writing {method}: {e}"));
         }
@@ -127,8 +127,8 @@ impl Client {
             }
             Ok(_) => {}
             Err(e) => {
-                // Usually the read timeout: the request stands, and its reply
-                // will land on top of whatever is asked next.
+                // * Usually the read timeout: the request stands, and its reply
+                // * will land on top of whatever is asked next.
                 self.broken = true;
                 return Err(format!("control socket: reading {method}: {e}"));
             }
@@ -136,15 +136,15 @@ impl Client {
         let response: Response = match serde_json::from_str(reply.trim_end()) {
             Ok(response) => response,
             Err(e) => {
-                // The line was consumed, so the stream is still aligned, but
-                // an app talking gibberish is not one to keep questioning.
+                // * The line was consumed, so the stream is still aligned, but
+                // * an app talking gibberish is not one to keep questioning.
                 self.broken = true;
                 return Err(format!("control socket: bad response to {method}: {e}"));
             }
         };
         if response.id != id {
-            // The stream is now one reply out of step; say so rather than
-            // handing back an answer to someone else's question.
+            // ? The stream is now one reply out of step; say so rather than
+            // ? handing back an answer to someone else's question.
             self.broken = true;
             return Err(format!(
                 "control socket: response id {} does not match request {id} ({method})",
@@ -182,15 +182,15 @@ mod tests {
         let (stream, _) = listener.accept().expect("a connection");
         let reader = BufReader::new(stream.try_clone().expect("clone"));
         let mut writer = BufWriter::new(stream);
-        // A client that hung up ends the stream; on Windows it can also
-        // reset it, which is the same thing to a server.
+        // * A client that hung up ends the stream; on Windows it can also
+        // * reset it, which is the same thing to a server.
         for line in reader.lines().map_while(Result::ok) {
             let request: Request = serde_json::from_str(&line).expect("parses");
             let response = match request.method.as_str() {
                 "ping" => Response::ok(request.id, json!({"ok": true, "protocol": 1})),
                 "echo" => Response::ok(request.id, request.params.clone()),
                 "boom" => Response::err(request.id, "no vault open"),
-                // A stuck handler, to be hit with a read timeout.
+                // * A stuck handler, to be hit with a read timeout.
                 "hang" => {
                     std::thread::sleep(Duration::from_millis(500));
                     Response::ok(request.id, Value::Null)
@@ -198,8 +198,8 @@ mod tests {
                 "liar" => Response::ok(request.id + 100, Value::Null),
                 other => Response::err(request.id, format!("unknown method: {other}")),
             };
-            // A client that gave up on a slow reply is already gone; that is
-            // its business, not an error here.
+            // * A client that gave up on a slow reply is already gone; that is
+            // * its business, not an error here.
             if writer.write_all(response.line().as_bytes()).is_err() || writer.flush().is_err() {
                 break;
             }
@@ -217,12 +217,12 @@ mod tests {
             client.call("ping", json!({})),
             Ok(json!({"ok": true, "protocol": 1}))
         );
-        // Params survive the trip, and ids advance.
+        // * Params survive the trip, and ids advance.
         assert_eq!(
             client.call("echo", json!({"rows": 5, "text": true})),
             Ok(json!({"rows": 5, "text": true}))
         );
-        // An error response is an Err with the app's own message.
+        // * An error response is an Err with the app's own message.
         assert_eq!(
             client.call("boom", Value::Null),
             Err("no vault open".into())
@@ -231,7 +231,7 @@ mod tests {
             client.call("frobnicate", json!({})),
             Err("unknown method: frobnicate".into())
         );
-        // A mismatched id is an error, not a panic.
+        // ! A mismatched id is an error, not a panic.
         let e = client.call("liar", json!({})).expect_err("mismatch");
         assert!(e.contains("does not match"), "{e}");
 
@@ -262,7 +262,7 @@ mod tests {
     fn connect_gives_up_when_nothing_ever_binds() {
         let path = socket_path("nobody-home");
         let e = Client::connect(&path, Duration::from_millis(50)).expect_err("no socket");
-        // A missing socket file is not found on Unix; WinSock calls it refused.
+        // ! A missing socket file is not found on Unix; WinSock calls it refused.
         assert!(
             matches!(
                 e.kind(),
@@ -302,8 +302,8 @@ mod tests {
             .expect_err("times out");
         assert!(client.is_broken(), "a timed-out reply is still in flight");
 
-        // Without this the slow reply to `hang` would be read as the answer to
-        // `ping`, and every call after it would stay one reply behind.
+        // * Without this the slow reply to `hang` would be read as the answer to
+        // * `ping`, and every call after it would stay one reply behind.
         let e = client.call("ping", json!({})).expect_err("refuses");
         assert!(e.contains("out of step"), "{e}");
         assert!(e.contains("ping"), "{e}");
@@ -324,7 +324,7 @@ mod tests {
             client.call("boom", Value::Null),
             Err("no vault open".into())
         );
-        // An app that answered "no vault open" is in step and healthy.
+        // * An app that answered "no vault open" is in step and healthy.
         assert!(!client.is_broken());
         assert_eq!(
             client.call("ping", json!({})).expect("a reply")["ok"],

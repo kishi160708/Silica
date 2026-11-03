@@ -192,7 +192,7 @@ impl RichBuilder {
         let mut style = self.style;
         for open in &self.html_stack {
             if open.href.is_some() {
-                // An `<a>`'s text is what the link style paints.
+                // * An `<a>`'s text is what the link style paints.
                 style.link = true;
             }
             match open.effect {
@@ -286,7 +286,7 @@ impl RichBuilder {
 /// does not draw, and the caller keeps its source.
 fn draw_tag(acc: &mut RichBuilder, src: &str) -> Option<usize> {
     let (closing, name, attrs, len) = parse_tag(src)?;
-    // A self-closing `<br/>` and a bare `<br>` are the same break.
+    // * A self-closing `<br/>` and a bare `<br>` are the same break.
     if name == "br" || name == "hr" {
         acc.html_break();
         return Some(len);
@@ -425,7 +425,7 @@ mod tests {
         assert!(runs[0].1.link || links.len() == 1);
         assert!(matches!(&links[0], LinkTarget::External(h) if h == "https://e.com/x"));
 
-        // A vault-relative destination is resolved like a markdown link.
+        // * A vault-relative destination is resolved like a markdown link.
         let (_, _, links) = drawn("<a href=\"Note.md\">n</a>").expect("drawn");
         assert!(matches!(&links[0], LinkTarget::Internal(p) if p == "Note.md"));
     }

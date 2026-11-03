@@ -42,7 +42,7 @@ mod tests {
         let all: Vec<u8> = (0..=255).collect();
         let encoded = encode(&all);
         assert_eq!(encoded.len(), 344);
-        // The high bytes are where a sign-extending shift would show up.
+        // * The high bytes are where a sign-extending shift would show up.
         assert!(encoded.starts_with("AAECAwQFBgcICQoLDA0ODxAREhMUFRYX"));
         assert!(encoded.ends_with("8PHy8/T19vf4+fr7/P3+/w=="));
     }

@@ -112,7 +112,7 @@ fn every_entry_span_covers_its_own_key() {
                 path.display(),
                 entry.key
             );
-            // The entry lies inside the block's YAML.
+            // * The entry lies inside the block's YAML.
             assert!(
                 entry.span.start >= props.yaml.start && entry.span.end <= props.yaml.end,
                 "{}: entry `{}` reaches outside the block",
@@ -159,7 +159,7 @@ fn an_edit_touches_only_its_own_entry() {
             path.display(),
             entry.key
         );
-        // And the new value reads back.
+        // * And the new value reads back.
         let reparsed = note_properties(&after).unwrap();
         assert_eq!(
             reparsed.get(&entry.key).unwrap().value,
@@ -190,8 +190,8 @@ fn clearing_a_note_leaves_exactly_its_body() {
             .collect();
         let edits = plan(&text, &props, &changes).expect("clearing plans an edit");
         let after = apply(&text, &edits);
-        // Everything before the block (a BOM, where there is one) and
-        // everything after it survives; only the block goes.
+        // * Everything before the block (a BOM, where there is one) and
+        // * everything after it survives; only the block goes.
         let expected = format!("{}{}", &text[..props.block.start], &text[props.block.end..]);
         assert_eq!(
             after,
@@ -235,7 +235,7 @@ fn adding_a_property_appends_one_line() {
             reparsed.get("silica_probe").unwrap().value,
             Value::Number(1.0)
         );
-        // Every key that was there is still there, in the same order.
+        // * Every key that was there is still there, in the same order.
         let before: Vec<&str> = props.entries.iter().map(|p| p.key.as_str()).collect();
         let now: Vec<&str> = reparsed
             .entries

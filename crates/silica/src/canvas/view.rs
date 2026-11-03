@@ -38,11 +38,10 @@ use silica_canvas::{
 use silica_formats::canvas::{Canvas, Edge, Node, NodeType, Side};
 use std::sync::Arc;
 
-// ---- constants ----------------------------------------------------------------
-// Screen measurements observed in Obsidian 1.14.4 on 2026-10-21 (see
-// `docs/silica/Specification.md`, "Observed canvas view behavior"). Labels
-// and edges scale with the square root of the zoom: Obsidian draws them in
-// canvas space and counter-scales them by `1 / sqrt(scale)`.
+// * Screen measurements observed in Obsidian 1.14.4 on 2026-10-21 (see
+//   `docs/silica/Specification.md`, "Observed canvas view behavior"). Labels
+//   and edges scale with the square root of the zoom: Obsidian draws them in
+//   canvas space and counter-scales them by `1 / sqrt(scale)`.
 
 /// Padding around the content when the view frames it (Shift+1).
 const FIT_PADDING: f64 = 40.0;
@@ -327,17 +326,17 @@ impl Focusable for CanvasView {
 impl CanvasView {
     pub fn new(cx: &mut Context<Self>) -> CanvasView {
         let mut cards = Cards::new();
-        // A card's link is the workspace's to follow; the view only relays it.
+        // * A card's link is the workspace's to follow; the view only relays it.
         let weak = cx.weak_entity();
         cards.set_on_link(std::rc::Rc::new(move |_, target, _, cx| {
             weak.update(cx, |_, cx| cx.emit(CanvasEvent::OpenLink(target)))
                 .ok();
         }));
-        // A task checkbox inside a text card flips the marker in the node's
-        // own text, with the editor's rule (`[ ]` to `[x]`, anything else
-        // to `[ ]`), and saves the canvas. One inside an embedded note would
-        // have to write that note; no view writes a note it does not hold,
-        // so that click stays inert for now.
+        // * A task checkbox inside a text card flips the marker in the node's
+        //   own text, with the editor's rule (`[ ]` to `[x]`, anything else
+        //   to `[ ]`), and saves the canvas. One inside an embedded note would
+        //   have to write that note; no view writes a note it does not hold,
+        //   so that click stays inert for now.
         let weak = cx.weak_entity();
         cards.set_on_task(std::rc::Rc::new(move |origin, marker, cx| {
             if let TaskOrigin::Node(id) = origin {
@@ -542,7 +541,7 @@ impl CanvasView {
                 _ => {}
             },
         )];
-        // The session is one undo step, closed when the editor goes.
+        // * The session is one undo step, closed when the editor goes.
         self.scene.begin();
         window.focus(&editor.focus_handle(cx), cx);
         self.card_editor = Some(CardEditor {
@@ -625,8 +624,8 @@ impl CanvasView {
     }
 
     fn clear_selection(&mut self, _: &ClearSelection, _: &mut Window, cx: &mut Context<Self>) {
-        // Escape ends an editing session and leaves the card selected
-        // (observed); a second Escape clears the selection.
+        // * Escape ends an editing session and leaves the card selected
+        //   (observed); a second Escape clears the selection.
         if self.editing.take().is_some() {
             cx.notify();
             return;
@@ -984,8 +983,8 @@ impl CanvasView {
             (r.height - 2.0 * band).max(0.0),
         );
         if inner.contains(at) {
-            // Something beneath the group's body? Groups come first in the
-            // array, so a lower group's frame could still be there.
+            // * Something beneath the group's body? Groups come first in the
+            //   array, so a lower group's frame could still be there.
             return None;
         }
         Some(ix)
@@ -1018,8 +1017,8 @@ impl CanvasView {
         }
         self.context_menu = None;
         if event.button == MouseButton::Right {
-            // What is under the pointer joins the selection (a card outside
-            // it replaces it), and the menu for that kind of thing opens.
+            // * What is under the pointer joins the selection (a card outside
+            //   it replaces it), and the menu for that kind of thing opens.
             let target = if let Some(ix) = self.edge_or_node_at(local, at) {
                 match ix {
                     Hit::Edge(id) => {
@@ -1050,7 +1049,7 @@ impl CanvasView {
             return;
         }
         let shift = event.modifiers.shift;
-        // A group's label pill selects (and drags) the group.
+        // * A group's label pill selects (and drags) the group.
         let on_label = self
             .label_hits
             .borrow()
@@ -1073,8 +1072,8 @@ impl CanvasView {
             cx.notify();
             return;
         }
-        // The connector dots sit where the side-midpoint handles do, and
-        // on a hovered card they are what is drawn there, so they win.
+        // * The connector dots sit where the side-midpoint handles do, and
+        //   on a hovered card they are what is drawn there, so they win.
         if let Some((from, side)) = self.connector_at(local) {
             self.drag = Some(Drag::Connect { from, side, to: at });
             cx.notify();
@@ -1098,7 +1097,7 @@ impl CanvasView {
                 self.editing = None;
             }
             if event.click_count == 2 && is_text {
-                // The text editing hook: see the field.
+                // * The text editing hook: see the field.
                 self.scene.selection = silica_canvas::Selection::only_node(&id);
                 self.editing = Some(id);
                 cx.notify();
@@ -1132,10 +1131,10 @@ impl CanvasView {
             cx.notify();
             return;
         }
-        // The background.
+        // * The background.
         if event.click_count == 2 {
-            // A new card is centred on the pointer, unsnapped, and opens
-            // for editing (observed).
+            // * A new card is centred on the pointer, unsnapped, and opens
+            //   for editing (observed).
             let (w, h) = silica_canvas::DEFAULT_CARD;
             self.scene.begin();
             let id = self.scene.add_text_card(
@@ -1202,8 +1201,8 @@ impl CanvasView {
                 if !moved && !far {
                     return;
                 }
-                // Back to the unsnapped positions plus the new delta, then
-                // the snap of the pressed card carries everything with it.
+                // * Back to the unsnapped positions plus the new delta, then
+                //   the snap of the pressed card carries everything with it.
                 self.scene
                     .move_selection(total.x - applied.x, total.y - applied.y);
                 let mut applied = total;
@@ -1276,7 +1275,7 @@ impl CanvasView {
                     self.edited(cx);
                     return;
                 }
-                // A click: `begin` took a snapshot that nothing changed.
+                // * A click: `begin` took a snapshot that nothing changed.
                 self.scene.commit();
             }
             Drag::Resize { .. } => {
@@ -1294,10 +1293,10 @@ impl CanvasView {
                 let (to, to_side) = match target {
                     Some(found) => found,
                     None => {
-                        // Dropped on empty space: Obsidian makes a new card
-                        // there, its near side on the drop point, and
-                        // connects it. OBSERVE: whether the card opens for
-                        // editing at once.
+                        // * Dropped on empty space: Obsidian makes a new card
+                        //   there, its near side on the drop point, and
+                        //   connects it. OBSERVE: whether the card opens for
+                        //   editing at once.
                         let to_side = opposite(side);
                         let (w, h) = silica_canvas::DEFAULT_CARD;
                         let top_left = match to_side {
@@ -1316,8 +1315,8 @@ impl CanvasView {
                 };
                 self.scene.add_edge(&from, side, &to, to_side);
                 if let Some(card) = created {
-                    // The new card, not its edge, is what the user works
-                    // on next.
+                    // * The new card, not its edge, is what the user works
+                    //   on next.
                     self.scene.selection = silica_canvas::Selection::only_node(&card);
                 }
                 self.scene.commit();
@@ -1344,8 +1343,8 @@ impl CanvasView {
     }
 
     fn pinch(&mut self, event: &PinchEvent, cx: &mut Context<Self>) {
-        // The platform's delta is a fraction of the scale; the viewport
-        // wants log2 of a factor.
+        // * The platform's delta is a fraction of the scale; the viewport
+        //   wants log2 of a factor.
         let factor = f64::from(1.0 + event.delta).max(f64::EPSILON);
         self.viewport
             .zoom_at(factor.log2(), self.local(event.position), self.size());
@@ -1381,12 +1380,12 @@ impl CanvasView {
         let visible = self.viewport.visible(self.size());
         for ix in visible_nodes(&self.scene.canvas, &visible) {
             let node = &self.scene.canvas.nodes[ix];
-            // A group has content only when it has a background image.
+            // * A group has content only when it has a background image.
             if node.kind == NodeType::Group && node.background.is_none() {
                 continue;
             }
             let frame = self.frame_bounds(node);
-            // The content sits inside the border.
+            // * The content sits inside the border.
             let inner = Bounds::new(
                 point(
                     frame.origin.x + px(BORDER_WIDTH),
@@ -1458,7 +1457,7 @@ impl CanvasView {
                 self.paint_groups(&mut contents, &theme, window, cx);
                 self.paint_edges(&theme, window);
                 self.paint_cards(&mut contents, &theme, window, cx);
-                // Edge labels sit above the cards, as Obsidian's do.
+                // * Edge labels sit above the cards, as Obsidian's do.
                 self.paint_edge_labels(&theme, window, cx);
                 self.paint_selection(&theme, window);
                 self.paint_overlays(&theme, window);
@@ -1524,7 +1523,7 @@ impl CanvasView {
             }
             let color = Self::color_of(node.color.as_deref(), theme);
             let frame = self.frame_bounds(node);
-            // A tinted body inside a bordered frame, like a card's.
+            // * A tinted body inside a bordered frame, like a card's.
             let mut tint = color.unwrap_or(theme.canvas.card_border);
             tint.a = theme.canvas.tint_alpha;
             let mut quad = fill(frame, tint);
@@ -1545,9 +1544,9 @@ impl CanvasView {
                 if font < MIN_LABEL_PX {
                     continue;
                 }
-                // The pill: solid colour with contrasting text for a coloured
-                // group, the default colour washed under muted text for a
-                // plain one.
+                // * The pill: solid colour with contrasting text for a coloured
+                //   group, the default colour washed under muted text for a
+                //   plain one.
                 let (bg, fg) = match color {
                     Some(c) => (c, theme.canvas.on_color),
                     None => {
@@ -1601,8 +1600,8 @@ impl CanvasView {
             let color =
                 Self::color_of(edge.color.as_deref(), theme).unwrap_or(theme.canvas.card_border);
             if selected {
-                // Obsidian keeps the stroke as it is and shows the floating
-                // menu; a wider translucent halo makes the pick visible here.
+                // * Obsidian keeps the stroke as it is and shows the floating
+                //   menu; a wider translucent halo makes the pick visible here.
                 let mut halo = color;
                 halo.a = theme.canvas.wash_alpha * 2.0;
                 self.stroke_edge(&path, width * 4.0, halo, window);
@@ -1612,7 +1611,7 @@ impl CanvasView {
             self.paint_end(from.0, from.1, from_arrow, width, color, window);
             self.paint_end(to.0, to.1, to_arrow, width, color, window);
         }
-        // The edge being drawn.
+        // * The edge being drawn.
         if let Some(Drag::Connect { from, side, to }) = &self.drag {
             if let Some(n) = self.scene.node(from) {
                 let a = anchor(&Rect::of(n), *side);
@@ -1765,8 +1764,8 @@ impl CanvasView {
                 continue;
             }
             let frame = self.frame_bounds(node);
-            // The canvas ground under a tint of the card's colour, inside a
-            // border of that colour at 0.7 (the default colour is solid).
+            // * The canvas ground under a tint of the card's colour, inside a
+            //   border of that colour at 0.7 (the default colour is solid).
             let color = Self::color_of(node.color.as_deref(), theme);
             let mut quad = fill(frame, theme.canvas.background);
             quad.corner_radii = Corners::all(px((CARD_RADIUS * scale) as f32));
@@ -1787,8 +1786,8 @@ impl CanvasView {
                     |window| content.element.paint(window, cx),
                 );
             }
-            // The name above a file card, the address above a link card
-            // (Obsidian shows the page's title there, which it fetched).
+            // * The name above a file card, the address above a link card
+            //   (Obsidian shows the page's title there, which it fetched).
             let label = match node.kind {
                 NodeType::File => node.file.as_deref().map(|f| {
                     crate::explorer::display_name(f.rsplit('/').next().unwrap_or(f)).to_string()
@@ -2524,9 +2523,9 @@ impl Render for CanvasView {
                         paint_entity
                             .update(cx, |view, cx| view.paint(bounds, prepared, window, cx));
                         let line_height = window.line_height();
-                        // An event sent from inside a frame's paint is
-                        // dropped; the fit made in prepaint is reported from
-                        // the next frame instead.
+                        // * An event sent from inside a frame's paint is
+                        //   dropped; the fit made in prepaint is reported from
+                        //   the next frame instead.
                         if paint_entity.read(cx).announce_viewport {
                             let e = paint_entity.clone();
                             window.on_next_frame(move |_, cx| {
@@ -2582,8 +2581,8 @@ impl Render for CanvasView {
                                 e.update(cx, |v, cx| v.pinch(event, cx));
                             }
                         });
-                        // Space held turns a left drag into a pan; the key
-                        // events reach here while the view has the focus.
+                        // * Space held turns a left drag into a pan; the key
+                        //   events reach here while the view has the focus.
                         let e = paint_entity.clone();
                         window.on_key_event(move |event: &KeyDownEvent, phase, _, cx| {
                             if phase == DispatchPhase::Bubble && event.keystroke.key == "space" {
@@ -2757,8 +2756,8 @@ fn shape_label(
     if line.width <= max || text.is_empty() {
         return line;
     }
-    // Proportional cut: the labels are short and the fonts proportional
-    // enough that one pass lands within a character or two.
+    // * Proportional cut: the labels are short and the fonts proportional
+    //   enough that one pass lands within a character or two.
     let share = f32::from(max) / f32::from(line.width).max(1.0);
     let chars = text.chars().count();
     let keep = ((chars as f32 * share) as usize).saturating_sub(1);

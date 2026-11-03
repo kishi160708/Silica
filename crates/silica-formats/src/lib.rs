@@ -153,14 +153,14 @@ mod tests {
             Err("File name cannot contain any of these characters: * \" \\ / < > : | ?")
         );
         assert!(validate_renamed_file("Renamed", Some("md")).is_ok());
-        // 252 + ".md" is exactly 255; one more is over.
+        // * 252 + ".md" is exactly 255; one more is over.
         let stem = "a".repeat(MAX_NAME_BYTES - 3);
         assert!(validate_renamed_file(&stem, Some("md")).is_ok());
         assert_eq!(
             validate_renamed_file(&format!("{stem}a"), Some("md")),
             Err("File name is too long.")
         );
-        // A folder has no extension, so the whole budget is the stem's.
+        // * A folder has no extension, so the whole budget is the stem's.
         assert!(validate_renamed_file(&"a".repeat(MAX_NAME_BYTES), None).is_ok());
     }
 }

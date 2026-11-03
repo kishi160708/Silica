@@ -553,14 +553,14 @@ impl VaultState {
     pub fn load(root: &PathBuf) -> Result<VaultState, String> {
         let started = Instant::now();
         let vault = Vault::open(root).map_err(|e| e.to_string())?;
-        // Every config falls back to its defaults when it will not parse,
-        // because one broken file may not stop a vault opening. Which ones
-        // did is worth knowing, though: the window reports them, and a
-        // write to any of them is refused rather than replacing it.
+        // ! Every config falls back to its defaults when it will not parse,
+        //   because one broken file may not stop a vault opening. Which ones
+        //   did is worth knowing, though: the window reports them, and a
+        //   write to any of them is refused rather than replacing it.
         let mut unreadable = Vec::new();
-        // Only a parse failure counts. An unreadable file is a different
-        // problem with a different message, and the write path lets it
-        // through: there is nothing on disk to lose.
+        // * Only a parse failure counts. An unreadable file is a different
+        //   problem with a different message, and the write path lets it
+        //   through: there is nothing on disk to lose.
         let mut note = |name: &'static str, err: Option<&VaultError>| {
             if matches!(err, Some(VaultError::Json { .. })) {
                 unreadable.push(name.to_string());
@@ -742,15 +742,15 @@ impl VaultState {
                     .unwrap_or_else(|e| e.into_inner()) = config.clone();
             }
             SettingChange::Hotkeys(overrides) => {
-                // Whole, not merged: an entry taken out is a command back
-                // on its defaults, and a merge would keep it.
+                // * Whole, not merged: an entry taken out is a command back
+                //   on its defaults, and a merge would keep it.
                 self.vault()
                     .replace_config("hotkeys.json", overrides)
                     .map_err(|e| e.to_string())?;
             }
             SettingChange::Frame(style) => {
-                // Outside the vault, in the per-user store the vault list
-                // already uses: `frame_style()` reads it on the next start.
+                // * Outside the vault, in the per-user store the vault list
+                //   already uses: `frame_style()` reads it on the next start.
                 let Some(mut registry) = silica_vault::VaultRegistry::open()
                     .map_err(|e| e.to_string())?
                 else {
@@ -760,9 +760,9 @@ impl VaultState {
                 registry.save().map_err(|e| e.to_string())?;
             }
             SettingChange::ConfigFolder(folder) => {
-                // The same store: `Vault::open` reads the folder from the
-                // vault's entry on the next start, which is what the row's
-                // "on restart" tag says.
+                // * The same store: `Vault::open` reads the folder from the
+                //   vault's entry on the next start, which is what the row's
+                //   "on restart" tag says.
                 let Some(mut registry) = silica_vault::VaultRegistry::open()
                     .map_err(|e| e.to_string())?
                 else {
@@ -833,7 +833,7 @@ impl VaultState {
     /// the file list) and re-resolves links when files came or went.
     pub(crate) fn absorb(&self, files: Vec<FileChange>) -> Changes {
         let mut changes = Changes::default();
-        // Keep one change per path, the last one seen.
+        // * Keep one change per path, the last one seen.
         let mut last: HashMap<String, FileChange> = HashMap::new();
         for c in files {
             last.insert(c.path().to_string(), c);
@@ -1020,8 +1020,8 @@ impl VaultState {
             .write()
             .unwrap_or_else(|e| e.into_inner())
             .rename(from, to)
-            // Both of these end up in a modal the user typed into, so they
-            // get the sentence rather than the path and the errno.
+            // * Both of these end up in a modal the user typed into, so they
+            //   get the sentence rather than the path and the errno.
             .map_err(|e| e.user_message())?;
         let plan = if update_links {
             let texts = self.texts();
@@ -1032,11 +1032,11 @@ impl VaultState {
         } else {
             Vec::new()
         };
-        // Each rewrite was planned from the text the index holds, so the
-        // file has to still be that text: another app may have saved it
-        // since, and writing the plan would throw that away. A note that
-        // moved underneath keeps its own bytes and its links are left for
-        // the user, which loses nothing either way.
+        // * Each rewrite was planned from the text the index holds, so the
+        //   file has to still be that text: another app may have saved it
+        //   since, and writing the plan would throw that away. A note that
+        //   moved underneath keeps its own bytes and its links are left for
+        //   the user, which loses nothing either way.
         let mut stale: Vec<String> = Vec::new();
         let texts = self.texts();
         for rw in &plan {
@@ -1405,7 +1405,7 @@ impl Default for BacklinkState {
             sort: SortOrder::Alphabetical,
             show_search: false,
             linked_collapsed: false,
-            // Obsidian's fresh leaf starts with the section folded.
+            // * Obsidian's fresh leaf starts with the section folded.
             unlinked_collapsed: true,
             toggled: HashSet::new(),
             sort_menu_open: false,
@@ -1426,7 +1426,7 @@ impl Default for OutgoingState {
     fn default() -> OutgoingState {
         OutgoingState {
             links_collapsed: false,
-            // Obsidian's fresh leaf starts with the section folded.
+            // * Obsidian's fresh leaf starts with the section folded.
             unlinked_collapsed: true,
             toggled: HashSet::new(),
         }
@@ -2105,15 +2105,15 @@ const DRAG_GHOST_GAP: f32 = 8.;
 impl Render for TabDragPreview {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.global::<Theme>().clone();
-        // The offset is padding on a wrapper rather than a margin on the
-        // card: the layout drops a root element's margin, and the card is
-        // the root of the drag's view.
+        // * The offset is padding on a wrapper rather than a margin on the
+        //   card: the layout drops a root element's margin, and the card is
+        //   the root of the drag's view.
         div()
             .pl(self.grab.x + px(DRAG_GHOST_GAP))
             .pt(self.grab.y + px(DRAG_GHOST_GAP))
-            // The drag's view paints after everything else, and a cursor
-            // asked for without a hitbox wins over the pointer the tab under
-            // it asks for, so this is where the grabbing hand comes from.
+            // * The drag's view paints after everything else, and a cursor
+            //   asked for without a hitbox wins over the pointer the tab under
+            //   it asks for, so this is where the grabbing hand comes from.
             .child(canvas(
                 |_, _, _| (),
                 |_, _, window, _| window.set_window_cursor_style(CursorStyle::ClosedHand),
@@ -2408,10 +2408,10 @@ fn window_handle(area: gpui::Stateful<gpui::Div>, frameless: bool) -> gpui::Stat
         return area.window_control_area(WindowControlArea::Drag);
     }
     if cfg!(target_os = "macos") {
-        // AppKit's drag session swallows the click it starts from, so the
-        // drag begins on the first move after a press and a double click
-        // still arrives as one: it does what the desktop's "Double-click a
-        // window's title bar to" setting says. macOS has no window menu.
+        // * AppKit's drag session swallows the click it starts from, so the
+        //   drag begins on the first move after a press and a double click
+        //   still arrives as one: it does what the desktop's "Double-click a
+        //   window's title bar to" setting says. macOS has no window menu.
         return area
             .on_mouse_down(MouseButton::Left, |_, _, _| {
                 MAC_DRAG_PENDING.store(true, std::sync::atomic::Ordering::Relaxed)
@@ -2582,8 +2582,8 @@ fn client_frame(
                             }])
                         })
                 })
-                // The margin's own listeners see only what the content
-                // lets through, so the content keeps the pointer's moves.
+                // * The margin's own listeners see only what the content
+                //   lets through, so the content keeps the pointer's moves.
                 .on_mouse_move(|_, _, cx| cx.stop_propagation())
                 .child(content),
         )
@@ -2809,8 +2809,8 @@ fn view_subscriptions(
         cx.subscribe(pdf, |this, _, event: &PdfEvent, cx| match event {
             PdfEvent::Report(message) => this.report(message.clone(), cx),
         }),
-        // A row of a base names a file; activating it opens that file, the
-        // same route a link in the reading view takes.
+        // * A row of a base names a file; activating it opens that file, the
+        //   same route a link in the reading view takes.
         cx.subscribe(bases, |this, _, event: &BasesEvent, cx| match event {
             BasesEvent::Open(path) => this.open_file(path.clone(), None, cx),
             BasesEvent::Edited => this.schedule_save(cx),
@@ -2827,8 +2827,8 @@ fn view_subscriptions(
                 CanvasEvent::Viewport(view_state) => {
                     this.record_canvas_view_state(&canvas, view_state.clone(), cx)
                 }
-                // The chooser needs the window to take focus, which this
-                // subscription does not have: the next render opens it.
+                // * The chooser needs the window to take focus, which this
+                //   subscription does not have: the next render opens it.
                 CanvasEvent::PickFile(kind) => {
                     this.pending_canvas_pick = Some(*kind);
                     cx.notify();
@@ -2895,15 +2895,15 @@ impl Workspace {
         let pdf = cx.new(PdfView::new);
         let graph = cx.new(GraphView::new);
         let subscriptions = vec![
-            // The filter is applied as the pane is drawn; a keystroke only
-            // has to ask for a draw.
+            // * The filter is applied as the pane is drawn; a keystroke only
+            //   has to ask for a draw.
             cx.subscribe(&backlink_filter, |_, _, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Changed) {
                     cx.notify();
                 }
             }),
-            // Escape in the Tags filter is not the pane's: Obsidian hands
-            // the keyboard to the editor and leaves the rows filtered.
+            // * Escape in the Tags filter is not the pane's: Obsidian hands
+            //   the keyboard to the editor and leaves the rows filtered.
             cx.subscribe_in(
                 &tag_filter,
                 window,
@@ -2913,7 +2913,7 @@ impl Workspace {
                     _ => {}
                 },
             ),
-            // Escape in the other two hides the box and clears the query.
+            // * Escape in the other two hides the box and clears the query.
             cx.subscribe_in(
                 &property_filter,
                 window,
@@ -2932,8 +2932,8 @@ impl Workspace {
                     _ => {}
                 },
             ),
-            // The Outline marks the heading holding the cursor, or the one
-            // at the top of the reading view: it follows both views.
+            // * The Outline marks the heading holding the cursor, or the one
+            //   at the top of the reading view: it follows both views.
             cx.observe(&editor, |this, _, cx| this.follow_heading(cx)),
             cx.observe(&reading, |this, _, cx| this.follow_heading(cx)),
             cx.subscribe_in(
@@ -2945,8 +2945,8 @@ impl Workspace {
                         this.set_mode(back, window, cx);
                         this.open_file(path.clone(), None, cx);
                     }
-                    // The picture was written, or the dialog or the file
-                    // refused: either way the reader is told once.
+                    // * The picture was written, or the dialog or the file
+                    //   refused: either way the reader is told once.
                     GraphEvent::Exported(Ok(path)) => {
                         let name = path
                             .file_name()
@@ -2964,9 +2964,9 @@ impl Workspace {
                 window,
                 |this, _, event: &ExplorerEvent, window, cx| match event {
                     ExplorerEvent::Open(path) => {
-                        // A row's click or Enter hands the keyboard to the
-                        // note it opened, as Obsidian's does; the tree
-                        // keeps its ring for the next reveal.
+                        // * A row's click or Enter hands the keyboard to the
+                        //   note it opened, as Obsidian's does; the tree
+                        //   keeps its ring for the next reveal.
                         this.open_file(path.clone(), None, cx);
                         this.focus_main(window, cx);
                     }
@@ -3160,10 +3160,10 @@ impl Workspace {
                         }
                         ChooserPurpose::BasesView => {
                             this.modal = Modal::None;
-                            // The row carries the view's index into
-                            // `base.views`, which is what the Bases view
-                            // switches on; a name would not do, since
-                            // nothing stops two views sharing one.
+                            // * The row carries the view's index into
+                            //   `base.views`, which is what the Bases view
+                            //   switches on; a name would not do, since
+                            //   nothing stops two views sharing one.
                             if let Ok(ix) = value.parse::<usize>() {
                                 this.bases.update(cx, |b, cx| b.switch_view(ix, cx));
                             }
@@ -3173,9 +3173,9 @@ impl Workspace {
                     },
                     ChooserEvent::Close => {
                         this.modal = Modal::None;
-                        // Whatever the main area paints, not the editor:
-                        // its handle is outside the dispatch tree in
-                        // reading view and would swallow every key.
+                        // * Whatever the main area paints, not the editor:
+                        //   its handle is outside the dispatch tree in
+                        //   reading view and would swallow every key.
                         this.focus_main(window, cx);
                         cx.notify();
                     }
@@ -3195,7 +3195,7 @@ impl Workspace {
             pdf.clone(),
             ViewMode::Reading,
         )];
-        // Closing the window must not lose edits waiting for the autosave.
+        // ! Closing the window must not lose edits waiting for the autosave.
         let this = cx.entity().downgrade();
         window.on_window_should_close(cx, move |_, cx| {
             if let Some(ws) = this.upgrade() {
@@ -3337,8 +3337,8 @@ impl Workspace {
             .into();
         self.loading = Some(format!("Indexing {}…", root.display()).into());
         self.status = "Indexing vault".into();
-        // Restoring the layout may have to make tab groups, and a group's
-        // editor is made with the window, so the vault comes back in it.
+        // * Restoring the layout may have to make tab groups, and a group's
+        //   editor is made with the window, so the vault comes back in it.
         cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_executor()
@@ -3411,14 +3411,14 @@ impl Workspace {
     /// open. Called when the vault loads and again whenever Settings
     /// writes.
     fn apply_app_config(&mut self, state: &VaultState, cx: &mut Context<Self>) {
-        // "Language": the locale is process-wide, read once here — this runs
-        // at startup and on every settings write, so the two cannot drift.
+        // * "Language": the locale is process-wide, read once here — this runs
+        //   at startup and on every settings write, so the two cannot drift.
         let locale = crate::i18n::Locale::from_code(state.app().locale.as_deref().unwrap_or("en"));
         crate::i18n::set(locale);
-        // "Native menus" is applied here rather than only on a settings
-        // change, because this runs at startup too: a saved preference is in
-        // force from the first frame, not from the next time someone opens
-        // Settings.
+        // * "Native menus" is applied here rather than only on a settings
+        //   change, because this runs at startup too: a saved preference is in
+        //   force from the first frame, not from the next time someone opens
+        //   Settings.
         crate::native_menus::apply(state, cx);
         let readable = state.app().readable_line_length.unwrap_or(true);
         let properties =
@@ -3433,7 +3433,7 @@ impl Workspace {
             format: state.link_format(),
             markdown_links: state.app().use_markdown_links.unwrap_or(false),
         };
-        // Every group's views, the active one's among them.
+        // * Every group's views, the active one's among them.
         for group in &self.groups {
             group.reading.update(cx, |r, cx| {
                 r.set_readable_line_length(readable);
@@ -3499,11 +3499,11 @@ impl Workspace {
             self.report(format!("{} could not be written: {err}", change.file()), cx);
             return;
         }
-        // The registry is what the palette, the Hotkeys tab and the key
-        // bindings read. Both a hotkey change and a core-plugin toggle
-        // change what belongs in it -- turning a plugin off takes its
-        // commands with it, the way Obsidian does -- so either rebuilds it
-        // from the files as written and makes every binding again.
+        // * The registry is what the palette, the Hotkeys tab and the key
+        //   bindings read. Both a hotkey change and a core-plugin toggle
+        //   change what belongs in it -- turning a plugin off takes its
+        //   commands with it, the way Obsidian does -- so either rebuilds it
+        //   from the files as written and makes every binding again.
         match &change {
             SettingChange::Hotkeys(overrides) => {
                 self.rebuild_commands(&state, Some(overrides), cx);
@@ -3511,9 +3511,9 @@ impl Workspace {
             SettingChange::CorePlugins(_) => self.rebuild_commands(&state, None, cx),
             _ => {}
         }
-        // Recompute the global theme live when appearance changes
-        // (dark/light, fonts, accent, CSS theme, CSS snippets).
-        // Previously these required a restart.
+        // * Recompute the global theme live when appearance changes
+        //   (dark/light, fonts, accent, CSS theme, CSS snippets).
+        //   Previously these required a restart.
         if matches!(&change, SettingChange::Appearance(_)) {
             self.recompute_theme(&state, window, cx);
         }
@@ -3559,9 +3559,9 @@ impl Workspace {
             state.index_ms
         )
         .into();
-        // A config that would not parse is being stood in for by its
-        // defaults, and Settings will refuse to write it. Say so once, on
-        // the way in, rather than leaving a tab that looks merely wrong.
+        // ! A config that would not parse is being stood in for by its
+        //   defaults, and Settings will refuse to write it. Say so once, on
+        //   the way in, rather than leaving a tab that looks merely wrong.
         if !state.unreadable_configs.is_empty() {
             let names = state.unreadable_configs.join(", ");
             let one = state.unreadable_configs.len() == 1;
@@ -3641,7 +3641,7 @@ impl Workspace {
         };
         let today = now();
         if let Some(forward) = step {
-            // From the note in hand when it is a daily note, else from today.
+            // * From the note in hand when it is a daily note, else from today.
             let from = self
                 .current
                 .as_deref()
@@ -3672,7 +3672,7 @@ impl Workspace {
             Err(err) => return self.report(err.to_string(), cx),
         };
         if exists {
-            // An existing note is opened and not touched, bytes or times.
+            // * An existing note is opened and not touched, bytes or times.
             self.open_file(path, None, cx);
             let mode = self.editing_mode();
             self.set_mode(mode, window, cx);
@@ -3921,8 +3921,8 @@ impl Workspace {
             Ok(text) => text,
             Err(err) => return self.report(format!("Could not read {path}: {err}"), cx),
         };
-        // A template's own byte order mark and line endings are its file's,
-        // not the target's: only its text is inserted.
+        // * A template's own byte order mark and line endings are its file's,
+        //   not the target's: only its text is inserted.
         let text = silica_text::FileText::parse(&raw).text;
         let title = self
             .current
@@ -4116,28 +4116,28 @@ impl Workspace {
         } else {
             format!("{n} files changed").into()
         };
-        // A card showing one of these files is rebuilt from it, whichever
-        // group's canvas holds it.
+        // * A card showing one of these files is rebuilt from it, whichever
+        //   group's canvas holds it.
         for change in &changes.files {
             let path = change.path().to_string();
             for group in &self.groups {
                 group.canvas.update(cx, |c, cx| c.invalidate(&path, cx));
             }
         }
-        // A base is a view over the whole vault, so any change may change its
-        // rows -- unlike a canvas card, which only its own file touches. The
-        // base's own bytes are not re-read here: a change to the `.base`
-        // itself arrives through `show_file` and reloads the query.
+        // * A base is a view over the whole vault, so any change may change its
+        //   rows -- unlike a canvas card, which only its own file touches. The
+        //   base's own bytes are not re-read here: a change to the `.base`
+        //   itself arrives through `show_file` and reloads the query.
         for group in &self.groups {
             group
                 .bases
                 .update(cx, |b, cx| b.invalidate(state.clone(), cx));
         }
-        // A changed `.pdf` is forgotten by the cache every drawing shares --
-        // the embeds and the canvas cards read it afresh on their next
-        // frame -- and every view holding it reloads, keeping its page and
-        // zoom. The view never writes, so the change is always somebody
-        // else's.
+        // * A changed `.pdf` is forgotten by the cache every drawing shares --
+        //   the embeds and the canvas cards read it afresh on their next
+        //   frame -- and every view holding it reloads, keeping its page and
+        //   zoom. The view never writes, so the change is always somebody
+        //   else's.
         for change in &changes.files {
             let path = change.path();
             if FileKind::from_path(path) != FileKind::Pdf {
@@ -4150,9 +4150,9 @@ impl Workspace {
                 }
             }
         }
-        // Back and forward must never land on a file the vault no longer
-        // has, whoever removed it; an atomic external save arrives as a
-        // removal too, so only a path that is really gone is forgotten.
+        // ! Back and forward must never land on a file the vault no longer
+        //   has, whoever removed it; an atomic external save arrives as a
+        //   removal too, so only a path that is really gone is forgotten.
         for change in &changes.files {
             if let FileChange::Removed(path) = change {
                 if !state.vault().absolute(path).exists() {
@@ -4171,20 +4171,20 @@ impl Workspace {
                 .iter()
                 .any(|c| matches!(c, FileChange::Removed(p) if *p == current));
             if removed && !state.vault().absolute(&current).exists() {
-                // The open note is gone from the vault. The buffer stays on
-                // screen because it may hold edits that exist nowhere else,
-                // but it is no longer a file: the autosave is disarmed and
-                // the panes stop describing it.
+                // * The open note is gone from the vault. The buffer stays on
+                //   screen because it may hold edits that exist nowhere else,
+                //   but it is no longer a file: the autosave is disarmed and
+                //   the panes stop describing it.
                 self.detach_current(true, &state, cx);
                 self.status =
                     format!("{current} was deleted; this buffer is no longer saved anywhere")
                         .into();
             } else if changes.files.iter().any(|c| c.path() == current) {
-                // Silica's own autosave comes back through the watcher a
-                // moment later. Rebuilding the view from bytes the buffer
-                // already holds would re-enter `show_file`, which reveals
-                // the row: the Files list would re-centre and every
-                // ancestor folder re-expand every few seconds of typing.
+                // * Silica's own autosave comes back through the watcher a
+                //   moment later. Rebuilding the view from bytes the buffer
+                //   already holds would re-enter `show_file`, which reveals
+                //   the row: the Files list would re-centre and every
+                //   ancestor folder re-expand every few seconds of typing.
                 if self.is_own_write(&current, &changes, &state, cx) {
                     self.refresh_panes(&state, cx);
                 } else {
@@ -4194,12 +4194,12 @@ impl Workspace {
                 self.refresh_panes(&state, cx);
             }
         } else if let Some(detached) = self.detached.clone() {
-            // The file the detached buffer came from is back: a slow external
-            // unlink-then-rewrite (git checkout, a sync client) lands as two
-            // changes either side of the watcher's debounce. Reattach rather
-            // than leave the pane showing a note the vault has again under a
-            // banner saying it does not; `show_file` keeps unsaved edits and
-            // reports that the file changed underneath them.
+            // * The file the detached buffer came from is back: a slow external
+            //   unlink-then-rewrite (git checkout, a sync client) lands as two
+            //   changes either side of the watcher's debounce. Reattach rather
+            //   than leave the pane showing a note the vault has again under a
+            //   banner saying it does not; `show_file` keeps unsaved edits and
+            //   reports that the file changed underneath them.
             if changes.files.iter().any(|c| c.path() == detached.as_ref())
                 && state.vault().absolute(&detached).exists()
             {
@@ -4323,18 +4323,18 @@ impl Workspace {
             .as_ref()
             .map(|s| s.palette.pinned.clone())
             .unwrap_or_default();
-        // The palette is what the check callbacks decide, so the list is
-        // built with the keyboard where it is now: opening the palette
-        // from a reading leaf does not offer the editing commands.
+        // * The palette is what the check callbacks decide, so the list is
+        //   built with the keyboard where it is now: opening the palette
+        //   from a reading leaf does not offer the editing commands.
         let mut commands: Vec<PaletteCommand> = registry
             .iter()
             .filter(|c| self.can_run(&c.id, window, cx))
             .map(|c| PaletteCommand::from_command(c, pinned.contains(&c.id)))
             .collect();
-        // The commands the loaded plugins registered, under the names
-        // Obsidian shows them by. Loading happens here and in Settings, both
-        // on this thread: the runtimes are JavaScript, and this is the only
-        // thread they can be made on.
+        // * The commands the loaded plugins registered, under the names
+        //   Obsidian shows them by. Loading happens here and in Settings, both
+        //   on this thread: the runtimes are JavaScript, and this is the only
+        //   thread they can be made on.
         if let Some(state) = self.state.as_ref() {
             silica_plugins::live::ensure(&state.root, state.vault().config_dir(), &state.plugins);
         }
@@ -4416,14 +4416,14 @@ impl Workspace {
     /// Runs a command by its Obsidian id; unknown or not-yet-implemented
     /// ids are reported in the status bar.
     pub fn run_command(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-        // A command whose core plugin is off is not in the registry, so it
-        // is in no palette and on no key. Asked for by id -- over the
-        // control socket, or by a binding made before the toggle -- it
-        // says so rather than running anyway.
-        // A plugin command is not in the registry either: it belongs to the
-        // plugin's own runtime, on the thread the app runs on. A plugin that
-        // failed to load registered nothing, so its commands are unknown here
-        // like any other unknown id.
+        // * A command whose core plugin is off is not in the registry, so it
+        //   is in no palette and on no key. Asked for by id -- over the
+        //   control socket, or by a binding made before the toggle -- it
+        //   says so rather than running anyway.
+        //   A plugin command is not in the registry either: it belongs to the
+        //   plugin's own runtime, on the thread the app runs on. A plugin that
+        //   failed to load registered nothing, so its commands are unknown here
+        //   like any other unknown id.
         let state = self.state.clone();
         let current = self.current.clone();
         let ctx = PluginContext {
@@ -4539,9 +4539,9 @@ impl Workspace {
                     if !full_path.exists() {
                         return Err(format!("'{path}' does not exist"));
                     }
-                    // Open the note by setting current and reloading the model
-                    // This is handled by the workspace; for now just return OK
-                    // and let the caller handle it. The plugin signals success.
+                    // * Open the note by setting current and reloading the model
+                    //   This is handled by the workspace; for now just return OK
+                    //   and let the caller handle it. The plugin signals success.
                     Ok(())
                 }
             }),
@@ -4597,10 +4597,10 @@ impl Workspace {
             "switcher:open" => self.open_switcher("", window, cx),
             "global-search:open" => self.open_search_action(&OpenSearch, window, cx),
             "graph:open" => self.open_graph_action(&OpenGraph, window, cx),
-            // Asked for by id with no file open -- the palette does not offer
-            // it, and `can_run` says so -- this opens nothing, which is what
-            // Obsidian's `checkCallback` does rather than falling back to the
-            // global graph.
+            // * Asked for by id with no file open -- the palette does not offer
+            //   it, and `can_run` says so -- this opens nothing, which is what
+            //   Obsidian's `checkCallback` does rather than falling back to the
+            //   global graph.
             "graph:open-local" if self.current.is_none() => {}
             "graph:open-local" => self.show_graph(true, window, cx),
             "canvas:new-file" => self.new_canvas("", cx),
@@ -4613,13 +4613,13 @@ impl Workspace {
             "canvas:jump-to-group" => self.jump_to_group(window, cx),
             "canvas:convert-to-file" => self.convert_card_to_file(cx),
             "markdown:toggle-preview" => self.toggle_mode(&ToggleMode, window, cx),
-            // The properties block is the same editable widget in reading
-            // view, and `editor:toggle-fold-properties` was observed running
-            // there with the preview leaf active (Specification.md, "Folding"),
-            // so these three ask only that the note hold the keyboard.
+            // * The properties block is the same editable widget in reading
+            //   view, and `editor:toggle-fold-properties` was observed running
+            //   there with the preview leaf active (Specification.md, "Folding"),
+            //   so these three ask only that the note hold the keyboard.
             //
-            // Obsidian opens an unnamed property row and writes nothing until
-            // it is named, which is what `add_property_row` does.
+            //   Obsidian opens an unnamed property row and writes nothing until
+            //   it is named, which is what `add_property_row` does.
             "markdown:add-metadata-property" => {
                 if self.note_has_keys(window, cx) {
                     self.editor
@@ -4642,9 +4642,9 @@ impl Workspace {
                     }
                 }
             }
-            // The five fold commands pass their check only with a markdown
-            // view focused in an editing mode, as observed; none has a
-            // default hotkey.
+            // * The five fold commands pass their check only with a markdown
+            //   view focused in an editing mode, as observed; none has a
+            //   default hotkey.
             "editor:toggle-fold" => {
                 if self.editing_or_report(id, window, cx) {
                     self.editor.update(cx, |e, cx| e.toggle_fold(cx));
@@ -4671,8 +4671,8 @@ impl Workspace {
                     self.editor.update(cx, |e, cx| e.insert_table(window, cx));
                 }
             }
-            // The wrapping toggles: each writes the pair Obsidian's
-            // markup uses around the selection, or takes it off again.
+            // * The wrapping toggles: each writes the pair Obsidian's
+            //   markup uses around the selection, or takes it off again.
             "editor:toggle-bold"
             | "editor:toggle-italics"
             | "editor:toggle-strikethrough"
@@ -4719,7 +4719,7 @@ impl Workspace {
                         .update(cx, |e, cx| e.cycle_checklist(window, cx));
                 }
             }
-            // The six colours write one emoji after the opening `==`.
+            // * The six colours write one emoji after the opening `==`.
             "editor:toggle-highlight-red"
             | "editor:toggle-highlight-orange"
             | "editor:toggle-highlight-yellow"
@@ -4754,12 +4754,12 @@ impl Workspace {
                     }
                 }
             }
-            // "Toggle heading" is a real palette entry whose check passes
-            // and which changes nothing: twelve line shapes, three ways of
-            // running it and ten presses in a row all came back
-            // byte-identical (Specification.md, "Observed editing command
-            // behavior"). Registering the id and doing nothing is parity;
-            // it is not a bug here.
+            // * "Toggle heading" is a real palette entry whose check passes
+            //   and which changes nothing: twelve line shapes, three ways of
+            //   running it and ten presses in a row all came back
+            //   byte-identical (Specification.md, "Observed editing command
+            //   behavior"). Registering the id and doing nothing is parity;
+            //   it is not a bug here.
             "editor:set-heading" => {
                 self.editing_or_report(id, window, cx);
             }
@@ -4886,17 +4886,17 @@ impl Workspace {
             "file-explorer:new-file"
             | "file-explorer:new-file-in-current-tab"
             | "file-explorer:new-file-in-new-pane" => {
-                // Obsidian's "Create new note" goes to a new tab too, unless
-                // the active one is empty; "in current tab" replaces the
-                // note, and "to the right" would split, which is a new tab
-                // in the one strip Silica has.
+                // * Obsidian's "Create new note" goes to a new tab too, unless
+                //   the active one is empty; "in current tab" replaces the
+                //   note, and "to the right" would split, which is a new tab
+                //   in the one strip Silica has.
                 let fresh_tab = match id {
                     "file-explorer:new-file-in-current-tab" => false,
                     "file-explorer:new-file-in-new-pane" => true,
                     _ => self.current.is_some(),
                 };
-                // The folder follows the note that was open, so it is
-                // settled before the new tab empties the main area.
+                // * The folder follows the note that was open, so it is
+                //   settled before the new tab empties the main area.
                 let folder = self
                     .state
                     .as_ref()
@@ -4939,15 +4939,15 @@ impl Workspace {
                 let id = self.active_group_id();
                 self.close_group(id, true, cx);
             }
-            // Obsidian's "Close others in tab group" closes the group's
-            // other tabs, which is what `close-others` does too.
+            // * Obsidian's "Close others in tab group" closes the group's
+            //   other tabs, which is what `close-others` does too.
             "workspace:close-others-tab-group" => self.close_other_tabs(cx),
             "editor:focus-left" => self.focus_neighbor(SplitDirection::Vertical, false, cx),
             "editor:focus-right" => self.focus_neighbor(SplitDirection::Vertical, true, cx),
             "editor:focus-top" => self.focus_neighbor(SplitDirection::Horizontal, false, cx),
             "editor:focus-bottom" => self.focus_neighbor(SplitDirection::Horizontal, true, cx),
-            // "Open link under cursor to the right": a split right, then the
-            // link followed in the new group.
+            // * "Open link under cursor to the right": a split right, then the
+            //   link followed in the new group.
             "editor:open-link-in-new-split" => {
                 if self.editing_or_report(id, window, cx) {
                     if let Some(target) = self.editor.read(cx).link_target_at_cursor() {
@@ -5085,9 +5085,9 @@ impl Workspace {
                 self.show_right_tab("properties", cx);
             }
             "app:open-help" => self.open_help(window, cx),
-            // "Manage vaults" raises the vault manager; Obsidian's does
-            // the same (its `app:open-vault` left no menu and no modal
-            // behind, and raised `starter.html` — probe of 2026-10-29).
+            // * "Manage vaults" raises the vault manager; Obsidian's does
+            //   the same (its `app:open-vault` left no menu and no modal
+            //   behind, and raised `starter.html` — probe of 2026-10-29).
             "app:open-vault" => self.open_vault_manager(window, cx),
             "app:switch-vault" => self.toggle_vault_menu(cx),
             "app:open-another-vault" => self.open_another_vault(window, cx),
@@ -5188,7 +5188,7 @@ impl Workspace {
             return;
         }
         self.load_vault_with(root, false, window, cx);
-        // Opened once the vault is in, the way `--note` is.
+        // * Opened once the vault is in, the way `--note` is.
         self.current = Some("Welcome.md".into());
     }
 
@@ -5268,8 +5268,8 @@ impl Workspace {
         if !RUNNABLE.contains(&id) {
             return false;
         }
-        // A command whose core plugin is off is gone from the registry, so
-        // this only matters for an id asked for directly.
+        // * A command whose core plugin is off is gone from the registry, so
+        //   this only matters for an id asked for directly.
         if let Some(plugin) = silica_commands::plugin_of(id) {
             if !self
                 .state
@@ -5282,22 +5282,22 @@ impl Workspace {
         if TableCommand::from_id(id).is_some() {
             return self.mode.is_editing() && self.editor.read(cx).in_table();
         }
-        // `graph:open-local` is a checkCallback: with every markdown leaf
-        // detached Obsidian does not list the id at all, rather than offer a
-        // command that would open nothing (see [[Specification#`graph:open-
-        // local` is not offered with no file open]]). Only the no-file case
-        // was observed, so that is all this refuses.
+        // * `graph:open-local` is a checkCallback: with every markdown leaf
+        //   detached Obsidian does not list the id at all, rather than offer a
+        //   command that would open nothing (see [[Specification#`graph:open-
+        //   local` is not offered with no file open]]). Only the no-file case
+        //   was observed, so that is all this refuses.
         if id == "graph:open-local" {
             return self.current.is_some();
         }
         if EDITOR_ONLY.contains(&id) {
             return self.mode.is_editing() && self.note_has_keys(window, cx);
         }
-        // A base's own commands need one on screen. `bases:copy-table` is
-        // offered while a base leaf is active even when the keyboard is
-        // elsewhere -- that is the case the probe ran, and it is the one that
-        // answers "Unable to copy to your clipboard" -- so this asks only
-        // that the base be showing.
+        // * A base's own commands need one on screen. `bases:copy-table` is
+        //   offered while a base leaf is active even when the keyboard is
+        //   elsewhere -- that is the case the probe ran, and it is the one that
+        //   answers "Unable to copy to your clipboard" -- so this asks only
+        //   that the base be showing.
         if BASE_ONLY.contains(&id) {
             return self.main_view(cx) == MainView::Bases;
         }
@@ -5341,10 +5341,10 @@ impl Workspace {
     }
 
     fn open_graph_action(&mut self, _: &OpenGraph, window: &mut Window, cx: &mut Context<Self>) {
-        // "Open graph view" toggles the *global* graph. Asked for it with a
-        // local graph on screen, Obsidian shows the global one rather than
-        // leaving graph mode: `graph:open-local` is not a toggle either, so
-        // treating any graph as the one to close made the pair inconsistent.
+        // * "Open graph view" toggles the *global* graph. Asked for it with a
+        //   local graph on screen, Obsidian shows the global one rather than
+        //   leaving graph mode: `graph:open-local` is not a toggle either, so
+        //   treating any graph as the one to close made the pair inconsistent.
         if self.mode == ViewMode::Graph && !self.graph.read(cx).is_local() {
             let back = self.mode_before_graph;
             self.set_mode(back, window, cx);
@@ -5357,13 +5357,13 @@ impl Workspace {
         if mode == ViewMode::Graph && self.mode != ViewMode::Graph {
             self.mode_before_graph = self.mode;
         }
-        // The history entry for the note on screen tracks the state it is
-        // in, so a reader who presses Ctrl+E and then navigates away comes
-        // back to the mode they were reading in.
+        // * The history entry for the note on screen tracks the state it is
+        //   in, so a reader who presses Ctrl+E and then navigates away comes
+        //   back to the mode they were reading in.
         self.record_history_state(cx);
         if !mode.is_editing() && self.mode.is_editing() {
-            // The reading view shows what the editor has: save and rebuild now
-            // rather than waiting for the autosave and the watcher.
+            // * The reading view shows what the editor has: save and rebuild now
+            //   rather than waiting for the autosave and the watcher.
             if self.editor.read(cx).is_dirty() {
                 self.flush_save(cx);
                 if let (Some(state), Some(current)) = (self.state.clone(), self.current.clone()) {
@@ -5371,9 +5371,9 @@ impl Workspace {
                 }
             }
         }
-        // The fold is shared: the editor's fold collapses the same section
-        // in reading view, and a section collapsed there is folded on the
-        // way back.
+        // * The fold is shared: the editor's fold collapses the same section
+        //   in reading view, and a section collapsed there is folded on the
+        //   way back.
         if mode.is_editing() != self.mode.is_editing() {
             self.sync_folds(mode.is_editing(), cx);
         }
@@ -5522,10 +5522,10 @@ impl Workspace {
         {
             return true;
         }
-        // A view of a group that is no longer the active one is painted, but
-        // the keyboard belongs with the active group's note: a split, a
-        // focus command or a close moved the active group and the view it
-        // left behind still holds the focus.
+        // * A view of a group that is no longer the active one is painted, but
+        //   the keyboard belongs with the active group's note: a split, a
+        //   focus command or a close moved the active group and the view it
+        //   left behind still holds the focus.
         self.groups.iter().enumerate().any(|(ix, g)| {
             ix != self.active_group
                 && (g.editor.read(cx).focus_handle_ref().is_focused(window)
@@ -5662,15 +5662,15 @@ impl Workspace {
             self.current = Some(path);
             return;
         };
-        // The graph is a toggle, not a place a note can open in: a note
-        // asked for from anywhere shows the note.
+        // * The graph is a toggle, not a place a note can open in: a note
+        //   asked for from anywhere shows the note.
         if self.mode == ViewMode::Graph {
             self.mode = self.mode_before_graph;
         }
         if self.current.as_deref() != Some(path.as_str()) {
             self.flush_save(cx);
-            // The entry being left keeps the state it is being left in, so
-            // coming back to it comes back to where the reader was.
+            // * The entry being left keeps the state it is being left in, so
+            //   coming back to it comes back to where the reader was.
             self.record_history_state(cx);
             self.history.truncate(self.history_ix);
             self.history
@@ -5681,14 +5681,14 @@ impl Workspace {
             self.last_open_files.truncate(LAST_OPEN_FILES_KEPT);
         }
         self.show_file(&path, &state, cx);
-        // Opening a note is a move into the main area, wherever it was asked
-        // for: an explorer row, a search hit, the switcher, a link, the
-        // socket. Obsidian hands the keyboard to the note it just opened, and
-        // without this the click that opened it leaves focus on the
-        // workspace root, where typing and the arrow keys reach nothing.
+        // * Opening a note is a move into the main area, wherever it was asked
+        //   for: an explorer row, a search hit, the switcher, a link, the
+        //   socket. Obsidian hands the keyboard to the note it just opened, and
+        //   without this the click that opened it leaves focus on the
+        //   workspace root, where typing and the arrow keys reach nothing.
         self.request_focus_main(cx);
         if self.current.as_deref() != Some(path.as_str()) {
-            // It did not open, so it is not somewhere to go back to either.
+            // * It did not open, so it is not somewhere to go back to either.
             self.forget_history(&path);
             return;
         }
@@ -5705,10 +5705,10 @@ impl Workspace {
             }
         }
         if let Some(gone) = self.detached.take() {
-            // The buffer was kept because its edits exist nowhere else. There
-            // is no file to save them to, and resurrecting one the user
-            // deleted would be worse, so the least this can do on the way out
-            // is name what it is dropping rather than drop it in silence.
+            // * The buffer was kept because its edits exist nowhere else. There
+            //   is no file to save them to, and resurrecting one the user
+            //   deleted would be worse, so the least this can do on the way out
+            //   is name what it is dropping rather than drop it in silence.
             let lost = {
                 let e = self.editor.read(cx);
                 e.is_dirty() && e.name.as_ref() != path
@@ -5738,8 +5738,8 @@ impl Workspace {
         match kind {
             FileKind::Canvas => match std::fs::read_to_string(state.vault().absolute(path)) {
                 Ok(text) => {
-                    // Nothing of a note may show through: the reading view
-                    // is emptied and the editor let go of, as for an image.
+                    // * Nothing of a note may show through: the reading view
+                    //   is emptied and the editor let go of, as for an image.
                     self.reading.update(cx, |r, cx| {
                         r.set_note(
                             None,
@@ -5748,24 +5748,24 @@ impl Workspace {
                         )
                     });
                     self.release_buffer(cx);
-                    // The same rule as the editor's: the view keeps its
-                    // scene when the file is what it last read or wrote
-                    // (its own save coming back through the watcher), keeps
-                    // unsaved edits when the file changed underneath them,
-                    // and reloads otherwise.
+                    // * The same rule as the editor's: the view keeps its
+                    //   scene when the file is what it last read or wrote
+                    //   (its own save coming back through the watcher), keeps
+                    //   unsaved edits when the file changed underneath them,
+                    //   and reloads otherwise.
                     let (same, matches, dirty) = {
                         let c = self.canvas.read(cx);
                         (c.path() == Some(path), c.matches_file(&text), c.is_dirty())
                     };
                     if same && matches {
-                        // Own write or an unrelated event.
+                        // * Own write or an unrelated event.
                     } else if same && dirty {
                         self.report(format!("{path} changed on disk; unsaved edits kept"), cx);
                     } else if same {
                         self.canvas.update(cx, |c, cx| c.reload(&text, cx));
                     } else {
-                        // Where the tab last looked, when it was restored
-                        // from the layout for this very file.
+                        // * Where the tab last looked, when it was restored
+                        //   from the layout for this very file.
                         let view_state = self
                             .tabs
                             .get(self.active_tab)
@@ -5779,17 +5779,17 @@ impl Workspace {
                 }
                 Err(err) => self.unreadable(path, previous, &err, state, cx),
             },
-            // A base is drawn by its own view, the way a canvas is. It is
-            // read-only in this cut -- Obsidian writes a base only on an
-            // edit, or on the close that follows one (see
-            // [[Specification#Observed Bases write behavior, Obsidian 1.14.5
-            // (installer build 1.13.7)]]) -- so there are no unsaved edits
-            // to keep, and the canvas arm's three cases collapse to two:
-            // the bytes the view already read, and somebody else's write.
+            // * A base is drawn by its own view, the way a canvas is. It is
+            //   read-only in this cut -- Obsidian writes a base only on an
+            //   edit, or on the close that follows one (see
+            //   [[Specification#Observed Bases write behavior, Obsidian 1.14.5
+            //   (installer build 1.13.7)]]) -- so there are no unsaved edits
+            //   to keep, and the canvas arm's three cases collapse to two:
+            //   the bytes the view already read, and somebody else's write.
             FileKind::Base => match std::fs::read_to_string(state.vault().absolute(path)) {
                 Ok(text) => {
-                    // Nothing of a note may show through: the reading view
-                    // is emptied and the editor let go of, as for a canvas.
+                    // * Nothing of a note may show through: the reading view
+                    //   is emptied and the editor let go of, as for a canvas.
                     self.reading.update(cx, |r, cx| {
                         r.set_note(
                             None,
@@ -5803,8 +5803,8 @@ impl Workspace {
                         (b.path() == Some(path)).then(|| b.matches_file(&text))
                     };
                     match same {
-                        // Its own read coming back through the watcher, or
-                        // an unrelated event: the view has these bytes.
+                        // * Its own read coming back through the watcher, or
+                        //   an unrelated event: the view has these bytes.
                         Some(true) => {}
                         Some(false) => self.bases.update(cx, |b, cx| b.reload(&text, cx)),
                         None => {
@@ -5829,15 +5829,15 @@ impl Workspace {
                     self.reading
                         .update(cx, |r, cx| r.set_note(Some(path.to_string()), model, cx));
                     self.install_canvas_host(cx);
-                    // The editor keeps its buffer when the file on disk is
-                    // what it last saved (or still holds unsaved edits), and
-                    // keeps its place when the note changed underneath it.
+                    // * The editor keeps its buffer when the file on disk is
+                    //   what it last saved (or still holds unsaved edits), and
+                    //   keeps its place when the note changed underneath it.
                     let (same, matches, dirty) = {
                         let e = self.editor.read(cx);
                         (e.name.as_ref() == path, e.matches_file(&text), e.is_dirty())
                     };
                     if same && matches {
-                        // Own write or an unrelated event.
+                        // * Own write or an unrelated event.
                     } else if same && dirty {
                         self.report(format!("{path} changed on disk; unsaved edits kept"), cx);
                         self.refresh_panes(state, cx);
@@ -5850,9 +5850,9 @@ impl Workspace {
                             .update(cx, |e, cx| e.set_text(path.to_string(), text.clone(), cx));
                         self.restore_folds(path, &text, state, cx);
                     }
-                    // Nothing about a build time reaches Obsidian's status
-                    // bar; the number is still there to be read with
-                    // `SILICA_DEBUG_STATUS` set.
+                    // * Nothing about a build time reaches Obsidian's status
+                    //   bar; the number is still there to be read with
+                    //   `SILICA_DEBUG_STATUS` set.
                     self.status = if debug_status() {
                         format!("{path}  ·  reading view built in {build_ms:.1} ms").into()
                     } else {
@@ -5861,17 +5861,17 @@ impl Workspace {
                 }
                 Err(err) => self.unreadable(path, previous, &err, state, cx),
             },
-            // A PDF is drawn by its own view, like a canvas and a base. The
-            // view never writes, so a change to the file is always somebody
-            // else's: `after_changes` forgets the parsed file and reloads
-            // every view holding it before this arrives, and what reaches
-            // here for the file already on screen is a tab switch back to
-            // it, which keeps the page and zoom the view is on. A file the
-            // view showed earlier this session comes back to its page: the
-            // view remembers, since the leaf records nothing but the file.
+            // * A PDF is drawn by its own view, like a canvas and a base. The
+            //   view never writes, so a change to the file is always somebody
+            //   else's: `after_changes` forgets the parsed file and reloads
+            //   every view holding it before this arrives, and what reaches
+            //   here for the file already on screen is a tab switch back to
+            //   it, which keeps the page and zoom the view is on. A file the
+            //   view showed earlier this session comes back to its page: the
+            //   view remembers, since the leaf records nothing but the file.
             FileKind::Pdf => {
-                // Nothing of a note may show through: the reading view is
-                // emptied and the editor let go of, as for a canvas.
+                // * Nothing of a note may show through: the reading view is
+                //   emptied and the editor let go of, as for a canvas.
                 self.reading.update(cx, |r, cx| {
                     r.set_note(
                         None,
@@ -5899,11 +5899,11 @@ impl Workspace {
                 self.status = path.to_string().into();
             }
             other => {
-                // Nothing of the note that was open may survive into a file
-                // no view can draw: its text is not this file's and its links
-                // would still be clickable underneath the placeholder. The
-                // file's own bytes must not reach the editor either — that
-                // buffer saves through the markdown writer.
+                // ! Nothing of the note that was open may survive into a file
+                //   no view can draw: its text is not this file's and its links
+                //   would still be clickable underneath the placeholder. The
+                //   file's own bytes must not reach the editor either — that
+                //   buffer saves through the markdown writer.
                 self.reading.update(cx, |r, cx| {
                     r.set_note(
                         None,
@@ -6041,9 +6041,9 @@ impl Workspace {
             )
         });
         self.current = None;
-        // Nothing is open, so no row is the open file's: a highlight left
-        // behind outlives the note it marked, and the next `set_tree` would
-        // keep painting a path the vault no longer has.
+        // * Nothing is open, so no row is the open file's: a highlight left
+        //   behind outlives the note it marked, and the next `set_tree` would
+        //   keep painting a path the vault no longer has.
         self.explorer.update(cx, |e, cx| e.clear_active(cx));
         self.graph.update(cx, |g, cx| g.set_current(None, cx));
         self.clear_panes(cx);
@@ -6084,17 +6084,17 @@ impl Workspace {
         let cache = state.cache();
         let texts = state.texts();
         self.outline = cache.file(&path).map(outline_headings).unwrap_or_default();
-        // Folds belong to the note: another note's outline opens unfolded.
+        // * Folds belong to the note: another note's outline opens unfolded.
         if self.outline_state.file.as_deref() != Some(path.as_str()) {
             self.outline_state.collapsed.clear();
             self.outline_state.file = Some(path.clone());
             self.outline_state.scroll_pending = true;
         }
 
-        // Linked mentions: every link into this file, grouped by the note
-        // it was written in; Links: the ones this file writes, properties
-        // included. Unlinked mentions take a search of every note and come
-        // in from the background executor.
+        // * Linked mentions: every link into this file, grouped by the note
+        //   it was written in; Links: the ones this file writes, properties
+        //   included. Unlinked mentions take a search of every note and come
+        //   in from the background executor.
         let extra = self.backlink_state.extra_context;
         let linked = backlinks::linked_mentions(&cache, &texts, &path, extra);
         let links = backlinks::outgoing_links(&cache, &path);
@@ -6307,8 +6307,8 @@ impl Workspace {
         };
         let rows = {
             let editor = self.editor.read(cx);
-            // A clean buffer is the file the index read, and a buffer
-            // holding another note says nothing about this one.
+            // * A clean buffer is the file the index read, and a buffer
+            //   holding another note says nothing about this one.
             if editor.name.as_ref() != path.as_str() || !editor.is_dirty() {
                 return;
             }
@@ -6375,8 +6375,8 @@ impl Workspace {
         self.reading
             .update(cx, |r, cx| r.scroll_to_offset(offset, cx));
         self.editor.update(cx, |e, cx| e.reveal_offset(offset, cx));
-        // An outline row or a backlink moved the caret; the keyboard goes
-        // where the caret went, not to the dock row that was clicked.
+        // * An outline row or a backlink moved the caret; the keyboard goes
+        //   where the caret went, not to the dock row that was clicked.
         self.request_focus_main(cx);
     }
 
@@ -6387,14 +6387,14 @@ impl Workspace {
         state: &Arc<VaultState>,
         cx: &mut Context<Self>,
     ) {
-        // `[[doc.pdf#page=3]]`: the link parser reads `page=3` as a heading,
-        // and the PDF view reads it as a page. Every `#` part is put back
-        // and parsed as pdf.js's hash.
+        // * `[[doc.pdf#page=3]]`: the link parser reads `page=3` as a heading,
+        //   and the PDF view reads it as a page. Every `#` part is put back
+        //   and parsed as pdf.js's hash.
         if FileKind::from_path(path) == FileKind::Pdf {
             if let Subpath::Headings(names) = subpath {
                 let raw = names.join("#");
-                // Observed: `#page=99` on a five-page file, `#page=0` and
-                // `#page=abc` leave the view where it is.
+                // * Observed: `#page=99` on a five-page file, `#page=0` and
+                //   `#page=abc` leave the view where it is.
                 if let Some(page) = silica_pdf::parse_subpath(&raw).page {
                     if self.pdf.read(cx).path() == Some(path) {
                         self.pdf.update(cx, |p, cx| p.go_to_page(page, false, cx));
@@ -6449,7 +6449,7 @@ impl Workspace {
                         }
                     }
                     None => {
-                        // Obsidian creates the note a dangling link points at.
+                        // * Obsidian creates the note a dangling link points at.
                         if new_tab {
                             self.new_tab(cx);
                         }
@@ -6461,11 +6461,11 @@ impl Workspace {
             LinkTarget::External(url) => cx.open_url(&url),
             LinkTarget::Tag(tag) => self.show_search(&format!("tag:#{tag}"), None, cx),
             LinkTarget::Footnote(n) => {
-                // Obsidian's reference is an anchor to that one definition,
-                // not to the end of the note. The model knows where each
-                // definition is written, so the same reveal every heading
-                // jump uses takes the reader there: the Footnotes block in
-                // reading, the definition's own line while editing.
+                // * Obsidian's reference is an anchor to that one definition,
+                //   not to the end of the note. The model knows where each
+                //   definition is written, so the same reveal every heading
+                //   jump uses takes the reader there: the Footnotes block in
+                //   reading, the definition's own line while editing.
                 let at = self
                     .reading
                     .read(cx)
@@ -6516,8 +6516,8 @@ impl Workspace {
             self.mode = self.mode_before_graph;
         }
         self.flush_save(cx);
-        // Obsidian's history carries the view state, so back and forward
-        // restore the mode the note was left in as well as the note.
+        // * Obsidian's history carries the view state, so back and forward
+        //   restore the mode the note was left in as well as the note.
         self.mode = entry.mode;
         self.show_file(&entry.path, &state, cx);
         if entry.offset > 0 {
@@ -6565,8 +6565,8 @@ impl Workspace {
         let Some(state) = self.state.clone() else {
             return;
         };
-        // A click that outlived the note it was made in must write nothing:
-        // the marker's line and column belong to that note's bytes.
+        // * A click that outlived the note it was made in must write nothing:
+        //   the marker's line and column belong to that note's bytes.
         if self.current.as_deref() != Some(path) || self.editor.read(cx).name.as_ref() != path {
             return;
         }
@@ -6598,7 +6598,7 @@ impl Workspace {
         let Some(state) = self.state.clone() else {
             return;
         };
-        // Only the currently open note can be edited this way.
+        // * Only the currently open note can be edited this way.
         if self.current.as_deref() != Some(path) {
             return;
         }
@@ -6616,7 +6616,7 @@ impl Workspace {
             return;
         };
         let mut new_text = text;
-        // Apply edits in reverse order so earlier byte ranges stay valid.
+        // * Apply edits in reverse order so earlier byte ranges stay valid.
         for edit in edits.iter().rev() {
             new_text.replace_range(edit.start..edit.end, &edit.text);
         }
@@ -6655,15 +6655,15 @@ impl Workspace {
             let editor = self.editor.read(cx);
             (editor.is_dirty(), editor.name.to_string())
         };
-        // Only the open note is written back; a buffer that is not a vault
-        // file (the synthetic stress note) never touches the disk.
+        // * Only the open note is written back; a buffer that is not a vault
+        //   file (the synthetic stress note) never touches the disk.
         if !dirty || self.current.as_deref() != Some(name.as_str()) {
             return;
         }
         let contents = self.editor.read(cx).file_contents();
-        // The one place a note's bytes are written: the path is checked
-        // for links and the open does not follow one, so a save can never
-        // land outside the vault.
+        // * The one place a note's bytes are written: the path is checked
+        //   for links and the open does not follow one, so a save can never
+        //   land outside the vault.
         let absolute = match state.vault().write_path(&name) {
             Ok(path) => path,
             Err(err) => {
@@ -6671,13 +6671,13 @@ impl Workspace {
                 return;
             }
         };
-        // The vault is the source of truth. If the file is not the bytes
-        // this note was loaded from or last saved as, something else wrote
-        // it — Obsidian, in the mixed use the phase 3 gate is about — and
-        // overwriting it would throw that away. A file that cannot be read
-        // at all is the same answer only more so: a note deleted underneath
-        // the app must not be recreated here from the buffer it left behind.
-        // The buffer keeps its edits and says so instead.
+        // ! The vault is the source of truth. If the file is not the bytes
+        //   this note was loaded from or last saved as, something else wrote
+        //   it — Obsidian, in the mixed use the phase 3 gate is about — and
+        //   overwriting it would throw that away. A file that cannot be read
+        //   at all is the same answer only more so: a note deleted underneath
+        //   the app must not be recreated here from the buffer it left behind.
+        //   The buffer keeps its edits and says so instead.
         match std::fs::read_to_string(&absolute) {
             Ok(on_disk) if self.editor.read(cx).disk_unchanged(&on_disk) => {}
             Ok(_) => {
@@ -6769,9 +6769,9 @@ impl Workspace {
             return;
         };
         let absolute = state.vault().absolute(path);
-        // `cmd /C start` was here on Windows, which made the file name shell
-        // syntax: a note called `a&calc.exe.md` ran a command on being opened.
-        // The system's own open call takes the path as data instead.
+        // * `cmd /C start` was here on Windows, which made the file name shell
+        //   syntax: a note called `a&calc.exe.md` ran a command on being opened.
+        //   The system's own open call takes the path as data instead.
         let outcome = silica_plugins::launch::open_path(&absolute);
         if let Err(err) = outcome {
             self.report(format!("Could not open {path}: {err}"), cx);
@@ -6922,8 +6922,8 @@ impl Workspace {
                 value: ix.to_string(),
             })
             .collect();
-        // A base that did not parse has no views to switch between, and a
-        // chooser of nothing is not what the command does.
+        // * A base that did not parse has no views to switch between, and a
+        //   chooser of nothing is not what the command does.
         if rows.is_empty() {
             return;
         }
@@ -6996,9 +6996,9 @@ impl Workspace {
             Err(err) => return self.report(err, cx),
         };
         self.after_changes(changes, cx);
-        // The link is the file's own name with its extension, the way a
-        // non-markdown file is always linked; the new base is in the vault
-        // root, as `bases:new-file`'s is.
+        // * The link is the file's own name with its extension, the way a
+        //   non-markdown file is always linked; the new base is in the vault
+        //   root, as `bases:new-file`'s is.
         let name = path.rsplit('/').next().unwrap_or(&path).to_string();
         let (before, after) = {
             let editor = self.editor.read(cx);
@@ -7101,8 +7101,8 @@ impl Workspace {
                 return;
             }
         };
-        // Any group's editor may be holding the note, not just the active
-        // one, and a buffer that differs from the disk is unsaved work.
+        // * Any group's editor may be holding the note, not just the active
+        //   one, and a buffer that differs from the disk is unsaved work.
         if self.buffer_differs(&path, &on_disk, cx) {
             self.report(format!("{path} has unsaved edits; {key} not set"), cx);
             return;
@@ -7111,8 +7111,8 @@ impl Workspace {
             let types = state.property_types();
             crate::bases::edit::write_property(&on_disk, &key, &value, &types)
         };
-        // An unchanged value writes nothing at all, which is what keeps a
-        // committed field from touching a file it did not change.
+        // * An unchanged value writes nothing at all, which is what keeps a
+        //   committed field from touching a file it did not change.
         let Some(written) = written else {
             return;
         };
@@ -7121,8 +7121,8 @@ impl Workspace {
             return;
         }
         self.report(format!("{key} set in {path}"), cx);
-        // The index is what every base resolves against, so the table comes
-        // back through the same path an outside edit would take.
+        // * The index is what every base resolves against, so the table comes
+        //   back through the same path an outside edit would take.
         self.files_changed(vec![absolute], cx);
     }
 
@@ -7427,19 +7427,19 @@ impl Workspace {
                 .as_deref()
                 .is_some_and(|c| c.starts_with(&format!("{path}/")));
         if was_current {
-            // Nothing may write the buffer back into a file that is gone,
-            // and no pane may go on describing it.
+            // * Nothing may write the buffer back into a file that is gone,
+            //   and no pane may go on describing it.
             self.detach_current(false, &state, cx);
-            // The main area may stop painting the view that was showing the
-            // note, and a focus left on it would sit outside the dispatch
-            // tree and swallow every key. The same rule as everywhere else
-            // decides where it goes instead: the workspace root when nothing
-            // is painted, the detached buffer when one stayed behind.
+            // * The main area may stop painting the view that was showing the
+            //   note, and a focus left on it would sit outside the dispatch
+            //   tree and swallow every key. The same rule as everywhere else
+            //   decides where it goes instead: the workspace root when nothing
+            //   is painted, the detached buffer when one stayed behind.
             self.focus_main(window, cx);
         }
         self.forget_history(path);
         match state.trash(path) {
-            // Obsidian shows nothing for a delete that worked.
+            // * Obsidian shows nothing for a delete that worked.
             Ok(changes) => self.after_changes(changes, cx),
             Err(err) => self.report(err, cx),
         }
@@ -7450,8 +7450,8 @@ impl Workspace {
             return;
         };
         match state.duplicate(path) {
-            // Nothing is reported for a copy that worked either; the new
-            // file opening is the feedback.
+            // * Nothing is reported for a copy that worked either; the new
+            //   file opening is the feedback.
             Ok((copy, changes)) => {
                 self.after_changes(changes, cx);
                 self.open_file(copy, None, cx);
@@ -7469,9 +7469,9 @@ impl Workspace {
         let value = value.trim();
         match op {
             PendingOp::Rename(from) => {
-                // The box holds the stem, which is what `renamed_path`
-                // takes -- the same path and the same validator the view
-                // header's inline rename field commits through.
+                // * The box holds the stem, which is what `renamed_path`
+                //   takes -- the same path and the same validator the view
+                //   header's inline rename field commits through.
                 let to = match self.renamed_path(&from, value) {
                     Ok(to) => to,
                     Err(err) => {
@@ -7524,7 +7524,7 @@ impl Workspace {
                 self.close_modal(window, cx);
                 self.finish_bookmark(draft, value, cx);
             }
-            // Save on "Edit bookmark" changes nothing, as Obsidian's did.
+            // * Save on "Edit bookmark" changes nothing, as Obsidian's did.
             PendingOp::EditBookmark(_) => {
                 self.pending = None;
                 self.close_modal(window, cx);
@@ -7674,8 +7674,8 @@ impl Workspace {
                 )
             }
             BookmarkDraft::Tabs(paths) => {
-                // Every member shares one time, the group's is its own, as
-                // "Bookmark all tabs" writes them.
+                // * Every member shares one time, the group's is its own, as
+                //   "Bookmark all tabs" writes them.
                 let members: Vec<Bookmark> = paths
                     .iter()
                     .map(|p| Bookmark::file(p, None, None, ctime))
@@ -7775,8 +7775,8 @@ impl Workspace {
         let Some(state) = self.state.clone() else {
             return;
         };
-        // The open note's edits must be on disk before its file moves or
-        // its links are rewritten.
+        // * The open note's edits must be on disk before its file moves or
+        //   its links are rewritten.
         self.flush_save(cx);
         match state.rename(from, to, update_links) {
             Ok(outcome) => {
@@ -7796,7 +7796,7 @@ impl Workspace {
             .iter()
             .map(|(a, b)| (a.as_str(), b.as_str()))
             .collect();
-        // A note's fold record follows it to its new path.
+        // * A note's fold record follows it to its new path.
         if let Some(root) = self.state.as_ref().map(|s| s.root.clone()) {
             if let Some(store) = self.fold_store(&root) {
                 for (from, to) in &renamed {
@@ -7821,7 +7821,7 @@ impl Workspace {
                 }
             }
         }
-        // Every group's views follow the rename, the active one's included.
+        // * Every group's views follow the rename, the active one's included.
         for group in &self.groups {
             group.editor.update(cx, |e, _| {
                 if let Some(new) = renamed.get(e.name.as_ref()) {
@@ -7839,10 +7839,10 @@ impl Workspace {
                 self.current = Some(new.to_string());
             }
         }
-        // Obsidian says nothing about the rename itself. It shows one
-        // Notice, and only when links were rewritten:
-        // [[Specification#A move that changes the file's basename]] records
-        // it as exactly `Updated 1 link in 1 file.`
+        // * Obsidian says nothing about the rename itself. It shows one
+        //   Notice, and only when links were rewritten:
+        //   [[Specification#A move that changes the file's basename]] records
+        //   it as exactly `Updated 1 link in 1 file.`
         let links = (outcome.rewritten_links > 0).then(|| {
             format!(
                 "Updated {} link{} in {} file{}.",
@@ -7852,9 +7852,9 @@ impl Workspace {
                 plural(outcome.rewritten_files),
             )
         });
-        // A note that changed underneath keeps its own bytes. Obsidian has
-        // nothing to say here because it never skips, and silence would
-        // leave stale links behind with no sign of it, so this one stays.
+        // * A note that changed underneath keeps its own bytes. Obsidian has
+        //   nothing to say here because it never skips, and silence would
+        //   leave stale links behind with no sign of it, so this one stays.
         let skipped = match outcome.stale.len() {
             0 => None,
             n => Some(format!(
@@ -7951,8 +7951,8 @@ impl Workspace {
             _ if bases => MainView::Bases,
             _ if pdf => MainView::Pdf,
             ViewMode::Reading if has_note => MainView::Reading,
-            // An image has no source to edit, so it reads the same in the
-            // editing modes as it does in the reading view.
+            // * An image has no source to edit, so it reads the same in the
+            //   editing modes as it does in the reading view.
             ViewMode::LivePreview | ViewMode::Source if image && has_note => MainView::Reading,
             ViewMode::LivePreview | ViewMode::Source if has_buffer => MainView::Editor,
             _ => MainView::Empty,
@@ -8022,9 +8022,9 @@ impl Workspace {
                 ..
             } => {
                 let row = *direction == SplitDirection::Vertical;
-                // A split whose children do not all carry a `dimension`
-                // shares its room equally, as Obsidian draws one that was
-                // never resized.
+                // * A split whose children do not all carry a `dimension`
+                //   shares its room equally, as Obsidian draws one that was
+                //   never resized.
                 let dims: Option<Vec<f64>> =
                     children.iter().map(|c| self.dimension_of(c)).collect();
                 let split_path = path.clone();
@@ -8104,8 +8104,8 @@ impl Workspace {
         let id = view.id;
         let mut order = Vec::new();
         self.layout_tree.groups(&mut order);
-        // The corner groups: top left is the first group however the
-        // splits run, top right needs the tree's shape.
+        // * The corner groups: top left is the first group however the
+        //   splits run, top right needs the tree's shape.
         let first = order.first() == Some(&id);
         let last = self.layout_tree.top_right() == Some(id);
         div()
@@ -8191,8 +8191,8 @@ impl Workspace {
     /// group, which they make active first.
     fn render_header(&self, view: &GroupView, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
         let id = view.id;
-        // The leaf's name, the same string its tab carries: "New tab" with
-        // nothing open, not "No file is open".
+        // * The leaf's name, the same string its tab carries: "New tab" with
+        //   nothing open, not "No file is open".
         let title = leaf_title(view.current.as_deref(), view.mode);
         let crumbs: SharedString = view
             .current
@@ -8200,8 +8200,8 @@ impl Workspace {
             .and_then(|p| p.rsplit_once('/').map(|(dir, _)| dir.replace('/', " / ")))
             .unwrap_or_default()
             .into();
-        // Obsidian's view action shows the current mode: a book while
-        // reading, a pencil while editing.
+        // * Obsidian's view action shows the current mode: a book while
+        //   reading, a pencil while editing.
         let mode_icon = match view.mode {
             ViewMode::Reading => "book-open",
             _ => "pencil",
@@ -8213,9 +8213,9 @@ impl Workspace {
         } else {
             theme.text_muted
         };
-        // Obsidian's view header: 40 px, 12 px side padding, the history
-        // arrows at 40 percent while they have nowhere to go, the title in
-        // the small UI size, the actions as icons at the right.
+        // * Obsidian's view header: 40 px, 12 px side padding, the history
+        //   arrows at 40 percent while they have nowhere to go, the title in
+        //   the small UI size, the actions as icons at the right.
         div()
             .flex()
             .flex_row()
@@ -8336,8 +8336,8 @@ impl Workspace {
                 };
                 let selection_x =
                     selection.map(|s| line.x_for_index(s.start)..line.x_for_index(s.end));
-                // A title too long for the header scrolls to keep the
-                // caret in view, the way the crate's other field does.
+                // * A title too long for the header scrolls to keep the
+                //   caret in view, the way the crate's other field does.
                 let width = bounds.size.width;
                 let mut scroll_x = ws
                     .title_layout
@@ -8364,9 +8364,9 @@ impl Workspace {
                 }
             },
             move |bounds, prepaint: TitlePrepaint, window, cx| {
-                // The platform's input method is pointed at the field only
-                // while one is open: the title is not a tab stop, and
-                // nothing types into it until a click puts a caret there.
+                // * The platform's input method is pointed at the field only
+                //   while one is open: the title is not a tab stop, and
+                //   nothing types into it until a click puts a caret there.
                 if prepaint.editing {
                     window.handle_input(
                         &paint_focus,
@@ -8422,8 +8422,8 @@ impl Workspace {
             .id(("view-title", id))
             .flex_1()
             .min_w_0()
-            // The canvas has no size of its own, so the row's height is
-            // given here; the line is centred in it when it paints.
+            // * The canvas has no size of its own, so the row's height is
+            //   given here; the line is centred in it when it paints.
             .h(px(HEADER_HEIGHT))
             .flex()
             .items_center()
@@ -8442,8 +8442,8 @@ impl Workspace {
         if !editing {
             return host.into_any_element();
         }
-        // The keys only come here while a field is open, and they are the
-        // crate's own field keys: the same context, so the same bindings.
+        // * The keys only come here while a field is open, and they are the
+        //   crate's own field keys: the same context, so the same bindings.
         host.track_focus(&self.title_focus)
             .key_context("TextInput")
             .on_action(cx.listener(|this, _: &text_input::Left, _, cx| {
@@ -8515,8 +8515,8 @@ impl Workspace {
                     this.cancel_title(window, cx)
                 }),
             )
-            // Ctrl+E in a field is swallowed rather than toggling the mode
-            // behind it, as it is in every other field here.
+            // * Ctrl+E in a field is swallowed rather than toggling the mode
+            //   behind it, as it is in every other field here.
             .on_action(cx.listener(|_, _: &text_input::Swallow, _, _| {}))
             .into_any_element()
     }
@@ -8541,12 +8541,12 @@ impl Workspace {
         if x > layout.line.width + px(4.) {
             return;
         }
-        // A click in another group's header makes that group active first,
-        // so the edit always belongs to the leaf the keyboard is in.
+        // * A click in another group's header makes that group active first,
+        //   so the edit always belongs to the leaf the keyboard is in.
         self.activate_group(group, cx);
-        // The field holds the name the header shows, which is the name
-        // without its extension -- the same stem the rename prompt's box
-        // holds, so both commit the same way.
+        // * The field holds the name the header shows, which is the name
+        //   without its extension -- the same stem the rename prompt's box
+        //   holds, so both commit the same way.
         let name = leaf_title(Some(&path), ViewMode::Reading).to_string();
         let mut edit = match self.title_edit.take() {
             Some(edit) if edit.group == group && edit.path == path => edit,
@@ -8567,10 +8567,10 @@ impl Workspace {
         edit.field
             .click(at, event.click_count, event.modifiers.shift);
         self.title_edit = Some(edit);
-        // The field's focus handle only joins the dispatch tree with the
-        // frame that paints it, and the click that opens one lands before
-        // that frame: a field that was not there yet takes the keyboard on
-        // the next frame instead.
+        // * The field's focus handle only joins the dispatch tree with the
+        //   frame that paints it, and the click that opens one lands before
+        //   that frame: a field that was not there yet takes the keyboard on
+        //   the next frame instead.
         let focus = self.title_focus.clone();
         window.focus(&focus, cx);
         window.on_next_frame(move |window, cx| window.focus(&focus, cx));
@@ -8628,8 +8628,8 @@ impl Workspace {
                 return;
             }
         };
-        // The keyboard goes back to the view before the rename, which may
-        // put the "Update links?" prompt up and want it for itself.
+        // * The keyboard goes back to the view before the rename, which may
+        //   put the "Update links?" prompt up and want it for itself.
         self.focus_main(window, cx);
         self.rename_with_links(&edit.path, &to, window, cx);
         cx.notify();
@@ -8779,8 +8779,8 @@ impl Workspace {
                 .into_iter()
                 .map(|action| {
                     let command = action.command;
-                    // Obsidian's `mod-pill`: fully rounded, the label in the
-                    // UI size with the hotkey behind it at muted strength.
+                    // * Obsidian's `mod-pill`: fully rounded, the label in the
+                    //   UI size with the hotkey behind it at muted strength.
                     div()
                         .id(action.id)
                         .flex()
@@ -8834,8 +8834,8 @@ impl Workspace {
     fn stash_active_tab(&mut self) {
         let slot = self.tabs.get(self.active_tab);
         let leaf = slot.and_then(|t| t.leaf.clone());
-        // The view state belongs to the canvas the tab shows; a tab that
-        // moved on to another file leaves it behind.
+        // * The view state belongs to the canvas the tab shows; a tab that
+        //   moved on to another file leaves it behind.
         let view_state = slot
             .filter(|t| t.path == self.current)
             .and_then(|t| t.view_state.clone());
@@ -8996,8 +8996,8 @@ impl Workspace {
         let tab = self.tabs.remove(ix);
         self.remember_closed(ix, tab);
         if self.tabs.is_empty() {
-            // A group whose last tab closes goes with it, as Obsidian's
-            // does, unless it is the only one.
+            // * A group whose last tab closes goes with it, as Obsidian's
+            //   does, unless it is the only one.
             if self.groups.len() > 1 {
                 self.tabs.push(Tab::empty(self.default_mode()));
                 self.active_tab = 0;
@@ -9020,7 +9020,7 @@ impl Workspace {
     }
 
     fn remember_closed(&mut self, ix: usize, tab: Tab) {
-        // An empty tab is not worth bringing back.
+        // * An empty tab is not worth bringing back.
         if tab.path.is_some() || tab.mode == ViewMode::Graph {
             self.closed_tabs.push((ix, tab));
             if self.closed_tabs.len() > CLOSED_TABS_KEPT {
@@ -9245,7 +9245,7 @@ impl Workspace {
         self.groups[ix].active_tab = 0;
         self.groups[ix].mode_before_graph = mode_before_graph;
         self.load_group(ix, cx);
-        // The new group's views are empty: put the note in them.
+        // * The new group's views are empty: put the note in them.
         if let (Some(path), Some(state)) = (self.current.clone(), self.state.clone()) {
             if self.mode.is_editing() {
                 let live = self.mode == ViewMode::LivePreview;
@@ -9346,8 +9346,8 @@ impl Workspace {
                 }
                 DropBar { strip_x, ..bar }
             }
-            // Within the strip the bar slides; arriving from elsewhere it
-            // appears where it is wanted.
+            // * Within the strip the bar slides; arriving from elsewhere it
+            //   appears where it is wanted.
             Some(bar) if bar.group == group => DropBar {
                 group,
                 at,
@@ -9484,8 +9484,8 @@ impl Workspace {
         let mut at = at.unwrap_or(usize::MAX);
         let mut empty = false;
         let tab = if from_ix == to_ix {
-            // A reorder: the strip's views keep showing what they show
-            // until the end, when the dragged tab takes over if it must.
+            // * A reorder: the strip's views keep showing what they show
+            //   until the end, when the dragged tab takes over if it must.
             let group = &mut self.groups[to_ix];
             if drag.tab >= group.tabs.len() {
                 return;
@@ -9501,8 +9501,8 @@ impl Workspace {
             empty = self.groups[from_ix].tabs.is_empty();
             tab
         };
-        // What the target's views show now: the tab that was active there,
-        // or for a reorder whose active tab left, nothing in particular.
+        // * What the target's views show now: the tab that was active there,
+        //   or for a reorder whose active tab left, nothing in particular.
         let target = &mut self.groups[to_ix];
         let shown = (from_ix != to_ix || drag.tab != target.active_tab)
             .then(|| target.tabs.get(target.active_tab).cloned())
@@ -9588,8 +9588,8 @@ impl Workspace {
         }
         let was_active = ix == self.active_group;
         let active_id = self.active_group_id();
-        // Nothing paints this group's header again, so its title's shaped
-        // line goes with it.
+        // * Nothing paints this group's header again, so its title's shaped
+        //   line goes with it.
         self.title_layout.remove(&id);
         if was_active {
             self.flush_save(cx);
@@ -9606,8 +9606,8 @@ impl Workspace {
         self.layout_tree.remove(id);
         self.groups.remove(ix);
         self.group_mru.retain(|g| *g != id);
-        // The split the group left, or the nearest one still standing when
-        // it was the split's last child and went with it.
+        // * The split the group left, or the nearest one still standing when
+        //   it was the split's last child and went with it.
         loop {
             if matches!(
                 self.layout_tree.node_at(&parent),
@@ -10041,13 +10041,13 @@ impl Workspace {
                 .as_ref()
                 .is_some_and(|s| settings::plugin_enabled(s, plugin))
         };
-        // The corner above the ribbon is part of the title row: it carries
-        // the headers' bottom line across, and the ribbon's own divider
-        // starts below it, since Obsidian's ribbon begins under the title
-        // row. The left sidebar's toggle sits in the corner, which is where
-        // Obsidian's hidden frame puts it on Linux and Windows. On macOS the
-        // corner is the traffic lights' and only drags the window; the
-        // toggle is in the headers instead.
+        // * The corner above the ribbon is part of the title row: it carries
+        //   the headers' bottom line across, and the ribbon's own divider
+        //   starts below it, since Obsidian's ribbon begins under the title
+        //   row. The left sidebar's toggle sits in the corner, which is where
+        //   Obsidian's hidden frame puts it on Linux and Windows. On macOS the
+        //   corner is the traffic lights' and only drags the window; the
+        //   toggle is in the headers instead.
         let toggle: gpui::AnyElement = if self.mac_frame() {
             window_handle(
                 div()
@@ -10076,11 +10076,11 @@ impl Workspace {
                 cx.listener(move |this, _, window, cx| this.run_command(command, window, cx)),
             )
         };
-        // The icons are the ones Obsidian's ribbon names: `lucide-file-search`
-        // for the switcher, `git-fork` for the graph, `layout-dashboard` for
-        // a new canvas, `calendar`, `files` for a template, `terminal` for
-        // the palette and `layout-list` for a new base -- in that order,
-        // which is the order the DOM was read in.
+        // * The icons are the ones Obsidian's ribbon names: `lucide-file-search`
+        //   for the switcher, `git-fork` for the graph, `layout-dashboard` for
+        //   a new canvas, `calendar`, `files` for a template, `terminal` for
+        //   the palette and `layout-list` for a new base -- in that order,
+        //   which is the order the DOM was read in.
         let items: [(&'static str, &'static str, &'static str, &'static str); 7] = [
             (
                 "ribbon-switcher",
@@ -10180,9 +10180,9 @@ impl Workspace {
                         this.vault_switcher_hovered = *over;
                     }))
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_vault_menu(cx)))
-                    // The menu's anchor is this box, pinned at the row's
-                    // top-left corner: an absolute element left to the
-                    // row's own centring would hang from its middle.
+                    // * The menu's anchor is this box, pinned at the row's
+                    //   top-left corner: an absolute element left to the
+                    //   row's own centring would hang from its middle.
                     .child(div().absolute().top_0().left_0().size_0().children(menu))
                     .child(
                         div()
@@ -10262,10 +10262,10 @@ impl Workspace {
                 .items_center()
                 .children(on.then(|| icon("check", 14., theme.text_muted)))
         };
-        // A machine that has opened dozens of vaults has a menu taller than
-        // the window, and the rows under the hairline are then off the
-        // bottom edge however the menu is snapped: cap it at the window and
-        // scroll, as Obsidian's own menus do inside their `.menu-scroll`.
+        // * A machine that has opened dozens of vaults has a menu taller than
+        //   the window, and the rows under the hairline are then off the
+        //   bottom edge however the menu is snapped: cap it at the window and
+        //   scroll, as Obsidian's own menus do inside their `.menu-scroll`.
         let tallest = (window.viewport_size().height - px(96.)).max(px(160.));
         let mut list = div()
             .id("vault-menu")
@@ -10284,10 +10284,10 @@ impl Workspace {
             .text_size(px(FONT_UI_SMALL))
             .text_color(theme.text)
             .occlude()
-            // A press on the switcher row is a press outside the menu, and
-            // the click that ends it toggles: closing here as well would
-            // close and reopen the menu in one press. The row's own
-            // handler does the closing when the press is its.
+            // * A press on the switcher row is a press outside the menu, and
+            //   the click that ends it toggles: closing here as well would
+            //   close and reopen the menu in one press. The row's own
+            //   handler does the closing when the press is its.
             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                 if this.vault_switcher_hovered {
                     return;
@@ -10331,11 +10331,11 @@ impl Workspace {
                     ),
             );
         }
-        // Obsidian's tail is a single row under the separator, "Manage
-        // vaults...", which raises the vault manager (probe of
-        // 2026-10-29). Silica's own "Open vault..." and "Open sandbox
-        // vault" moved into that window, where Obsidian keeps the same
-        // two; they are still commands, and still in the palette.
+        // * Obsidian's tail is a single row under the separator, "Manage
+        //   vaults...", which raises the vault manager (probe of
+        //   2026-10-29). Silica's own "Open vault..." and "Open sandbox
+        //   vault" moved into that window, where Obsidian keeps the same
+        //   two; they are still commands, and still in the palette.
         list =
             list.child(div().my_1().h(px(1.)).bg(theme.border)).child(
                 item("vault-menu-manage".into(), theme)
@@ -10385,12 +10385,12 @@ impl Workspace {
         let show_ribbon = self.show_ribbon();
         let frameless = self.frameless;
         let mac = self.mac_frame();
-        // The window buttons overlay the right end of whichever header is
-        // in the window's top right corner: this strip's, when the right
-        // sidebar is collapsed and this is the last group. macOS has none.
+        // * The window buttons overlay the right end of whichever header is
+        //   in the window's top right corner: this strip's, when the right
+        //   sidebar is collapsed and this is the last group. macOS has none.
         let under_controls = frameless && !mac && last && !self.right_visible;
-        // The strip in the window's top-left corner, with the left sidebar
-        // collapsed, keeps clear of the traffic lights on macOS.
+        // * The strip in the window's top-left corner, with the left sidebar
+        //   collapsed, keeps clear of the traffic lights on macOS.
         let left_space = if first && !self.left_visible {
             self.frame_left_space()
         } else {
@@ -10416,19 +10416,19 @@ impl Workspace {
             .bg(theme.bg_secondary)
             .relative()
             .overflow_hidden()
-            // A dragged tab over the strip moves the drop bar to the
-            // nearest tab boundary; dropped, it lands there (at the end,
-            // should the bar never have found one).
+            // * A dragged tab over the strip moves the drop bar to the
+            //   nearest tab boundary; dropped, it lands there (at the end,
+            //   should the bar never have found one).
             .on_drag_move(cx.listener(move |this, e: &DragMoveEvent<TabDrag>, _, cx| {
                 this.strip_drag_moved(group, e.bounds, e.event.position, cx)
             }))
             .on_drop(cx.listener(move |this, drag: &TabDrag, _, cx| {
                 this.drop_tab_at_bar(drag, group, None, cx)
             }))
-            // The strip's outline is a hairline along its bottom edge rather
-            // than a border, so the active tab, which reaches the edge, paints
-            // over it and joins the view header below without a seam. The
-            // other tabs stop a pixel short and keep the line under them.
+            // * The strip's outline is a hairline along its bottom edge rather
+            //   than a border, so the active tab, which reaches the edge, paints
+            //   over it and joins the view header below without a seam. The
+            //   other tabs stop a pixel short and keep the line under them.
             .child(
                 div()
                     .absolute()
@@ -10438,9 +10438,9 @@ impl Workspace {
                     .h(px(1.))
                     .bg(theme.border),
             )
-            // Without the ribbon a collapsed left sidebar would have no
-            // way back from the window; macOS keeps the toggle here, after
-            // the traffic lights, ribbon or not.
+            // * Without the ribbon a collapsed left sidebar would have no
+            //   way back from the window; macOS keeps the toggle here, after
+            //   the traffic lights, ribbon or not.
             .when(first && !self.left_visible && (!show_ribbon || mac), |d| {
                 d.child(self.sidebar_toggle(true, theme, cx).mb(px(8.)).mr(px(2.)))
             })
@@ -10458,12 +10458,12 @@ impl Workspace {
                     title: title.clone(),
                 };
                 let this = cx.weak_entity();
-                // Obsidian's tab: 34 px tall, 200 px wide, the active one
-                // in the content's colour, its top corners as round as its
-                // feet, its title in the small UI size and its close button a
-                // 20 px disc. It is padded `1px 4px 4px` around an inner box
-                // with a 4 px radius, and that inner box, not the tab, is
-                // what the hover wash paints.
+                // * Obsidian's tab: 34 px tall, 200 px wide, the active one
+                //   in the content's colour, its top corners as round as its
+                //   feet, its title in the small UI size and its close button a
+                //   20 px disc. It is padded `1px 4px 4px` around an inner box
+                //   with a 4 px radius, and that inner box, not the tab, is
+                //   what the hover wash paints.
                 div()
                     .id(("tab", ix))
                     .group("tab")
@@ -10479,20 +10479,20 @@ impl Workspace {
                     .rounded_t(px(TAB_CURVE))
                     .relative()
                     .when(!active, |d| d.mb(px(1.)))
-                    // The divider on an inactive tab's right edge, as
-                    // Obsidian's `::after`: a 1 px line, 15 px tall and 8 px
-                    // down, astride the edge (the tabs touch, so it is
-                    // centred between two inner boxes, 3.5 px from each),
-                    // and after the last tab it parts the strip from the
-                    // new-tab button. The active tab has none and paints
-                    // over its left neighbour's, so the gaps around it are
-                    // bare. Hover leaves it alone: the wash stops 4 px short
-                    // of the edge, so the line stays beside the hovered box.
-                    // Deferred, like the feet: the next tab paints after
-                    // this one with an opaque background, and the half of
-                    // the line astride its edge would otherwise be lost
-                    // under it, whole or in part depending on where the
-                    // edge falls between device pixels.
+                    // * The divider on an inactive tab's right edge, as
+                    //   Obsidian's `::after`: a 1 px line, 15 px tall and 8 px
+                    //   down, astride the edge (the tabs touch, so it is
+                    //   centred between two inner boxes, 3.5 px from each),
+                    //   and after the last tab it parts the strip from the
+                    //   new-tab button. The active tab has none and paints
+                    //   over its left neighbour's, so the gaps around it are
+                    //   bare. Hover leaves it alone: the wash stops 4 px short
+                    //   of the edge, so the line stays beside the hovered box.
+                    //   Deferred, like the feet: the next tab paints after
+                    //   this one with an opaque background, and the half of
+                    //   the line astride its edge would otherwise be lost
+                    //   under it, whole or in part depending on where the
+                    //   edge falls between device pixels.
                     .when(divider, |d| {
                         d.child(deferred(
                             div()
@@ -10504,9 +10504,9 @@ impl Workspace {
                                 .bg(theme.tab_divider),
                         ))
                     })
-                    // The active tab's feet: the concave curves that carry
-                    // its bottom corners out into the view header. Painted
-                    // late so a neighbour's hover wash stays underneath.
+                    // * The active tab's feet: the concave curves that carry
+                    //   its bottom corners out into the view header. Painted
+                    //   late so a neighbour's hover wash stays underneath.
                     .when(active, |d| {
                         d.child(deferred(tab_foot(true, theme)))
                             .child(deferred(tab_foot(false, theme)))
@@ -10526,15 +10526,15 @@ impl Workspace {
                         this.activate_group(group, cx);
                         this.activate_tab(ix, cx)
                     }))
-                    // Picking the tab up: the ghost is its title, and the
-                    // workspace is told so every group shows its zones.
+                    // * Picking the tab up: the ghost is its title, and the
+                    //   workspace is told so every group shows its zones.
                     .on_drag(drag, move |drag, grab, _, cx| {
                         this.update(cx, |w, cx| w.begin_tab_drag(cx)).ok();
                         let title = drag.title.clone();
                         cx.new(|_| TabDragPreview { title, grab })
                     })
-                    // Where the tab is, for the strip's drop bar; a tab
-                    // dropped on it lands at the bar, else in front of it.
+                    // * Where the tab is, for the strip's drop bar; a tab
+                    //   dropped on it lands at the bar, else in front of it.
                     .on_drag_move(cx.listener(move |this, e: &DragMoveEvent<TabDrag>, _, _| {
                         if this.dragging_tab {
                             this.tab_bounds.insert((group, ix), e.bounds);
@@ -10550,9 +10550,9 @@ impl Workspace {
                             this.close_tab(ix, cx)
                         }),
                     )
-                    // The inner box: the title and the close button, padded
-                    // `0 3px 0 6px`, washed on hover when the tab is not the
-                    // active one (the active tab shows nothing on hover).
+                    // * The inner box: the title and the close button, padded
+                    //   `0 3px 0 6px`, washed on hover when the tab is not the
+                    //   active one (the active tab shows nothing on hover).
                     .child(
                         div()
                             .flex_1()
@@ -10575,8 +10575,8 @@ impl Workspace {
                                     .text_ellipsis()
                                     .child(title),
                             )
-                            // The close button: no wash of its own, its cross
-                            // brightens from muted to normal under the pointer.
+                            // * The close button: no wash of its own, its cross
+                            //   brightens from muted to normal under the pointer.
                             .child(
                                 div()
                                     .id(("tab-close", ix))
@@ -10603,8 +10603,8 @@ impl Workspace {
                             ),
                     )
             }))
-            // Stacked tabs: only the active tab is in the strip, so a
-            // badge beside it steps through the rest of the stack.
+            // * Stacked tabs: only the active tab is in the strip, so a
+            //   badge beside it steps through the rest of the stack.
             .when(view.stacked && tabs.len() > 1, |d| {
                 d.child(
                     div()
@@ -10651,10 +10651,10 @@ impl Workspace {
                 div().id(("tab-strip-space", group)).flex_1().h_full(),
                 frameless,
             ))
-            // The tab-list button at the strip's right end: Obsidian's
-            // `chevron-down`, 24 px square at y 8.66 with a 2 px right
-            // margin. The menu hangs off the wrapper, so it opens under
-            // the button's top-left corner, 2 px below the button.
+            // * The tab-list button at the strip's right end: Obsidian's
+            //   `chevron-down`, 24 px square at y 8.66 with a 2 px right
+            //   margin. The menu hangs off the wrapper, so it opens under
+            //   the button's top-left corner, 2 px below the button.
             .child(
                 div()
                     .relative()
@@ -10680,18 +10680,18 @@ impl Workspace {
                     )
                     .children(self.render_tab_list_menu(view, theme, cx)),
             )
-            // The right sidebar's toggle sits at the root header's right
-            // end in Obsidian's title row whether the sidebar is open (left
-            // of its header) or collapsed (at the window's edge, before the
-            // window buttons): it never moves into the sidebar's own header.
-            // On macOS it keeps to the window's top-right corner, which is
-            // the right dock's own header while that dock is open.
+            // * The right sidebar's toggle sits at the root header's right
+            //   end in Obsidian's title row whether the sidebar is open (left
+            //   of its header) or collapsed (at the window's edge, before the
+            //   window buttons): it never moves into the sidebar's own header.
+            //   On macOS it keeps to the window's top-right corner, which is
+            //   the right dock's own header while that dock is open.
             .when(last && !(mac && self.right_visible), |d| {
                 d.child(self.sidebar_toggle(false, theme, cx).mb(px(8.)))
             })
-            // The drop bar: an accent bar astride the boundary the dragged
-            // tab would land at, the height of the tabs' inner boxes.
-            // Deferred past the dividers and feet, which paint late too.
+            // * The drop bar: an accent bar astride the boundary the dragged
+            //   tab would land at, the height of the tabs' inner boxes.
+            //   Deferred past the dividers and feet, which paint late too.
             .when_some(self.drop_bar.filter(|b| b.group == group), |d, bar| {
                 let left = bar.shown_x(Instant::now()) - bar.strip_x - DROP_BAR_WIDTH / 2.;
                 d.child(deferred(
@@ -10823,8 +10823,8 @@ impl Workspace {
                     .children(checked.then(|| icon("check", ICON_SIZE, theme.text_muted))),
             );
         }
-        // The wrapper lays the menu out below the button, so the offset
-        // is the gap under it.
+        // * The wrapper lays the menu out below the button, so the offset
+        //   is the gap under it.
         Some(
             deferred(
                 anchored()
@@ -10881,15 +10881,15 @@ impl Workspace {
             .unwrap_or_default();
         let default_mode = self.default_mode();
         let spec = layout.get("main").and_then(|main| {
-            // A leaf naming a file the vault no longer has is dropped, the
-            // way Obsidian drops one it cannot open.
+            // * A leaf naming a file the vault no longer has is dropped, the
+            //   way Obsidian drops one it cannot open.
             read_main(main, default_mode, &|file| {
                 state.vault().absolute(file).is_file()
             })
         });
         if let Some(spec) = spec {
-            // The groups the file describes replace the one the window
-            // opened with; its views were empty.
+            // * The groups the file describes replace the one the window
+            //   opened with; its views were empty.
             let placeholder = self.active_group_id();
             let mut leaf_ids: Vec<(String, u64, usize)> = Vec::new();
             let tree = self.materialize(spec, &mut leaf_ids, window, cx);
@@ -10904,7 +10904,7 @@ impl Workspace {
                 .find(|(id, _, _)| Some(id.as_str()) == active_id)
                 .map(|(_, g, t)| (*g, Some(*t)))
                 .or_else(|| {
-                    // No active leaf on record: the first with a file.
+                    // * No active leaf on record: the first with a file.
                     leaf_ids
                         .iter()
                         .find(|(_, g, t)| {
@@ -10918,8 +10918,8 @@ impl Workspace {
             if let (Some(ix), Some(tab)) = (self.group_ix(group), tab) {
                 self.groups[ix].active_tab = tab;
             }
-            // Fill every group's views, the active one last so its note is
-            // the one the explorer, graph and right dock follow.
+            // * Fill every group's views, the active one last so its note is
+            //   the one the explorer, graph and right dock follow.
             let mut order = Vec::new();
             self.layout_tree.groups(&mut order);
             for id in order.into_iter().filter(|id| *id != group).chain([group]) {
@@ -10930,8 +10930,8 @@ impl Workspace {
                     self.stash_active_group();
                 }
             }
-            // The most recently used order Obsidian would have: the active
-            // group first, the rest in layout order.
+            // * The most recently used order Obsidian would have: the active
+            //   group first, the rest in layout order.
             self.group_mru = {
                 let mut mru = vec![group];
                 let mut order = Vec::new();
@@ -10949,9 +10949,9 @@ impl Workspace {
         };
         self.left_visible = !collapsed("left");
         self.right_visible = !collapsed("right");
-        // A dock's `width` is where its handle was last dragged to; a
-        // fresh vault has 300, and nothing narrower than a header row's
-        // worth of buttons is believed.
+        // * A dock's `width` is where its handle was last dragged to; a
+        //   fresh vault has 300, and nothing narrower than a header row's
+        //   worth of buttons is believed.
         let width = |dock: &str| {
             layout
                 .get(dock)
@@ -11108,10 +11108,10 @@ impl Workspace {
         let Some(object) = layout.as_object_mut() else {
             return layout;
         };
-        // A vault Obsidian never laid out has no docks in the file, or no
-        // file at all. Obsidian writes its default ones; so does Silica, so
-        // the panes' own state has a leaf to live in rather than being
-        // lost, with `main` first the way Obsidian orders the keys.
+        // * A vault Obsidian never laid out has no docks in the file, or no
+        //   file at all. Obsidian writes its default ones; so does Silica, so
+        //   the panes' own state has a leaf to live in rather than being
+        //   lost, with `main` first the way Obsidian orders the keys.
         if !object.contains_key("main") {
             object.insert("main".into(), Value::Null);
         }
@@ -11124,7 +11124,7 @@ impl Workspace {
                 );
             }
         }
-        // The Files leaf's own state, where the file has that leaf.
+        // * The Files leaf's own state, where the file has that leaf.
         {
             let explorer = self.explorer.read(cx);
             let (sort, auto_reveal) = (explorer.sort_order(), explorer.auto_reveal());
@@ -11133,7 +11133,7 @@ impl Workspace {
                 set_leaf_state(left, "search", &self.search.read(cx).leaf_state(cx));
             }
         }
-        // The Backlinks and Outgoing links leaves' own state, likewise.
+        // * The Backlinks and Outgoing links leaves' own state, likewise.
         if let Some(right) = object.get_mut("right") {
             let b = &self.backlink_state;
             set_leaf_state(
@@ -11158,7 +11158,7 @@ impl Workspace {
                     ("unlinkedCollapsed", json!(o.unlinked_collapsed)),
                 ],
             );
-            // The Tags, All properties and Outline leaves' own state.
+            // * The Tags, All properties and Outline leaves' own state.
             let t = &self.tag_state;
             set_leaf_state(
                 right,
@@ -11180,8 +11180,8 @@ impl Workspace {
                     ("searchQuery", json!(self.property_filter.read(cx).text())),
                 ],
             );
-            // `file` is the open note; Obsidian leaves the key out for an
-            // empty tab, and a `null` here removes it.
+            // * `file` is the open note; Obsidian leaves the key out for an
+            //   empty tab, and a `null` here removes it.
             let o = &self.outline_state;
             set_leaf_state(
                 right,
@@ -11196,7 +11196,7 @@ impl Workspace {
         }
         let mut active_id = Value::Null;
         let main = self.layout_node_json(&self.layout_tree, &mut active_id);
-        // `main` keeps its place in a file that had one.
+        // * `main` keeps its place in a file that had one.
         match object.get_mut("main") {
             Some(slot) => *slot = main,
             None => {
@@ -11214,9 +11214,9 @@ impl Workspace {
                 } else {
                     d.insert("collapsed".into(), json!(true));
                 }
-                // The width is rewritten only once a drag moved it, so the
-                // `300` Obsidian wrote stays the integer it was and a file
-                // without the key gains it only for a sidebar that moved.
+                // * The width is rewritten only once a drag moved it, so the
+                //   `300` Obsidian wrote stays the integer it was and a file
+                //   without the key gains it only for a sidebar that moved.
                 let same = d
                     .get("width")
                     .and_then(Value::as_f64)
@@ -11351,9 +11351,9 @@ impl Workspace {
     /// are made on demand and reused, so a note that shows the same board
     /// twice holds one scene rather than two.
     fn install_canvas_host(&mut self, cx: &mut Context<Self>) {
-        // The entities are made when a note loads (see `prepare_embeds`), so
-        // this paints from a map it only reads: a paint has no `cx` to make
-        // one with.
+        // * The entities are made when a note loads (see `prepare_embeds`), so
+        //   this paints from a map it only reads: a paint has no `cx` to make
+        //   one with.
         let canvases = self.embedded_canvases.clone();
         let host: crate::reading::view::CanvasHandler =
             std::rc::Rc::new(move |path: &str, width: f32, height: f32| {
@@ -11380,7 +11380,7 @@ impl Workspace {
                 wanted.push(path.to_string_lossy().into_owned());
             }
         });
-        // Only what this note shows: anything else has been scrolled past.
+        // * Only what this note shows: anything else has been scrolled past.
         self.embedded_canvases
             .borrow_mut()
             .retain(|path, _| wanted.contains(path));
@@ -11393,10 +11393,10 @@ impl Workspace {
             };
             let entity = cx.new(crate::canvas::view::CanvasView::new);
             entity.update(cx, |view, cx| {
-                // At scale 1 rather than fitted: fitting the whole board into
-                // a note-width box lands below the zoom where cards keep
-                // their text, so a fitted embed draws blank cards. The
-                // reader pans and zooms it like any canvas.
+                // * At scale 1 rather than fitted: fitting the whole board into
+                //   a note-width box lands below the zoom where cards keep
+                //   their text, so a fitted embed draws blank cards. The
+                //   reader pans and zooms it like any canvas.
                 view.load(&path, &text, Some(Default::default()), state.clone(), cx)
             });
             self.embedded_canvases.borrow_mut().insert(path, entity);
@@ -11447,8 +11447,8 @@ impl Workspace {
             "active": self.active_tab,
             "items": self.tab_snapshots().iter().map(tab_json).collect::<Vec<Value>>(),
         });
-        // The tab groups and how they are split; `tabs` above is the active
-        // group's, as it was before there could be more than one.
+        // * The tab groups and how they are split; `tabs` above is the active
+        //   group's, as it was before there could be more than one.
         let groups = json!({
             "active": self.active_group_id(),
             "layout": self.layout_tree_json(&self.layout_tree),
@@ -11577,8 +11577,8 @@ impl Workspace {
             }),
         );
 
-        // Whether the graph is on screen is the shell's to say; the view
-        // itself only knows what it would draw.
+        // * Whether the graph is on screen is the shell's to say; the view
+        //   itself only knows what it would draw.
         let mut graph = self.graph.read(cx).describe();
         if let Some(object) = graph.as_object_mut() {
             object.insert("open".into(), json!(matches!(self.mode, ViewMode::Graph)));
@@ -11602,16 +11602,16 @@ impl Workspace {
             "status": self.status_text(),
             "status_bar": self.status_bar_text(cx),
             "status_bar_items": self.status_bar_items(cx),
-            // The empty tab's pills, by the text they carry, while that is
-            // what the main area shows.
+            // * The empty tab's pills, by the text they carry, while that is
+            //   what the main area shows.
             "empty_tab": (self.current.is_none() && self.main_view(cx) == MainView::Empty).then(|| {
                 empty_tab_actions(&cx.global::<Commands>().0)
                     .iter()
                     .map(EmptyAction::text)
                     .collect::<Vec<String>>()
             }),
-            // The view header's title while it is being renamed in place,
-            // so a driver can see the typed name before Enter commits it.
+            // * The view header's title while it is being renamed in place,
+            //   so a driver can see the typed name before Enter commits it.
             "view_title": self.title_edit.as_ref().map(|edit| json!({
                 "group": edit.group,
                 "file": edit.path,
@@ -11649,8 +11649,8 @@ impl Workspace {
                 Modal::Chooser => "chooser",
             }),
         );
-        // The four list modals fill these in; with no modal up they stay
-        // empty rather than disappearing.
+        // * The four list modals fill these in; with no modal up they stay
+        //   empty rather than disappearing.
         modal.insert("query".into(), Value::Null);
         modal.insert("selected".into(), Value::Null);
         modal.insert("error".into(), Value::Null);
@@ -11669,8 +11669,8 @@ impl Workspace {
                 modal.insert(key, value);
             }
         }
-        // Settings has tabs rather than rows; the tab it is on is the part
-        // a caller steers by.
+        // * Settings has tabs rather than rows; the tab it is on is the part
+        //   a caller steers by.
         modal.insert(
             "settings_tab".into(),
             modal.get("tab").cloned().unwrap_or(Value::Null),
@@ -11717,7 +11717,7 @@ impl Workspace {
     /// belongs to no file with text nothing ever saves.
     fn typed_text_target(focus: &str, painted: MainView) -> &'static str {
         match focus {
-            // A property row or a table cell is the editor's own field.
+            // * A property row or a table cell is the editor's own field.
             "editor" | "property-field" | "cell-field" => match painted {
                 MainView::Editor => "editor",
                 _ => "none",
@@ -11744,8 +11744,8 @@ impl Workspace {
     ) -> &'static str {
         match self.type_target(window, cx) {
             "editor" => {
-                // `type_text` already routes to an open property row or
-                // table cell rather than the body.
+                // * `type_text` already routes to an open property row or
+                //   table cell rather than the body.
                 self.editor
                     .update(cx, |e, cx| e.type_text(text, window, cx));
                 "editor"
@@ -11756,9 +11756,9 @@ impl Workspace {
                 }
                 "canvas-editor"
             }
-            // Nothing else is reachable from here, so nothing else is
-            // typed into: a focused input is answered by the caller, which
-            // asked where the text would go before handing it over.
+            // * Nothing else is reachable from here, so nothing else is
+            //   typed into: a focused input is answered by the caller, which
+            //   asked where the text would go before handing it over.
             _ => "none",
         }
     }
@@ -11774,8 +11774,8 @@ impl Workspace {
             return "none";
         }
         if self.editor.read(cx).focus_handle_ref().is_focused(window) {
-            // An open property row or table cell takes the editor's keys
-            // without taking the focus.
+            // * An open property row or table cell takes the editor's keys
+            //   without taking the focus.
             return match self.editor.read(cx).field_kind() {
                 Some("cell") => "cell-field",
                 Some(_) => "property-field",
@@ -11808,8 +11808,8 @@ impl Workspace {
         if self.pdf.focus_handle(cx).is_focused(window) {
             return "pdf";
         }
-        // The view header's inline rename field, which takes typed text
-        // through the workspace's own input handler.
+        // * The view header's inline rename field, which takes typed text
+        //   through the workspace's own input handler.
         if self.title_focus.is_focused(window) {
             return "view-title";
         }
@@ -11847,8 +11847,8 @@ impl Workspace {
         if self.focus_handle.is_focused(window) {
             return "workspace";
         }
-        // Both find fields sit in one key context, so the stack cannot tell
-        // them apart; the editor holds the two handles and can.
+        // * Both find fields sit in one key context, so the stack cannot tell
+        //   them apart; the editor holds the two handles and can.
         if let Some(name) = self.editor.read(cx).find_focus(window, cx) {
             return name;
         }
@@ -11867,8 +11867,8 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        // The tree is in the left dock, not the main area: showing the
-        // dock's Files tab is what puts its handle on screen.
+        // * The tree is in the left dock, not the main area: showing the
+        //   dock's Files tab is what puts its handle on screen.
         if name == "explorer" {
             self.leave_search_field(window, cx);
             self.left_visible = true;
@@ -11878,8 +11878,8 @@ impl Workspace {
             return Ok(());
         }
         match Self::focus_target(name, self.main_view(cx))? {
-            // The root div paints in every frame, so its handle is always
-            // somewhere the keyboard can sit.
+            // * The root div paints in every frame, so its handle is always
+            //   somewhere the keyboard can sit.
             None => window.focus(&self.focus_handle, cx),
             Some(_) => self.focus_main(window, cx),
         }
@@ -12052,8 +12052,8 @@ impl Workspace {
         let Some(state) = self.state.as_ref() else {
             return Vec::new();
         };
-        // Vault paths keep their case and compare without it, so a folder
-        // stored as `Sub` answers to `sub` as well.
+        // * Vault paths keep their case and compare without it, so a folder
+        //   stored as `Sub` answers to `sub` as well.
         let prefix = folder
             .map(|f| f.trim_matches('/'))
             .filter(|f| !f.is_empty())
@@ -12210,8 +12210,8 @@ impl Workspace {
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_backlink_context(cx))),
             )
             .child(
-                // The menu hangs off this wrapper, so it opens under the
-                // button wherever the dock is.
+                // * The menu hangs off this wrapper, so it opens under the
+                //   button wherever the dock is.
                 div()
                     .relative()
                     .child(
@@ -12294,7 +12294,7 @@ impl Workspace {
             .shadow_lg()
             .text_size(px(13.))
             .text_color(theme.text)
-            // Keeps a click on an item from reaching the row under it.
+            // * Keeps a click on an item from reaching the row under it.
             .occlude()
             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                 this.backlink_state.sort_menu_open = false;
@@ -12364,8 +12364,8 @@ impl Workspace {
         };
         let prefix = if outgoing { "outgoing" } else { "backlinks" };
         let current = self.current.clone().unwrap_or_default();
-        // Obsidian's `.outgoing-link-pane` is padded 12px 12px 32px; the
-        // backlink pane 4px 12px 32px, its nav header carrying the rest.
+        // * Obsidian's `.outgoing-link-pane` is padded 12px 12px 32px; the
+        //   backlink pane 4px 12px 32px, its nav header carrying the rest.
         let mut list = div()
             .id(prefix)
             .flex()
@@ -12392,8 +12392,8 @@ impl Workspace {
             } else {
                 shown.count.to_string().into()
             };
-            // A folded section is drawn faint throughout; an open one's
-            // count brightens from faint to muted under the pointer.
+            // * A folded section is drawn faint throughout; an open one's
+            //   count brightens from faint to muted under the pointer.
             list = list.child(
                 div()
                     .id(("pane-section", next()))
@@ -12439,7 +12439,7 @@ impl Workspace {
             if folded {
                 continue;
             }
-            // Obsidian's `.search-result-container`: 4px 1px 16px.
+            // * Obsidian's `.search-result-container`: 4px 1px 16px.
             let mut body = div()
                 .w_full()
                 .flex_shrink_0()
@@ -12458,7 +12458,7 @@ impl Workspace {
                         .child("No backlinks found."),
                 );
             }
-            // The Outgoing pane's unlinked mentions: one card, no title row.
+            // * The Outgoing pane's unlinked mentions: one card, no title row.
             let one_card = outgoing && s_ix == 1;
             if one_card {
                 let mut card = Self::match_card(theme);
@@ -12486,8 +12486,8 @@ impl Workspace {
                 let path = group.path.clone();
                 let link = group.link.clone();
                 let resolved = path.is_some();
-                // The fold triangle (a mentions group) or the link's glyph
-                // (a Links row) sits in the row's 24px left gutter.
+                // * The fold triangle (a mentions group) or the link's glyph
+                //   (a Links row) sits in the row's 24px left gutter.
                 let gutter: gpui::AnyElement = if flat {
                     let name = group.icon.unwrap_or("link");
                     div()
@@ -12550,10 +12550,10 @@ impl Workspace {
                         .hover(|s| s.bg(theme.bg_alt))
                         .when(unresolved, |d| d.tooltip(tooltip("Not created yet")))
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            // A Links row follows the link the way the note
-                            // would, subpath included, and creates the note
-                            // nothing stands behind; a mentions row opens
-                            // the file.
+                            // * A Links row follows the link the way the note
+                            //   would, subpath included, and creates the note
+                            //   nothing stands behind; a mentions row opens
+                            //   the file.
                             if let Some(link) = link.clone() {
                                 this.follow_link(LinkTarget::Internal(link), cx);
                             } else if let Some(path) = path.clone() {
@@ -12669,9 +12669,9 @@ impl Workspace {
             })
             .collect();
         let text = StyledText::new(SharedString::from(m.text.clone())).with_highlights(highlights);
-        // Which note the mention is in and which it names depend on the
-        // pane: the Backlinks pane lists other notes mentioning this one,
-        // the Outgoing pane this note mentioning others.
+        // * Which note the mention is in and which it names depend on the
+        //   pane: the Backlinks pane lists other notes mentioning this one,
+        //   the Outgoing pane this note mentioning others.
         let outgoing = which == RightTab::Outgoing;
         let link = m.mention.clone().and_then(|mention| {
             let (source, target) = if outgoing {
@@ -12842,7 +12842,7 @@ impl Workspace {
 
     fn toggle_tag_hierarchy(&mut self, cx: &mut Context<Self>) {
         self.tag_state.use_hierarchy = !self.tag_state.use_hierarchy;
-        // Obsidian's tree comes back with every folder open.
+        // * Obsidian's tree comes back with every folder open.
         self.tag_state.collapsed.clear();
         cx.notify();
     }
@@ -13022,8 +13022,8 @@ impl Workspace {
     ) -> gpui::Div {
         let input = self.pane_filter(which).clone();
         let has_text = !input.read(cx).text().is_empty();
-        // Obsidian's `search-input-container`: the field's text starts
-        // 30 px in, behind a magnifier at the left.
+        // * Obsidian's `search-input-container`: the field's text starts
+        //   30 px in, behind a magnifier at the left.
         div().flex_shrink_0().px(px(8.)).pb(px(8.)).child(
             div()
                 .relative()
@@ -13241,9 +13241,9 @@ impl Workspace {
                 self.show_search(&format!("tag:#{tag}"), None, cx);
             }
             SidePaneAction::RenameTag(_tag) => {
-                // Tag renaming is not yet implemented: Obsidian's rename
-                // rewrites every occurrence across the vault, which requires
-                // a vault-wide scan and link repair that is not yet built.
+                // * Tag renaming is not yet implemented: Obsidian's rename
+                //   rewrites every occurrence across the vault, which requires
+                //   a vault-wide scan and link repair that is not yet built.
             }
             SidePaneAction::CopyTag(tag) => {
                 self.copy_path(tag, cx);
@@ -13365,8 +13365,8 @@ impl Workspace {
                     }
                 }),
             )
-            // Obsidian's `tree-item-children` guides: a hairline 12 px in
-            // from each ancestor's text, the row's full pitch tall.
+            // * Obsidian's `tree-item-children` guides: a hairline 12 px in
+            //   from each ancestor's text, the row's full pitch tall.
             .children((1..=depth).map(|k| {
                 div()
                     .absolute()
@@ -13472,7 +13472,7 @@ impl Workspace {
             );
         let filter = show_search.then(|| self.render_pane_filter(RightTab::Tags, theme, cx));
         let rows = self.tag_rows(cx);
-        // Obsidian's `.tag-container`: padding 12px 12px 32px.
+        // * Obsidian's `.tag-container`: padding 12px 12px 32px.
         let mut list = div()
             .id("tags")
             .flex()
@@ -13491,7 +13491,7 @@ impl Workspace {
                     Box::new(move |this, cx| this.toggle_tag_fold(key.clone(), cx));
                 (row.collapsed, on_fold)
             });
-            // The parent part shows only in flat mode, in the same colour.
+            // * The parent part shows only in flat mode, in the same colour.
             let label = if hierarchy {
                 row.name.clone()
             } else {
@@ -13574,7 +13574,7 @@ impl Workspace {
             );
         let filter = show_search.then(|| self.render_pane_filter(RightTab::Properties, theme, cx));
         let rows = self.property_rows(cx);
-        // Obsidian's `.view-content`: padding 4px 12px 32px.
+        // * Obsidian's `.view-content`: padding 4px 12px 32px.
         let mut list = div()
             .id("properties")
             .flex()
@@ -13621,8 +13621,8 @@ impl Workspace {
     /// filter when shown, then the headings as a structural tree with the
     /// one holding the cursor marked, or "No headings found.".
     fn render_outline_pane(&mut self, theme: &Theme, cx: &mut Context<Self>) -> gpui::AnyElement {
-        // The mark follows the cursor and the reading view; a mode or note
-        // switch lands here before anything else can notice it.
+        // * The mark follows the cursor and the reading view; a mode or note
+        //   switch lands here before anything else can notice it.
         let active = self.current_heading(cx);
         if active != self.outline_state.active {
             self.outline_state.active = active;
@@ -13678,8 +13678,8 @@ impl Workspace {
             );
         let filter = show_search.then(|| self.render_pane_filter(RightTab::Outline, theme, cx));
         let body: gpui::AnyElement = if self.outline.is_empty() {
-            // Obsidian's `.pane-empty`: 13 px faint, padding 24px 16px,
-            // margin 8px 0, centred.
+            // * Obsidian's `.pane-empty`: 13 px faint, padding 24px 16px,
+            //   margin 8px 0, centred.
             div()
                 .flex_1()
                 .px(px(12.))
@@ -13720,8 +13720,8 @@ impl Workspace {
                         Box::new(move |this, cx| this.toggle_outline_fold(ix, cx));
                     (row.collapsed, on_fold)
                 });
-                // The text wraps; a search match is Obsidian's
-                // `suggestion-highlight`, drawn in the accent.
+                // * The text wraps; a search match is Obsidian's
+                //   `suggestion-highlight`, drawn in the accent.
                 let highlights: Vec<(Range<usize>, HighlightStyle)> = row
                     .highlights
                     .iter()
@@ -13794,9 +13794,9 @@ impl Workspace {
     }
 
     fn render_right_dock(&mut self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
-        // The pane whose plugin was just turned off has no tab any more,
-        // so it cannot be the one on screen either: the first that is
-        // still on takes over, as Obsidian moves to a neighbouring leaf.
+        // * The pane whose plugin was just turned off has no tab any more,
+        //   so it cannot be the one on screen either: the first that is
+        //   still on takes over, as Obsidian moves to a neighbouring leaf.
         if !self.pane_enabled(self.right_tab) {
             if let Some(next) = [
                 RightTab::Backlinks,
@@ -13819,8 +13819,8 @@ impl Workspace {
             RightTab::Tags => self.render_tags_pane(theme, cx),
             RightTab::Properties => self.render_properties_pane(theme, cx),
         };
-        // A pane whose core plugin is off is not offered: Obsidian takes
-        // the view away with the plugin.
+        // * A pane whose core plugin is off is not offered: Obsidian takes
+        //   the view away with the plugin.
         let tab_button = |this: &mut Self,
                           label: &'static str,
                           icon_name: &'static str,
@@ -13839,8 +13839,8 @@ impl Workspace {
         };
         let frameless = self.frameless;
         let mac = self.mac_frame();
-        // Obsidian's tab order and icon names (`links-coming-in` and
-        // `links-going-out` are its own drawings; Silica's are in `assets`).
+        // * Obsidian's tab order and icon names (`links-coming-in` and
+        //   `links-going-out` are its own drawings; Silica's are in `assets`).
         div()
             .relative()
             .flex()
@@ -13892,8 +13892,8 @@ impl Workspace {
                         div().id("right-dock-space").flex_1().h_full(),
                         frameless,
                     ))
-                    // The window's top-right corner on macOS: the right
-                    // sidebar's toggle, which Obsidian fixes there.
+                    // * The window's top-right corner on macOS: the right
+                    //   sidebar's toggle, which Obsidian fixes there.
                     .when(mac, |d| d.child(self.sidebar_toggle(false, theme, cx))),
             )
             .child(div().flex_1().overflow_hidden().child(body))
@@ -13990,15 +13990,15 @@ fn vault_path_in(root: &Path, path: &str) -> Result<PathBuf, String> {
         if existing.symlink_metadata().is_ok() {
             break match existing.canonicalize() {
                 Ok(real) => real.starts_with(&real_root),
-                // A dangling link has nothing to resolve; so has a path the
-                // process may not look at. Neither can be shown to stay in
-                // the vault, so neither is written through.
+                // ! A dangling link has nothing to resolve; so has a path the
+                //   process may not look at. Neither can be shown to stay in
+                //   the vault, so neither is written through.
                 Err(_) => false,
             };
         }
         match existing.parent() {
-            // The walk stops at `root` at the latest: it canonicalized
-            // above, so it exists.
+            // * The walk stops at `root` at the latest: it canonicalized
+            //   above, so it exists.
             Some(parent) if parent.starts_with(root) => existing = parent,
             _ => break false,
         }
@@ -14598,9 +14598,9 @@ fn leaf_json(tab: &Tab) -> Value {
                 inner.insert("source".into(), json!(source));
             }
         }
-        // A canvas leaf records where the view looked, when it is known; a
-        // tab restored with a `viewState` and never moved keeps the one it
-        // was read with.
+        // * A canvas leaf records where the view looked, when it is known; a
+        //   tab restored with a `viewState` and never moved keeps the one it
+        //   was read with.
         if leaf_view_type(path) == "canvas" {
             if let Some(view_state) = &tab.view_state {
                 if let Some(inner) = leaf
@@ -14653,14 +14653,14 @@ fn tab_foot(left: bool, theme: &Theme) -> impl IntoElement {
             let o = bounds.origin;
             let mut path = PathBuilder::fill();
             if left {
-                // The arc is centred on the top-left corner: from the
-                // bottom-left point round to the top-right one.
+                // * The arc is centred on the top-left corner: from the
+                //   bottom-left point round to the top-right one.
                 path.move_to(point(o.x + r, o.y));
                 path.line_to(point(o.x + r, o.y + r));
                 path.line_to(point(o.x, o.y + r));
                 path.arc_to(point(r, r), px(0.), false, false, point(o.x + r, o.y));
             } else {
-                // Mirrored: the arc is centred on the top-right corner.
+                // * Mirrored: the arc is centred on the top-right corner.
                 path.move_to(point(o.x, o.y));
                 path.line_to(point(o.x, o.y + r));
                 path.line_to(point(o.x + r, o.y + r));
@@ -14727,8 +14727,8 @@ fn leaf_view_type(path: &str) -> &'static str {
         FileKind::Image => "image",
         FileKind::Pdf => "pdf",
         FileKind::Canvas => "canvas",
-        // OBSERVE: unread, like the base's leaf icon; `bases` is the id of
-        // the core plugin that registers the view.
+        // * OBSERVE: unread, like the base's leaf icon; `bases` is the id of
+        //   the core plugin that registers the view.
         FileKind::Base => "bases",
         FileKind::Audio => "audio",
         FileKind::Video => "video",
@@ -14886,21 +14886,21 @@ impl Render for Workspace {
         if let Some(kind) = self.pending_canvas_pick.take() {
             self.open_canvas_file_chooser(kind, window, cx);
         }
-        // A view's focus handle only joins the dispatch tree when the frame
-        // that paints it is prepainted, so this — the start of that frame —
-        // is the first moment a focus asked for elsewhere can land. A modal
-        // owns the keyboard while it is up, and closing one focuses the main
-        // area anyway, so the request is dropped rather than queued.
+        // * A view's focus handle only joins the dispatch tree when the frame
+        //   that paints it is prepainted, so this — the start of that frame —
+        //   is the first moment a focus asked for elsewhere can land. A modal
+        //   owns the keyboard while it is up, and closing one focuses the main
+        //   area anyway, so the request is dropped rather than queued.
         if std::mem::take(&mut self.refocus_main)
             && self.modal == Modal::None
             && self.keyboard_is_parked(window, cx)
         {
             self.focus_main(window, cx);
         }
-        // A title edit belongs to the file whose header it opened on: if
-        // that leaf moved on -- another tab, another file, the rename
-        // itself -- the field goes with it rather than committing a name to
-        // whatever is on screen now.
+        // * A title edit belongs to the file whose header it opened on: if
+        //   that leaf moved on -- another tab, another file, the rename
+        //   itself -- the field goes with it rather than committing a name to
+        //   whatever is on screen now.
         if let Some(edit) = &self.title_edit {
             if self.group_current(edit.group) != Some(edit.path.as_str()) {
                 self.title_edit = None;
@@ -14909,23 +14909,23 @@ impl Render for Workspace {
                 }
             }
         }
-        // A drag that ended anywhere but on a drop zone just stops: gpui
-        // drops it on the mouse up and redraws, and this is where the zones
-        // learn to go away.
+        // * A drag that ended anywhere but on a drop zone just stops: gpui
+        //   drops it on the mouse up and redraws, and this is where the zones
+        //   learn to go away.
         if self.dragging_tab && !cx.has_active_drag() {
             self.dragging_tab = false;
             self.tab_drop = None;
             self.drop_bar = None;
             self.tab_bounds.clear();
         }
-        // A sliding drop bar needs a frame per step until it lands.
+        // * A sliding drop bar needs a frame per step until it lands.
         if self.drop_bar.is_some_and(|b| !b.settled(Instant::now())) {
             window.request_animation_frame();
         }
         let theme = cx.global::<Theme>().clone();
-        // The active leaf's name, which is the window title's first part:
-        // "New tab" with nothing open, as Obsidian's reads
-        // (`New tab - <vault> - Obsidian 1.14.5`).
+        // * The active leaf's name, which is the window title's first part:
+        //   "New tab" with nothing open, as Obsidian's reads
+        //   (`New tab - <vault> - Obsidian 1.14.5`).
         let title = leaf_title(self.current.as_deref(), self.mode);
 
         let main_body: gpui::AnyElement = if let Some(loading) = &self.loading {
@@ -14960,8 +14960,8 @@ impl Render for Workspace {
         self.fullscreen = window.is_fullscreen();
         let mac = self.mac_frame();
         let ribbon = show_ribbon.then(|| self.render_ribbon(&theme, cx));
-        // As on the right: a pane whose plugin is off has no tab, so it
-        // cannot be the one showing.
+        // * As on the right: a pane whose plugin is off has no tab, so it
+        //   cannot be the one showing.
         for (tab, id) in [
             (LeftTab::Files, "file-explorer"),
             (LeftTab::Search, "global-search"),
@@ -15001,8 +15001,8 @@ impl Render for Workspace {
                     .flex_row()
                     .items_center()
                     .h(px(HEADER_HEIGHT))
-                    // Past the traffic lights on macOS, where this header
-                    // is the window's top-left corner.
+                    // * Past the traffic lights on macOS, where this header
+                    //   is the window's top-left corner.
                     .pl(px(8. + self.frame_left_space()))
                     .pr(px(8.))
                     .gap(px(3.))
@@ -15053,9 +15053,9 @@ impl Render for Workspace {
                         div().id("left-dock-space").flex_1().h_full(),
                         frameless,
                     ))
-                    // With the ribbon hidden, and on macOS whenever this
-                    // sidebar is open, Obsidian appends the toggle to this
-                    // row: it sits at the right end, against the dock's edge.
+                    // * With the ribbon hidden, and on macOS whenever this
+                    //   sidebar is open, Obsidian appends the toggle to this
+                    //   row: it sits at the right end, against the dock's edge.
                     .when(!show_ribbon || mac, |d| {
                         d.child(self.sidebar_toggle(true, &theme, cx))
                     }),
@@ -15065,9 +15065,9 @@ impl Render for Workspace {
             .child(self.dock_handle(true, &theme));
 
         let status_items = self.status_bar_items(cx);
-        // Obsidian's status bar is a tab in the window's bottom right
-        // corner rather than a bar across it: the sidebar colour, a border
-        // on its open sides, an 8 px top left corner, the smaller UI size.
+        // * Obsidian's status bar is a tab in the window's bottom right
+        //   corner rather than a bar across it: the sidebar colour, a border
+        //   on its open sides, an 8 px top left corner, the smaller UI size.
         let status_bar = div()
             .absolute()
             .bottom_0()
@@ -15102,8 +15102,8 @@ impl Render for Workspace {
                     .whitespace_nowrap()
                     .child(SharedString::from(text))
             }))
-            // Obsidian's "Show editing mode in status bar": the same toggle
-            // the header draws, as a word rather than an icon.
+            // * Obsidian's "Show editing mode in status bar": the same toggle
+            //   the header draws, as a word rather than an icon.
             .when(self.editor_status_shown(), |d| {
                 let editing = self.mode.is_editing();
                 d.child(
@@ -15123,14 +15123,14 @@ impl Render for Workspace {
                 )
             });
 
-        // Every overlay occludes: a modal in Obsidian owns the pointer as
-        // well as the keyboard, and without this the editor's raw window
-        // listeners take the mouse-down that landed on the modal and focus
-        // the note behind it, leaving the modal visible but keyboard-dead.
-        // Occluding costs nothing a modal wants — a click outside still
-        // reaches each list modal's `on_mouse_down_out`, which is bounds
-        // based rather than hitbox based, and Settings closes on its own
-        // backdrop click.
+        // * Every overlay occludes: a modal in Obsidian owns the pointer as
+        //   well as the keyboard, and without this the editor's raw window
+        //   listeners take the mouse-down that landed on the modal and focus
+        //   the note behind it, leaving the modal visible but keyboard-dead.
+        //   Occluding costs nothing a modal wants — a click outside still
+        //   reaches each list modal's `on_mouse_down_out`, which is bounds
+        //   based rather than hitbox based, and Settings closes on its own
+        //   backdrop click.
         let overlay: Option<gpui::AnyElement> = match self.modal {
             Modal::None => None,
             Modal::Switcher
@@ -15178,11 +15178,11 @@ impl Render for Workspace {
                         div()
                             .id("settings-frame")
                             .h_full()
-                            // Obsidian's modal is `min(90vw, 1100px)`. The
-                            // frame has to carry the width, because a frame
-                            // that only clips leaves the panel laying out at
-                            // its full width with the control column past
-                            // the clip, where nothing can be clicked.
+                            // * Obsidian's modal is `min(90vw, 1100px)`. The
+                            //   frame has to carry the width, because a frame
+                            //   that only clips leaves the panel laying out at
+                            //   its full width with the control column past
+                            //   the clip, where nothing can be clicked.
                             .w(relative(0.9))
                             .max_w(px(1100.))
                             .on_click(|_, _, cx| cx.stop_propagation())
@@ -15191,8 +15191,8 @@ impl Render for Workspace {
                     .into_any_element(),
             ),
         };
-        // Obsidian reports an outcome with a Notice in the corner rather
-        // than in the status bar, and the probe notes put it bottom right.
+        // * Obsidian reports an outcome with a Notice in the corner rather
+        //   than in the status bar, and the probe notes put it bottom right.
         let notices = (!self.notices.live.is_empty()).then(|| {
             div()
                 .absolute()
@@ -15219,14 +15219,14 @@ impl Render for Workspace {
 
         let left_visible = self.left_visible;
         let right_visible = self.right_visible;
-        // A modal owns the keyboard while it is up, the way an Obsidian
-        // modal's own keymap scope keeps app hotkeys from firing behind it.
-        // gpui's key contexts nest rather than replace — the overlay is a
-        // child of this div — so the workspace stands its handlers down
-        // instead: without them a hotkey can no longer focus a pane behind
-        // the modal, or swap the modal out from under its own Escape.
+        // * A modal owns the keyboard while it is up, the way an Obsidian
+        //   modal's own keymap scope keeps app hotkeys from firing behind it.
+        //   gpui's key contexts nest rather than replace — the overlay is a
+        //   child of this div — so the workspace stands its handlers down
+        //   instead: without them a hotkey can no longer focus a pane behind
+        //   the modal, or swap the modal out from under its own Escape.
         let hotkeys_live = self.modal == Modal::None;
-        // macOS has the desktop's traffic lights instead.
+        // * macOS has the desktop's traffic lights instead.
         let controls = (frameless && !mac).then(|| self.render_window_controls(&theme, window));
 
         let content = div()
@@ -15245,9 +15245,9 @@ impl Render for Workspace {
             .flex_col()
             .size_full()
             .bg(theme.bg)
-            // This box paints the whole content square, over the frame's
-            // rounding and under its children's; a corner left square here
-            // is a notch of `theme.bg` outside every rounded child.
+            // * This box paints the whole content square, over the frame's
+            //   rounding and under its children's; a corner left square here
+            //   is a notch of `theme.bg` outside every rounded child.
             .map(|d| corners.apply(d))
             .font_family(theme.ui_font.clone())
             .text_size(px(crate::theme::FONT_UI_MEDIUM))
@@ -15291,10 +15291,10 @@ mod tests {
 
     #[test]
     fn stacked_group_shows_only_the_active_tab() {
-        // Unstacked: every tab is in the strip.
+        // * Unstacked: every tab is in the strip.
         assert!(tab_in_strip(0, 0, false));
         assert!(tab_in_strip(2, 0, false));
-        // Stacked: only the active tab is.
+        // * Stacked: only the active tab is.
         assert!(tab_in_strip(1, 1, true));
         assert!(!tab_in_strip(0, 1, true));
         assert!(!tab_in_strip(2, 1, true));
@@ -15541,9 +15541,9 @@ mod tests {
                 "{id} is editor-only but not runnable"
             );
         }
-        // The table commands have their own rule in `can_run` and must not
-        // be in the editor-only list as well, or the narrower check never
-        // runs.
+        // ! The table commands have their own rule in `can_run` and must not
+        //   be in the editor-only list as well, or the narrower check never
+        //   runs.
         for id in EDITOR_ONLY {
             assert!(
                 TableCommand::from_id(id).is_none(),
@@ -15580,12 +15580,12 @@ mod tests {
             .expect("run_command is declared in this file")
             .1;
         let mut handled: Vec<String> = Vec::new();
-        // An arm's pattern is the lines at the match's own indentation that
-        // start with an id or carry on an `|` chain, up to the `=>`: a long
-        // chain is wrapped over several lines, and a guard (`if ...`) sits
-        // between the last id and the arrow. An arm's body is indented
-        // past this, so a nested match and a string literal in a call are
-        // both out of reach.
+        // * An arm's pattern is the lines at the match's own indentation that
+        //   start with an id or carry on an `|` chain, up to the `=>`: a long
+        //   chain is wrapped over several lines, and a guard (`if ...`) sits
+        //   between the last id and the arrow. An arm's body is indented
+        //   past this, so a nested match and a string literal in a call are
+        //   both out of reach.
         let mut pattern = String::new();
         for line in body.lines() {
             if line.starts_with("            _ =>") {
@@ -15598,13 +15598,13 @@ mod tests {
             let Some((ids, _)) = pattern.split_once("=>") else {
                 continue;
             };
-            // Every id is quoted, so the odd pieces of a split on the quote
-            // are the ids and the even ones are the `|`s and the guard.
+            // * Every id is quoted, so the odd pieces of a split on the quote
+            //   are the ids and the even ones are the `|`s and the guard.
             handled.extend(ids.split('"').skip(1).step_by(2).map(|id| id.to_string()));
             pattern.clear();
         }
-        // A floor, so that a change to the match's shape shows up as a
-        // failure here rather than as a test that quietly checks nothing.
+        // * A floor, so that a change to the match's shape shows up as a
+        //   failure here rather than as a test that quietly checks nothing.
         assert!(
             handled.len() >= 95,
             "only {} arms found; the reader above has stopped matching \
@@ -15779,7 +15779,7 @@ mod tests {
         let (_, restored) = tab_from_leaf(&written, ViewMode::Reading, &known).unwrap();
         assert_eq!(restored.view_state, None);
         assert_eq!(leaf_json(&restored), written);
-        // A leaf somebody else wrote with keys of its own keeps them.
+        // * A leaf somebody else wrote with keys of its own keeps them.
         let read = json!({
             "id": "0f6c3a9d2b1e4c5a",
             "type": "leaf",
@@ -15881,8 +15881,8 @@ mod tests {
                 "switcher:open"
             ]
         );
-        // Each pill runs its command, so each has to be one the workspace
-        // will actually run.
+        // * Each pill runs its command, so each has to be one the workspace
+        //   will actually run.
         for action in &actions {
             assert!(
                 RUNNABLE.contains(&action.command),
@@ -16002,13 +16002,13 @@ mod tests {
             renamed_path("Folder/Board.canvas", "Board 2", false).as_deref(),
             Ok("Folder/Board 2.canvas")
         );
-        // A folder has no extension to put back.
+        // * A folder has no extension to put back.
         assert_eq!(
             renamed_path("Folder", "Renamed", true).as_deref(),
             Ok("Renamed")
         );
-        // And a name the filesystem would refuse never gets there: the
-        // field stays open on the error instead.
+        // ! And a name the filesystem would refuse never gets there: the
+        //   field stays open on the error instead.
         assert!(renamed_path("Props.md", "", false).is_err());
         assert!(renamed_path("Props.md", "a/b", false).is_err());
         assert!(renamed_path("Props.md", &"x".repeat(300), false).is_err());
@@ -16090,7 +16090,7 @@ mod tests {
 
     #[test]
     fn the_top_right_group_follows_the_splits_shape() {
-        // Side by side: the last child. Stacked: the first.
+        // * Side by side: the last child. Stacked: the first.
         let row = Layout::split(
             SplitDirection::Vertical,
             vec![Layout::Group(1), Layout::Group(2)],
@@ -16101,8 +16101,8 @@ mod tests {
             vec![Layout::Group(1), Layout::Group(2)],
         );
         assert_eq!(stack.top_right(), Some(1));
-        // A stack on the right of a row: its top group holds the corner,
-        // though the depth-first order ends on its bottom one.
+        // * A stack on the right of a row: its top group holds the corner,
+        //   though the depth-first order ends on its bottom one.
         let nested = Layout::split(
             SplitDirection::Vertical,
             vec![
@@ -16138,8 +16138,8 @@ mod tests {
             tree.node_at(&[1]),
             Some(Layout::Split { direction: SplitDirection::Horizontal, children, .. }) if children.len() == 2
         ));
-        // Neighbours: from 1, right is the whole right column; from 3, up is 2
-        // and left is 1; from 2, down is 3, up is nothing.
+        // * Neighbours: from 1, right is the whole right column; from 3, up is 2
+        //   and left is 1; from 2, down is 3, up is nothing.
         assert_eq!(tree.neighbors(1, SplitDirection::Vertical, true), [2, 3]);
         assert_eq!(tree.neighbors(3, SplitDirection::Horizontal, false), [2]);
         assert_eq!(tree.neighbors(3, SplitDirection::Vertical, false), [1]);
@@ -16150,8 +16150,8 @@ mod tests {
         assert!(tree
             .neighbors(1, SplitDirection::Vertical, false)
             .is_empty());
-        // Removing 2 leaves the horizontal split nested around 3, as Obsidian
-        // keeps it; removing 3 too takes the split with it.
+        // * Removing 2 leaves the horizontal split nested around 3, as Obsidian
+        //   keeps it; removing 3 too takes the split with it.
         assert!(tree.remove(2));
         assert_eq!(tree.path_to(3), Some(vec![1, 0]));
         assert!(tree.remove(3));
@@ -16193,7 +16193,7 @@ mod tests {
             size: gpui::size(px(400.), px(200.)),
         };
         let at = |x: f32, y: f32| DropZone::at(bounds, point(px(100. + x), px(50. + y)));
-        // The band is 30 percent of 200: 60 px.
+        // * The band is 30 percent of 200: 60 px.
         assert_eq!(at(200., 100.), DropZone::Center);
         assert_eq!(at(10., 100.), DropZone::Left);
         assert_eq!(at(390., 100.), DropZone::Right);
@@ -16201,7 +16201,7 @@ mod tests {
         assert_eq!(at(200., 190.), DropZone::Bottom);
         assert_eq!(at(70., 100.), DropZone::Center);
         assert_eq!(at(200., 65.), DropZone::Center);
-        // In a corner the nearer edge wins.
+        // * In a corner the nearer edge wins.
         assert_eq!(at(20., 40.), DropZone::Left);
         assert_eq!(at(40., 20.), DropZone::Top);
         assert_eq!(
@@ -16425,8 +16425,8 @@ mod tests {
             "the id is not in the file: {after}"
         );
 
-        // The same insertion against bytes the file no longer holds is
-        // refused rather than written.
+        // ! The same insertion against bytes the file no longer holds is
+        //   refused rather than written.
         let err = state
             .write_block_id(path, &before, &insertion)
             .expect_err("the file changed since");
@@ -16534,7 +16534,7 @@ mod tests {
             template,
             "the template itself was written to"
         );
-        // Running again finds it rather than creating a second one.
+        // * Running again finds it rather than creating a second one.
         let (again, exists) = state
             .vault()
             .daily_note("YYYY-MM-DD", "Journal", &at)
@@ -16566,9 +16566,9 @@ mod tests {
 
     #[test]
     fn rename_leaves_a_note_that_changed_underneath_alone() {
-        // The rewrites are planned from the text the index holds. If the
-        // other app saved one of those notes since, writing the plan would
-        // throw that save away, so the note keeps its own bytes.
+        // * The rewrites are planned from the text the index holds. If the
+        //   other app saved one of those notes since, writing the plan would
+        //   throw that save away, so the note keeps its own bytes.
         let (dir, state) = vault();
         let theirs = "# B\n\nRewritten by the other app, with [[A]] still in it.\n";
         fs::write(dir.path().join("B.md"), theirs).unwrap();
@@ -16579,7 +16579,7 @@ mod tests {
             theirs,
             "the other app's save was overwritten"
         );
-        // The notes that did not change are still rewritten.
+        // * The notes that did not change are still rewritten.
         assert!(outcome.rewritten_files >= 1);
         let sub = fs::read_to_string(dir.path().join("Sub/S.md")).unwrap();
         assert!(
@@ -16613,13 +16613,13 @@ mod tests {
             let cache = state.cache();
             assert!(cache.file("A.md").is_none());
             assert!(cache.file("Renamed A.md").is_some());
-            // B's `related` property, its two body links, and S's markdown link.
+            // * B's `related` property, its two body links, and S's markdown link.
             assert_eq!(cache.backlinks("Renamed A.md").len(), 4);
             assert!(cache.unresolved_links("B.md").is_none());
             assert_eq!(state.texts()["B.md"].as_str(), b);
         }
         assert!(outcome.changes.structural());
-        // The watcher's events for the same paths find nothing new.
+        // * The watcher's events for the same paths find nothing new.
         let changes = state.apply(&[
             dir.path().join("A.md"),
             dir.path().join("Renamed A.md"),
@@ -16697,8 +16697,8 @@ mod tests {
         assert!(vault_path_in(&root, "/etc/passwd").is_err());
         assert!(vault_path_in(&root, "").is_err(), "the folder itself");
 
-        // A symlinked folder in the vault: the path is innocent, the folder
-        // it goes through is not.
+        // * A symlinked folder in the vault: the path is innocent, the folder
+        //   it goes through is not.
         let outside = tempfile::tempdir().unwrap();
         fs::write(outside.path().join("there.md"), "o").unwrap();
         if symlink(outside.path(), &root.join("linked")).is_none() {
@@ -16707,8 +16707,8 @@ mod tests {
         assert!(vault_path_in(&root, "linked/new.md").is_err());
         assert!(vault_path_in(&root, "linked/there.md").is_err());
 
-        // A dangling link resolves to nothing, and a write through it would
-        // create the file wherever it points.
+        // * A dangling link resolves to nothing, and a write through it would
+        //   create the file wherever it points.
         if symlink(&outside.path().join("gone.md"), &root.join("dangling.md")).is_none() {
             return;
         }
@@ -16836,8 +16836,8 @@ mod tests {
                 MainView::Editor,
                 "{mode:?} with a note open"
             );
-            // The `--synthetic` spike hands the editor a note that is in no
-            // vault: the buffer names a file, and that is what mounts it.
+            // * The `--synthetic` spike hands the editor a note that is in no
+            //   vault: the buffer names a file, and that is what mounts it.
             assert_eq!(
                 Workspace::main_view_for(mode, false, false, true, false, false, false),
                 MainView::Editor,
@@ -16881,8 +16881,8 @@ mod tests {
             MainView::Graph,
             "the graph wins over a PDF"
         );
-        // The graph is the one view that outranks a file: a canvas or a base
-        // open behind it stays behind it.
+        // * The graph is the one view that outranks a file: a canvas or a base
+        //   open behind it stays behind it.
         assert_eq!(
             Workspace::main_view_for(ViewMode::Graph, false, false, false, false, true, false),
             MainView::Graph,
@@ -17018,9 +17018,9 @@ fn canvas_frame(
     height: f32,
 ) -> gpui::AnyElement {
     let w = if width > 0.0 { width } else { 0.0 };
-    // Tall enough that the fit zoom stays above the card-text threshold: a
-    // short box shrinks the board until the labels fade out, which reads as
-    // an empty canvas rather than a small one.
+    // * Tall enough that the fit zoom stays above the card-text threshold: a
+    //   short box shrinks the board until the labels fade out, which reads as
+    //   an empty canvas rather than a small one.
     let h = if height > 0.0 { height } else { 460.0 };
     div()
         .id("canvas-embed-frame")

@@ -100,8 +100,8 @@ fn nodes_made_in_the_app_are_written_in_the_fixed_order() {
     let mut colored = Node::new("716ed934c420f719", NodeType::Text, 0.0, 400.0, 250.0, 60.0);
     colored.text = Some("Colored".into());
     colored.color = Some("3".into());
-    // Created text, file, link, group, group, text, and written in that
-    // order: only reading a file moves the groups first.
+    // * Created text, file, link, group, group, text, and written in that
+    // * order: only reading a file moves the groups first.
     canvas.nodes = vec![text, file, link, group, plain, colored];
     assert_eq!(canvas.to_json(), fixture("api.out.canvas"));
 }

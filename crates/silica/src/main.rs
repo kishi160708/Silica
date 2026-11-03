@@ -267,7 +267,7 @@ fn apply_obsidian_uri(args: &mut Args, uri: &str) {
             .map(|(_, v)| v.clone())
     };
 
-    // Resolve vault from the URI's `vault` param.
+    // * Resolve vault from the URI's `vault` param.
     if let Some(vault_name) = get("vault") {
         if let Some(path) = resolve_vault_by_name(&vault_name) {
             args.vault = Some(path);
@@ -282,9 +282,9 @@ fn apply_obsidian_uri(args: &mut Args, uri: &str) {
             args.search = get("query");
         }
         "new" => {
-            // `new` sets a note path; content is written by the workspace once
-            // create-on-open is implemented.  For now, opening the path is the
-            // best effort.
+            // * `new` sets a note path; content is written by the workspace once
+            //   create-on-open is implemented.  For now, opening the path is the
+            //   best effort.
             args.note = get("file");
         }
         _ => {}
@@ -469,9 +469,9 @@ pub fn bind_all_keys(cx: &mut App, registry: &CommandRegistry) {
 
 fn main() {
     let args = parse_args();
-    // The theme comes from appearance.json and the key bindings from
-    // hotkeys.json; read both before the window opens so the first frame
-    // already has the right colors and keys.
+    // * The theme comes from appearance.json and the key bindings from
+    //   hotkeys.json; read both before the window opens so the first frame
+    //   already has the right colors and keys.
     let vault = args
         .vault
         .as_ref()
@@ -488,9 +488,9 @@ fn main() {
                 })
                 .and_then(|path| silica_vault::Vault::open(&path).ok())
         })
-        // "Override config folder": the folder is on the vault's entry in
-        // the per-user store, so the vault has to be reopened with it once
-        // both are known.
+        // * "Override config folder": the folder is on the vault's entry in
+        //   the per-user store, so the vault has to be reopened with it once
+        //   both are known.
         .and_then(|v| {
             let folder = silica_vault::VaultRegistry::open()
                 .ok()
@@ -500,8 +500,8 @@ fn main() {
                 .ok()
                 .or(Some(v))
         });
-    // A community CSS theme layers its custom properties on top of the base
-    // theme; read it from `.obsidian/themes/<name>.css` inside the vault.
+    // * A community CSS theme layers its custom properties on top of the base
+    //   theme; read it from `.obsidian/themes/<name>.css` inside the vault.
     let css_theme = vault
         .as_ref()
         .and_then(|v| v.appearance_config().ok().and_then(|a| a.css_theme.clone()))
@@ -511,8 +511,8 @@ fn main() {
                 theme::load_css_theme(&root, &name)
             })
         });
-    // Enabled CSS snippets from `.obsidian/snippets/<name>.css`; applied last
-    // so they override both base and community theme colors.
+    // * Enabled CSS snippets from `.obsidian/snippets/<name>.css`; applied last
+    //   so they override both base and community theme colors.
     let css_snippets = vault
         .as_ref()
         .and_then(|v| {
@@ -528,19 +528,19 @@ fn main() {
             Some(theme::load_css_snippets(&root, &css_snippets))
         })
         .unwrap_or_default();
-    // The window is what knows the desktop's colour scheme, and it does not
-    // exist yet; dark is assumed here and the theme is rebuilt below once
-    // the window can answer, which only matters for `theme: "system"`.
+    // ? The window is what knows the desktop's colour scheme, and it does not
+    //   exist yet; dark is assumed here and the theme is rebuilt below once
+    //   the window can answer, which only matters for `theme: "system"`.
     let appearance = vault.as_ref().and_then(|v| v.appearance_config().ok());
     let theme = appearance
         .as_ref()
         .map(|a| Theme::from_appearance(a, true, css_theme.as_ref(), &css_snippets))
         .unwrap_or_else(Theme::dark);
     let mut registry = CommandRegistry::with_known_ids();
-    // A core plugin that is off has no commands: not in the palette, and
-    // nothing bound to its keys. `core-plugins.json` is read here so the
-    // first frame is already right, and `change_setting` rebuilds this the
-    // same way when a toggle changes it.
+    // * A core plugin that is off has no commands: not in the palette, and
+    //   nothing bound to its keys. `core-plugins.json` is read here so the
+    //   first frame is already right, and `change_setting` rebuilds this the
+    //   same way when a toggle changes it.
     if let Some(vault) = vault.as_ref() {
         let core = vault.core_plugins().unwrap_or_default();
         registry.retain_enabled(|id| {
@@ -558,11 +558,11 @@ fn main() {
     drop(vault);
     let registry = Arc::new(registry);
 
-    // Obsidian's "Window frame style" is "Hidden" on Linux and Windows: no
-    // title bar of the desktop's, the tab strip at the window's top edge and
-    // the window buttons in its right corner. `--frame native` asks the
-    // desktop for its own frame instead, which is the choice for a
-    // compositor that draws client windows badly.
+    // * Obsidian's "Window frame style" is "Hidden" on Linux and Windows: no
+    //   title bar of the desktop's, the tab strip at the window's top edge and
+    //   the window buttons in its right corner. `--frame native` asks the
+    //   desktop for its own frame instead, which is the choice for a
+    //   compositor that draws client windows badly.
     let frame = args.frame.clone().unwrap_or_else(frame_style);
     let decorations = if frame == "native" {
         WindowDecorations::Server
@@ -581,7 +581,7 @@ fn main() {
             bind_all_keys(cx, &registry);
             cx.set_global(Commands(registry));
 
-            // Register native plugins compiled into Silica.
+            // * Register native plugins compiled into Silica.
             silica_plugins::native_plugins::register_all();
 
             let (width, height) = args.size.unwrap_or((1400.0, 900.0));
@@ -593,14 +593,14 @@ fn main() {
                         window_bounds: Some(WindowBounds::Windowed(bounds)),
                         titlebar: Some(TitlebarOptions {
                             title: Some("Silica".into()),
-                            // What hides the caption on Windows and macOS,
-                            // where `window_decorations` is not read at all:
-                            // the window keeps the system's shadow and resize
-                            // border and loses only the title bar, which is
-                            // the frame Obsidian draws there. macOS keeps its
-                            // traffic lights, at the point Obsidian's window
-                            // options put them; the workspace pads the header
-                            // under them (see `frame_left_space`).
+                            // * What hides the caption on Windows and macOS,
+                            //   where `window_decorations` is not read at all:
+                            //   the window keeps the system's shadow and resize
+                            //   border and loses only the title bar, which is
+                            //   the frame Obsidian draws there. macOS keeps its
+                            //   traffic lights, at the point Obsidian's window
+                            //   options put them; the workspace pads the header
+                            //   under them (see `frame_left_space`).
                             appears_transparent: (cfg!(target_os = "windows")
                                 || cfg!(target_os = "macos"))
                                 && frame != "native",
@@ -608,17 +608,17 @@ fn main() {
                                 && frame != "native")
                                 .then(|| point(px(19.), px(12.))),
                         }),
-                        // KWin only honours the xdg-activation token that
-                        // `activate_window` asks for when it can tie it to an
-                        // application, which is what this id is for.
+                        // * KWin only honours the xdg-activation token that
+                        //   `activate_window` asks for when it can tie it to an
+                        //   application, which is what this id is for.
                         app_id: Some("silica".into()),
                         window_decorations: Some(decorations),
-                        // A client-drawn frame paints its shadow in a margin
-                        // around the content, which has to be see-through.
-                        // Only Linux draws that margin: Windows keeps the
-                        // system's shadow outside the window, so a
-                        // transparent background there would only show the
-                        // desktop through the app's own rounded corners.
+                        // * A client-drawn frame paints its shadow in a margin
+                        //   around the content, which has to be see-through.
+                        //   Only Linux draws that margin: Windows keeps the
+                        //   system's shadow outside the window, so a
+                        //   transparent background there would only show the
+                        //   desktop through the app's own rounded corners.
                         window_background: match decorations {
                             WindowDecorations::Client if !cfg!(target_os = "windows") => {
                                 WindowBackgroundAppearance::Transparent
@@ -631,9 +631,9 @@ fn main() {
                     |window, cx| cx.new(|cx| Workspace::new(vault, window, cx)),
                 )
                 .expect("open main window");
-            // Now there is a window to ask: `theme: "system"` follows the
-            // desktop, which is Obsidian's default and what a vault with no
-            // theme key means.
+            // * Now there is a window to ask: `theme: "system"` follows the
+            //   desktop, which is Obsidian's default and what a vault with no
+            //   theme key means.
             if let Some(a) = appearance {
                 let follows_system =
                     !matches!(a.theme.as_deref(), Some("moonstone") | Some("obsidian"));
@@ -656,22 +656,22 @@ fn main() {
                 }
             }
             cx.on_action(move |_: &Quit, cx| {
-                // Save the note and the layout before the window goes away.
+                // * Save the note and the layout before the window goes away.
                 window.update(cx, |ws, _, cx| ws.on_quit(cx)).ok();
                 control::cleanup();
                 cx.quit();
             });
-            // Ctrl+Q is not the only way out: closing the window from the
-            // titlebar quits too, and a socket file left behind makes the next
-            // run look like one that is already listening.
+            // * Ctrl+Q is not the only way out: closing the window from the
+            //   titlebar quits too, and a socket file left behind makes the next
+            //   run look like one that is already listening.
             cx.on_app_quit(|_| {
                 control::cleanup();
                 async {}
             })
             .detach();
 
-            // Bound before the startup flags are applied, so `--control`
-            // composes with `--note`, `--source` and the rest of them.
+            // * Bound before the startup flags are applied, so `--control`
+            //   composes with `--note`, `--source` and the rest of them.
             if let Some(path) = args.control.clone() {
                 control::start(path, window, cx);
             }
@@ -704,8 +704,8 @@ fn main() {
                             editor.set_text(format!("synthetic-{lines}.md"), text, cx)
                         });
                         ws.set_mode(ViewMode::Source, window, cx);
-                        // The flag loop below never runs for a synthetic note, so
-                        // this is as arranged as the window is going to get.
+                        // * The flag loop below never runs for a synthetic note, so
+                        //   this is as arranged as the window is going to get.
                         ws.mark_started();
                     } else {
                         window.focus(&ws.focus_handle(cx), cx);
@@ -714,7 +714,7 @@ fn main() {
                 .expect("window update");
             cx.activate(true);
 
-            // The vault indexes in the background; open the requested note once it lands.
+            // * The vault indexes in the background; open the requested note once it lands.
             if synthetic.is_none() {
                 cx.spawn(async move |cx| loop {
                     cx.background_executor()
@@ -725,9 +725,9 @@ fn main() {
                             if !ws.is_loaded() {
                                 return false;
                             }
-                            // The vault's default view mode, unless a flag says
-                            // otherwise — or `workspace.json` restored the tabs,
-                            // each in the mode it recorded.
+                            // * The vault's default view mode, unless a flag says
+                            //   otherwise — or `workspace.json` restored the tabs,
+                            //   each in the mode it recorded.
                             let mode = if source {
                                 Some(ViewMode::Source)
                             } else if reading {
@@ -740,9 +740,9 @@ fn main() {
                             if let Some(mode) = mode {
                                 ws.set_mode(mode, window, cx);
                             }
-                            // With a layout restored and no note asked for, the
-                            // window stays as `workspace.json` left it, which is
-                            // the empty state when nothing was open.
+                            // * With a layout restored and no note asked for, the
+                            //   window stays as `workspace.json` left it, which is
+                            //   the empty state when nothing was open.
                             let opened = match &note {
                                 Some(n) => ws.open_by_name(n, cx),
                                 None => false,
@@ -823,8 +823,8 @@ fn main() {
             };
             if let Some(steps) = stress {
                 cx.spawn(async move |cx| {
-                    // Without `--synthetic` the run edits the opened note (and
-                    // saves it): wait for the vault to index and the note to open.
+                    // * Without `--synthetic` the run edits the opened note (and
+                    //   saves it): wait for the vault to index and the note to open.
                     while synthetic.is_none() {
                         cx.background_executor()
                             .timer(std::time::Duration::from_millis(50))
@@ -852,8 +852,8 @@ fn main() {
                                 .update(cx, |editor, cx| editor.stress_step(step, window, cx));
                         });
                     }
-                    // Let the last parse land (and, on a real note, the autosave
-                    // fire) before reporting.
+                    // * Let the last parse land (and, on a real note, the autosave
+                    //   fire) before reporting.
                     cx.background_executor()
                         .timer(std::time::Duration::from_millis(if synthetic.is_some() {
                             1500
@@ -884,7 +884,7 @@ mod tests {
         assert_eq!(percent_decode("hello%20world"), "hello world");
         assert_eq!(percent_decode("a%2Fb%2Cc"), "a/b,c");
         assert_eq!(percent_decode("not%20%20encoded"), "not  encoded");
-        // Invalid % sequences are not touched: leave the literal characters.
+        // * Invalid % sequences are not touched: leave the literal characters.
         assert_eq!(percent_decode("100% GG"), "100% GG");
         assert_eq!(percent_decode("trailing%"), "trailing%");
         assert_eq!(percent_decode("plain"), "plain");
@@ -904,15 +904,14 @@ mod tests {
             ]
         );
 
-        // No query -> empty params, trailing slash on action is trimmed.
+        // * No query -> empty params, trailing slash on action is trimmed.
         let (action, params) = parse_obsidian_uri("obsidian://search/").unwrap();
         assert_eq!(action, "search");
         assert!(params.is_empty());
 
-        // `obsidian://` with an empty action is still a valid parse.
+        // * `obsidian://` with an empty action is still a valid parse.
         assert_eq!(parse_obsidian_uri("obsidian://"), Some(("".into(), vec![])));
 
-        // Not an obsidian URI -> None.
         assert!(parse_obsidian_uri("https://example.com/x").is_none());
         assert!(parse_obsidian_uri("").is_none());
     }

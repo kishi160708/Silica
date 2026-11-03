@@ -48,8 +48,8 @@ pub fn fuzzy_match(query: &str, candidate: &str) -> Option<FuzzyMatch> {
     if m > n {
         return None;
     }
-    // dp[i][j]: best score matching the first i query chars with the first j
-    // candidate chars, with query char i-1 matched at candidate j-1.
+    // * dp[i][j]: best score matching the first i query chars with the first j
+    // * candidate chars, with query char i-1 matched at candidate j-1.
     const NEG: f64 = f64::NEG_INFINITY;
     let mut dp = vec![vec![NEG; n + 1]; m + 1];
     let mut from = vec![vec![0usize; n + 1]; m + 1];
@@ -81,7 +81,7 @@ pub fn fuzzy_match(query: &str, candidate: &str) -> Option<FuzzyMatch> {
                 let gap = (j - 1 - k) as f64;
                 let mut s = base + 1.0;
                 if gap == 0.0 {
-                    s += 3.0; // consecutive
+                    s += 3.0; // * consecutive
                 } else {
                     s -= 0.5 + gap.min(10.0) * 0.1;
                 }
@@ -107,7 +107,7 @@ pub fn fuzzy_match(query: &str, candidate: &str) -> Option<FuzzyMatch> {
     if score == NEG {
         return None;
     }
-    // Shorter candidates win ties; unmatched length costs a little.
+    // * Shorter candidates win ties; unmatched length costs a little.
     score -= (n - m) as f64 * 0.05;
     let mut positions = Vec::with_capacity(m);
     let mut i = m;
@@ -132,10 +132,10 @@ pub fn fuzzy_match(query: &str, candidate: &str) -> Option<FuzzyMatch> {
 /// Every whitespace-separated token of `query` must be a case-insensitive
 /// substring of `candidate`; returns the first occurrence of each.
 pub fn simple_search(query: &str, candidate: &str) -> Option<Vec<Range<usize>>> {
-    // Lowercasing changes byte widths and can turn one character into
-    // several (`\u{130}` into `i` and a combining dot), so a hit found in the
-    // lowercased copy cannot be carried back by arithmetic: every byte of
-    // the copy remembers the candidate character it came from instead.
+    // ! Lowercasing changes byte widths and can turn one character into
+    // ! several (`\u{130}` into `i` and a combining dot), so a hit found in the
+    // ! lowercased copy cannot be carried back by arithmetic: every byte of
+    // ! the copy remembers the candidate character it came from instead.
     let mut lower = String::with_capacity(candidate.len());
     let mut source: Vec<Range<usize>> = Vec::with_capacity(candidate.len());
     for (at, c) in candidate.char_indices() {
@@ -146,8 +146,8 @@ pub fn simple_search(query: &str, candidate: &str) -> Option<Vec<Range<usize>>> 
     for token in query.split_whitespace() {
         let t = token.to_lowercase();
         let at = lower.find(&t)?;
-        // A hit that covers part of an expansion highlights the whole
-        // character behind it rather than half of one.
+        // * A hit that covers part of an expansion highlights the whole
+        // * character behind it rather than half of one.
         let start = source.get(at).map_or(candidate.len(), |r| r.start);
         let end = source[at..at + t.len()]
             .iter()
@@ -206,13 +206,13 @@ mod tests {
         assert_eq!(simple_search("zzz", "File System"), None);
         assert_eq!(simple_search("ß", "Straße"), Some(vec![4..6]));
         assert_eq!(simple_search("", "x"), Some(vec![]));
-        // `İ` lowercases into two characters, so a hit after it lands a
-        // character early unless the offsets are carried rather than counted.
+        // * `İ` lowercases into two characters, so a hit after it lands a
+        // * character early unless the offsets are carried rather than counted.
         let city = "İstanbul";
         let hit = simple_search("stan", city).unwrap();
         assert_eq!(&city[hit[0].clone()], "stan");
-        // A hit on the combining dot that expansion produced highlights the
-        // character it came from.
+        // * A hit on the combining dot that expansion produced highlights the
+        // * character it came from.
         let dot = simple_search("̇", city).unwrap();
         assert_eq!(&city[dot[0].clone()], "İ");
     }

@@ -442,8 +442,8 @@ impl Plugin for WebViewer {
                 if url.is_empty() {
                     return Err("No URL specified".to_string());
                 }
-                // One launcher for every platform, and it checks the scheme
-                // first: the target arrives from a note, so it is untrusted.
+                // ! One launcher for every platform, and it checks the scheme
+                // ! first: the target arrives from a note, so it is untrusted.
                 crate::launch::open(url).map_err(|error| error.to_string())
             }
             _ => Err(format!("'{id}' is not a command this plugin registered")),
@@ -726,7 +726,6 @@ impl Plugin for Bookmarks {
                 };
 
                 if existing.contains(&format!("]({current})")) {
-                    // Already bookmarked
                     return Ok(());
                 }
 

@@ -72,7 +72,7 @@ fn pdfdoc(byte: u8) -> char {
         0x9F => char::REPLACEMENT_CHARACTER,
         0xA0 => '\u{20AC}',
         0xAD => char::REPLACEMENT_CHARACTER,
-        // 0xA1..=0xFF bar the two above are Latin-1.
+        // * 0xA1..=0xFF bar the two above are Latin-1.
         _ => byte as char,
     }
 }
@@ -102,7 +102,7 @@ mod tests {
             "Hi\u{2014}"
         );
         assert_eq!(decode(&[0xFF, 0xFE, 0x48, 0x00, 0x69, 0x00]), "Hi");
-        // A surrogate pair, then a trailing odd byte that is dropped.
+        // * A surrogate pair, then a trailing odd byte that is dropped.
         assert_eq!(
             decode(&[0xFE, 0xFF, 0xD8, 0x3D, 0xDE, 0x00, 0x00]),
             "\u{1F600}"

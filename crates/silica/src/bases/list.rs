@@ -165,8 +165,8 @@ impl BasesView {
         self.list.markers = layout.markers;
         self.list.separator = layout.separator;
         self.list.indent = layout.indent_properties;
-        // Reset rather than splice: a splice on a variable-height list lands
-        // at the end, so lines would silently stop following the data.
+        // * Reset rather than splice: a splice on a variable-height list lands
+        //   at the end, so lines would silently stop following the data.
         let count = self.list.lines.len();
         self.list.list.reset(count);
     }
@@ -390,7 +390,7 @@ mod tests {
         let r = row("A.md", &["Alpha", "todo", "0.02"]);
         assert_eq!(line_text(&r, ", "), "Alpha, todo, 0.02");
         assert_eq!(line_text(&r, "; "), "Alpha; todo; 0.02");
-        // An empty separator is a separator, which is what the reader keeps.
+        // * An empty separator is a separator, which is what the reader keeps.
         assert_eq!(line_text(&r, ""), "Alphatodo0.02");
     }
 
@@ -457,7 +457,7 @@ mod tests {
         let table = table_of(
             vec![a.clone(), b.clone(), c.clone()],
             vec![
-                // The no-value group leads under an ascending `groupBy`.
+                // * The no-value group leads under an ascending `groupBy`.
                 Group {
                     key: None,
                     rows: vec![a.clone()],

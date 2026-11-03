@@ -43,12 +43,12 @@ impl SpellChecker {
         let bytes = text.as_bytes();
         let mut i = 0;
         while i < bytes.len() {
-            // Skip non-word characters.
+            // * Skip non-word characters.
             if !bytes[i].is_ascii_alphabetic() && bytes[i] != b'\'' {
                 i += 1;
                 continue;
             }
-            // Find the end of this word run.
+            // * Find the end of this word run.
             let mut j = i;
             while j < bytes.len()
                 && (bytes[j].is_ascii_alphabetic() || bytes[j] == b'\'')
@@ -76,7 +76,7 @@ mod tests {
         assert!(checker.is_known("Hello"));
         assert!(checker.is_known("the"));
         assert!(checker.is_known("silica"));
-        // Silica is in the dictionary.
+        // * Silica is in the dictionary.
         assert!(checker.misspelled("hello world").is_empty());
     }
 
@@ -85,17 +85,17 @@ mod tests {
         let checker = SpellChecker::new();
         let misspelled = checker.misspelled("teh quick broen fox");
         assert!(!misspelled.is_empty());
-        // "teh" starts at 0, ends at 3.
+        // * "teh" starts at 0, ends at 3.
         assert_eq!(misspelled[0], (0, 3));
     }
 
     #[test]
     fn punctuation_is_stripped() {
         let checker = SpellChecker::new();
-        // "hello," should be known because the comma is stripped.
+        // * "hello," should be known because the comma is stripped.
         assert!(checker.is_known("hello,"));
         assert!(checker.is_known("(hello)"));
-        // "teh," should still be misspelled.
+        // * "teh," should still be misspelled.
         let misspelled = checker.misspelled("teh, world");
         assert_eq!(misspelled, vec![(0, 3)]);
     }

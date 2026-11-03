@@ -59,7 +59,7 @@ fn main() {
 }
 
 // ---------------------------------------------------------------------------
-// Argument parsing (deliberately dependency-free)
+// * Argument parsing (deliberately dependency-free)
 
 struct Opts {
     positional: Vec<String>,
@@ -125,7 +125,7 @@ impl Opts {
 }
 
 // ---------------------------------------------------------------------------
-// Synthetic vault generator
+// * Synthetic vault generator
 
 /// xorshift64*: small, deterministic, good enough for shaping test data.
 struct Rng(u64);
@@ -285,8 +285,8 @@ fn plan_notes(rng: &mut Rng, notes: usize) -> Vec<Plan> {
 
     let daily = notes / 7;
     let mut plans = Vec::with_capacity(notes);
-    // Each folder starts with an `Index.md` so basenames collide across folders,
-    // the case that exercises Obsidian's shortest-path tie-break.
+    // * Each folder starts with an `Index.md` so basenames collide across folders,
+    // * the case that exercises Obsidian's shortest-path tie-break.
     for f in &folders {
         if plans.len() >= notes {
             break;
@@ -372,7 +372,7 @@ fn note_body(rng: &mut Rng, plans: &[Plan], me: usize, attachments: usize) -> St
     let plan = &plans[me];
     let mut s = String::with_capacity(2500);
 
-    // Frontmatter: tags as a list, sometimes aliases, a date, a link-valued property.
+    // * Frontmatter: tags as a list, sometimes aliases, a date, a link-valued property.
     s.push_str("---\n");
     let _ = writeln!(s, "title: {}", plan.title);
     s.push_str("tags:\n");
@@ -523,7 +523,7 @@ fn generate_vault(dir: &Path, notes: usize, seed: u64) -> Result<GenerateStats, 
     let plans = plan_notes(&mut rng, notes);
     let attachments = (notes / 10).max(1);
 
-    // Content generation is sequential so the output is a pure function of the seed.
+    // * Content generation is sequential so the output is a pure function of the seed.
     let mut rngs = Vec::with_capacity(plans.len());
     for _ in 0..plans.len() {
         rngs.push(rng.next());
@@ -556,7 +556,7 @@ fn generate_vault(dir: &Path, notes: usize, seed: u64) -> Result<GenerateStats, 
         .par_iter()
         .zip(bodies.par_iter())
         .try_for_each(|(p, body)| io(&dir.join(&p.path), body.as_bytes()))?;
-    // Eight bytes of PNG signature is enough for a file-kind test; nothing renders these.
+    // * Eight bytes of PNG signature is enough for a file-kind test; nothing renders these.
     let png = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
     (0..attachments)
         .into_par_iter()
@@ -571,7 +571,7 @@ fn generate_vault(dir: &Path, notes: usize, seed: u64) -> Result<GenerateStats, 
 }
 
 // ---------------------------------------------------------------------------
-// Index timing
+// * Index timing
 
 #[derive(Default)]
 struct IndexRun {
@@ -740,7 +740,7 @@ fn cmd_index(opts: &Opts) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
-// Formatting
+// * Formatting
 
 fn group(n: usize) -> String {
     let s = n.to_string();
@@ -797,7 +797,7 @@ mod tests {
         assert!(run.headings >= 300);
         assert!(run.tags > 0);
         assert!(run.blocks > 0);
-        // Only the deliberately dangling links (about 5 percent) should fail to resolve.
+        // * Only the deliberately dangling links (about 5 percent) should fail to resolve.
         let total = run.resolved + run.unresolved;
         assert!(
             run.unresolved * 100 / total < 12,
@@ -815,8 +815,8 @@ mod tests {
         generate_vault(b.path(), 40, 3).unwrap();
         let va = Vault::open(a.path()).unwrap();
         let vb = Vault::open(b.path()).unwrap();
-        // What the generator decides: the kind follows from the path, and
-        // the modification times are the clock's, not its.
+        // * What the generator decides: the kind follows from the path, and
+        // * the modification times are the clock's, not its.
         let listing = |v: &Vault| -> Vec<(String, u64)> {
             v.files().iter().map(|f| (f.path.clone(), f.size)).collect()
         };

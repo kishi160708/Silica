@@ -63,7 +63,7 @@ fn group(src: &[u8], i: usize) -> Option<(usize, usize)> {
     let mut j = i;
     while j < src.len() {
         match src[j] {
-            b'\\' => j += 1, // `\{` and `\}` do not nest
+            b'\\' => j += 1, // * `\{` and `\}` do not nest
             b'{' => depth += 1,
             b'}' => {
                 depth -= 1;
@@ -177,8 +177,8 @@ fn collect(tex: &str, macros: &mut HashMap<String, Macro>) -> String {
                 }
             },
             _ => {
-                // A group can carry a declaration too (`{\newcommand…}`);
-                // recurse so it is still collected.
+                // * A group can carry a declaration too (`{\newcommand…}`);
+                // * recurse so it is still collected.
                 if let Some((inner, end)) = group(src, skip_ws(src, j)) {
                     let body = &tex[inner..end];
                     if body.contains("\\newcommand")
@@ -205,7 +205,7 @@ fn collect(tex: &str, macros: &mut HashMap<String, Macro>) -> String {
 /// its name.
 fn define(src: &[u8], i: usize) -> Option<(usize, Macro, String)> {
     let mut i = skip_ws(src, i);
-    // The name is either a braced `{\name}` or a bare `\name`.
+    // * The name is either a braced `{\name}` or a bare `\name`.
     let name = if src.get(i) == Some(&b'{') {
         let (a, b) = group(src, i)?;
         i = b + 1;
@@ -222,7 +222,7 @@ fn define(src: &[u8], i: usize) -> Option<(usize, Macro, String)> {
     i = skip_ws(src, i);
     let mut params = 0usize;
     let mut optional_arg = None;
-    // `\newcommand{\n}[2][default]{body}`: brackets, not braces.
+    // * `\newcommand{\n}[2][default]{body}`: brackets, not braces.
     if let Some((a, b)) = optional(src, i) {
         params = String::from_utf8_lossy(&src[a..b]).trim().parse().unwrap_or(0);
         i = skip_ws(src, b + 1);
@@ -328,7 +328,7 @@ fn call(src: &[u8], i: usize, def: &Macro) -> Option<(usize, String)> {
     let mut args: Vec<String> = Vec::new();
     let mut i = skip_ws(src, i);
     if let Some(default) = &def.optional {
-        // An optional first argument in `[…]`, or its default.
+        // * An optional first argument in `[…]`, or its default.
         if let Some((a, b)) = optional(src, i) {
             args.push(String::from_utf8_lossy(&src[a..b]).into_owned());
             i = skip_ws(src, b + 1);
@@ -392,8 +392,8 @@ fn rewrite(tex: &str, depth: usize) -> String {
                 };
                 let after = skip_ws(src, j);
                 match name.as_str() {
-                    // The extension loader: RaTeX has the extensions it can
-                    // use, so the directive goes.
+                    // * The extension loader: RaTeX has the extensions it can
+                    // * use, so the directive goes.
                     "require" => {
                         let end = group(src, after)
                             .map(|(_, b)| b + 1)
@@ -413,7 +413,7 @@ fn rewrite(tex: &str, depth: usize) -> String {
                         out.push_str("(\\text{?})");
                         i = group(src, after).map(|(_, b)| b + 1).unwrap_or(j);
                     }
-                    // A box or CSS hook around a group: keep the group.
+                    // * A box or CSS hook around a group: keep the group.
                     "bbox" => {
                         let g = optional(src, after)
                             .map(|(_, b)| skip_ws(src, b + 1))
@@ -538,7 +538,7 @@ mod tests {
         assert_eq!(normalize("\\newcommand{\\a}{b}\\a"), "b");
         assert_eq!(normalize("\\newcommand{\\sq}[1]{#1^2}\\sq{x}"), "x^2");
         assert_eq!(normalize("\\newcommand{\\t}[2]{#2+#1}\\t{a}{b}"), "b+a");
-        // `##` is a literal `#`; `#3` with only two args is left alone.
+        // * `##` is a literal `#`; `#3` with only two args is left alone.
         assert_eq!(normalize("\\newcommand{\\h}{\\#}"), "");
         assert_eq!(normalize("\\DeclareMathOperator{\\Tr}{Tr}\\Tr"), "\\operatorname{Tr}");
     }

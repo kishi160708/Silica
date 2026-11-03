@@ -222,8 +222,8 @@ pub fn line_block(spans: &[HighlightSpan]) -> (f32, Decor) {
     let mut decor = Decor::default();
     for s in spans {
         match s.kind {
-            // A setext underline is the heading's markup, so the row it
-            // sits on keeps the body size.
+            // * A setext underline is the heading's markup, so the row it
+            //   sits on keeps the body size.
             HighlightKind::Heading(h) if !h.underline => {
                 scale = heading_scale(h.level);
             }
@@ -291,11 +291,11 @@ pub fn display_line_with(
                 }
             };
         match k {
-            // A setext underline is *not* hidden: the `=====` or `-----` row
-            // keeps its characters and its own line, at body size and weight
-            // (see [[Specification#The setext underline row stays, at body
-            // size]]). Its size is `line_block`'s business; there is nothing
-            // to hide here, and the arm below finds no hash run on it.
+            // * A setext underline is *not* hidden: the `=====` or `-----` row
+            //   keeps its characters and its own line, at body size and weight
+            //   (see [[Specification#The setext underline row stays, at body
+            //   size]]). Its size is `line_block`'s business; there is nothing
+            //   to hide here, and the arm below finds no hash run on it.
             HighlightKind::Heading(_) => {
                 let hashes = t.bytes().take_while(|&b| b == b'#').count();
                 let ws = t[hashes..]
@@ -332,15 +332,15 @@ pub fn display_line_with(
                 if open > 0 && t.ends_with("]]") && t.len() >= open + 2 {
                     let inner = &t[open..t.len() - 2];
                     match inner.find('|') {
-                        // `[[target|alias]]` shows the alias.
+                        // * `[[target|alias]]` shows the alias.
                         Some(p) if p + 1 < inner.len() => {
                             hides.push((r.start..r.start + open + p + 1, "".into(), k));
                         }
                         _ => {
                             hides.push((r.start..r.start + open, "".into(), k));
-                            // A subpath reads `Note > Heading`, the label the
-                            // reading view already gives it; a link into this
-                            // note has no path, so its leading `#` just goes.
+                            // * A subpath reads `Note > Heading`, the label the
+                            //   reading view already gives it; a link into this
+                            //   note has no path, so its leading `#` just goes.
                             for (i, _) in inner.match_indices('#') {
                                 let at = r.start + open + i;
                                 let with = if i == 0 { "" } else { " > " };
@@ -360,7 +360,7 @@ pub fn display_line_with(
                     0
                 };
                 if open > 0 {
-                    // The `]` closing the text, counting nested brackets.
+                    // * The `]` closing the text, counting nested brackets.
                     let mut depth = 0usize;
                     let mut close = None;
                     for (i, b) in t.bytes().enumerate().skip(open) {
@@ -390,7 +390,7 @@ pub fn display_line_with(
                 hides.push((r.clone(), "".into(), k));
             }
             HighlightKind::BlockId => {
-                // Take the space before the id along with it.
+                // * Take the space before the id along with it.
                 let start = if r.start > 0 && line.as_bytes()[r.start - 1] == b' ' {
                     r.start - 1
                 } else {
@@ -399,8 +399,8 @@ pub fn display_line_with(
                 hides.push((start..r.end, "".into(), k));
             }
             HighlightKind::ListMarker => {
-                // The parser accepts one to four spaces or a tab between
-                // the marker and the checkbox, and all of it is markup.
+                // * The parser accepts one to four spaces or a tab between
+                //   the marker and the checkbox, and all of it is markup.
                 let task_after = spans.iter().skip(ix + 1).find(|s| {
                     s.kind == HighlightKind::Task
                         && s.range.start >= r.end
@@ -409,7 +409,7 @@ pub fn display_line_with(
                             .is_some_and(|gap| gap.bytes().all(|b| b == b' ' || b == b'\t'))
                 });
                 match task_after {
-                    // A task shows its checkbox in place of the bullet.
+                    // * A task shows its checkbox in place of the bullet.
                     Some(task) => hides.push((r.start..task.range.start, "".into(), k)),
                     None if t.len() == 1 && matches!(t, "-" | "*" | "+") => {
                         hides.push((r.clone(), "•".into(), k));
@@ -426,8 +426,8 @@ pub fn display_line_with(
                 hides.push((r.clone(), glyph.into(), k));
             }
             HighlightKind::Callout => {
-                // `> [!type]- Title`: the type block goes, an empty title
-                // shows the type instead.
+                // * `> [!type]- Title`: the type block goes, an empty title
+                //   shows the type instead.
                 if let Some(open) = t.find("[!") {
                     if let Some(close) = t[open..].find(']') {
                         let mut end = open + close + 1;
@@ -436,9 +436,9 @@ pub fn display_line_with(
                         }
                         let title_empty = t[end..].trim().is_empty();
                         if title_empty {
-                            // Shared with the reading view: this used to leave
-                            // the tail of the type as written, so `[!NOTE]`
-                            // read "NOTE" here and "Note" there.
+                            // * Shared with the reading view: this used to leave
+                            //   the tail of the type as written, so `[!NOTE]`
+                            //   read "NOTE" here and "Note" there.
                             let name =
                                 silica_markdown::callout_default_title(&t[open + 2..open + close]);
                             hides.push((r.start + open..r.start + end, name.into(), k));
@@ -450,7 +450,7 @@ pub fn display_line_with(
                 }
             }
             HighlightKind::Footnote => {
-                // `[^ref]` and inline `^[text]` both lose their brackets.
+                // * `[^ref]` and inline `^[text]` both lose their brackets.
                 if (t.starts_with("[^") || t.starts_with("^[")) && t.ends_with(']') && t.len() >= 3
                 {
                     hides.push((r.start..r.start + 2, "".into(), k));
@@ -458,10 +458,10 @@ pub fn display_line_with(
                 }
             }
             HighlightKind::Math => {
-                // `$x$` and `$$x$$` on one line are typeset over a
-                // placeholder when they can be, and otherwise lose their
-                // dollars; a block's lines are a widget when it is not being
-                // edited, so only the delimiters on this line go.
+                // * `$x$` and `$$x$$` on one line are typeset over a
+                //   placeholder when they can be, and otherwise lose their
+                //   dollars; a block's lines are a widget when it is not being
+                //   edited, so only the delimiters on this line go.
                 let n = t.bytes().take_while(|&b| b == b'$').count().min(2);
                 if n > 0 && t.len() >= 2 * n && t.ends_with(&t[..n]) {
                     let tex = &t[n..t.len() - n];
@@ -496,7 +496,7 @@ pub fn display_line_with(
             || !line.is_char_boundary(range.start)
             || !line.is_char_boundary(range.end)
         {
-            // Inside an earlier hide (a comment swallows its contents).
+            // * Inside an earlier hide (a comment swallows its contents).
             continue;
         }
         if range.start > at {
@@ -577,7 +577,7 @@ mod tests {
         assert_eq!(render("**b** and __c__", None).text, "b and c");
         assert_eq!(render("so $x^2$ and $$y$$", None).text, "so x^2 and y");
         assert_eq!(render("so $x^2$ and", Some(4..4)).text, "so $x^2$ and");
-        // The cursor right after the bold reveals it; elsewhere not.
+        // * The cursor right after the bold reveals it; elsewhere not.
         assert_eq!(render("**b** *c*", Some(5..5)).text, "**b** c");
         assert_eq!(render("**b** *c*", Some(0..0)).text, "**b** c");
         assert_eq!(render("**b** *c*", Some(6..6)).text, "b *c*");
@@ -588,8 +588,8 @@ mod tests {
         let src = "so $x^2$ and $$y$$ or $a";
         let doc = silica_markdown::parse(src);
         let lines = highlight_lines(&doc);
-        // The placeholder is whatever the measurer answers; a formula it
-        // declines keeps the dollar-hiding fallback.
+        // * The placeholder is whatever the measurer answers; a formula it
+        //   declines keeps the dollar-hiding fallback.
         let math = |tex: &str, block: bool| match (tex, block) {
             ("x^2", false) => Some("\u{a0}\u{a0}".to_string()),
             ("y", true) => None,
@@ -605,12 +605,12 @@ mod tests {
                 block: false
             }]
         );
-        // The whole `$x^2$` maps onto the placeholder: a click lands at
-        // its start, which reveals the source.
+        // * The whole `$x^2$` maps onto the placeholder: a click lands at
+        //   its start, which reveals the source.
         assert_eq!(d.to_source(4), 3);
         assert_eq!(d.to_display(5), 3);
         assert_eq!(d.to_display(8), 7);
-        // Touched, the source shows and nothing is typeset.
+        // * Touched, the source shows and nothing is typeset.
         let d = display_line_with(src, &lines[0], std::slice::from_ref(&(5..5)), &math);
         assert_eq!(d.text, "so $x^2$ and y or $a");
         assert!(d.math.is_empty());
@@ -624,8 +624,8 @@ mod tests {
         );
         assert_eq!(render("![[pic.png]]", None).text, "pic.png");
         assert_eq!(render("![[Note#H]]", None).text, "Note > H");
-        // A block id keeps its caret, and a link into this note has no
-        // path to separate from.
+        // * A block id keeps its caret, and a link into this note has no
+        //   path to separate from.
         assert_eq!(
             render("[[Note#A#B]] [[Note#^id]] [[#Local]]", None).text,
             "Note > A > B Note > ^id Local"
@@ -647,19 +647,19 @@ mod tests {
 
     #[test]
     fn a_checked_task_marks_its_line_done() {
-        // The styling is the element's, but the flag is this module's: the
-        // line of a done item is muted and struck through, an open one is not,
-        // and `[X]` counts the same as `[x]`.
+        // * The styling is the element's, but the flag is this module's: the
+        //   line of a done item is muted and struck through, an open one is not,
+        //   and `[X]` counts the same as `[x]`.
         assert!(!render("- [ ] open", None).decor.task_done);
         assert!(render("- [x] done", None).decor.task_done);
         assert!(render("- [X] done", None).decor.task_done);
-        // A revealed line keeps the flag: the cursor shows the source, it
-        // does not reopen the task.
+        // * A revealed line keeps the flag: the cursor shows the source, it
+        //   does not reopen the task.
         assert!(render("- [x] done", Some(0..0)).decor.task_done);
-        // Only `[x]` and `[X]` were observed, and any other non-space marker
-        // follows the rule the checkbox glyph and the reading view already
-        // use (`reading::view`, `item.task.is_some_and(|c| c != ' ')`), so
-        // the three agree rather than each guessing.
+        // * Only `[x]` and `[X]` were observed, and any other non-space marker
+        //   follows the rule the checkbox glyph and the reading view already
+        //   use (`reading::view`, `item.task.is_some_and(|c| c != ' ')`), so
+        //   the three agree rather than each guessing.
         assert!(render("- [/] partial", None).decor.task_done);
         assert!(!render("plain line", None).decor.task_done);
     }
@@ -673,7 +673,7 @@ mod tests {
         assert_eq!(render("1. item", None).text, "1. item");
         assert_eq!(render("- [ ] open", None).text, "☐ open");
         assert_eq!(render("- [x] done", None).text, "☑ done");
-        // Every padding the parser accepts between bullet and checkbox.
+        // * Every padding the parser accepts between bullet and checkbox.
         assert_eq!(render("-  [x] padded", None).text, "☑ padded");
         assert_eq!(render("-    [ ] four", None).text, "☐ four");
         assert_eq!(render("-\t[x] tabbed", None).text, "☑ tabbed");
@@ -682,7 +682,7 @@ mod tests {
         assert_eq!(q.text, "deep");
         assert_eq!(q.decor.quote_depth, 2);
         assert_eq!(render("> [!note] Title", None).text, "Title");
-        // An empty title shows the capitalised type, foldable or not.
+        // * An empty title shows the capitalised type, foldable or not.
         assert_eq!(render("> [!tip]", None).text, "Tip");
         assert_eq!(render("> [!warning]-", None).text, "Warning");
         assert_eq!(render("> [!tip]", Some(0..0)).text, "> [!tip]");
@@ -704,15 +704,15 @@ mod tests {
             "Closing ## sequence"
         );
         assert_eq!(render("## ##", None).text, "");
-        // Not a closing sequence: no space before the run.
+        // * Not a closing sequence: no space before the run.
         assert_eq!(render("## Title#", None).text, "Title#");
         assert_eq!(render("## Title ##", Some(0..0)).text, "## Title ##");
     }
 
     #[test]
     fn a_setext_underline_stays_at_body_size() {
-        // Obsidian keeps the underline row's characters and gives the row
-        // body size, where the title line above it is heading-sized.
+        // * Obsidian keeps the underline row's characters and gives the row
+        //   body size, where the title line above it is heading-sized.
         let src = "Setext title\n============\n";
         let title = render_at(src, 0, None);
         assert_eq!(title.text, "Setext title");
@@ -720,21 +720,21 @@ mod tests {
         let underline = render_at(src, 1, None);
         assert_eq!(underline.text, "============");
         assert_eq!(underline.scale, 1.0);
-        // Nothing is hidden, so the cursor on the row changes nothing.
+        // * Nothing is hidden, so the cursor on the row changes nothing.
         assert_eq!(render_at(src, 1, Some(0..0)).text, "============");
         let h2 = render_at("Setext two\n---\n", 1, None);
         assert_eq!(h2.text, "---");
         assert_eq!(h2.scale, 1.0);
-        // A title that is itself a run of the underline character: the
-        // parser marks which row is the markup, so the title row is the
-        // heading and the row below it is body-sized.
+        // * A title that is itself a run of the underline character: the
+        //   parser marks which row is the markup, so the title row is the
+        //   heading and the row below it is body-sized.
         let title = render_at("==\n==\n", 0, None);
         assert_eq!(title.text, "==");
         assert_eq!(title.scale, heading_scale(1));
         let underline = render_at("==\n==\n", 1, None);
         assert_eq!(underline.text, "==");
         assert_eq!(underline.scale, 1.0);
-        // The same for the level 2 shape, whose title reads as a break.
+        // * The same for the level 2 shape, whose title reads as a break.
         let title = render_at("--\n--\n", 0, None);
         assert_eq!(title.text, "--");
         assert_eq!(title.scale, heading_scale(2));
@@ -746,8 +746,8 @@ mod tests {
         let d = render("a **b** c", None);
         assert_eq!(d.text, "a b c");
         assert_eq!(d.to_display(0), 0);
-        assert_eq!(d.to_display(2), 2); // start of `**`
-        assert_eq!(d.to_display(4), 2); // after `**`
+        assert_eq!(d.to_display(2), 2); // * start of `**`
+        assert_eq!(d.to_display(4), 2); // * after `**`
         assert_eq!(d.to_display(5), 3);
         assert_eq!(d.to_display(9), 5);
         assert_eq!(d.to_source(2), 4);

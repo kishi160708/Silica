@@ -61,7 +61,7 @@ pub fn parse_prefix(line: &str) -> Prefix {
             if i < b.len() && b[i] == b' ' {
                 i += 1;
             }
-            // Up to three spaces may precede a nested marker.
+            // * Up to three spaces may precede a nested marker.
             let mut j = i;
             let mut spaces = 0;
             while j < b.len() && b[j] == b' ' && spaces < 3 {
@@ -79,7 +79,7 @@ pub fn parse_prefix(line: &str) -> Prefix {
     let mut indent = indent;
     let mut list_start = i;
     if quotes.is_empty() {
-        // No quote: the leading whitespace is the list's own nesting.
+        // * No quote: the leading whitespace is the list's own nesting.
         list_start = 0;
         i = indent.end;
         indent = 0..0;
@@ -96,7 +96,7 @@ pub fn parse_prefix(line: &str) -> Prefix {
         task: None,
         content: i,
     };
-    // A marker needs a space (or the end of the line) after it.
+    // * A marker needs a space (or the end of the line) after it.
     let marker = if i < b.len() && matches!(b[i], b'-' | b'*' | b'+') {
         if i + 1 == b.len() || b[i + 1] == b' ' {
             Some(Marker::Bullet {
@@ -126,7 +126,7 @@ pub fn parse_prefix(line: &str) -> Prefix {
         }
     };
     let Some(marker) = marker else {
-        // No list: the whitespace belongs to the line's indentation.
+        // * No list: the whitespace belongs to the line's indentation.
         if prefix.quotes.is_empty() {
             prefix.indent = 0..list_indent.end;
         }
@@ -142,7 +142,7 @@ pub fn parse_prefix(line: &str) -> Prefix {
     if i < b.len() && b[i] == b' ' {
         i += 1;
     }
-    // `[ ] ` or `[x] ` with any single character inside.
+    // * `[ ] ` or `[x] ` with any single character inside.
     if i + 3 <= b.len()
         && b[i] == b'['
         && b[i + 2] == b']'
@@ -176,7 +176,7 @@ pub enum Continuation {
 pub fn continuation(line: &str, col: usize, tab_size: u8) -> Continuation {
     let p = parse_prefix(line);
     if col < p.content {
-        // Before the marker: only the leading whitespace carries over.
+        // * Before the marker: only the leading whitespace carries over.
         let mut ws = line[p.indent.clone()].to_string();
         if p.quotes.is_empty() {
             ws.push_str(&line[p.list_indent.clone()]);
@@ -187,7 +187,7 @@ pub fn continuation(line: &str, col: usize, tab_size: u8) -> Continuation {
     prefix.push_str(&line[p.indent.clone()]);
     prefix.push_str(&line[p.quotes.clone()]);
     let Some(marker) = &p.marker else {
-        // A bare quote line continues the quote; an empty one ends it.
+        // * A bare quote line continues the quote; an empty one ends it.
         if !p.quotes.is_empty() && line[p.content..].trim().is_empty() {
             return Continuation::Clear {
                 range: p.indent.start..line.len(),
@@ -197,7 +197,7 @@ pub fn continuation(line: &str, col: usize, tab_size: u8) -> Continuation {
         return Continuation::Insert(prefix);
     };
     if line[p.content..].trim().is_empty() {
-        // Empty item: a nested one outdents, a top-level one loses its marker.
+        // * Empty item: a nested one outdents, a top-level one loses its marker.
         if !p.list_indent.is_empty() {
             let unit = outdent_width(&line[p.list_indent.clone()], tab_size);
             let cut = p.list_indent.start..p.list_indent.start + unit;
@@ -434,7 +434,7 @@ pub fn renumber_block(lines: &[String], changed: Range<usize>) -> Vec<(usize, Ra
             i += 1;
             continue;
         }
-        // The previous sibling: up past deeper lines and plain text.
+        // * The previous sibling: up past deeper lines and plain text.
         let mut prev = None;
         let mut j = i;
         while j > 0 {
@@ -443,7 +443,7 @@ pub fn renumber_block(lines: &[String], changed: Range<usize>) -> Vec<(usize, Ra
                 break;
             };
             if !above.bullet && above.number.is_none() {
-                // Plain text (an item's continuation): not a sibling.
+                // * Plain text (an item's continuation): not a sibling.
                 continue;
             }
             if above.key.0 != item.key.0 || above.key.1 != item.key.1 {
@@ -564,7 +564,7 @@ mod tests {
             continuation("  - item", 1, 4),
             Continuation::Insert("  ".into())
         );
-        // Right after the marker's space the item counts as continued.
+        // * Right after the marker's space the item counts as continued.
         assert_eq!(
             continuation("- item", 2, 4),
             Continuation::Insert("- ".into())
@@ -582,7 +582,7 @@ mod tests {
         assert_eq!(outdent_range("- a", 4), None);
         assert_eq!(outdent_range("  text", 4), Some(0..2));
         assert_eq!(indent_unit(true, 4), "\t");
-        // Four spaces whatever the width: observed under `tabSize: 2`.
+        // ? Four spaces whatever the width: observed under `tabSize: 2`.
         assert_eq!(indent_unit(false, 2), "    ");
     }
 
@@ -592,7 +592,7 @@ mod tests {
     #[test]
     fn shift_tab_removes_one_unit_of_columns() {
         let sp = |n: usize| format!("{}- b", " ".repeat(n));
-        // `tabSize: 2`, `useTab: true`.
+        // * `tabSize: 2`, `useTab: true`.
         assert_eq!(outdent_edit(&sp(3), true, 2), Some((0..3, " ".into())));
         assert_eq!(outdent_edit(&sp(2), true, 2), Some((0..2, "".into())));
         assert_eq!(outdent_edit(&sp(1), true, 2), Some((0..1, "".into())));
@@ -601,15 +601,15 @@ mod tests {
         assert_eq!(outdent_edit("\t - b", true, 2), Some((0..2, " ".into())));
         assert_eq!(outdent_edit("   plain", true, 2), Some((0..3, " ".into())));
         assert_eq!(outdent_edit("- a", true, 2), None);
-        // `tabSize: 4`, `useTab: true`.
+        // * `tabSize: 4`, `useTab: true`.
         assert_eq!(outdent_edit(&sp(3), true, 4), Some((0..3, "".into())));
         assert_eq!(outdent_edit(&sp(5), true, 4), Some((0..5, " ".into())));
         assert_eq!(outdent_edit("\t - b", true, 4), Some((0..2, " ".into())));
         assert_eq!(outdent_edit("   plain", true, 4), Some((0..3, "".into())));
-        // `useTab: false`: the unit is four columns whatever `tabSize` says.
+        // * `useTab: false`: the unit is four columns whatever `tabSize` says.
         assert_eq!(outdent_edit(&sp(3), false, 2), Some((0..3, "".into())));
         assert_eq!(outdent_edit(&sp(5), false, 2), Some((0..5, " ".into())));
-        // After a quote marker the list's own indentation is what goes.
+        // * After a quote marker the list's own indentation is what goes.
         assert_eq!(outdent_edit("> \t- a", true, 4), Some((2..3, "".into())));
     }
 
@@ -621,9 +621,9 @@ mod tests {
         assert_eq!(outdent_range("    - a", 2), Some(0..2));
         assert_eq!(outdent_range("  - a", 2), Some(0..2));
         assert_eq!(outdent_range("        - a", 8), Some(0..8));
-        // A tab is one level whatever the width is.
+        // * A tab is one level whatever the width is.
         assert_eq!(outdent_range("\t\t- a", 2), Some(0..1));
-        // Indentation shallower than a step gives up what it has.
+        // * Indentation shallower than a step gives up what it has.
         assert_eq!(outdent_range(" - a", 2), Some(0..1));
         assert_eq!(
             continuation("    - ", 6, 2),
@@ -641,7 +641,7 @@ mod tests {
         assert_eq!(fixes, vec![(3, 0..1, 4)]);
         let fixes = renumber_following(lines.iter().copied(), "1. a", 3);
         assert_eq!(fixes, vec![(0, 0..1, 3), (2, 0..1, 4), (3, 0..1, 5)]);
-        // A bullet or a shallower line ends the run.
+        // * A bullet or a shallower line ends the run.
         let lines = ["  2. b", "- c"];
         assert_eq!(
             renumber_following(lines.iter().copied(), "  1. a", 2),
@@ -656,23 +656,23 @@ mod tests {
 
     #[test]
     fn indented_items_restart_and_the_rest_close_the_gap() {
-        // `2. b` was indented under `1. a`.
+        // * `2. b` was indented under `1. a`.
         let lines = ["1. a", "\t2. b", "3. c", "4. d", "", "9. e"];
         assert_eq!(
             block(&lines, 1..2),
             vec![(1, 1..2, 1), (2, 0..1, 2), (3, 0..1, 3)]
         );
-        // The first item was indented: the rest restart at 1.
+        // * The first item was indented: the rest restart at 1.
         let lines = ["\t1. a", "2. b", "3. c"];
         assert_eq!(block(&lines, 0..1), vec![(1, 0..1, 1), (2, 0..1, 2)]);
-        // Outdented back: it follows its new sibling and its old siblings
-        // below become a nested list that restarts.
+        // * Outdented back: it follows its new sibling and its old siblings
+        // * below become a nested list that restarts.
         let lines = ["1. a", "\t1. x", "1. b", "\t3. y", "\t4. z", "2. c"];
         assert_eq!(
             block(&lines, 2..3),
             vec![(2, 0..1, 2), (3, 1..2, 1), (4, 1..2, 2), (5, 0..1, 3)]
         );
-        // Bullets and quotes bound a run; plain lines are skipped.
+        // * Bullets and quotes bound a run; plain lines are skipped.
         let lines = ["- a", "\t5. b", "> 1. q", "> \t7. r"];
         assert_eq!(block(&lines, 1..2), vec![(1, 1..2, 1), (3, 3..4, 1)]);
         let lines = ["1. a", "   text", "7. b"];

@@ -219,7 +219,7 @@ pub fn parse(input: &str) -> Query {
     let q = p.or(None);
     p.skip_ws();
     if p.pos < p.chars.len() {
-        // Stray closing parens or brackets: skip and keep parsing.
+        // * Stray closing parens or brackets: skip and keep parsing.
         p.pos += 1;
         let rest = p.or(None);
         return simplify(Query::All(vec![q, rest]));
@@ -370,8 +370,8 @@ impl Parser {
                 continue;
             }
             if self.at_dangling_and(close) {
-                // An operator with no operand: a group with no term, which
-                // matches nothing, rather than a search for the word "AND".
+                // * An operator with no operand: a group with no term, which
+                // * matches nothing, rather than a search for the word "AND".
                 self.pos += 3;
                 terms.push(Query::All(Vec::new()));
                 continue;
@@ -387,11 +387,11 @@ impl Parser {
     fn unary(&mut self, close: Option<char>) -> Option<Query> {
         if self.peek() == Some('-') {
             if self.nothing_follows(1, close) {
-                // A dangling `-`: Obsidian matches `foo -` exactly as `foo`,
-                // so the operator with nothing to negate yields no term at
-                // all rather than a search for a literal hyphen. Consuming it
-                // (and the whitespace after it) leaves the cursor on the
-                // terminator, so `parse` does not take it for stray input.
+                // * A dangling `-`: Obsidian matches `foo -` exactly as `foo`,
+                // * so the operator with nothing to negate yields no term at
+                // * all rather than a search for a literal hyphen. Consuming it
+                // * (and the whitespace after it) leaves the cursor on the
+                // * terminator, so `parse` does not take it for stray input.
                 self.pos += 1;
                 self.skip_ws();
                 return None;
@@ -508,7 +508,7 @@ impl Parser {
         }
         if word.is_empty() {
             if self.pos == start {
-                // Nothing consumable here (a lone quote or bracket); step over it.
+                // * Nothing consumable here (a lone quote or bracket); step over it.
                 self.pos += 1;
             }
             return None;
@@ -527,8 +527,8 @@ impl Parser {
             name.push(c);
             self.pos += 1;
         }
-        // Obsidian writes `["Status"]` from the All properties pane: the
-        // quotes allow a space in the name and are not part of it.
+        // * Obsidian writes `["Status"]` from the All properties pane: the
+        // * quotes allow a space in the name and are not part of it.
         let name = name.trim().trim_matches('"').trim().to_string();
         match self.peek() {
             Some(']') => {
@@ -583,7 +583,7 @@ mod tests {
             parse("(a OR b) c"),
             Query::All(vec![Query::Any(vec![text("a"), text("b")]), text("c")])
         );
-        // Lowercase "or" is a word.
+        // * Lowercase "or" is a word.
         assert_eq!(
             parse("a or b"),
             Query::All(vec![text("a"), text("or"), text("b")])
@@ -658,7 +658,7 @@ mod tests {
                 Query::CaseInsensitive(Box::new(Query::Exact("Bar baz".into())))
             ])
         );
-        // Unknown prefixes are words, as are URLs.
+        // ? Unknown prefixes are words, as are URLs.
         assert_eq!(parse("http://x.y"), text("http://x.y"));
     }
 
@@ -720,21 +720,21 @@ mod tests {
         );
         assert_eq!(parse("[prop"), Query::HasProperty("prop".into()));
         assert!(parse("   ").is_empty());
-        // A dangling `-` is the operator with nothing to negate, not a
-        // search for a hyphen: `foo -` matches as `foo` does, so a lone one
-        // leaves no term behind at all.
+        // * A dangling `-` is the operator with nothing to negate, not a
+        // * search for a hyphen: `foo -` matches as `foo` does, so a lone one
+        // * leaves no term behind at all.
         assert!(parse("-").is_empty());
         assert_eq!(parse("foo -"), text("foo"));
         assert_eq!(parse("foo -  "), text("foo"));
-        // One still beside a term keeps negating it.
+        // * One still beside a term keeps negating it.
         assert_eq!(parse("-a"), Query::Not(Box::new(text("a"))));
         assert_eq!(
             parse("- a"),
             Query::All(vec![text("-"), text("a")]),
             "a `-` with a term later in the query is unprobed and stays a word"
         );
-        // An unclosed trailing `(` and a dangling `AND` keep a group with no
-        // term, which never matches; an `AND` with a term after it is a word.
+        // ! An unclosed trailing `(` and a dangling `AND` keep a group with no
+        // ! term, which never matches; an `AND` with a term after it is a word.
         let nothing = Query::All(Vec::new());
         assert_eq!(
             parse("foo ("),
@@ -750,7 +750,7 @@ mod tests {
             Query::All(vec![text("a"), text("AND"), text("b")])
         );
         assert_eq!(parse("ANDY"), text("ANDY"));
-        // A dangling `OR` keeps its empty branch, which the matcher fails.
+        // * A dangling `OR` keeps its empty branch, which the matcher fails.
         assert_eq!(
             parse("foo OR"),
             Query::Any(vec![text("foo"), Query::All(Vec::new())])
@@ -776,8 +776,8 @@ mod tests {
         ] {
             assert!(parse(q).is_empty(), "{q:?} should hold no matcher");
         }
-        // `foo (` and `foo AND` hold a matcher that fails, not none at all:
-        // Obsidian runs the search and reports "No matches found.".
+        // * `foo (` and `foo AND` hold a matcher that fails, not none at all:
+        // * Obsidian runs the search and reports "No matches found.".
         for q in [
             "a", "(a", "file:x", "OR a", "-a", "[p]", "/x/", "a (", "a AND",
         ] {

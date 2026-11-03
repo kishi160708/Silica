@@ -51,31 +51,31 @@ use super::{arity, not_enough, too_many, unknown_function, want_number, want_str
 
 /// A List or Tags method call.
 pub fn call(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Expr]) -> EvalResult {
-    // Tags calls itself List in a refusal, and it is the only other receiver
-    // that reaches this function.
+    // * Tags calls itself List in a refusal, and it is the only other receiver
+    // * that reaches this function.
     let ty = Type::List;
     let items = subject.as_list().unwrap_or_default();
 
     let lower = name.to_ascii_lowercase();
     match lower.as_str() {
-        // `contains(value: Any)` — "Returns true if the list contains
-        // `value`." Observed: `listish.contains("alpha")` is true and
-        // `listish.contains("ALPHA")` is false, so values are compared as the
-        // language's own `==` compares them and not case-insensitively.
-        // Whether `[3,1,2].contains("3")` is true is unprobed; loose equality,
-        // which is what `==` uses, says it is.
+        // * `contains(value: Any)` — "Returns true if the list contains
+        // * `value`." Observed: `listish.contains("alpha")` is true and
+        // * `listish.contains("ALPHA")` is false, so values are compared as the
+        // * language's own `==` compares them and not case-insensitively.
+        // * Whether `[3,1,2].contains("3")` is true is unprobed; loose equality,
+        // * which is what `==` uses, says it is.
         "contains" => {
             arity(name, args, 1, 1)?;
             let wanted = ev.eval(&args[0])?;
             Ok(Value::Bool(contains(&items, &wanted)))
         }
-        // `containsAll(values: Any)` / `containsAny(values: Any)` are
-        // **variadic from zero**: `[3,1,2].containsAll()` is true and
-        // `[3,1,2].containsAny()` is false, which is "all of nothing" and
-        // "any of nothing". Their maximum is unprobed — the brute-force pass
-        // stopped at the first try that did not refuse — and whether a single
-        // List argument is read as the set of values rather than as one value
-        // to look for is unprobed too; each argument is one value here.
+        // ? `containsAll(values: Any)` / `containsAny(values: Any)` are
+        // ? **variadic from zero**: `[3,1,2].containsAll()` is true and
+        // ? `[3,1,2].containsAny()` is false, which is "all of nothing" and
+        // ? "any of nothing". Their maximum is unprobed — the brute-force pass
+        // ? stopped at the first try that did not refuse — and whether a single
+        // ? List argument is read as the set of values rather than as one value
+        // ? to look for is unprobed too; each argument is one value here.
         "containsall" => {
             let wanted = ev.eval_args(args)?;
             Ok(Value::Bool(wanted.iter().all(|w| contains(&items, w))))
@@ -84,12 +84,12 @@ pub fn call(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Expr]) 
             let wanted = ev.eval_args(args)?;
             Ok(Value::Bool(wanted.iter().any(|w| contains(&items, w))))
         }
-        // `earliest()` / `latest()` — "Returns the earliest/latest date value
-        // in the list." Observed: `[3,1,2].earliest()` and `.latest()` are
-        // both **null**, so a list with no date in it answers null rather than
-        // refusing. Whether a String that parses as a date counts as a date
-        // value is unprobed; it does here, because every other place a Date
-        // meets a String parses the String (`when > "2026-01-01"`).
+        // * `earliest()` / `latest()` — "Returns the earliest/latest date value
+        // * in the list." Observed: `[3,1,2].earliest()` and `.latest()` are
+        // * both **null**, so a list with no date in it answers null rather than
+        // * refusing. Whether a String that parses as a date counts as a date
+        // * value is unprobed; it does here, because every other place a Date
+        // * meets a String parses the String (`when > "2026-01-01"`).
         "earliest" => {
             arity(name, args, 0, 0)?;
             Ok(extreme_date(&items, Ordering::Less))
@@ -98,10 +98,10 @@ pub fn call(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Expr]) 
             arity(name, args, 0, 0)?;
             Ok(extreme_date(&items, Ordering::Greater))
         }
-        // `filter(value: Boolean)` keeps the elements whose expression is
-        // truthy — truthy, not Boolean: `[3,1,2].filter(/zz/)` keeps all three
-        // and `listish.filter("value != 'beta'")` keeps all three, because a
-        // RegExp and a non-empty String are both truthy.
+        // * `filter(value: Boolean)` keeps the elements whose expression is
+        // * truthy — truthy, not Boolean: `[3,1,2].filter(/zz/)` keeps all three
+        // * and `listish.filter("value != 'beta'")` keeps all three, because a
+        // * RegExp and a non-empty String are both truthy.
         "filter" => {
             arity(name, args, 1, 1)?;
             let mut out = Vec::new();
@@ -112,10 +112,10 @@ pub fn call(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Expr]) 
             }
             Ok(Value::List(out))
         }
-        // `flat()` — "Flattens nested list into a single list." How deep is
-        // unprobed (the only observation is `[3,1,2].flat()` → `3,1,2`, which
-        // has nothing to flatten); "into a single list" reads as all the way
-        // down rather than one level.
+        // ? `flat()` — "Flattens nested list into a single list." How deep is
+        // ? unprobed (the only observation is `[3,1,2].flat()` → `3,1,2`, which
+        // ? has nothing to flatten); "into a single list" reads as all the way
+        // ? down rather than one level.
         "flat" => {
             arity(name, args, 0, 0)?;
             let mut out = Vec::new();
@@ -126,9 +126,9 @@ pub fn call(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Expr]) 
             arity(name, args, 0, 0)?;
             Ok(Value::Bool(items.is_empty()))
         }
-        // `join(separator: String)`. The separator is required and typed:
-        // `[3,1,2].join()` is not enough arguments, `[3,1,2].join(/zz/)` is a
-        // type error on `separator`.
+        // * `join(separator: String)`. The separator is required and typed:
+        // * `[3,1,2].join()` is not enough arguments, `[3,1,2].join(/zz/)` is a
+        // * type error on `separator`.
         "join" => {
             if args.is_empty() {
                 return Err(not_enough(name));
@@ -141,7 +141,7 @@ pub fn call(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Expr]) 
             let parts: Vec<String> = items.iter().map(|v| v.to_string()).collect();
             Ok(Value::Str(parts.join(&sep)))
         }
-        // `map(value: Any)` answers one element per element, in order.
+        // * `map(value: Any)` answers one element per element, in order.
         "map" => {
             arity(name, args, 1, 1)?;
             let mut out = Vec::with_capacity(items.len());
@@ -150,11 +150,11 @@ pub fn call(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Expr]) 
             }
             Ok(Value::List(out))
         }
-        // The five numeric summaries are over "the number values in the list",
-        // which is Obsidian's own wording in the completion list, so a
-        // non-number is skipped rather than coerced or refused. A list with no
-        // number in it is **unprobed**; null is the reading `earliest()` and
-        // `latest()` support, since they answer null for a list with no date.
+        // ? The five numeric summaries are over "the number values in the list",
+        // ? which is Obsidian's own wording in the completion list, so a
+        // ? non-number is skipped rather than coerced or refused. A list with no
+        // ? number in it is **unprobed**; null is the reading `earliest()` and
+        // ? `latest()` support, since they answer null for a list with no date.
         "max" => {
             arity(name, args, 0, 0)?;
             Ok(extreme_number(&items, Ordering::Greater))
@@ -163,11 +163,11 @@ pub fn call(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Expr]) 
             arity(name, args, 0, 0)?;
             Ok(extreme_number(&items, Ordering::Less))
         }
-        // Whether `mean()` divides by the count of numbers or by the list's
-        // length is **unprobed** — they differ only for a list that mixes
-        // numbers with anything else, and `[3,1,2].mean()` is 2 either way.
-        // "the mean of the number values in the list" reads as the count of
-        // numbers.
+        // ? Whether `mean()` divides by the count of numbers or by the list's
+        // ? length is **unprobed** — they differ only for a list that mixes
+        // ? numbers with anything else, and `[3,1,2].mean()` is 2 either way.
+        // ? "the mean of the number values in the list" reads as the count of
+        // ? numbers.
         "mean" => {
             arity(name, args, 0, 0)?;
             let nums = numbers(&items);
@@ -176,8 +176,8 @@ pub fn call(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Expr]) 
             }
             Ok(Value::Number(nums.iter().sum::<f64>() / nums.len() as f64))
         }
-        // An even count is unprobed; the mean of the two middle numbers is the
-        // only reading of "median" that is defined there.
+        // ? An even count is unprobed; the mean of the two middle numbers is the
+        // ? only reading of "median" that is defined there.
         "median" => {
             arity(name, args, 0, 0)?;
             let mut nums = numbers(&items);
@@ -192,12 +192,12 @@ pub fn call(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Expr]) 
                 nums[n / 2]
             }))
         }
-        // `reduce(value: Any, acc: Any)`. The second argument is the initial
-        // accumulator and is evaluated **once, outside the element scope**;
-        // the first runs per element with `value`, `index` and `acc` bound,
-        // and its result becomes the next `acc`. One argument is not enough
-        // arguments, which is what makes the initial accumulator required
-        // rather than optional.
+        // * `reduce(value: Any, acc: Any)`. The second argument is the initial
+        // * accumulator and is evaluated **once, outside the element scope**;
+        // * the first runs per element with `value`, `index` and `acc` bound,
+        // * and its result becomes the next `acc`. One argument is not enough
+        // * arguments, which is what makes the initial accumulator required
+        // * rather than optional.
         "reduce" => {
             arity(name, args, 2, 2)?;
             let mut acc = ev.eval(&args[1])?;
@@ -214,11 +214,11 @@ pub fn call(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Expr]) 
             out.reverse();
             Ok(Value::List(out))
         }
-        // `slice(start: Number, end: Number?)` — "a shallow copy of a portion
-        // of the list from `start` (inclusive) to `end` (exclusive)". Whether
-        // a negative index counts from the end is **unprobed**; it clamps to
-        // the front here, which is the reading `list[-1]` supports — indexing
-        // a List with a negative number is null, not the last element.
+        // ? `slice(start: Number, end: Number?)` — "a shallow copy of a portion
+        // ? of the list from `start` (inclusive) to `end` (exclusive)". Whether
+        // ? a negative index counts from the end is **unprobed**; it clamps to
+        // ? the front here, which is the reading `list[-1]` supports — indexing
+        // ? a List with a negative number is null, not the last element.
         "slice" => {
             if args.is_empty() {
                 return Err(not_enough(name));
@@ -244,21 +244,21 @@ pub fn call(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Expr]) 
                 Vec::new()
             }))
         }
-        // `sort()` — "Sorts list elements from smallest to largest."
-        // `[3,1,2].sort()` is `1,2,3`. What a mixed list orders by is
-        // **unprobed**: two numbers compare as numbers here and anything else
-        // compares as its rendered text, which is the only total order the
-        // observations leave room for. The sort is stable; whether Obsidian's
-        // is, is unprobed.
+        // ? `sort()` — "Sorts list elements from smallest to largest."
+        // ? `[3,1,2].sort()` is `1,2,3`. What a mixed list orders by is
+        // ? **unprobed**: two numbers compare as numbers here and anything else
+        // ? compares as its rendered text, which is the only total order the
+        // ? observations leave room for. The sort is stable; whether Obsidian's
+        // ? is, is unprobed.
         "sort" => {
             arity(name, args, 0, 0)?;
             let mut out = items;
             out.sort_by(sort_order);
             Ok(Value::List(out))
         }
-        // The population standard deviation, not the sample one:
-        // `[3,1,2].stddev()` is `0.816496580927726`, which is √(2/3) — the
-        // sample deviation would be 1.
+        // * The population standard deviation, not the sample one:
+        // * `[3,1,2].stddev()` is `0.816496580927726`, which is √(2/3) — the
+        // * sample deviation would be 1.
         "stddev" => {
             arity(name, args, 0, 0)?;
             let nums = numbers(&items);
@@ -277,25 +277,25 @@ pub fn call(ev: &mut Evaluator<'_>, subject: &Value, name: &str, args: &[Expr]) 
             }
             Ok(Value::Number(nums.iter().sum()))
         }
-        // `unique()` — "Removes duplicate elements." Two observations, and
-        // they disagree about order: `[3,1,2].unique()` is **`1,2,3`** while
-        // `listish.unique()` ([alpha, beta, alpha]) is **`alpha,beta`**, which
-        // is first-seen order. So the distinct elements are not returned in
-        // the order they appear and they are not sorted either: they come back
-        // in the order a plain JavaScript object hands back its keys —
-        // array-index-like keys ascending first, then every other key in
-        // insertion order — which is what grouping the elements by their
-        // rendered text produces. `["beta", "alpha"].unique()` is **unprobed**
-        // and answers `beta, alpha` here; a "dedupe, then sort" reading would
-        // answer `alpha, beta` and fits both observations equally well.
+        // ? `unique()` — "Removes duplicate elements." Two observations, and
+        // ? they disagree about order: `[3,1,2].unique()` is **`1,2,3`** while
+        // ? `listish.unique()` ([alpha, beta, alpha]) is **`alpha,beta`**, which
+        // ? is first-seen order. So the distinct elements are not returned in
+        // ? the order they appear and they are not sorted either: they come back
+        // ? in the order a plain JavaScript object hands back its keys —
+        // ? array-index-like keys ascending first, then every other key in
+        // ? insertion order — which is what grouping the elements by their
+        // ? rendered text produces. `["beta", "alpha"].unique()` is **unprobed**
+        // ? and answers `beta, alpha` here; a "dedupe, then sort" reading would
+        // ? answer `alpha, beta` and fits both observations equally well.
         //
-        // Distinctness is by rendered text, which is why `3` and `"3"` are one
-        // element; that `[1, "1"].unique()` keeps only the first is unprobed.
+        // ? Distinctness is by rendered text, which is why `3` and `"3"` are one
+        // ? element; that `[1, "1"].unique()` keeps only the first is unprobed.
         "unique" => {
             arity(name, args, 0, 0)?;
             Ok(Value::List(unique(&items)))
         }
-        // The refusal carries the name as it was written, not lowercased.
+        // * The refusal carries the name as it was written, not lowercased.
         _ => Err(unknown_function(name, ty)),
     }
 }
@@ -314,16 +314,16 @@ pub fn call_object(
 
     let lower = name.to_ascii_lowercase();
     match lower.as_str() {
-        // `filter` keeps whole entries and answers an **Object**;
-        // `file.properties.filter(/zz/)` renders as `[object Object]`.
+        // ? `filter` keeps whole entries and answers an **Object**;
+        // ? `file.properties.filter(/zz/)` renders as `[object Object]`.
         //
-        // What the per-entry expression binds is only half settled.
-        // Obsidian's own completion text says "which uses the variables `key`
-        // and `value`" — `key`, not the List family's `index` — but no probe
-        // ever bound one: the only try was a RegExp, which is truthy whatever
-        // is in scope. So `key` and `value` are bound here, on the strength of
-        // that sentence alone, and `index` is not: it would claim a name
-        // Obsidian's own text does not use.
+        // ? What the per-entry expression binds is only half settled.
+        // ? Obsidian's own completion text says "which uses the variables `key`
+        // ? and `value`" — `key`, not the List family's `index` — but no probe
+        // ? ever bound one: the only try was a RegExp, which is truthy whatever
+        // ? is in scope. So `key` and `value` are bound here, on the strength of
+        // ? that sentence alone, and `index` is not: it would claim a name
+        // ? Obsidian's own text does not use.
         "filter" => {
             arity(name, args, 1, 1)?;
             let mut out = IndexMap::new();
@@ -338,15 +338,15 @@ pub fn call_object(
             arity(name, args, 0, 0)?;
             Ok(Value::Bool(map.is_empty()))
         }
-        // "Returns a list containing the keys of the object", in the map's own
-        // order: `file.properties.keys()` comes back in frontmatter order.
+        // * "Returns a list containing the keys of the object", in the map's own
+        // * order: `file.properties.keys()` comes back in frontmatter order.
         "keys" => {
             arity(name, args, 0, 0)?;
             Ok(Value::List(map.keys().map(Value::str).collect()))
         }
-        // `map` answers a **List**, not an Object — "Transform each key value
-        // pair of this object into a list": `file.properties.map(/zz/)` on a
-        // 22-key object is a List of 22 RegExps.
+        // * `map` answers a **List**, not an Object — "Transform each key value
+        // * pair of this object into a list": `file.properties.map(/zz/)` on a
+        // * 22-key object is a List of 22 RegExps.
         "map" => {
             arity(name, args, 1, 1)?;
             let mut out = Vec::with_capacity(map.len());

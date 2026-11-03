@@ -134,7 +134,7 @@ pub fn image_ref(cell: &Cell, source_path: &str, vault: &dyn EmbedSource) -> Opt
         if text.starts_with("http://") || text.starts_with("https://") {
             return Some(ImageRef::Url(text.to_string()));
         }
-        // A wikilink's own body may have reached the property as text.
+        // * A wikilink's own body may have reached the property as text.
         let body = text
             .strip_prefix("[[")
             .and_then(|t| t.strip_suffix("]]"))
@@ -145,9 +145,7 @@ pub fn image_ref(cell: &Cell, source_path: &str, vault: &dyn EmbedSource) -> Opt
     of(&cell.value, source_path, vault)
 }
 
-// ---------------------------------------------------------------------------
-// The scroll body
-// ---------------------------------------------------------------------------
+// * The scroll body
 
 /// One line of a layout's scroll body. A group header is not a row, which is
 /// why the table's and the list's bodies are variable-height lists.
@@ -191,9 +189,7 @@ pub fn row_of(table: &Table, line: Line) -> Option<&Row> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// What a row shows
-// ---------------------------------------------------------------------------
+// * What a row shows
 
 /// What a card, a line or a kanban card shows as its title.
 ///

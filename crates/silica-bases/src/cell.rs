@@ -70,9 +70,9 @@ pub fn of(answer: Result<Value, EvalError>) -> Cell {
             value,
             error: None,
         },
-        // Unprobed: an error cell's own `data-property-type` was never read,
-        // only its text. `text` is the most defensible reading of a cell whose
-        // content is a sentence.
+        // ? Unprobed: an error cell's own `data-property-type` was never read,
+        // ? only its text. `text` is the most defensible reading of a cell
+        // ? whose content is a sentence.
         Err(error) => Cell {
             value: Value::Null,
             text: error.message.clone(),
@@ -139,8 +139,8 @@ pub fn kind_of(value: &Value) -> CellKind {
 /// view that can do better should read [`Cell::value`] instead.
 pub fn text_of(value: &Value) -> String {
     match value {
-        // Both empty, and for different reasons: a boolean is a disabled
-        // checkbox, and a null cell is blank where `toString()` is `null`.
+        // * Both empty, and for different reasons: a boolean is a disabled
+        // * checkbox, and a null cell is blank where `toString()` is `null`.
         Value::Null | Value::Bool(_) => String::new(),
         Value::List(items) => items
             .iter()

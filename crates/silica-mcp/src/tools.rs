@@ -356,8 +356,8 @@ fn run(app: &mut App, tool: &Tool, arguments: &Value) -> Result<Vec<Value>, Stri
         Run::Method { method, settles } => {
             let result = app.call(method, arguments.clone())?;
             let mut content = vec![text(pretty(&result))];
-            // The call succeeded; a timed-out settle is worth saying but is not
-            // a failure of the tool the model asked for.
+            // * The call succeeded; a timed-out settle is worth saying but is not
+            // * a failure of the tool the model asked for.
             if settles {
                 if let Err(e) = app.call("wait_idle", json!({})) {
                     content.push(text(format!("(wait_idle after `{method}` failed: {e})")));
@@ -405,8 +405,8 @@ fn schema(tool: &Tool) -> Value {
         }),
         Run::Method { method: name, .. } => match method(name) {
             Some(spec) => params_schema(spec),
-            // Unreachable while the table above names real methods, and a
-            // permissive schema beats a tool that cannot be listed.
+            // ! Unreachable while the table above names real methods, and a
+            // ! permissive schema beats a tool that cannot be listed.
             None => json!({"type": "object"}),
         },
     }
@@ -459,8 +459,8 @@ mod tests {
         /// `answers` pairs a control method with the result it returns;
         /// anything else gets an error, the way the app's socket would.
         fn start(name: &str, answers: Vec<(&'static str, Value)>) -> Fake {
-            // `tempfile` is not a dependency here, so the pid and the test
-            // name keep two runs apart.
+            // * `tempfile` is not a dependency here, so the pid and the test
+            // * name keep two runs apart.
             let path =
                 std::env::temp_dir().join(format!("silica-mcp-{}-{name}.sock", std::process::id()));
             let _ = std::fs::remove_file(&path);
@@ -561,7 +561,7 @@ mod tests {
             .cloned()
             .unwrap_or_default();
         assert!(required.contains(&json!("x")), "{required:?}");
-        // The hand-written four are the only ones that may invent a parameter.
+        // * The hand-written four are the only ones that may invent a parameter.
         let launch = find("silica_launch");
         assert_eq!(launch["inputSchema"]["required"], json!(["vault"]));
         assert!(!find("silica_list_commands")["inputSchema"]["properties"]["filter"].is_null());
@@ -587,7 +587,7 @@ mod tests {
         );
         assert_eq!(result["isError"], json!(false), "{result}");
         assert!(body(&result).contains("Sub/Alpha.md"), "{result}");
-        // A state-changing tool waits for the window before answering.
+        // * A state-changing tool waits for the window before answering.
         assert_eq!(fake.asked(), vec!["open", "wait_idle"]);
     }
 
@@ -600,7 +600,7 @@ mod tests {
         let mut app = fake.app();
         let result = called(&mut app, "silica_state", json!({"rows": 5}));
         assert_eq!(result["isError"], json!(false));
-        // Pretty-printed, because a model reads it.
+        // * Pretty-printed, because a model reads it.
         assert!(body(&result).contains("\n  \"vault\""), "{}", body(&result));
         assert_eq!(fake.asked(), vec!["state"]);
     }
@@ -615,7 +615,7 @@ mod tests {
             body(&result).contains("unknown method: command"),
             "{result}"
         );
-        // A method that failed changed nothing, so there is nothing to wait for.
+        // * A method that failed changed nothing, so there is nothing to wait for.
         assert_eq!(fake.asked(), vec!["command"]);
     }
 
@@ -649,7 +649,7 @@ mod tests {
         assert!(text.contains("editor:toggle-bold"), "{text}");
         assert!(!text.contains("app:go-back"), "{text}");
 
-        // The filter reads the name as well as the id.
+        // * The filter reads the name as well as the id.
         let back = called(
             &mut app,
             "silica_list_commands",
@@ -668,7 +668,7 @@ mod tests {
             ],
         );
         let mut app = fake.app();
-        // `Config::for_test` captures with `false`, which writes nothing.
+        // * `Config::for_test` captures with `false`, which writes nothing.
         let result = called(&mut app, "silica_screenshot", json!({}));
         assert_eq!(result["isError"], json!(true), "{result}");
         assert!(
@@ -712,7 +712,7 @@ mod tests {
     fn launch_refuses_a_binary_that_is_not_there() {
         let fake = Fake::start("nobin", vec![]);
         let mut app = fake.app();
-        // A folder that certainly exists, so the binary is what fails.
+        // * A folder that certainly exists, so the binary is what fails.
         let vault = std::env::temp_dir();
         let result = called(
             &mut app,
@@ -731,8 +731,8 @@ mod tests {
     fn quit_asks_the_app_and_cleans_up_after_it() {
         let fake = Fake::start("quit", vec![("quit", json!({"ok": true}))]);
         let mut app = fake.app();
-        // The fake socket is listening, so `quit` is attempted and answered;
-        // with no child of our own there is nothing to reap.
+        // * The fake socket is listening, so `quit` is attempted and answered;
+        // * with no child of our own there is nothing to reap.
         let result = called(&mut app, "silica_quit", json!({}));
         assert_eq!(result["isError"], json!(false), "{result}");
         assert_eq!(fake.asked(), vec!["quit"]);
@@ -774,7 +774,7 @@ mod tests {
         let fault = call(&mut app, &json!({"name": "silica_state", "arguments": 7}))
             .expect_err("arguments must be an object");
         assert_eq!(fault.code, INVALID_PARAMS);
-        // Absent arguments are an empty object, not a fault.
+        // * Absent arguments are an empty object, not a fault.
         assert!(call(&mut app, &json!({"name": "silica_state"})).is_ok());
     }
 }

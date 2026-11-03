@@ -71,14 +71,12 @@ pub struct Node {
     pub height: f64,
     /// `"1"`..`"6"` preset or `#rrggbb`.
     pub color: Option<String>,
-    // text
     pub text: Option<String>,
-    // file
     pub file: Option<String>,
     pub subpath: Option<String>,
-    // link
+    // * link
     pub url: Option<String>,
-    // group
+    // * group
     pub label: Option<String>,
     pub background: Option<String>,
     pub background_style: Option<BackgroundStyle>,
@@ -123,8 +121,8 @@ pub struct Edge {
 }
 
 // ---- the serde shapes ------------------------------------------------------
-// The public types carry the file's key order, which serde cannot derive, so
-// each is read through a derived twin and written by hand.
+// * The public types carry the file's key order, which serde cannot derive, so
+// * each is read through a derived twin and written by hand.
 
 #[derive(Serialize, Deserialize)]
 struct CanvasFields {
@@ -203,8 +201,8 @@ where
 impl<'de> Deserialize<'de> for Canvas {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let (f, key_order): (CanvasFields, _) = object_with_order(deserializer)?;
-        // Obsidian loads the groups first and the rest in file order; a node
-        // made afterwards goes on the end. Nodes are then written in that order.
+        // * Obsidian loads the groups first and the rest in file order; a node
+        // * made afterwards goes on the end. Nodes are then written in that order.
         let (groups, rest): (Vec<_>, Vec<_>) =
             f.nodes.into_iter().partition(|n| n.kind == NodeType::Group);
         Ok(Canvas {
@@ -375,7 +373,7 @@ impl Node {
         for key in own {
             o.set(key, self.typed_value(key));
         }
-        // A text node always carries `text`, even empty.
+        // * A text node always carries `text`, even empty.
         if self.kind == NodeType::Text && self.text.is_none() {
             o.set("text", Some(Value::String(String::new())));
         }
@@ -671,7 +669,7 @@ mod tests {
     fn parses_all_node_types_and_keeps_unknown_fields() {
         let canvas = Canvas::from_json(SAMPLE).unwrap();
         assert_eq!(canvas.nodes.len(), 4);
-        // The group is read first, the rest keep their order.
+        // * The group is read first, the rest keep their order.
         assert_eq!(canvas.nodes[0].kind, NodeType::Group);
         assert_eq!(
             canvas.nodes[0].background_style,
@@ -689,8 +687,8 @@ mod tests {
         let canvas = Canvas::from_json(SAMPLE).unwrap();
         let text = canvas.to_json();
         assert!(text.starts_with("{\n\t\"nodes\""));
-        // The group moves first on reading and the default `toEnd` is
-        // dropped; what is written is then a fixed point.
+        // * The group moves first on reading and the default `toEnd` is
+        // * dropped; what is written is then a fixed point.
         let again = Canvas::from_json(&text).unwrap();
         let ids = |c: &Canvas| c.nodes.iter().map(|n| n.id.clone()).collect::<Vec<_>>();
         assert_eq!(ids(&again), ["g4", "a1", "b2", "c3"]);

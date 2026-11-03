@@ -96,7 +96,7 @@ fn row() -> SimpleContext {
         ext: "md".into(),
         ..FileData::default()
     };
-    // `this` is the base file, not the row.
+    // * `this` is the base file, not the row.
     let main_base = FileData {
         name: "Main.base".into(),
         basename: "Main".into(),
@@ -133,19 +133,19 @@ fn shows(source: &str, text: &str, kind: CellKind) {
 /// window: a cell's `textContent` and its `data-property-type`, verbatim.
 #[test]
 fn rendered_cells_of_e11() {
-    // <div data-property-type="text">abcd</div>
+    // * <div data-property-type="text">abcd</div>
     shows(r#""ab" + "cd""#, "abcd", CellKind::Text);
-    // <div data-property-type="number">7</div>
+    // * <div data-property-type="number">7</div>
     shows("1 + 2 * 3", "7", CellKind::Number);
-    // <div data-property-type="checkbox"><input disabled="true"
-    // type="checkbox"></div> — the oracle's value is `true`, and the cell's
-    // text is empty all the same.
+    // * <div data-property-type="checkbox"><input disabled="true"
+    // * type="checkbox"></div> — the oracle's value is `true`, and the cell's
+    // * text is empty all the same.
     shows(r#""3" > 2"#, "", CellKind::Checkbox);
-    // <div data-property-type="text">12</div> — a String, because `+` with a
-    // String on either side concatenates.
+    // * <div data-property-type="text">12</div> — a String, because `+` with a
+    // * String on either side concatenates.
     shows(r#"1 + "2""#, "12", CellKind::Text);
-    // Three nulls, each `<div data-property-type="text"></div>`, where the
-    // oracle's `str` for all three is the String `null`.
+    // * Three nulls, each `<div data-property-type="text"></div>`, where the
+    // * oracle's `str` for all three is the String `null`.
     shows("nosuchprop + 1", "", CellKind::Text);
     shows("nosuchprop.length", "", CellKind::Text);
     shows("nosuchprop.toFixed(2)", "", CellKind::Text);
@@ -170,16 +170,16 @@ fn a_checkbox_cell_keeps_its_boolean() {
 /// `["BadFilter.base", "", "Cannot find function \"nosuchfunction\"", ""]`.
 #[test]
 fn the_two_failures_render_differently() {
-    // `broken: density +` does not parse, so it answers null and the cell is
-    // empty — not an error.
+    // * `broken: density +` does not parse, so it answers null and the cell is
+    // * empty — not an error.
     let broken = cell_of("density +");
     assert_eq!(broken.text, "");
     assert_eq!(broken.error, None);
     assert_eq!(broken.value, Value::Null);
     assert_eq!(broken.kind, CellKind::Text);
 
-    // `alsoBroken: nosuchfunction(1)` parses and refuses, and the refusal is
-    // the cell's content.
+    // * `alsoBroken: nosuchfunction(1)` parses and refuses, and the refusal is
+    // * the cell's content.
     let refused = cell_of("nosuchfunction(1)");
     assert_eq!(refused.text, r#"Cannot find function "nosuchfunction""#);
     assert_eq!(
@@ -189,9 +189,9 @@ fn the_two_failures_render_differently() {
     assert_eq!(refused.value, Value::Null);
     assert_eq!(refused.kind, CellKind::Text);
 
-    // `badMethod: density.nosuchmethod()` is empty on the probe's first rows,
-    // which are `.base` files with no `density`: null answers every call with
-    // null, with no error.
+    // * `badMethod: density.nosuchmethod()` is empty on the probe's first rows,
+    // * which are `.base` files with no `density`: null answers every call with
+    // * null, with no error.
     let on_null = cell_of("nosuchprop.nosuchmethod()");
     assert_eq!(on_null.text, "");
     assert_eq!(on_null.error, None);
@@ -212,12 +212,12 @@ fn a_parse_failure_is_a_null_cell() {
 /// oracle's `str` is `String(value.data)`.
 #[test]
 fn the_columns_beyond_the_rendered_window() {
-    // str "true" / "false", and a boolean is a checkbox.
+    // * str "true" / "false", and a boolean is a checkbox.
     shows("nosuchprop == null", "", CellKind::Checkbox);
     shows(r#"nosuchprop == """#, "", CellKind::Checkbox);
     shows(r#"when > "2026-01-01""#, "", CellKind::Checkbox);
     shows("flag && true", "", CellKind::Checkbox);
-    // Two refusals, each the cell's content.
+    // * Two refusals, each the cell's content.
     shows(
         r#"when - "2026-01-01""#,
         "Invalid operator between Date and String",
@@ -228,9 +228,9 @@ fn the_columns_beyond_the_rendered_window() {
         r#"Cannot find function "days" on type Duration"#,
         CellKind::Text,
     );
-    // A DateTime: the run's own now() less a week, to the second.
+    // * A DateTime: the run's own now() less a week, to the second.
     shows(r#"now() - "1 week""#, "2026-10-18T15:29:15", CellKind::Text);
-    // Strings out of the list functions.
+    // * Strings out of the list functions.
     shows(r#"listish.join("|")"#, "alpha|beta|alpha", CellKind::Text);
     shows(
         r#"listish.filter(value != "beta").join("|")"#,
@@ -238,17 +238,17 @@ fn the_columns_beyond_the_rendered_window() {
         CellKind::Text,
     );
     shows(r#"nums.map(value * 2).join("|")"#, "6|2|4", CellKind::Text);
-    // `this` is the base file, not the row.
+    // * `this` is the base file, not the row.
     shows("this.file.name", "Main.base", CellKind::Text);
     shows(
         r#"if(density > 1, "heavy", "light")"#,
         "heavy",
         CellKind::Text,
     );
-    // Numbers as JavaScript prints them.
+    // * Numbers as JavaScript prints them.
     shows("1 / 0", "Infinity", CellKind::Number);
     shows("0 / 0", "NaN", CellKind::Number);
-    // A text property whose text looks like a number concatenates.
+    // * A text property whose text looks like a number concatenates.
     shows("numish + 1", "421", CellKind::Text);
     shows("linkish.asFile().name", "Pumice", CellKind::Text);
 }
@@ -258,7 +258,7 @@ fn the_columns_beyond_the_rendered_window() {
 /// `toString()` beside each is what [`Value`]'s `Display` answers.
 #[test]
 fn a_list_joins_with_a_bare_comma() {
-    // `listish` → str "alpha,beta,alpha"; toString() is "alpha, beta, alpha".
+    // * `listish` → str "alpha,beta,alpha"; toString() is "alpha, beta, alpha".
     let listish = Value::List(vec![
         Value::str("alpha"),
         Value::str("beta"),
@@ -268,7 +268,7 @@ fn a_list_joins_with_a_bare_comma() {
     assert_eq!(cell::text_of(&listish), "alpha,beta,alpha");
     assert_eq!(cell::of(Ok(listish)).kind, CellKind::Text);
 
-    // `nums` → str "3,1,2".
+    // * `nums` → str "3,1,2".
     assert_eq!(
         cell::text_of(&Value::List(vec![
             Value::Number(3.0),
@@ -278,14 +278,14 @@ fn a_list_joins_with_a_bare_comma() {
         "3,1,2"
     );
 
-    // `file.tags` → str "#rock,#igneous/extrusive", with the `#` kept.
+    // * `file.tags` → str "#rock,#igneous/extrusive", with the `#` kept.
     let tags = Value::Tags(vec!["#rock".into(), "#igneous/extrusive".into()]);
     assert_eq!(cell::text_of(&tags), "#rock,#igneous/extrusive");
     assert_eq!(tags.ty().icon(), "lucide-tags");
 
-    // `file.links` → str "[[Pumice|Pumice]],[[Pumice|Pumice]],[[Basalt|Basalt]]":
-    // the join is a bare comma, but each *element* is still its own
-    // `toString()`, brackets and all.
+    // * `file.links` → str "[[Pumice|Pumice]],[[Pumice|Pumice]],[[Basalt|Basalt]]":
+    // * the join is a bare comma, but each *element* is still its own
+    // * `toString()`, brackets and all.
     let links = Value::List(vec![
         Value::Link(LinkValue {
             path: "Pumice".into(),
@@ -298,13 +298,13 @@ fn a_list_joins_with_a_bare_comma() {
     ]);
     assert_eq!(cell::text_of(&links), "[[Pumice|Pumice]],[[Basalt|Basalt]]");
 
-    // An empty List is an empty cell: `file.embeds` → str "".
+    // * An empty List is an empty cell: `file.embeds` → str "".
     assert_eq!(cell::text_of(&Value::List(vec![])), "");
 }
 
 #[test]
 fn a_link_drops_its_wikilink_syntax() {
-    // `linkish` → str "Pumice"; toString() is "[[Pumice]]".
+    // * `linkish` → str "Pumice"; toString() is "[[Pumice]]".
     let link = Value::Link(LinkValue {
         path: "Pumice".into(),
         display: None,
@@ -319,7 +319,7 @@ fn a_link_drops_its_wikilink_syntax() {
 /// because the value carries no `data` of its own.
 #[test]
 fn the_types_whose_cell_is_their_to_string() {
-    // `when` → "2026-01-02"; `stamp` → "2026-01-02T03:04:05".
+    // * `when` → "2026-01-02"; `stamp` → "2026-01-02T03:04:05".
     assert_eq!(cell::text_of(&date(2026, 1, 2)), "2026-01-02");
     let stamp = Value::Date(DateValue {
         at: NaiveDate::from_ymd_opt(2026, 1, 2)
@@ -331,7 +331,7 @@ fn the_types_whose_cell_is_their_to_string() {
     assert_eq!(cell::text_of(&stamp), "2026-01-02T03:04:05");
     assert_eq!(cell::of(Ok(stamp)).kind, CellKind::Text);
 
-    // `duration("1d")` → "a day": humanized, not a count.
+    // * `duration("1d")` → "a day": humanized, not a count.
     let a_day = Value::Duration(DurationValue {
         days: 1.0,
         ..DurationValue::default()
@@ -339,7 +339,7 @@ fn the_types_whose_cell_is_their_to_string() {
     assert_eq!(cell::text_of(&a_day), "a day");
     assert_eq!(cell::of(Ok(a_day)).kind, CellKind::Text);
 
-    // `file("Silica.md")` → "Silica.md", the path.
+    // * `file("Silica.md")` → "Silica.md", the path.
     let file = Value::File(Arc::new(FileData {
         name: "Silica".into(),
         path: "Silica.md".into(),
@@ -347,7 +347,7 @@ fn the_types_whose_cell_is_their_to_string() {
     }));
     assert_eq!(cell::text_of(&file), "Silica.md");
 
-    // A number prints as JavaScript prints one.
+    // * A number prints as JavaScript prints one.
     assert_eq!(
         cell::text_of(&Value::Number(0.1 + 0.2)),
         "0.30000000000000004"
@@ -356,8 +356,8 @@ fn the_types_whose_cell_is_their_to_string() {
     assert_eq!(cell::text_of(&Value::Number(f64::NAN)), "NaN");
     assert_eq!(cell::of(Ok(Value::Number(483.0))).kind, CellKind::Number);
 
-    // An empty string is a cell with no text, and is not a null: its type tag
-    // is still `text`.
+    // * An empty string is a cell with no text, and is not a null: its type tag
+    // * is still `text`.
     let empty = cell::of(Ok(Value::str("")));
     assert_eq!(empty.text, "");
     assert_eq!(empty.kind, CellKind::Text);
@@ -389,7 +389,7 @@ fn kind_of_every_type() {
 
 fn kind_of_v(value: Value) -> CellKind {
     let kind = cell::kind_of(&value);
-    // `of` tags a cell with exactly what `kind_of` answers.
+    // ? `of` tags a cell with exactly what `kind_of` answers.
     assert_eq!(cell::of(Ok(value)).kind, kind);
     kind
 }

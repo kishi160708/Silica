@@ -131,9 +131,9 @@ pub fn typeset(tex: &str, display: bool) -> Result {
     }
     let result = typeset_uncached(tex, display);
     if let Ok(mut c) = cache().lock() {
-        // A long session touches many formulas; none of them is worth more
-        // than a millisecond to redo, so the cache is simply emptied when it
-        // grows large rather than kept in order.
+        // * A long session touches many formulas; none of them is worth more
+        // * than a millisecond to redo, so the cache is simply emptied when it
+        // * grows large rather than kept in order.
         if c.len() >= CACHE_LIMIT {
             c.clear();
         }
@@ -150,9 +150,9 @@ fn cache() -> &'static Mutex<HashMap<(String, bool), Result>> {
 }
 
 fn typeset_uncached(tex: &str, display: bool) -> Result {
-    // MathJax-only commands (`\require`, `\label`/`\ref`, `\bbox`,
-    // `\class`/`\style`/`\cssId`, `\unicode`) and user macros are handled
-    // here; see `mathjax`. RaTeX sets the rest.
+    // * MathJax-only commands (`\require`, `\label`/`\ref`, `\bbox`,
+    // * `\class`/`\style`/`\cssId`, `\unicode`) and user macros are handled
+    // * here; see `mathjax`. RaTeX sets the rest.
     let tex = mathjax::normalize(tex);
     let tex = if tex.trim().is_empty() { "{}" } else { tex.as_str() };
     let nodes = ratex_parser::parse(tex).map_err(|e| MathError { message: e.message })?;
@@ -178,9 +178,9 @@ fn typeset_uncached(tex: &str, display: bool) -> Result {
                 color,
             } => {
                 let id = ratex_font::FontId::parse(font)?;
-                // Bold and script letters are laid out by their Unicode
-                // mathematical alphanumeric code point, but the KaTeX files
-                // keep those glyphs at the ASCII letter they style.
+                // * Bold and script letters are laid out by their Unicode
+                // * mathematical alphanumeric code point, but the KaTeX files
+                // * keep those glyphs at the ASCII letter they style.
                 let ch = ratex_font::katex_ttf_glyph_char(id, *char_code);
                 Some(Item::Glyph {
                     x: *x,
@@ -372,8 +372,8 @@ pub fn rasterize(face: Face, ch: char, em_px: f32, subpixel_x: f32) -> Option<Bi
     if id.0 == 0 {
         return None;
     }
-    // ab_glyph scales by the font's height (ascent minus descent), not its
-    // em; convert so that one em is `em_px`.
+    // * ab_glyph scales by the font's height (ascent minus descent), not its
+    // * em; convert so that one em is `em_px`.
     let per_em = font.units_per_em()?;
     let scale = PxScale::from(em_px * font.height_unscaled() / per_em);
     let glyph = id.with_scale_and_position(scale, ab_glyph::point(subpixel_x, 0.0));
@@ -419,8 +419,8 @@ fn parsed_font(face: Face) -> Option<&'static ab_glyph::FontRef<'static>> {
     let mut fonts = fonts.lock().ok()?;
     let file = face.file();
     *fonts.entry(file).or_insert_with(|| {
-        // The bytes are embedded in release builds and read from disk in
-        // debug ones; either way they live for the rest of the process.
+        // * The bytes are embedded in release builds and read from disk in
+        // * debug ones; either way they live for the rest of the process.
         let bytes: &'static [u8] = match ratex_katex_fonts::ttf_bytes(file)? {
             std::borrow::Cow::Borrowed(b) => b,
             std::borrow::Cow::Owned(v) => Box::leak(v.into_boxed_slice()),
@@ -449,7 +449,7 @@ mod tests {
             .count();
         assert_eq!((glyphs, bars), (2, 1));
         assert!(f.width > 0.4 && f.width < 1.0, "width {}", f.width);
-        // The numerator sits above the baseline, the denominator below it.
+        // * The numerator sits above the baseline, the denominator below it.
         assert!(
             f.height > 0.9 && f.depth > 0.5,
             "{} / {}",
@@ -579,7 +579,7 @@ mod tests {
             x.height
         );
         assert!(x.coverage.iter().any(|&c| c > 128));
-        // The italic file is a different drawing from the upright one.
+        // * The italic file is a different drawing from the upright one.
         let italic = rasterize(
             Face {
                 italic: true,
@@ -591,7 +591,7 @@ mod tests {
         )
         .unwrap();
         assert_ne!(italic.coverage, x.coverage);
-        // A size face holds the big parenthesis the matrix needs.
+        // * A size face holds the big parenthesis the matrix needs.
         let paren = rasterize(
             Face {
                 family: "KaTeX_Size3",
@@ -604,7 +604,7 @@ mod tests {
         )
         .unwrap();
         assert!(paren.height > 30, "{}", paren.height);
-        // And a space has no ink.
+        // * And a space has no ink.
         assert!(rasterize(main, ' ', 16.0, 0.0).is_none());
         assert!(advance(main, 'x').is_some_and(|a| a > 0.4 && a < 0.6));
     }

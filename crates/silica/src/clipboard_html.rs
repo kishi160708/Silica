@@ -34,9 +34,9 @@ pub fn read() -> Option<String> {
         else {
             continue;
         };
-        // A tool that is present but has no clipboard to talk to (no
-        // `WAYLAND_DISPLAY`, no `DISPLAY`) exits non-zero with nothing on
-        // stdout; that is a "no HTML here", not an error to report.
+        // * A tool that is present but has no clipboard to talk to (no
+        //   `WAYLAND_DISPLAY`, no `DISPLAY`) exits non-zero with nothing on
+        //   stdout; that is a "no HTML here", not an error to report.
         let mut raw = Vec::new();
         if let Some(out) = child.stdout.take() {
             let _ = out.take(4 * 1024 * 1024).read_to_end(&mut raw);
@@ -62,9 +62,9 @@ fn candidates() -> Vec<(&'static str, &'static [&'static str])> {
     #[cfg(target_os = "macos")]
     return vec![(
         "osascript",
-        // `the clipboard as «class HTML»` is the pasteboard's HTML flavour.
-        // AppKit hex-encodes it behind a `«data HTML…` wrapper, which
-        // `unwrap_apple` strips.
+        // * `the clipboard as «class HTML»` is the pasteboard's HTML flavour.
+        //   AppKit hex-encodes it behind a `«data HTML…` wrapper, which
+        //   `unwrap_apple` strips.
         &[
             "-e",
             "set h to the clipboard as «class HTML»",
@@ -140,7 +140,7 @@ mod tests {
     /// and neither may hang or panic.
     #[test]
     fn reading_never_panics_and_says_nothing_for_plain_text() {
-        // Whatever this machine's clipboard holds, the call returns.
+        // * Whatever this machine's clipboard holds, the call returns.
         let got = read();
         if let Some(html) = got {
             assert!(!html.trim().is_empty(), "an empty answer is not an answer");
@@ -149,9 +149,9 @@ mod tests {
 
     #[test]
     fn the_wayland_tool_is_tried_first_under_wayland() {
-        // The order is what makes a Wayland session use the tool that can
-        // see the Wayland clipboard rather than one that sees an empty X11
-        // one.
+        // * The order is what makes a Wayland session use the tool that can
+        //   see the Wayland clipboard rather than one that sees an empty X11
+        //   one.
         let list = candidates();
         assert!(!list.is_empty());
         if std::env::var_os("WAYLAND_DISPLAY").is_some() {
@@ -163,7 +163,7 @@ mod tests {
     fn a_windows_header_is_not_pasted_as_text() {
         let raw = "Version:0.9\r\nStartHTML:0000000097\r\nEndHTML:0000000130\r\n\r\n<p>hi</p>";
         assert_eq!(unwrap_windows(raw), "<p>hi</p>");
-        // Anything without the header is already the markup.
+        // * Anything without the header is already the markup.
         assert_eq!(unwrap_windows("<p>hi</p>"), "<p>hi</p>");
     }
 }

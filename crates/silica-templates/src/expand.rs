@@ -37,8 +37,8 @@ pub fn expand(template: &str, cx: &Context<'_>) -> String {
     while let Some(open) = rest.find("{{") {
         out.push_str(&rest[..open]);
         let after = &rest[open + 2..];
-        // A placeholder does not cross a line: `half={{date}` on one line
-        // stays literal rather than swallowing the `}}` of a later one.
+        // * A placeholder does not cross a line: `half={{date}` on one line
+        // * stays literal rather than swallowing the `}}` of a later one.
         let line = after.find('\n').unwrap_or(after.len());
         match after[..line].find("}}") {
             Some(close) => match placeholder(&after[..close], cx) {
@@ -51,7 +51,7 @@ pub fn expand(template: &str, cx: &Context<'_>) -> String {
                     rest = after;
                 }
             },
-            // No closer on this line: the braces are text like any other.
+            // * No closer on this line: the braces are text like any other.
             None => {
                 out.push_str("{{");
                 rest = after;
@@ -69,16 +69,16 @@ fn placeholder(body: &str, cx: &Context<'_>) -> Option<String> {
         Some(ix) => (&body[..ix], Some(&body[ix + 1..])),
         None => (body, None),
     };
-    // The name is matched without regard to case, but takes no whitespace
-    // at all: `{{DATE}}` expands and `{{ date }}` does not. The format may
-    // hold spaces, which is how `{{date:YYYY[-]MM-DD ddd}}` works.
+    // * The name is matched without regard to case, but takes no whitespace
+    // * at all: `{{DATE}}` expands and `{{ date }}` does not. The format may
+    // * hold spaces, which is how `{{date:YYYY[-]MM-DD ddd}}` works.
     if name.chars().any(char::is_whitespace) {
         return None;
     }
     let name = name.to_ascii_lowercase();
-    // An empty format on the placeholder falls back to the setting, and an
-    // empty setting to Obsidian's own default rather than to moment's: a
-    // vault with `"dateFormat": ""` still writes `2026-10-18`.
+    // * An empty format on the placeholder falls back to the setting, and an
+    // * empty setting to Obsidian's own default rather than to moment's: a
+    // * vault with `"dateFormat": ""` still writes `2026-10-18`.
     let fallback = |format: Option<&str>, setting: &str, default: &'static str| {
         non_empty(format)
             .or(non_empty(Some(setting)))
@@ -169,8 +169,8 @@ mod tests {
 
     #[test]
     fn nothing_is_exempt_from_expansion() {
-        // Obsidian expands inside fenced code, indented code, tilde fences,
-        // math and wikilinks alike, so this does too.
+        // * Obsidian expands inside fenced code, indented code, tilde fences,
+        // * math and wikilinks alike, so this does too.
         let template = "```\nfenced {{date}} {{title}}\n```\n\
              \x20   indented {{date}}\n\
              ~~~\ntilde {{date}}\n~~~\n\
@@ -190,21 +190,21 @@ mod tests {
         c.date_format = "DD/MM/YYYY";
         c.time_format = "h:mm a";
         assert_eq!(expand("{{date}} at {{time}}", &c), "18/10/2026 at 4:58 pm");
-        // A format on the placeholder wins over the setting.
+        // * A format on the placeholder wins over the setting.
         assert_eq!(expand("{{date:YYYY}}", &c), "2026");
     }
 
     #[test]
     fn an_empty_setting_falls_back_to_obsidian_s_own_default() {
-        // A vault whose templates.json holds `"dateFormat": ""` still gets
-        // `2026-10-18` and `16:58`, not the empty string a bare moment
-        // format would give.
+        // * A vault whose templates.json holds `"dateFormat": ""` still gets
+        // * `2026-10-18` and `16:58`, not the empty string a bare moment
+        // * format would give.
         let mut c = cx();
         c.date_format = "";
         c.time_format = "";
         assert_eq!(expand("{{date}} {{time}}", &c), "2026-10-18 16:58");
         assert_eq!(expand("{{date:}}", &c), "2026-10-18");
-        // A format on the placeholder still wins.
+        // * A format on the placeholder still wins.
         assert_eq!(expand("{{date:YYYY}}", &c), "2026");
     }
 

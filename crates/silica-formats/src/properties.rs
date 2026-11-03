@@ -333,7 +333,7 @@ pub fn parse(text: &str, yaml_range: Range<usize>, block_range: Range<usize>) ->
 /// `serde_yaml`, so the shapes are YAML's and only the boundaries are scanned
 /// here.
 fn parse_entries(yaml: &str, base: usize) -> Vec<Property> {
-    // (entry start, key range within the line, key)
+    // * (entry start, key range within the line, key)
     let mut starts: Vec<(usize, Range<usize>, String)> = Vec::new();
     let mut at = 0;
     while at < yaml.len() {
@@ -447,7 +447,7 @@ fn entry_end(yaml: &str, start: usize, next: usize) -> usize {
 fn read_value(entry: &str, key: &str) -> Value {
     let parsed: serde_yaml::Value = match serde_yaml::from_str(entry) {
         Ok(v) => v,
-        // A duplicate key or otherwise invalid entry: keep the text.
+        // * A duplicate key or otherwise invalid entry: keep the text.
         Err(_) => return Value::Other(entry.to_string()),
     };
     let serde_yaml::Value::Mapping(map) = parsed else {
@@ -479,7 +479,7 @@ fn from_yaml(value: &serde_yaml::Value, entry: &str) -> Value {
                     serde_yaml::Value::String(s) => out.push(s.clone()),
                     serde_yaml::Value::Number(n) => out.push(n.to_string()),
                     serde_yaml::Value::Bool(b) => out.push(b.to_string()),
-                    // A sequence of anything else is not an editable list.
+                    // * A sequence of anything else is not an editable list.
                     _ => return Value::Other(entry.to_string()),
                 }
             }
@@ -557,7 +557,7 @@ fn needs_quotes(s: &str) -> bool {
     if s.contains('\n') || s.contains(": ") || s.ends_with(':') {
         return true;
     }
-    // An inline comment would start at " #".
+    // * An inline comment would start at " #".
     if s.contains(" #") {
         return true;
     }
@@ -569,9 +569,9 @@ fn needs_quotes(s: &str) -> bool {
     if s == "-" || s.starts_with("- ") {
         return true;
     }
-    // Would read back as something other than a string. A bare `YYYY-MM-DD`
-    // would not: Obsidian's YAML reads it back as the string it wrote, and
-    // writes it unquoted (`d: 2026-10-18`), so dates stay bare.
+    // * Would read back as something other than a string. A bare `YYYY-MM-DD`
+    // * would not: Obsidian's YAML reads it back as the string it wrote, and
+    // * writes it unquoted (`d: 2026-10-18`), so dates stay bare.
     s.parse::<f64>().is_ok()
         || matches!(
             s,
@@ -651,9 +651,9 @@ pub fn plan(text: &str, props: &Properties, changes: &[Change]) -> Option<Vec<Ed
         }]);
     }
 
-    // A new property goes after the last entry that survives this plan; with
-    // none left it goes at the start of the YAML, so the insertion point never
-    // falls inside a range some other change removes.
+    // ! A new property goes after the last entry that survives this plan; with
+    // ! none left it goes at the start of the YAML, so the insertion point never
+    // ! falls inside a range some other change removes.
     let kept_last = props
         .entries
         .iter()
@@ -663,11 +663,11 @@ pub fn plan(text: &str, props: &Properties, changes: &[Change]) -> Option<Vec<Ed
     for change in changes {
         match change {
             Change::Set { key, value } => match props.get(key) {
-                // An unchanged value is left exactly as written. Comparing
-                // values rather than rendered text is what keeps a flow
-                // sequence (`tags: [a, b]`) and its quoting intact: the
-                // canonical block form is only written when the value really
-                // changes.
+                // * An unchanged value is left exactly as written. Comparing
+                // * values rather than rendered text is what keeps a flow
+                // * sequence (`tags: [a, b]`) and its quoting intact: the
+                // * canonical block form is only written when the value really
+                // * changes.
                 Some(existing) if existing.value == *value => {}
                 Some(existing) => edits.push(Edit {
                     start: existing.span.start,
@@ -698,7 +698,7 @@ pub fn plan(text: &str, props: &Properties, changes: &[Change]) -> Option<Vec<Ed
             }
             Change::Remove { key } => {
                 if let Some(existing) = props.get(key) {
-                    // Take the newline that ends the entry with it.
+                    // * Take the newline that ends the entry with it.
                     let mut end = existing.span.end;
                     if text[end..].starts_with("\r\n") {
                         end += 2;
@@ -714,7 +714,7 @@ pub fn plan(text: &str, props: &Properties, changes: &[Change]) -> Option<Vec<Ed
             }
         }
     }
-    // Stable, so two properties added at the same point keep their order.
+    // * Stable, so two properties added at the same point keep their order.
     edits.sort_by_key(|e| (e.start, e.end));
     edits.retain(|e| text.get(e.start..e.end) != Some(e.text.as_str()));
     if edits.is_empty() {
@@ -803,7 +803,7 @@ mod tests {
         assert_eq!(v("quoted"), Value::Text("hello".into()));
         assert_eq!(v("num"), Value::Number(42.0));
         assert_eq!(v("float"), Value::Number(3.5));
-        // YAML 1.2 core: `yes` is a string, and Obsidian types it text.
+        // * YAML 1.2 core: `yes` is a string, and Obsidian types it text.
         assert_eq!(v("yes_str"), Value::Text("yes".into()));
         assert_eq!(v("flag"), Value::Checkbox(true));
         assert_eq!(v("nul"), Value::Empty);
@@ -813,7 +813,7 @@ mod tests {
         assert_eq!(v("block"), Value::List(vec!["a".into(), "b".into()]));
         assert!(matches!(v("nested"), Value::Other(_)));
         assert_eq!(v("wrapped"), Value::Text("one\ntwo".into()));
-        // A multi-line entry's span covers all of its lines and no newline.
+        // * A multi-line entry's span covers all of its lines and no newline.
         assert_eq!(
             &text[p.get("block").unwrap().span.clone()],
             "block:\n  - a\n  - b"
@@ -843,9 +843,9 @@ mod tests {
 
     #[test]
     fn duplicate_keys_are_kept_as_text() {
-        // Obsidian's YAML parser rejects the whole block ("Map keys must be
-        // unique"); Silica keeps the entries as unparsed text rather than
-        // losing them.
+        // ! Obsidian's YAML parser rejects the whole block ("Map keys must be
+        // ! unique"); Silica keeps the entries as unparsed text rather than
+        // ! losing them.
         let text = "---\na: 1\na: 2\n---\n";
         let p = split(text);
         assert_eq!(p.entries.len(), 2);
@@ -871,7 +871,7 @@ mod tests {
         assert_eq!(t(Value::Checkbox(true)), PropertyType::Checkbox);
         assert_eq!(t(Value::List(vec![])), PropertyType::MultiText);
         assert_eq!(t(Value::Empty), PropertyType::Text);
-        // A bare date infers date; an ISO date-time does not infer datetime.
+        // * A bare date infers date; an ISO date-time does not infer datetime.
         assert_eq!(t(Value::Text("2026-10-18".into())), PropertyType::Date);
         assert_eq!(
             t(Value::Text("2026-10-18T09:30:00".into())),
@@ -887,12 +887,12 @@ mod tests {
         let mut types = PropertyTypes::default();
         assert_eq!(p.type_of("tags", &types), PropertyType::Tags);
         assert_eq!(p.type_of("aliases", &types), PropertyType::Aliases);
-        // cssclasses is a plain list, not a type of its own.
+        // * cssclasses is a plain list, not a type of its own.
         assert_eq!(p.type_of("cssclasses", &types), PropertyType::MultiText);
         assert_eq!(p.type_of("count", &types), PropertyType::Number);
         types.types.insert("count".into(), "text".into());
         assert_eq!(p.type_of("count", &types), PropertyType::Text);
-        // An unknown type name in types.json falls back to inference.
+        // ? An unknown type name in types.json falls back to inference.
         types.types.insert("count".into(), "nonsense".into());
         assert_eq!(p.type_of("count", &types), PropertyType::Number);
     }
@@ -914,7 +914,7 @@ mod tests {
         assert_eq!(r(&"x".repeat(200)), format!("k: {}", "x".repeat(200)));
         assert_eq!(r("one\ntwo"), "k: |-\n  one\n  two");
         assert_eq!(r("true"), "k: \"true\"");
-        // Obsidian writes a date bare, and YAML reads it back as a string.
+        // * Obsidian writes a date bare, and YAML reads it back as a string.
         assert_eq!(r("2026-10-18"), "k: 2026-10-18");
     }
 
@@ -988,8 +988,8 @@ mod tests {
                 value: Value::Number(4.0),
             }],
         );
-        // The comment survives and the flow list keeps its bytes: this is
-        // where Obsidian would have rewritten the whole block.
+        // * The comment survives and the flow list keeps its bytes: this is
+        // * where Obsidian would have rewritten the whole block.
         assert_eq!(
             out,
             "---\n# a comment\ntitle: Kept\ntags: [one, two]\ncount: 4\n---\nbody\n"
@@ -998,8 +998,8 @@ mod tests {
 
     #[test]
     fn setting_a_flow_list_to_its_own_value_keeps_the_flow_form() {
-        // The corpus has notes written `tags: [a, b]`; rewriting the same
-        // value must not reflow them, or every such note would churn.
+        // ! The corpus has notes written `tags: [a, b]`; rewriting the same
+        // ! value must not reflow them, or every such note would churn.
         let text = "---\ntags: [edge, blocks]\n---\nbody\n";
         let props = split(text);
         assert!(plan(
@@ -1109,7 +1109,7 @@ mod tests {
     #[test]
     fn a_flow_list_becomes_a_block_list_only_when_it_changes() {
         let text = "---\ntags: [a, b]\nnext: 1\n---\n";
-        // Untouched: Obsidian would have rewritten it on any edit.
+        // * Untouched: Obsidian would have rewritten it on any edit.
         assert_eq!(
             applied(
                 text,
@@ -1120,7 +1120,7 @@ mod tests {
             ),
             "---\ntags: [a, b]\nnext: 2\n---\n"
         );
-        // Changed: written in Obsidian's canonical block form.
+        // * Changed: written in Obsidian's canonical block form.
         assert_eq!(
             applied(
                 text,
@@ -1135,8 +1135,8 @@ mod tests {
 
     #[test]
     fn renames_a_key_in_place() {
-        // Obsidian's processFrontMatter moves a renamed key to the end;
-        // Silica keeps the entry where it is.
+        // * Obsidian's processFrontMatter moves a renamed key to the end;
+        // * Silica keeps the entry where it is.
         assert_eq!(
             applied(
                 "---\nold: v\nkeep: k\n---\n",
@@ -1187,7 +1187,7 @@ mod tests {
 
     #[test]
     fn removing_the_last_property_removes_the_block() {
-        // Obsidian 1.14.4: `---\na: 1\n---\nbody\n` becomes `body\n`.
+        // * Obsidian 1.14.4: `---\na: 1\n---\nbody\n` becomes `body\n`.
         assert_eq!(
             applied(
                 "---\na: 1\n---\nbody\n",
@@ -1215,7 +1215,7 @@ mod tests {
     /// than a bare pair of fences or a stray newline.
     #[test]
     fn a_note_that_is_only_frontmatter_clears_to_a_zero_byte_file() {
-        // The probe's own note.
+        // * The probe's own note.
         assert_eq!(
             applied(
                 "---\nalpha: one\n---\n",
@@ -1225,8 +1225,8 @@ mod tests {
             ),
             ""
         );
-        // Several properties, cleared in one plan, and a block whose closing
-        // fence ends the file without a trailing newline.
+        // * Several properties, cleared in one plan, and a block whose closing
+        // * fence ends the file without a trailing newline.
         assert_eq!(
             applied(
                 "---\nalpha: one\nbeta: two\n---\n",
@@ -1270,8 +1270,8 @@ mod tests {
     #[test]
     fn edits_keep_the_files_line_endings() {
         let text = "---\r\na: 1\r\nb: 2\r\n---\r\nbody\r\n";
-        // Obsidian writes LF inside a CRLF block, leaving mixed endings;
-        // Silica keeps the file's.
+        // * Obsidian writes LF inside a CRLF block, leaving mixed endings;
+        // * Silica keeps the file's.
         assert_eq!(
             applied(
                 text,
@@ -1319,7 +1319,7 @@ mod tests {
             Value::Number(3.5)
         );
         assert_eq!(Value::parse_as("", PropertyType::Number), Value::Empty);
-        // Not a number: kept as typed, as Obsidian keeps it and flags the row.
+        // * Not a number: kept as typed, as Obsidian keeps it and flags the row.
         assert_eq!(
             Value::parse_as("abc", PropertyType::Number),
             Value::Text("abc".into())
@@ -1349,7 +1349,7 @@ mod tests {
         ] {
             assert_eq!(PropertyType::parse(ty.as_str()), Some(ty));
         }
-        // Obsidian 1.14.4 has no `cssclasses` type widget.
+        // * Obsidian 1.14.4 has no `cssclasses` type widget.
         assert_eq!(PropertyType::parse("cssclasses"), None);
     }
 }

@@ -63,8 +63,8 @@ pub fn foldables(doc: &Document<'_>, text: &str, opts: FoldOptions) -> Vec<Folda
     let last_line = index.line_count() - 1;
     let mut out = Vec::new();
     if opts.headings {
-        // Only top-level headings: one in a blockquote or a callout was
-        // observed not to fold.
+        // * Only top-level headings: one in a blockquote or a callout was
+        //   observed not to fold.
         let headings: Vec<(usize, u8, String)> = doc
             .blocks
             .iter()
@@ -496,15 +496,15 @@ mod tests {
                 .map(|f| (f.line, f.end))
                 .collect::<Vec<_>>()
         };
-        // A heading on line 0, and a setext heading by its text line.
+        // * A heading on line 0, and a setext heading by its text line.
         assert_eq!(f("# Line zero\na\nb\n"), vec![(0, 3)]);
         assert_eq!(f("Title\n=====\nbody\n"), vec![(0, 3)]);
-        // In a callout or a blockquote: no.
+        // * In a callout or a blockquote: no.
         assert!(f("> ## Quoted\n> body\n").is_empty());
         assert!(f("> [!note] T\n> ## In a callout\n> body\n").is_empty());
-        // The last line of a file with no trailing newline.
+        // * The last line of a file with no trailing newline.
         assert!(f("body\n## Empty Last Section").is_empty());
-        // Two headings of one level: the first stops at the second.
+        // * Two headings of one level: the first stops at the second.
         assert_eq!(f("## A\na\n## B\nb\n"), vec![(0, 1), (2, 4)]);
     }
 
@@ -517,7 +517,7 @@ mod tests {
         assert!(!folds.toggle(&fs, 5), "a paragraph starts no fold");
         assert!(folds.toggle(&fs, 11));
         assert!(folds.resolve(&fs).is_empty());
-        // fold-more walks outward from the caret's section, fold-less back.
+        // * fold-more walks outward from the caret's section, fold-less back.
         let mut folds = Folds::default();
         assert!(folds.fold_more(&fs, 12));
         assert_eq!(folds.record(&fs), vec![(11, 18)]);
@@ -528,7 +528,7 @@ mod tests {
         assert_eq!(folds.record(&fs), vec![(11, 18)]);
         assert!(folds.fold_less(&fs, 12));
         assert!(!folds.fold_less(&fs, 12));
-        // fold-all and unfold-all.
+        // * fold-all and unfold-all.
         folds.fold_all(&fs);
         assert_eq!(folds.record(&fs).len(), 6);
         folds.unfold_all();
@@ -540,18 +540,18 @@ mod tests {
         let fs = all();
         let mut folds = Folds::default();
         folds.toggle(&fs, 19);
-        // A line inserted above: the key still matches, the line moves.
+        // * A line inserted above: the key still matches, the line moves.
         let moved = NOTE.replacen("PREAMBLEBODY", "x\nPREAMBLEBODY", 1);
         let doc = silica_markdown::parse(&moved);
         let fs2 = foldables(&doc, &moved, FoldOptions::default());
         assert_eq!(folds.resolve(&fs2), vec![(21, 27)]);
-        // The heading's text edited in place: found by its line, re-keyed.
+        // * The heading's text edited in place: found by its line, re-keyed.
         let renamed = moved.replacen("## Section B", "## Section Bee", 1);
         let doc = silica_markdown::parse(&renamed);
         let fs3 = foldables(&doc, &renamed, FoldOptions::default());
         assert_eq!(folds.resolve(&fs3), vec![(21, 27)]);
         assert_eq!(folds.keys()[0].text, "Section Bee");
-        // The heading gone: the fold goes with it.
+        // * The heading gone: the fold goes with it.
         let gone = renamed.replacen("## Section Bee\n", "", 1);
         let doc = silica_markdown::parse(&gone);
         let fs4 = foldables(&doc, &gone, FoldOptions::default());
@@ -562,14 +562,14 @@ mod tests {
     #[test]
     fn a_record_restores_by_from_line_and_the_extent_is_re_derived() {
         let fs = all();
-        // The reading view stored `{19,20}`: the editor folds 19..26.
+        // * The reading view stored `{19,20}`: the editor folds 19..26.
         let mut folds = Folds::from_record(&fs, [19, 5]);
         assert_eq!(folds.resolve(&fs), vec![(20, 26)]);
         assert_eq!(folds.record(&fs), vec![(19, 26)]);
         assert!(is_hidden(&[(20, 26)], 23));
         assert!(!is_hidden(&[(20, 26)], 19));
         assert_eq!(hidden_end(&[(20, 26)], 23), Some(26));
-        // A jump into the section unfolds it.
+        // * A jump into the section unfolds it.
         assert!(folds.unfold_hiding(&fs, 21));
         assert!(folds.keys().is_empty());
     }
@@ -625,7 +625,7 @@ mod tests {
                 .map(|r| r.folds[0].from),
             Some(19)
         );
-        // The file is under the configuration folder, not the vault.
+        // * The file is under the configuration folder, not the vault.
         let files: Vec<PathBuf> = std::fs::read_dir(dir.path().join("note-fold"))
             .expect("the folder")
             .map(|e| e.expect("an entry").path())

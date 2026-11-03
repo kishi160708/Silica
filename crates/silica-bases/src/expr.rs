@@ -235,7 +235,7 @@ impl<'a> Parser<'a> {
         const LEVELS: &[&[(&str, BinaryOp)]] = &[
             &[("||", BinaryOp::Or)],
             &[("&&", BinaryOp::And)],
-            // The two-character forms come first, or `<=` lexes as `<`.
+            // * The two-character forms come first, or `<=` lexes as `<`.
             &[
                 ("<=", BinaryOp::Le),
                 (">=", BinaryOp::Ge),
@@ -264,8 +264,8 @@ impl<'a> Parser<'a> {
             else {
                 return Ok(left);
             };
-            // `/` opens a regexp only where a value may start, which is never
-            // here: a division's left side has just been read.
+            // * `/` opens a regexp only where a value may start, which is never
+            // * here: a division's left side has just been read.
             self.pos += text.len();
             self.skip_space();
             let right = self.parse_binary(level + 1)?;
@@ -281,8 +281,8 @@ impl<'a> Parser<'a> {
         self.skip_space();
         let start = self.pos;
         if self.eat("!") {
-            // `!=` is a comparison, and the level above has already had its
-            // chance at it; reaching one here is a statement like `!= 1`.
+            // * `!=` is a comparison, and the level above has already had its
+            // * chance at it; reaching one here is a statement like `!= 1`.
             if self.peek() == Some(b'=') {
                 return Err(ParseError::unparseable(start));
             }
@@ -291,8 +291,8 @@ impl<'a> Parser<'a> {
         }
         if self.eat("-") {
             self.skip_space();
-            // A minus in front of a number is part of the literal, which is
-            // why `-1 + 2` has a `primitive -1` on its left.
+            // * A minus in front of a number is part of the literal, which is
+            // * why `-1 + 2` has a `primitive -1` on its left.
             if self.peek().is_some_and(|c| c.is_ascii_digit() || c == b'.') {
                 let n = self.parse_number()?;
                 return self.parse_postfix(Expr::Primitive(Literal::Number(-n)));
@@ -352,7 +352,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_args(&mut self) -> Result<Vec<Expr>, ParseError> {
-        // The caller has checked the `(`.
+        // * The caller has checked the `(`.
         self.pos += 1;
         let mut args = Vec::new();
         self.skip_space();
@@ -427,8 +427,8 @@ impl<'a> Parser<'a> {
                         args,
                     });
                 }
-                // Only these three spell a primitive, and each is
-                // case-sensitive here: `TRUE` is an ident that evaluates null.
+                // * Only these three spell a primitive, and each is
+                // * case-sensitive here: `TRUE` is an ident that evaluates null.
                 Ok(match name.as_str() {
                     "true" => Expr::Primitive(Literal::Bool(true)),
                     "false" => Expr::Primitive(Literal::Bool(false)),
@@ -465,9 +465,9 @@ impl<'a> Parser<'a> {
         if text.is_empty() || text == "." {
             return Err(ParseError::unparseable(start));
         }
-        // An exponent or a hex digit running on from the number is not part of
-        // the grammar, and leaving it for the next token would silently accept
-        // `1e3` as `1` followed by `e3`.
+        // ! An exponent or a hex digit running on from the number is not part of
+        // ! the grammar, and leaving it for the next token would silently accept
+        // ! `1e3` as `1` followed by `e3`.
         if self.peek().is_some_and(is_name_part) {
             return Err(ParseError::unparseable(self.pos));
         }
@@ -532,7 +532,7 @@ impl<'a> Parser<'a> {
                 }
                 continue;
             }
-            // Multi-byte characters pass through whole.
+            // * Multi-byte characters pass through whole.
             let ch = self.src[self.pos..]
                 .chars()
                 .next()
@@ -640,26 +640,26 @@ mod tests {
     /// step `e03-precedence`.
     #[test]
     fn precedence_is_the_observed_table() {
-        // postfix
+        // * postfix
         assert_eq!(s("a.b.c"), "a.b.c");
         assert_eq!(s("a.b().c()"), "a.b().c()");
         assert_eq!(s("a.b[0]"), "a.b[0]");
-        // unary over postfix, and under the binaries
+        // * unary over postfix, and under the binaries
         assert_eq!(s("!a.b"), "(! a.b)");
         assert_eq!(s("-a.b"), "(- a.b)");
         assert_eq!(s("!a && b"), "((! a) && b)");
         assert_eq!(s("!a == b"), "((! a) == b)");
-        // multiplicative over additive
+        // * multiplicative over additive
         assert_eq!(s("1 + 2 * 3"), "(1 + (2 * 3))");
         assert_eq!(s("1 % 2 * 3"), "((1 % 2) * 3)");
-        // additive left-associative
+        // * additive left-associative
         assert_eq!(s("1 - 2 + 3"), "((1 - 2) + 3)");
-        // comparison under additive, and left-associative
+        // * comparison under additive, and left-associative
         assert_eq!(s("a + b > c + d"), "((a + b) > (c + d))");
         assert_eq!(s("a == b == c"), "((a == b) == c)");
         assert_eq!(s("a < b < c"), "((a < b) < c)");
         assert_eq!(s("a >= b <= c"), "((a >= b) <= c)");
-        // and under comparison, or under and
+        // * and under comparison, or under and
         assert_eq!(s("a && b == c"), "(a && (b == c))");
         assert_eq!(s("a && b || c"), "((a && b) || c)");
         assert_eq!(s("a || b && c"), "(a || (b && c))");
@@ -702,7 +702,7 @@ mod tests {
         assert!(matches!(parse("(1)").unwrap(), Expr::Paren(_)));
         assert!(matches!(parse("[1, 2]").unwrap(), Expr::Array(_)));
         assert!(matches!(parse("/re/i").unwrap(), Expr::Regexp { .. }));
-        // `this` is an ident, not a node type of its own.
+        // * `this` is an ident, not a node type of its own.
         assert_eq!(parse("this").unwrap(), ident("this"));
         assert_eq!(s("this.file.name"), "this.file.name");
     }
@@ -738,7 +738,7 @@ mod tests {
         assert_eq!(s("null"), "null");
         assert_eq!(s(r#""a b""#), "\"a b\"");
         assert_eq!(s("'a b'"), "\"a b\"");
-        // JSON escapes, and a raw multi-byte character.
+        // * JSON escapes, and a raw multi-byte character.
         assert_eq!(
             parse(r#""a\nb""#).unwrap(),
             Expr::Primitive(Literal::String("a\nb".into()))
@@ -751,7 +751,7 @@ mod tests {
             parse(r#""é""#).unwrap(),
             Expr::Primitive(Literal::String("é".into()))
         );
-        // `undefined`, `NaN` and `Infinity` are idents, not literals.
+        // * `undefined`, `NaN` and `Infinity` are idents, not literals.
         for name in ["undefined", "NaN", "Infinity"] {
             assert_eq!(parse(name).unwrap(), ident(name), "{name}");
         }
@@ -762,14 +762,14 @@ mod tests {
     #[test]
     fn what_is_not_in_the_language_does_not_parse() {
         let rejected = [
-            // no ternary, no nullish coalescing, no word operators
+            // * no ternary, no nullish coalescing, no word operators
             "a ? b : c",
             "a ?? b",
             "a in b",
             "a and b",
             "a or b",
             "not a",
-            // no bitwise, no exponent, no strict equality, no assignment
+            // * no bitwise, no exponent, no strict equality, no assignment
             "a & b",
             "a | b",
             "a ** b",
@@ -777,17 +777,17 @@ mod tests {
             "a === b",
             "a !== b",
             "a = b",
-            // no object literal, no lambda
+            // * no object literal, no lambda
             "{}",
             "{a: 1}",
             "x => x",
             "list.filter(x => x)",
-            // numbers the lexer does not take
+            // * numbers the lexer does not take
             "+1",
             "1e3",
             "0x10",
             "1_000",
-            // malformed
+            // * malformed
             "",
             "foo((((",
             r#""unterminated"#,
@@ -826,7 +826,7 @@ mod tests {
         };
         assert_eq!(value, "foo((((");
         assert!(error.starts_with("Unable to parse formula."), "{error}");
-        // ... and a statement that parses is never wrapped.
+        // * ... and a statement that parses is never wrapped.
         assert_eq!(parse_node("1 + 1"), parse("1 + 1").unwrap());
     }
 
@@ -837,7 +837,7 @@ mod tests {
         assert_eq!(s("file.NAME"), "file.NAME");
         assert_eq!(s("DENSITY"), "DENSITY");
         assert_eq!(s("NOW()"), "NOW()");
-        // `true` is a keyword only in lower case; `TRUE` is an ident.
+        // ! `true` is a keyword only in lower case; `TRUE` is an ident.
         assert_eq!(parse("TRUE").unwrap(), ident("TRUE"));
     }
 

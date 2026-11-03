@@ -27,8 +27,8 @@ use std::io::{BufRead, Write};
 
 fn main() {
     let config = app::Config::from_env();
-    // The handshake has no room for this, and a wrong binary or socket is the
-    // first thing to go wrong, so say both before answering anything.
+    // * The handshake has no room for this, and a wrong binary or socket is the
+    // * first thing to go wrong, so say both before answering anything.
     eprintln!(
         "silica-mcp {} on {} (app: {}, timeout {} ms)",
         env!("CARGO_PKG_VERSION"),
@@ -58,6 +58,6 @@ fn main() {
             break;
         }
     }
-    // Dropping the app quits the child: a client that disconnects without
-    // calling silica_quit must not leave a window behind.
+    // ! Dropping the app quits the child: a client that disconnects without
+    // ! calling silica_quit must not leave a window behind.
 }

@@ -32,7 +32,7 @@ fn keys_at(text: &str, indent: usize) -> Vec<String> {
             continue;
         }
         let trimmed = line.trim_start();
-        // A key line, not a sequence item and not a comment.
+        // * A key line, not a sequence item and not a comment.
         if trimmed.starts_with('-') || trimmed.starts_with('#') {
             continue;
         }
@@ -76,7 +76,7 @@ fn the_top_level_key_order_is_the_one_obsidian_wrote() {
 fn a_views_key_order_is_the_one_obsidian_wrote() {
     let base = Base::from_yaml(&fixture("scrambled.in.base")).unwrap();
     let out = fixture("scrambled.out.base");
-    // The first view's block: from its `- type:` line to the next one.
+    // * The first view's block: from its `- type:` line to the next one.
     let first = out
         .split("  - type:")
         .nth(1)
@@ -132,7 +132,7 @@ fn an_empty_property_config_is_dropped() {
 #[test]
 fn statement_text_survives_byte_for_byte() {
     let base = Base::from_yaml(&fixture("scrambled.in.base")).unwrap();
-    // A double space inside a string literal, and a trailing space inside one.
+    // * A double space inside a string literal, and a trailing space inside one.
     assert_eq!(base.formulas["spaced"], r#"type + " "  + file.name"#);
     assert_eq!(base.formulas["trailingSpace"], r#"status + "x" "#);
     let out = fixture("scrambled.out.base");
@@ -150,9 +150,9 @@ fn statement_text_survives_byte_for_byte() {
 fn what_obsidian_wrote_parses_back_to_the_same_model() {
     let from_in = Base::from_yaml(&fixture("scrambled.in.base")).unwrap();
     let from_out = Base::from_yaml(&fixture("scrambled.out.base")).unwrap();
-    // The one difference the canonicalization makes to the *model* is the
-    // dropped empty property config; everything else is byte noise the model
-    // does not hold.
+    // * The one difference the canonicalization makes to the *model* is the
+    // * dropped empty property config; everything else is byte noise the model
+    // * does not hold.
     assert!(from_in.properties.contains_key("note.unused"));
     assert!(!from_out.properties.contains_key("note.unused"));
     assert_eq!(from_in.key_order(), from_out.key_order());
@@ -165,13 +165,13 @@ fn what_obsidian_wrote_parses_back_to_the_same_model() {
 }
 
 // ---------------------------------------------------------------------------
-// The writer, byte for byte
+// * The writer, byte for byte
 // ---------------------------------------------------------------------------
 //
-// Each pair below is one file the probe wrote into a scratch vault and the
-// bytes Obsidian left in its place. Parsing the first and writing it has to
-// produce the second exactly, which is the whole gate: a base Silica saves is
-// a base Obsidian would have saved.
+// * Each pair below is one file the probe wrote into a scratch vault and the
+// * bytes Obsidian left in its place. Parsing the first and writing it has to
+// * produce the second exactly, which is the whole gate: a base Silica saves is
+// * a base Obsidian would have saved.
 
 /// Every documented key, scrambled, with comments at three depths, flow
 /// collections, four-space indentation and both quoting styles. Nothing was
@@ -269,8 +269,8 @@ fn the_files_obsidian_refused_are_refused_here() {
             "filter-extra.in.base",
             "\"filters\" may only have one of an \"and\", \"or\", or \"not\" keys.",
         ),
-        // Two faults at once — a stray key beside `and` and an empty view
-        // name. Obsidian reports the name, so the views are checked first.
+        // * Two faults at once — a stray key beside `and` and an empty view
+        // * name. Obsidian reports the name, so the views are checked first.
         ("oddities.in.base", "Missing or invalid \"name\" in view 1"),
     ];
     for (file, message) in cases {

@@ -274,9 +274,7 @@ impl ToolbarState {
     }
 }
 
-// ---------------------------------------------------------------------------
-// The bar
-// ---------------------------------------------------------------------------
+// * The bar
 
 impl BasesView {
     /// The toolbar above the layout: the view switcher, the five controls,
@@ -382,10 +380,10 @@ impl BasesView {
         cx: &mut Context<Self>,
     ) {
         cx.stop_propagation();
-        // The press that began this click lands outside the open panel —
-        // a control's button is not inside its own panel — so the panel has
-        // already closed itself by the time the click arrives. A second click
-        // on the same control therefore closes rather than reopens.
+        // * The press that began this click lands outside the open panel —
+        //   a control's button is not inside its own panel — so the panel has
+        //   already closed itself by the time the click arrives. A second click
+        //   on the same control therefore closes rather than reopens.
         let reopening = self.toolbar.just_closed.take() == Some((panel, at));
         if self.toolbar.panel == panel || reopening {
             self.close_panel(cx);
@@ -398,8 +396,8 @@ impl BasesView {
         self.toolbar.editing = None;
         self.toolbar.total = None;
         self.toolbar.rows.clear();
-        // Two panels open with a field already live, so the first keystroke
-        // lands in it rather than opening it.
+        // * Two panels open with a field already live, so the first keystroke
+        //   lands in it rather than opening it.
         match panel {
             Panel::Results => {
                 let total = self.unlimited_rows();
@@ -525,8 +523,8 @@ impl BasesView {
     fn commit_field(&mut self, text: &str, cx: &mut Context<Self>) {
         self.toolbar.field_value = text.to_string();
         match self.toolbar.editing {
-            // Observed: the limit input writes `limit` as a bare number, and
-            // an empty field is no limit at all.
+            // * Observed: the limit input writes `limit` as a bare number, and
+            //   an empty field is no limit at all.
             Some(Field::Limit) => {
                 let limit = parse_limit(text);
                 if self.view().and_then(|v| v.limit) == limit {
@@ -548,8 +546,8 @@ impl BasesView {
                 let separator = text.to_string();
                 self.edit_view(move |view| layout::set_separator(view, &separator), cx);
             }
-            // The property field only narrows the list; "Add *name* property"
-            // is the row that writes.
+            // * The property field only narrows the list; "Add *name* property"
+            //   is the row that writes.
             Some(Field::Property) => cx.notify(),
             Some(Field::Rule(ix)) => {
                 let Some(node) = self.filter_nodes().get(ix).cloned() else {
@@ -576,8 +574,8 @@ impl BasesView {
                     },
                     cx,
                 );
-                // A group's new-rule field has become that rule's own field,
-                // which the next render draws on the node the rule now is.
+                // * A group's new-rule field has become that rule's own field,
+                //   which the next render draws on the node the rule now is.
                 if new_rule {
                     self.toolbar.editing = None;
                 }
@@ -700,8 +698,8 @@ impl BasesView {
                         this.close_panel(cx);
                     }))
                     .child(
-                        // The row's own icon is the Configure view page's
-                        // handle, which is observed.
+                        // * The row's own icon is the Configure view page's
+                        //   handle, which is observed.
                         div()
                             .id(("bases-view-configure", ix))
                             .size(px(20.))
@@ -804,10 +802,10 @@ impl BasesView {
                 theme,
             ));
         self.toolbar.rows = vec![json!({ "control": "Layout", "value": kind })];
-        // Each layout's own keys, from the observed layout-key table. The
-        // label of every control but Row height is **unprobed** — the
-        // Configure view page's own wording was never read — so the rest show
-        // the key they write.
+        // ? Each layout's own keys, from the observed layout-key table. The
+        //   label of every control but Row height is **unprobed** — the
+        //   Configure view page's own wording was never read — so the rest show
+        //   the key they write.
         match Layout::of(&view) {
             Layout::Table(table) => {
                 let steps: Vec<SharedString> = RowHeight::all()
@@ -892,11 +890,11 @@ impl BasesView {
                     self.text_field(Field::Separator, &list.separator, theme, cx),
                     theme,
                 ));
-                // "Indent properties" is not drawn: the key it writes is
-                // unprobed, and nothing should write `indentProperties`.
+                // ? "Indent properties" is not drawn: the key it writes is
+                //   unprobed, and nothing should write `indentProperties`.
             }
-            // An unknown type never reaches the toolbar; the shell draws the
-            // error block instead.
+            // * An unknown type never reaches the toolbar; the shell draws the
+            //   error block instead.
             Layout::Unknown(_) => {}
         }
         body.into_any_element()
@@ -912,8 +910,8 @@ impl BasesView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let properties = self.properties_of(base, view);
-        // The picker's own "no property" row was never read; this is the one
-        // label in the module that is not observed, and it only clears a key.
+        // ? The picker's own "no property" row was never read; this is the one
+        //   label in the module that is not observed, and it only clears a key.
         let mut labels = vec![SharedString::from("None")];
         labels.extend(properties.iter().map(|p| SharedString::from(p.1.clone())));
         let selected = match current {
@@ -1000,9 +998,9 @@ impl BasesView {
                     this.edit_view(|view| layout::set_limit(view, None), cx);
                     let total = this.unlimited_rows();
                     this.toolbar.total = Some(total);
-                    // The field has to follow the key it writes; the change
-                    // event that raises is a no-op, because `limit` is
-                    // already gone.
+                    // * The field has to follow the key it writes; the change
+                    //   event that raises is a no-op, because `limit` is
+                    //   already gone.
                     if let Some(input) = this.toolbar.field.clone() {
                         input.update(cx, |input, cx| input.set_text("", cx));
                     }
@@ -1284,8 +1282,8 @@ impl BasesView {
                     ),
             );
         }
-        // "Add *name* property": the italic *name* is the field's own text,
-        // which is how the row names a property the vault does not carry yet.
+        // * "Add *name* property": the italic *name* is the field's own text,
+        //   which is how the row names a property the vault does not carry yet.
         let name = typed.trim().to_string();
         if !name.is_empty() && !properties.iter().any(|(_, label)| *label == name) {
             let id = layout::qualify(&name);
@@ -1396,8 +1394,8 @@ impl BasesView {
                                 cx,
                             )),
                     );
-                    // The group's own new-rule field: typing in it appends a
-                    // rule to this group.
+                    // * The group's own new-rule field: typing in it appends a
+                    //   rule to this group.
                     body = body.child(
                         div()
                             .flex()
@@ -1430,10 +1428,10 @@ impl BasesView {
                                 cx,
                             )))
                             .child(
-                                // `filer-expression-mode-toggle`, spelled as
-                                // Obsidian spells it. It is lit and inert:
-                                // expression mode is the only mode this panel
-                                // has, because the operator list is unprobed.
+                                // ? `filer-expression-mode-toggle`, spelled as
+                                //   Obsidian spells it. It is lit and inert:
+                                //   expression mode is the only mode this panel
+                                //   has, because the operator list is unprobed.
                                 div()
                                     .id(("bases-rule-mode", ix))
                                     .size(px(22.))
@@ -1800,8 +1798,8 @@ impl BasesView {
                 return div()
                     .id("bases-toolbar-field")
                     .min_w(px(120.))
-                    // A click inside the open field is not a click away from
-                    // the panel, which is what the root would read it as.
+                    // * A click inside the open field is not a click away from
+                    //   the panel, which is what the root would read it as.
                     .on_click(|_, _, cx| cx.stop_propagation())
                     .child(input)
                     .into_any_element();
@@ -1847,8 +1845,8 @@ impl BasesView {
     fn combo_pick(&mut self, name: &'static str, ix: usize, opt: usize, cx: &mut Context<Self>) {
         self.toolbar.combo = None;
         match name {
-            // Observed: picking a layout rewrites `type` and leaves the
-            // previous layout's keys in place.
+            // * Observed: picking a layout rewrites `type` and leaves the
+            //   previous layout's keys in place.
             "layout" => {
                 if let Some((kind, ..)) = LAYOUTS.get(opt) {
                     let kind = kind.to_string();
@@ -2052,9 +2050,7 @@ fn direction_ix(direction: Option<&str>) -> usize {
     }
 }
 
-// ---------------------------------------------------------------------------
-// What the panels write
-// ---------------------------------------------------------------------------
+// * What the panels write
 
 // ----- the filter tree -------------------------------------------------------
 
@@ -2224,7 +2220,7 @@ mod tests {
 
     #[test]
     fn a_sort_added_from_the_panel_goes_to_the_head_of_the_list() {
-        // Observed: *Sort Z → A* prepends `{property, direction: DESC}`.
+        // * Observed: *Sort Z → A* prepends `{property, direction: DESC}`.
         let mut base = base_of(
             "views:\n  - type: table\n    name: V\n    sort:\n      - property: file.name\n        direction: ASC\n",
         );
@@ -2237,8 +2233,8 @@ mod tests {
 
     #[test]
     fn a_sort_entry_keeps_the_bare_id_the_file_wrote() {
-        // The writer "does not qualify ids that are already written bare", so
-        // changing a direction must not rewrite the property.
+        // ! The writer "does not qualify ids that are already written bare", so
+        //   changing a direction must not rewrite the property.
         let mut base =
             base_of("views:\n  - type: table\n    name: V\n    sort:\n      - property: status\n");
         set_sort_direction(&mut base.views[0], 0, "DESC");
@@ -2285,8 +2281,8 @@ mod tests {
 
     #[test]
     fn picking_a_layout_rewrites_type_and_keeps_the_old_layouts_keys() {
-        // Observed: a list view with `markers: number` and `separator: "; "`
-        // became `type: kanban` with both keys still there.
+        // * Observed: a list view with `markers: number` and `separator: "; "`
+        //   became `type: kanban` with both keys still there.
         let mut base = base_of(
             "views:\n  - type: list\n    name: V\n    markers: number\n    separator: \"; \"\n",
         );
@@ -2320,8 +2316,8 @@ mod tests {
 
     #[test]
     fn unchecking_a_column_of_a_view_with_no_order_writes_the_rest_out() {
-        // A view with no `order` shows the implied columns, so the panel has
-        // to name what is left for the uncheck to mean anything.
+        // * A view with no `order` shows the implied columns, so the panel has
+        //   to name what is left for the uncheck to mean anything.
         let mut base = base_of("views:\n  - type: table\n    name: V\n");
         let shown = vec!["note.status".to_string(), "note.phase".to_string()];
         toggle_property(&mut base.views[0], &shown, "note.status");
@@ -2335,12 +2331,12 @@ mod tests {
     fn a_bare_id_already_in_order_is_the_same_property_as_its_qualified_form() {
         let mut base =
             base_of("views:\n  - type: table\n    name: V\n    order:\n      - status\n");
-        // Checking it again must not double it, and unchecking must find it.
+        // ! Checking it again must not double it, and unchecking must find it.
         add_property(&mut base.views[0], "note.status");
         assert_eq!(base.views[0].order, vec!["status".to_string()]);
-        // Unchecking the last column is refused rather than writing an empty
-        // `order`, which the serializer omits and the implied columns come
-        // back from: the box would turn into "show every property".
+        // ! Unchecking the last column is refused rather than writing an empty
+        //   `order`, which the serializer omits and the implied columns come
+        //   back from: the box would turn into "show every property".
         toggle_property(&mut base.views[0], &["status".to_string()], "note.status");
         assert_eq!(
             yaml_of(&base),
@@ -2395,7 +2391,7 @@ mod tests {
             0,
             &mut nodes,
         );
-        // root group, rule a, nested group, rule b
+        // * root group, rule a, nested group, rule b
         assert_eq!(nodes.len(), 4);
         assert_eq!(nodes[0].kind, NodeKind::Group("and"));
         assert_eq!(nodes[1].kind, NodeKind::Rule("a".to_string()));
@@ -2413,7 +2409,7 @@ mod tests {
 
     #[test]
     fn a_rules_statement_is_written_verbatim() {
-        // A statement's bytes survive; only their quoting changes.
+        // * A statement's bytes survive; only their quoting changes.
         let mut base = base_of("filters:\n  and:\n    - a\n");
         let mut tree = group_tree(base.filters.as_ref());
         set_rule(&mut tree, &[0], "type + \" \"  + file.name");
@@ -2448,9 +2444,9 @@ mod tests {
 
     #[test]
     fn copy_to_clipboard_is_the_tsv_obsidian_put_on_the_clipboard() {
-        // Observed for `bases:copy-table`, which the results panel's own row
-        // produces too: one header row of display names, tab separators, no
-        // trailing newline.
+        // * Observed for `bases:copy-table`, which the results panel's own row
+        //   produces too: one header row of display names, tab separators, no
+        //   trailing newline.
         use silica_bases::{Cell, CellKind, Column, ColumnSource, FileData, Row, Value};
         use std::sync::Arc;
         fn cell(text: &str) -> Cell {
@@ -2499,8 +2495,8 @@ mod tests {
 
     #[test]
     fn a_this_view_filter_lands_on_the_view_and_an_all_views_one_on_the_base() {
-        // The two sections are two keys, and the panel's own writes are the
-        // same shape against either.
+        // * The two sections are two keys, and the panel's own writes are the
+        //   same shape against either.
         let mut base = base_of("views:\n  - type: table\n    name: V\n");
         let mut tree = group_tree(base.filters.as_ref());
         add_rule(&mut tree, &[], "file.ext == \"md\"");

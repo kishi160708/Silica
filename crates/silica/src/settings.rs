@@ -464,8 +464,8 @@ const ATTACHMENT_LOCATION: Typed = Typed {
         next.attachment_folder_path = Some(value.to_string());
         SettingChange::App(next)
     },
-    // A name typed into either dependent row leaves the shape the option
-    // chose, so the shape is what the row is read back from.
+    // * A name typed into either dependent row leaves the shape the option
+    //   chose, so the shape is what the row is read back from.
     shape: Some(|value| match value {
         "" | "/" => 0,
         "./" => 1,
@@ -810,9 +810,9 @@ const TEXTS: &[TextField] = &[
     TEXT_FONT_FAMILY,
     MONOSPACE_FONT_FAMILY,
 ];
-// SPELLCHECK_LANGUAGES and EXCLUDED_FILES write Vec<String>, not a single
-// string, so the string-only TEXTS test doesn't cover them; their write
-// closures are exercised by the write paths themselves.
+// * SPELLCHECK_LANGUAGES and EXCLUDED_FILES write Vec<String>, not a single
+//   string, so the string-only TEXTS test doesn't cover them; their write
+//   closures are exercised by the write paths themselves.
 
 /// A config file with one setting changed, for the workspace to write.
 #[derive(Clone, Debug, PartialEq)]
@@ -1275,8 +1275,8 @@ impl SettingsView {
                     _ => {}
                 },
             ),
-            // One field serves whichever text row is open, since the rows
-            // themselves are rebuilt from the vault on every render.
+            // * One field serves whichever text row is open, since the rows
+            //   themselves are rebuilt from the vault on every render.
             cx.subscribe(&field, |this, _, event: &InputEvent, cx| match event {
                 InputEvent::Submit => this.commit_field(cx),
                 InputEvent::Cancel => {
@@ -1328,15 +1328,15 @@ impl SettingsView {
         if let Some(tab) = tab {
             self.tab = tab;
         }
-        // The view outlives the modal, so a dropdown or a text field left
-        // open by the last session would come back expanded. Every way out
-        // of the modal commits the field first, so there is nothing to write
-        // here, only state to drop.
+        // * The view outlives the modal, so a dropdown or a text field left
+        //   open by the last session would come back expanded. Every way out
+        //   of the modal commits the field first, so there is nothing to write
+        //   here, only state to drop.
         self.menu = None;
         self.editing = None;
         self.capturing = None;
-        // A filter typed last time would otherwise be what the next thing
-        // typed appends to.
+        // * A filter typed last time would otherwise be what the next thing
+        //   typed appends to.
         self.hotkey_search
             .update(cx, |input, cx| input.set_text("", cx));
         self.focus_tab(window, cx);
@@ -1426,8 +1426,8 @@ impl SettingsView {
     }
 
     fn select_tab(&mut self, tab: Tab, window: &mut Window, cx: &mut Context<Self>) {
-        // A row that is no longer on screen cannot be committed or closed by
-        // the user, so leaving the tab is one of the moments that writes.
+        // * A row that is no longer on screen cannot be committed or closed by
+        //   the user, so leaving the tab is one of the moments that writes.
         self.dismiss_open_controls(cx);
         self.tab = tab;
         self.focus_tab(window, cx);
@@ -1436,8 +1436,8 @@ impl SettingsView {
 
     fn close_action(&mut self, _: &Close, window: &mut Window, cx: &mut Context<Self>) {
         match escape_closes(self.capturing.is_some(), self.menu.is_some()) {
-            // Escape while a chord is being captured backs out of the
-            // capture, not the modal.
+            // * Escape while a chord is being captured backs out of the
+            //   capture, not the modal.
             Escape::Capture => {
                 self.capturing = None;
                 self.focus_tab(window, cx);
@@ -1534,7 +1534,7 @@ impl SettingsView {
         let mut overrides = match state.vault().hotkeys() {
             Ok(overrides) => overrides,
             Err(err) => {
-                // An unreadable file must not be rewritten from defaults.
+                // ! An unreadable file must not be rewritten from defaults.
                 eprintln!("hotkeys.json could not be read: {err}");
                 return;
             }
@@ -1799,16 +1799,16 @@ impl SettingsView {
             heading("Advanced"),
             appearance_toggle(
                 "Native menus",
-                // Said plainly, because the answer differs by platform and
-                // a row that promised a menu bar on Linux would be lying.
+                // * Said plainly, because the answer differs by platform and
+                //   a row that promised a menu bar on Linux would be lying.
                 "Menus throughout the app will match the operating system. They will not be affected by your theme. macOS gets the system menu bar; Linux and Windows draw their menus in the window, so this changes nothing there.",
                 a,
                 NATIVE_MENUS,
             ),
-            // Obsidian keeps this one outside the vault: changing it wrote
-            // nothing under `.obsidian` (probed 2026-10-20), so it lives in
-            // the per-user store beside the vault list — the same place
-            // Obsidian's own copy is.
+            // * Obsidian keeps this one outside the vault: changing it wrote
+            //   nothing under `.obsidian` (probed 2026-10-20), so it lives in
+            //   the per-user store beside the vault list — the same place
+            //   Obsidian's own copy is.
             choice(
                 "Window frame style",
                 "Determines the styling of the title bar of Obsidian windows. Requires a full restart to take effect.",
@@ -1975,15 +1975,15 @@ impl SettingsView {
                 NEW_FILE_LOCATION,
             ),
         ];
-        // Both location dropdowns reveal a row for the option that needs a
-        // name typed into it, and hide it for the options that do not —
-        // keyed off the selected option rather than off the stored string,
-        // so the row appears the moment the option is picked.
+        // * Both location dropdowns reveal a row for the option that needs a
+        //   name typed into it, and hide it for the options that do not —
+        //   keyed off the selected option rather than off the stored string,
+        //   so the row appears the moment the option is picked.
         //
-        // Both attachment rows are read: `editor::paste_image_attachment`
-        // and `paste_files_attachment` send every pasted file through
-        // `silica_vault::ops::attachment_folder`, which resolves all four
-        // shapes Obsidian writes.
+        //   Both attachment rows are read: `editor::paste_image_attachment`
+        //   and `paste_files_attachment` send every pasted file through
+        //   `silica_vault::ops::attachment_folder`, which resolves all four
+        //   shapes Obsidian writes.
         if NEW_FILE_LOCATION.value(state) == "folder" {
             items.push(field(
                 "Folder to create new notes in",
@@ -2086,12 +2086,12 @@ impl SettingsView {
                     CorePlugins::is_enabled_or_default(state.core_plugins().as_ref(), p),
                     Flag::CorePlugin(p.id, p.default_on),
                 )
-                // The toggle is read: `rebuild_commands` drops a plugin's
-                // commands from the registry, `left_pane_enabled` and
-                // `pane_enabled` close its dock panes, and `run_command`
-                // refuses it by name. What does not follow is the plugin's
-                // own internals — Silica's Files, Search and Graph are its
-                // own views rather than plugin-provided ones.
+                // * The toggle is read: `rebuild_commands` drops a plugin's
+                //   commands from the registry, `left_pane_enabled` and
+                //   `pane_enabled` close its dock panes, and `run_command`
+                //   refuses it by name. What does not follow is the plugin's
+                //   own internals — Silica's Files, Search and Graph are its
+                //   own views rather than plugin-provided ones.
             })
             .collect()
     }
@@ -2099,8 +2099,8 @@ impl SettingsView {
     fn community_plugin_items(state: &VaultState) -> Vec<Item> {
         let n = state.plugins.records().len();
         let compat = state.plugins.compat_count();
-        // Loading the runtimes belongs on this thread, and this tab is where
-        // their result is read.
+        // * Loading the runtimes belongs on this thread, and this tab is where
+        //   their result is read.
         silica_plugins::live::ensure(&state.root, state.vault().config_dir(), &state.plugins);
         let mut items = vec![
             item(
@@ -2131,11 +2131,11 @@ impl SettingsView {
                 if !m.author.is_empty() {
                     title.push_str(&format!(" By {}", m.author));
                 }
-                // Obsidian runs whatever is installed. A native app runs
-                // the plugins that touch only the vault and its index, so
-                // each row says which tier it landed in, and a refused one
-                // gives the reason instead of a switch that would do
-                // nothing.
+                // * Obsidian runs whatever is installed. A native app runs
+                //   the plugins that touch only the vault and its index, so
+                //   each row says which tier it landed in, and a refused one
+                //   gives the reason instead of a switch that would do
+                //   nothing.
                 let mut detail = m.description.clone();
                 if !detail.is_empty() {
                     detail.push(' ');
@@ -2144,9 +2144,9 @@ impl SettingsView {
                     Tier::Refused(refusal) => refusal.reason(),
                     tier => tier.label().to_string(),
                 });
-                // What the runtimes did with it, which is the one thing a
-                // tier label cannot say: a plugin that loaded and a plugin
-                // that threw look the same until something runs one.
+                // * What the runtimes did with it, which is the one thing a
+                //   tier label cannot say: a plugin that loaded and a plugin
+                //   that threw look the same until something runs one.
                 let loaded = silica_plugins::live::hosts(|hosts| {
                     hosts
                         .iter()
@@ -2168,10 +2168,10 @@ impl SettingsView {
                 }
                 items.push(
                     toggle(&title, &detail, record.enabled, Flag::CommunityPlugin(record.id().to_string()))
-                        // The list is Obsidian's, and the runtimes are built
-                        // when this tab or the palette is first opened: flipping
-                        // a switch here rewrites `community-plugins.json` for
-                        // the next open.
+                        // * The list is Obsidian's, and the runtimes are built
+                        //   when this tab or the palette is first opened: flipping
+                        //   a switch here rewrites `community-plugins.json` for
+                        //   the next open.
                 );
             }
         }
@@ -2244,9 +2244,9 @@ impl SettingsView {
             .id("settings-nav")
             .flex()
             .flex_col()
-            // A short window clips the tabs below Core plugins, and the
-            // root is `overflow_hidden`: the nav scrolls for the same
-            // reason the content list does.
+            // * A short window clips the tabs below Core plugins, and the
+            //   root is `overflow_hidden`: the nav scrolls for the same
+            //   reason the content list does.
             .overflow_y_scroll()
             .w(px(220.))
             .h_full()
@@ -2255,9 +2255,9 @@ impl SettingsView {
             .border_r_1()
             .border_color(theme.border)
             .py_2()
-            // Obsidian's sidebar opens straight on "Options"; the mark and
-            // the version above it are ours, and say which program wrote
-            // the `.obsidian/` the rest of this modal is editing.
+            // * Obsidian's sidebar opens straight on "Options"; the mark and
+            //   the version above it are ours, and say which program wrote
+            //   the `.obsidian/` the rest of this modal is editing.
             .child(
                 div()
                     .flex()
@@ -2408,14 +2408,14 @@ impl SettingsView {
                             .id(SharedString::from(format!("settings-menu-{}", typed.key)))
                             .cursor_pointer()
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                // The root closes whatever is open on any
-                                // click; this one has to survive it, or the
-                                // menu would shut again as the click bubbles.
+                                // * The root closes whatever is open on any
+                                //   click; this one has to survive it, or the
+                                //   menu would shut again as the click bubbles.
                                 cx.stop_propagation();
-                                // A click with a popover open is spent
-                                // closing it — this one's own second click
-                                // included, which is how the property type
-                                // menu closes too.
+                                // * A click with a popover open is spent
+                                //   closing it — this one's own second click
+                                //   included, which is how the property type
+                                //   menu closes too.
                                 if this.click_dismissed_a_popover(cx) {
                                     return;
                                 }
@@ -2426,8 +2426,8 @@ impl SettingsView {
                             .child(shown),
                     )
                     .when(open, |d| {
-                        // Deferred, or the rows after this one paint over
-                        // the options: a later sibling wins otherwise.
+                        // * Deferred, or the rows after this one paint over
+                        //   the options: a later sibling wins otherwise.
                         d.child(deferred(
                             div()
                                 .absolute()
@@ -2477,8 +2477,8 @@ impl SettingsView {
                     .id("settings-field-open")
                     .min_w(px(220.))
                     .max_w(px(320.))
-                    // A click inside the open input is not a click away from
-                    // it, which is what the root would read it as.
+                    // * A click inside the open input is not a click away from
+                    //   it, which is what the root would read it as.
                     .on_click(|_, _, cx| cx.stop_propagation())
                     .child(self.field.clone())
                     .into_any_element()
@@ -2511,9 +2511,9 @@ impl SettingsView {
                         value.clone()
                     })
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        // Without this the click would bubble to the root and
-                        // be read as a click away from the field it just
-                        // opened, closing it again on the same frame.
+                        // * Without this the click would bubble to the root and
+                        //   be read as a click away from the field it just
+                        //   opened, closing it again on the same frame.
                         cx.stop_propagation();
                         if this.click_dismissed_a_popover(cx) {
                             return;
@@ -2569,8 +2569,8 @@ impl SettingsView {
                         .into_any_element();
                 };
                 let now = self.state.as_ref().map(|s| (number.read)(s)).unwrap_or(0);
-                // One cell per step: the ranges are small, so a click lands
-                // on a value without measuring the track.
+                // * One cell per step: the ranges are small, so a click lands
+                //   on a value without measuring the track.
                 let steps = (number.min..=number.max).collect::<Vec<_>>();
                 let width = (120. / steps.len() as f32).max(3.);
                 div()
@@ -2633,8 +2633,8 @@ impl SettingsView {
     /// Writes a slider's value, which the control also reads through.
     /// Opens a text field for typing, with what the vault holds in it.
     fn edit_field(&mut self, field: TextField, window: &mut Window, cx: &mut Context<Self>) {
-        // One input serves every row, so opening the next one is the last
-        // moment the one before it can be written.
+        // * One input serves every row, so opening the next one is the last
+        //   moment the one before it can be written.
         self.commit_field(cx);
         let Some(state) = self.state.clone() else {
             return;
@@ -2949,13 +2949,13 @@ impl SettingsView {
 
 impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // A committed or cancelled field stops being rendered while gpui
-        // still has the focus on it, and a focus on an element no frame
-        // contains dispatches nothing: every later keystroke, Escape
-        // included, falls outside every key context and the window goes
-        // keyboard-dead. The events that close a field arrive through a
-        // subscription, which has no window to hand `focus_tab`, so the
-        // frame that drops the input is where the focus goes back.
+        // * A committed or cancelled field stops being rendered while gpui
+        //   still has the focus on it, and a focus on an element no frame
+        //   contains dispatches nothing: every later keystroke, Escape
+        //   included, falls outside every key context and the window goes
+        //   keyboard-dead. The events that close a field arrive through a
+        //   subscription, which has no window to hand `focus_tab`, so the
+        //   frame that drops the input is where the focus goes back.
         if self.editing.is_none() && self.field.focus_handle(cx).is_focused(window) {
             self.focus_tab(window, cx);
         }
@@ -2978,17 +2978,17 @@ impl Render for SettingsView {
             .on_action(cx.listener(Self::close_action))
             .on_key_down(cx.listener(Self::key_down))
             .on_click(cx.listener(|this, _, _, cx| this.dismiss_open_controls(cx)))
-            // The backdrop is outside the panel, and it closes the modal on
-            // mouse up; writing on the way down is what keeps a click there
-            // from losing what was typed.
+            // * The backdrop is outside the panel, and it closes the modal on
+            //   mouse up; writing on the way down is what keeps a click there
+            //   from losing what was typed.
             .on_mouse_down_out(cx.listener(|this, _, _, cx| this.dismiss_open_controls(cx)))
             .flex()
             .flex_row()
-            // The frame sets the width; the panel fills it and stops at
-            // Obsidian's 1100 px. The nav is `flex_shrink_0` and the
-            // content column `flex_1().min_w_0()`, so a narrow window
-            // takes the difference out of the content column rather than
-            // pushing it past the window's edge.
+            // * The frame sets the width; the panel fills it and stops at
+            //   Obsidian's 1100 px. The nav is `flex_shrink_0` and the
+            //   content column `flex_1().min_w_0()`, so a narrow window
+            //   takes the difference out of the content column rather than
+            //   pushing it past the window's edge.
             .w_full()
             .max_w(px(1100.))
             .h_full()
@@ -3219,8 +3219,8 @@ pub(crate) mod tests {
                     typed.key
                 );
                 let written = object.get(typed.key).expect("its own key");
-                // `livePreview` is a boolean behind a two-option dropdown;
-                // every other one writes the string its option names.
+                // * `livePreview` is a boolean behind a two-option dropdown;
+                //   every other one writes the string its option names.
                 let want = match *value {
                     "true" => serde_json::Value::Bool(true),
                     "false" => serde_json::Value::Bool(false),
@@ -3237,8 +3237,8 @@ pub(crate) mod tests {
 
     #[test]
     fn a_dropdown_reads_back_what_it_wrote() {
-        // The control's label and its write go through the same table, so
-        // picking an option must leave that option showing.
+        // * The control's label and its write go through the same table, so
+        //   picking an option must leave that option showing.
         let (dir, mut state) = vault();
         for typed in TYPED_ALL {
             for (ix, (label, value)) in typed.options.iter().enumerate() {
@@ -3277,8 +3277,8 @@ pub(crate) mod tests {
         }
         for field in TEXTS {
             let written = one_key(&(field.write)(&state, "Journal"), field.key, field.key);
-            // Every field but the Subfolder name row is the whole value;
-            // that one is the half after the `./` it writes back.
+            // * Every field but the Subfolder name row is the whole value;
+            //   that one is the half after the `./` it writes back.
             assert_eq!(
                 written,
                 serde_json::json!(format!("{}Journal", field.prefix)),
@@ -3317,15 +3317,15 @@ pub(crate) mod tests {
             panic!("wrote the wrong file");
         };
         assert_eq!(app.attachment_folder_path.as_deref(), Some("Attachments"));
-        // The Subfolder name row is the same key behind a `./`, so an empty
-        // one leaves the value the subfolder option itself writes. Obsidian
-        // clearing this row is unprobed; the sibling's rule is the guess.
+        // ? The Subfolder name row is the same key behind a `./`, so an empty
+        //   one leaves the value the subfolder option itself writes. Obsidian
+        //   clearing this row is unprobed; the sibling's rule is the guess.
         let change = (SUBFOLDER_NAME.write)(&state, "");
         let SettingChange::App(app) = &change else {
             panic!("wrote the wrong file");
         };
         assert_eq!(app.attachment_folder_path.as_deref(), Some("./Attachments"));
-        // The other field keeps an empty string, as Obsidian does for it.
+        // * The other field keeps an empty string, as Obsidian does for it.
         let change = (NEW_FILE_FOLDER.write)(&state, "");
         let SettingChange::App(app) = &change else {
             panic!("wrote the wrong file");
@@ -3428,9 +3428,9 @@ pub(crate) mod tests {
         ] {
             assert!(row(&state, hidden).is_none(), "{hidden} was built");
         }
-        // An absent key is not the `/` the first option writes — which is
-        // what makes the first pick of that option write at all, rather
-        // than read as the value already there.
+        // * An absent key is not the `/` the first option writes — which is
+        //   what makes the first pick of that option write at all, rather
+        //   than read as the value already there.
         assert_eq!((ATTACHMENT_LOCATION.read)(&state), "");
         assert_ne!(
             (ATTACHMENT_LOCATION.read)(&state),
@@ -3541,9 +3541,9 @@ pub(crate) mod tests {
 
     #[test]
     fn a_setting_at_its_default_is_written_rather_than_removed() {
-        // Obsidian keeps the key with its explicit value, which the phase 3
-        // probe settled for every kind of value; Silica has no way of
-        // removing a config key and does not need one.
+        // * Obsidian keeps the key with its explicit value, which the phase 3
+        //   probe settled for every kind of value; Silica has no way of
+        //   removing a config key and does not need one.
         let (dir, state) = vault();
         let default = NEW_LINK_FORMAT.options[0].1;
         state
@@ -3784,7 +3784,7 @@ pub(crate) mod tests {
         assert_eq!(map.len(), 2, "no plugin was added");
         assert_eq!(map.keys().next().map(String::as_str), Some("graph"));
         assert_eq!(map.get("graph"), Some(&false));
-        // The legacy array shape keeps its shape.
+        // * The legacy array shape keeps its shape.
         let list = CorePlugins::List(vec!["graph".into()]);
         let next = toggled_core_plugin(Some(&list), "graph", true);
         assert_eq!(next, CorePlugins::List(Vec::new()));

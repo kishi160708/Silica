@@ -217,10 +217,10 @@ impl Shared {
         if !out.starts_with(&self.root) {
             return Err(format!("'{path}' points outside the vault"));
         }
-        // A lexical check cannot see a symbolic link: `notes/plan.md` is
-        // inside the vault as a string, and the `notes` beside it may point
-        // anywhere. Every component is inspected instead, so a link anywhere
-        // along the way is refused rather than followed.
+        // ! A lexical check cannot see a symbolic link: `notes/plan.md` is
+        // ! inside the vault as a string, and the `notes` beside it may point
+        // ! anywhere. Every component is inspected instead, so a link anywhere
+        // ! along the way is refused rather than followed.
         let mut walked = self.root.clone();
         for part in trimmed.split('/').filter(|p| !p.is_empty() && *p != ".") {
             walked.push(part);
@@ -230,9 +230,9 @@ impl Shared {
                         "'{path}' goes through a symbolic link, which a plugin may not follow"
                     ));
                 }
-                // A component that is not there yet is the normal case for a
-                // file a plugin is about to create; the rest of the walk
-                // cannot exist either.
+                // * A component that is not there yet is the normal case for a
+                // * file a plugin is about to create; the rest of the walk
+                // * cannot exist either.
                 Err(_) => break,
                 _ => {}
             }
@@ -247,13 +247,13 @@ impl Shared {
             .unwrap_or(&resolved)
             .to_string_lossy()
             .replace('\\', "/");
-        // Both paths are canonicalised before comparing, because the editor's
-        // idea of the open note and the plugin's idea of the file it is about
-        // to write are two strings that can name one file: a case-insensitive
-        // filesystem folds them, and a resolved link can too. Comparison
-        // ignores case as well, which over-refuses on a case-sensitive
-        // filesystem — the safe direction, since the alternative is losing
-        // unsaved edits.
+        // ! Both paths are canonicalised before comparing, because the editor's
+        // ! idea of the open note and the plugin's idea of the file it is about
+        // ! to write are two strings that can name one file: a case-insensitive
+        // ! filesystem folds them, and a resolved link can too. Comparison
+        // ! ignores case as well, which over-refuses on a case-sensitive
+        // ! filesystem — the safe direction, since the alternative is losing
+        // ! unsaved edits.
         let open = self.open_note.as_deref().map(|note| {
             self.root
                 .join(note)
@@ -288,7 +288,7 @@ impl Shared {
         let resolved = self.writable(path)?;
         if let Some(note) = self.open_note.as_deref() {
             let note = self.root.join(note);
-            // Same fold as `writable`: the two strings can name one path.
+            // * Same fold as `writable`: the two strings can name one path.
             let fold = |p: &Path| p.to_string_lossy().to_lowercase();
             let (target, note) = match (resolved.canonicalize(), note.canonicalize()) {
                 (Ok(target), Ok(note)) => (target, note),
@@ -395,8 +395,8 @@ impl PluginHost {
             }
         };
         runtime.set_memory_limit(HEAP_BYTES);
-        // Loading is bounded: the shim registers nothing that computes, so a
-        // plugin still running after the deadline is looping, not loading.
+        // * Loading is bounded: the shim registers nothing that computes, so a
+        // * plugin still running after the deadline is looping, not loading.
         let deadline = Rc::new(Cell::new(Instant::now() + LOAD_DEADLINE));
         {
             let deadline = Rc::clone(&deadline);
@@ -422,10 +422,10 @@ impl PluginHost {
 
         let manifest_json = serde_json::to_string(manifest).unwrap_or_else(|_| "{}".into());
 
-        // The shim, the plugin and the bootstrap run in one borrow. The
-        // promise jobs the plugin queued are drained between borrows, because
-        // `Context::with` holds the runtime and draining inside it is a
-        // re-entrant borrow of the same cell.
+        // * The shim, the plugin and the bootstrap run in one borrow. The
+        // * promise jobs the plugin queued are drained between borrows, because
+        // * `Context::with` holds the runtime and draining inside it is a
+        // * re-entrant borrow of the same cell.
         let setup = context.with(|ctx| -> Result<(), String> {
             install(ctx.clone(), Rc::clone(&shared), manifest_json)
                 .map_err(|error| format!("its JavaScript could not be set up: {error}"))?;
@@ -571,7 +571,7 @@ impl PluginHost {
         let result = self
             .context
             .with(|ctx| ctx.eval::<(), _>(call.as_bytes()).map_err(|error| describe(&ctx, error)));
-        // An async command does its work in the jobs after the call returns.
+        // * An async command does its work in the jobs after the call returns.
         drain_jobs(&self._runtime);
         result
     }
@@ -725,9 +725,9 @@ fn install<'js>(
             .borrow()
             .writable(&path)
             .map_err(|error| Exception::throw_message(&ctx, &error))?;
-        // A failed read is not an empty file. Substituting "" here would
-        // replace the file's real contents with only the appended text, so a
-        // file that cannot be decoded stops the append instead.
+        // * A failed read is not an empty file. Substituting "" here would
+        // * replace the file's real contents with only the appended text, so a
+        // * file that cannot be decoded stops the append instead.
         let mut existing = match std::fs::read(&resolved) {
             Ok(bytes) => match String::from_utf8(bytes) {
                 Ok(text) => text,
@@ -795,8 +795,8 @@ fn install<'js>(
             .borrow()
             .writable_tree(&path)
             .map_err(|error| Exception::throw_message(&ctx, &error))?;
-        // A plugin deletes into the vault's trash rather than unlinking, so a
-        // mistaken delete is recoverable.
+        // * A plugin deletes into the vault's trash rather than unlinking, so a
+        // * mistaken delete is recoverable.
         let shared_root = s.borrow().root.clone();
         let trash = shared_root.join(".trash");
         let name = resolved
@@ -813,8 +813,8 @@ fn install<'js>(
     let s = Rc::clone(&shared);
     set!("__silica_raw_vault_rename", move |ctx: Ctx<'js>, from: String, to: String| -> rquickjs::Result<()> {
         s.borrow_mut().mark_changed();
-        // The source needs the folder guard too: renaming a folder moves
-        // every note inside it, the open one among them.
+        // ! The source needs the folder guard too: renaming a folder moves
+        // ! every note inside it, the open one among them.
         let source = s
             .borrow()
             .writable_tree(&from)
@@ -829,9 +829,9 @@ fn install<'js>(
 
     let s = Rc::clone(&shared);
     set!("__silica_raw_execute", move |_id: String| -> bool {
-        // Commands the app itself owns cannot be reached from a plugin's own
-        // runtime without a round trip to the app, which a synchronous call
-        // cannot make. Reported as not run rather than silently ignored.
+        // * Commands the app itself owns cannot be reached from a plugin's own
+        // * runtime without a round trip to the app, which a synchronous call
+        // * cannot make. Reported as not run rather than silently ignored.
         let _ = &s;
         false
     });
@@ -860,9 +860,9 @@ const BOOTSTRAP: &str = r#"
     __silica_fail("the plugin class has no onload");
     return "";
   }
-  // `onload` is usually async and the registrations happen after its first
-  // await, so the promise is caught here and its jobs are drained by the
-  // caller before the registrations are read.
+  // * `onload` is usually async and the registrations happen after its first
+  // * await, so the promise is caught here and its jobs are drained by the
+  // * caller before the registrations are read.
   Promise.resolve(plugin.onload()).catch(function (error) {
     __silica_fail("onload threw: " + __silica_message(error));
   });
@@ -875,8 +875,8 @@ const BOOTSTRAP: &str = r#"
 /// the first `await`.
 fn drain_jobs(runtime: &Runtime) {
     while runtime.is_job_pending() {
-        // A job that throws has already been recorded as the plugin's
-        // failure; a job that loops is stopped by the load deadline.
+        // * A job that throws has already been recorded as the plugin's
+        // * failure; a job that loops is stopped by the load deadline.
         if runtime.execute_pending_job().is_err() {
             break;
         }
@@ -1083,7 +1083,7 @@ mod path_tests {
         let (dir, shared) = vault(None);
         let root = dir.path().canonicalize().unwrap();
         let outside = tempfile::tempdir().unwrap();
-        // `escape` is inside the vault by every string measure and points out.
+        // * `escape` is inside the vault by every string measure and points out.
         std::os::unix::fs::symlink(outside.path(), root.join("escape")).unwrap();
 
         let err = shared
@@ -1114,15 +1114,15 @@ mod path_tests {
         std::fs::create_dir_all(root.join("notes")).unwrap();
         std::fs::write(root.join("notes/plan.md"), "saved").unwrap();
 
-        // Same file as the open note on a case-insensitive filesystem.
+        // * Same file as the open note on a case-insensitive filesystem.
         let err = shared
             .borrow()
             .writable("notes/plan.md")
             .expect_err("a differently capitalised open note must be refused");
         assert!(err.contains("open in the editor"), "{err}");
-        // The exact spelling is still refused too.
+        // * The exact spelling is still refused too.
         assert!(shared.borrow().writable("Notes/Plan.md").is_err());
-        // A different note is not.
+        // * A different note is not.
         assert!(shared.borrow().writable("Other.md").is_ok());
     }
 
@@ -1133,16 +1133,16 @@ mod path_tests {
         std::fs::create_dir_all(root.join("Notes")).unwrap();
         std::fs::write(root.join("Notes/Plan.md"), "saved").unwrap();
 
-        // The folder, not the file: `writable` would allow this.
+        // * The folder, not the file: `writable` would allow this.
         let err = shared
             .borrow()
             .writable_tree("Notes")
             .expect_err("the open note's folder must be refused");
         assert!(err.contains("contains the note"), "{err}");
-        // A sibling folder is fine.
+        // * A sibling folder is fine.
         std::fs::create_dir_all(root.join("Other")).unwrap();
         assert!(shared.borrow().writable_tree("Other").is_ok());
-        // So is a folder whose name only shares a prefix.
+        // * So is a folder whose name only shares a prefix.
         std::fs::create_dir_all(root.join("Notes-old")).unwrap();
         assert!(shared.borrow().writable_tree("Notes-old").is_ok());
     }

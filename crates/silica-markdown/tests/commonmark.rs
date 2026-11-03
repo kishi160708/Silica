@@ -102,7 +102,7 @@ fn unescape_json(s: &str) -> String {
                 let hex: String = chars.by_ref().take(4).collect();
                 let code = u32::from_str_radix(&hex, 16).unwrap();
                 if (0xd800..0xdc00).contains(&code) {
-                    // Surrogate pair.
+                    // * Surrogate pair.
                     let _ = chars.next();
                     let _ = chars.next();
                     let hex2: String = chars.by_ref().take(4).collect();

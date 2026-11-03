@@ -63,8 +63,8 @@ fn link(line: &str, col: usize) -> Option<Triggered<'_>> {
     let before = &line[..col];
     let open = before.rfind("[[")?;
     let query = &before[open + 2..];
-    // A cursor past the end of the link (`[[Alpha]]|`) is not in it. One
-    // still inside (`[[al|]]`) is: the brackets only close after the cursor.
+    // * A cursor past the end of the link (`[[Alpha]]|`) is not in it. One
+    // * still inside (`[[al|]]`) is: the brackets only close after the cursor.
     if query.contains(']') || query.contains('[') {
         return None;
     }
@@ -83,7 +83,7 @@ fn link(line: &str, col: usize) -> Option<Triggered<'_>> {
 /// through the cursor. `word#tag` does not trigger.
 fn tag(line: &str, col: usize) -> Option<Triggered<'_>> {
     let before = &line[..col];
-    // Back over the tag characters typed so far.
+    // * Back over the tag characters typed so far.
     let mut start = col;
     for (i, c) in before.char_indices().rev() {
         if !is_tag_char(c) {
@@ -91,7 +91,7 @@ fn tag(line: &str, col: usize) -> Option<Triggered<'_>> {
         }
         start = i;
     }
-    // What they hang off has to be the `#`.
+    // * What they hang off has to be the `#`.
     if !before[..start].ends_with('#') {
         return None;
     }
@@ -127,7 +127,7 @@ mod tests {
         assert_eq!(at_end("[["), Some((Kind::Link, "[[", "")));
         assert_eq!(at_end("[[al"), Some((Kind::Link, "[[al", "al")));
         assert_eq!(at_end("see [[al"), Some((Kind::Link, "[[al", "al")));
-        // Spaces, folders, `#`, `^` and `|` all stay in the one query.
+        // * Spaces, folders, `#`, `^` and `|` all stay in the one query.
         assert_eq!(
             at_end("[[beta no"),
             Some((Kind::Link, "[[beta no", "beta no"))
@@ -146,7 +146,7 @@ mod tests {
             Some((Kind::Link, "[[Alpha|disp", "Alpha|disp"))
         );
         assert_eq!(at_end("[[al "), Some((Kind::Link, "[[al ", "al ")));
-        // Obsidian takes the last `[[` of a run.
+        // * Obsidian takes the last `[[` of a run.
         assert_eq!(at_end("[[[al"), Some((Kind::Link, "[[al", "al")));
     }
 
@@ -156,7 +156,7 @@ mod tests {
         assert_eq!(at_end("[[Alpha]]"), None);
         assert_eq!(at_end("[text]("), None);
         assert_eq!(at_end("[text](al"), None);
-        // A cursor inside the brackets still triggers.
+        // * A cursor inside the brackets still triggers.
         let t = trigger("[[al]]", 4).expect("triggers inside");
         assert_eq!((t.kind, t.query), (Kind::Link, "al"));
         assert_eq!(t.range, 0..4);
@@ -187,7 +187,7 @@ mod tests {
             Some((Kind::Tag, "#project/", "project/"))
         );
         assert_eq!(at_end("tags: #inl"), Some((Kind::Tag, "#inl", "inl")));
-        // Not after a letter, and not once the tag has ended.
+        // * Not after a letter, and not once the tag has ended.
         assert_eq!(at_end("word#inl"), None);
         assert_eq!(at_end("#inl and"), None);
     }
@@ -209,7 +209,7 @@ mod tests {
 
     #[test]
     fn the_query_is_what_the_cursor_sees() {
-        // The cursor before the query's end cuts it short.
+        // * The cursor before the query's end cuts it short.
         let t = trigger("[[Alpha", 4).expect("triggers");
         assert_eq!(t.query, "Al");
         assert_eq!(t.range, 0..4);

@@ -182,7 +182,7 @@ fn file_suggestions(query: &str, v: &Vault<'_>) -> Vec<Suggestion> {
             }
         }
     }
-    // An alias scores just below its file, and the newest file wins a tie.
+    // * An alias scores just below its file, and the newest file wins a tie.
     scored.sort_by(|a, b| {
         b.0.partial_cmp(&a.0)
             .unwrap_or(std::cmp::Ordering::Equal)
@@ -190,8 +190,8 @@ fn file_suggestions(query: &str, v: &Vault<'_>) -> Vec<Suggestion> {
             .then_with(|| a.2.label.cmp(&b.2.label))
     });
     let mut out: Vec<Suggestion> = scored.into_iter().map(|(_, _, s)| s).collect();
-    // A query nothing matches offers to link it as typed; no file is created
-    // until the link is followed.
+    // * A query nothing matches offers to link it as typed; no file is created
+    // * until the link is followed.
     if out.is_empty() && !query.is_empty() {
         out.push(Suggestion::new(
             Item::Literal,
@@ -256,8 +256,8 @@ fn block_suggestions(path: &str, query: &str, v: &Vault<'_>) -> Vec<Suggestion> 
     } else {
         target.clone()
     };
-    // Every block of the note in document order: the sections Obsidian
-    // writes an id onto, and a list's items rather than the list itself.
+    // * Every block of the note in document order: the sections Obsidian
+    // * writes an id onto, and a list's items rather than the list itself.
     let sections = meta.sections.iter().filter_map(|s| {
         let placement = Placement::of(s.kind)?;
         Some((s.position, s.id.clone(), placement))
@@ -289,11 +289,11 @@ fn block_suggestions(path: &str, query: &str, v: &Vault<'_>) -> Vec<Suggestion> 
         };
         let mut s = Suggestion::new(item, label.clone(), detail);
         if !query.is_empty() {
-            // A caret query is matched as a substring, not fuzzily the way
-            // a file query is: Obsidian offers `A paragraph.` for `^ara`
-            // and does not offer `Some text with ...`, which a subsequence
-            // match would. It matches the block's text or the id it
-            // carries, either way and whatever the case.
+            // * A caret query is matched as a substring, not fuzzily the way
+            // * a file query is: Obsidian offers `A paragraph.` for `^ara`
+            // * and does not offer `Some text with ...`, which a subsequence
+            // * match would. It matches the block's text or the id it
+            // * carries, either way and whatever the case.
             let by_id = match &id {
                 BlockId::Existing(id) => contains_fold(id, query).is_some(),
                 BlockId::New { .. } => false,
@@ -306,8 +306,8 @@ fn block_suggestions(path: &str, query: &str, v: &Vault<'_>) -> Vec<Suggestion> 
         }
         rows.push((position.start.offset, s));
     }
-    // A list and its only item can start at the same byte; the item wins,
-    // being the row Obsidian offers.
+    // * A list and its only item can start at the same byte; the item wins,
+    // * being the row Obsidian offers.
     rows.sort_by_key(|(at, _)| *at);
     rows.dedup_by(|a, b| a.0 == b.0);
     rows.into_iter().map(|(_, s)| s).collect()
@@ -317,8 +317,8 @@ fn block_suggestions(path: &str, query: &str, v: &Vault<'_>) -> Vec<Suggestion> 
 /// what a block id and the text around one are in practice.
 fn contains_fold(hay: &str, needle: &str) -> Option<Range<usize>> {
     let (h, n) = (hay.to_lowercase(), needle.to_lowercase());
-    // Lowercasing can change byte lengths, so the hit is mapped back by
-    // walking the original's char boundaries.
+    // * Lowercasing can change byte lengths, so the hit is mapped back by
+    // * walking the original's char boundaries.
     let at = h.find(&n)?;
     let prefix_chars = h[..at].chars().count();
     let start = hay
@@ -401,8 +401,8 @@ fn tag_suggestions(query: &str, v: &Vault<'_>) -> Vec<Suggestion> {
     for name in v.cache.tags().keys() {
         names.push(name);
     }
-    // `project/alpha` also offers `project`; the tag pane counts them the
-    // same way.
+    // * `project/alpha` also offers `project`; the tag pane counts them the
+    // * same way.
     let mut all: Vec<String> = Vec::new();
     for name in &names {
         let mut at = 0;

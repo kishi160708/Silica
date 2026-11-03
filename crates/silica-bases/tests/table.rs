@@ -148,13 +148,13 @@ fn an_id_names_its_namespace() {
     let cases: &[(&str, ColumnSource)] = &[
         ("status", ColumnSource::Property("status".into())),
         ("note.status", ColumnSource::Property("status".into())),
-        // Names are case-insensitive everywhere in the language.
+        // * Names are case-insensitive everywhere in the language.
         ("NOTE.status", ColumnSource::Property("status".into())),
         ("file.name", ColumnSource::File("name".into())),
         ("File.ctime", ColumnSource::File("ctime".into())),
         ("formula.ppu", ColumnSource::Formula("ppu".into())),
-        // A dot that names no namespace is part of the property's own name:
-        // a frontmatter key may hold one.
+        // * A dot that names no namespace is part of the property's own name:
+        // * a frontmatter key may hold one.
         ("my.key", ColumnSource::Property("my.key".into())),
         ("note.", ColumnSource::Property("note.".into())),
     ];
@@ -266,13 +266,13 @@ fn a_filter_group_is_all_any_and_none() {
         ("filters:\n  and: ['n > 1', 'n < 3']\n", &["B"]),
         ("filters:\n  or: ['n == 1', 'n == 3']\n", &["A", "C"]),
         ("filters:\n  not: ['n == 2']\n", &["A", "C"]),
-        // Nested, as the run's own fixture nests them.
+        // * Nested, as the run's own fixture nests them.
         (
             "filters:\n  and:\n    - 'n != 2'\n    - or:\n        - 'n > 2'\n        - not:\n            - 'n > 0'\n",
             &["C"],
         ),
-        // An empty group follows the conjunction's own wording: all of
-        // nothing is true, any of nothing is not.
+        // * An empty group follows the conjunction's own wording: all of
+        // * nothing is true, any of nothing is not.
         ("filters:\n  and: []\n", &["A", "B", "C"]),
         ("filters:\n  or: []\n", &[]),
         ("filters:\n  not: []\n", &["A", "B", "C"]),
@@ -427,7 +427,7 @@ fn sort_orders_by_each_key_in_turn() {
     let cases: &[(&str, &[&str])] = &[
         ("      - property: g\n        direction: ASC\n", &["C", "A", "B"]),
         ("      - property: g\n        direction: DESC\n", &["A", "B", "C"]),
-        // No direction is ascending.
+        // * No direction is ascending.
         ("      - property: n\n", &["B", "A", "C"]),
         (
             "      - property: g\n        direction: ASC\n      - property: n\n        direction: DESC\n",
@@ -437,7 +437,7 @@ fn sort_orders_by_each_key_in_turn() {
             "      - property: g\n        direction: DESC\n      - property: n\n        direction: ASC\n",
             &["B", "A", "C"],
         ),
-        // A file property sorts like any other.
+        // * A file property sorts like any other.
         ("      - property: file.name\n        direction: DESC\n", &["C", "B", "A"]),
     ];
     for (sort, want) in cases {
@@ -517,8 +517,8 @@ fn a_null_sorts_first_and_mixed_types_hold_still() {
         ["A", "C", "B"]
     );
 
-    // `"abc" > 1` is false and so is `1 > "abc"`, so there is no ordering to
-    // recover: the two hold the order they came in.
+    // * `"abc" > 1` is false and so is `1 > "abc"`, so there is no ordering to
+    // * recover: the two hold the order they came in.
     let mixed = vec![
         note("A", &[("n", Value::str("abc"))], &[]),
         note("B", &[("n", Value::Number(1.0))], &[]),
@@ -561,8 +561,8 @@ fn limit_cuts_the_sorted_rows_and_says_so() {
     );
     assert!(table.limited);
 
-    // A limit that cuts nothing does not set the flag — the run's own view
-    // had `limit: 10` over four results.
+    // * A limit that cuts nothing does not set the flag — the run's own view
+    // * had `limit: 10` over four results.
     let table = table::build(&base(&yaml("10")), 0, &env(rows));
     assert_eq!(table.rows.len(), 3);
     assert!(!table.limited);
@@ -616,7 +616,7 @@ fn groups_come_out_in_the_group_bys_direction() {
     let table = table::build(&base(&yaml("ASC")), 0, &env(rows.clone()));
     let keys: Vec<Option<&str>> = table.groups.iter().map(|g| g.key.as_deref()).collect();
     assert_eq!(keys, [None, Some("alpha"), Some("beta")]);
-    // `rows` is the groups flattened, in view order.
+    // * `rows` is the groups flattened, in view order.
     assert_eq!(
         table
             .rows
@@ -718,7 +718,7 @@ fn an_empty_base_has_one_default_table_view() {
         assert_eq!(table.unknown_kind, None, "{text:?}");
         assert_eq!(table.rows.len(), 1, "{text:?}");
     }
-    // There is only the one; asking for a second answers nothing.
+    // * There is only the one; asking for a second answers nothing.
     let table = table::build(&base(""), 1, &env(vec![]));
     assert!(table.rows.is_empty() && table.columns.is_empty() && table.unknown_kind.is_none());
 }
@@ -749,7 +749,7 @@ fn a_view_with_no_order_takes_the_rows_own_properties() {
     assert_eq!(displays(&table), ["type", "status", "density"]);
     assert_eq!(texts(&table), [["rock", "todo", ""], ["", "done", "1"]]);
 
-    // `columns()` cannot see the rows, so it answers only the view's `order`.
+    // * `columns()` cannot see the rows, so it answers only the view's `order`.
     let empty = base("");
     assert!(table::columns(&empty, &silica_formats::base::View::default()).is_empty());
 }
@@ -770,12 +770,12 @@ fn a_view_with_no_order_takes_the_rows_own_properties() {
 fn the_copied_table_is_the_one_the_run_copied() {
     let rock = ["#rock"];
     let rows = vec![
-        // Two rows with no `status`: `null != "done"` is true, they carry the
-        // tag, and `not: [silica < 50]` is true of a null, so they pass. Their
-        // `ppu` is null, which renders empty.
+        // * Two rows with no `status`: `null != "done"` is true, they carry the
+        // * tag, and `not: [silica < 50]` is true of a null, so they pass. Their
+        // * `ppu` is null, which renders empty.
         note("Pumice", &[], &rock),
         note("Basalt", &[], &rock),
-        // `density > 1` fails but `silica < 50` is false, so the `not` passes.
+        // * `density > 1` fails but `silica < 50` is false, so the `not` passes.
         note(
             "Zeta",
             &[
@@ -794,7 +794,7 @@ fn the_copied_table_is_the_one_the_run_copied() {
             ],
             &rock,
         ),
-        // Filtered out three different ways.
+        // * Filtered out three different ways.
         note(
             "Done",
             &[
@@ -825,7 +825,7 @@ fn the_copied_table_is_the_one_the_run_copied() {
     );
     assert!(!table.limited);
 
-    // The null-status group first, then `todo`; inside it, `file.name` DESC.
+    // * The null-status group first, then `todo`; inside it, `file.name` DESC.
     let keys: Vec<Option<&str>> = table.groups.iter().map(|g| g.key.as_deref()).collect();
     assert_eq!(keys, [None, Some("todo")]);
     assert_eq!(
@@ -837,7 +837,7 @@ fn the_copied_table_is_the_one_the_run_copied() {
         ["Zeta", "Alpha"]
     );
 
-    // The base's second view is the cards one, and it resolves the same way.
+    // * The base's second view is the cards one, and it resolves the same way.
     let cards = table::build(&base, 1, &env(vec![note("Pumice", &[], &rock)]));
     assert_eq!(cards.unknown_kind, None);
     assert_eq!(displays(&cards), ["file name", "Price per unit"]);

@@ -227,8 +227,8 @@ impl BasesView {
                     .iter()
                     .map(|row| {
                         let mut card = card_of(row, columns);
-                        // Only a view that names an `image` property has one;
-                        // `Row::image` is `None` otherwise.
+                        // * Only a view that names an `image` property has one;
+                        //   `Row::image` is `None` otherwise.
                         if let (Some(cell), Some(vault)) = (row.image.as_ref(), vault.as_deref()) {
                             match image_ref(cell, &row.file.path, vault) {
                                 Some(ImageRef::File(path)) => card.image = Some(path),
@@ -339,8 +339,8 @@ impl BasesView {
             .hover(|s| s.bg(theme.bg_alt))
             .on_click(cx.listener(move |this, _, _, cx| this.open(path.clone(), cx)));
         if self.cards.has_image {
-            // The box is drawn whether or not the property answered, so a
-            // row with no image does not shuffle the grid out of line.
+            // * The box is drawn whether or not the property answered, so a
+            //   row with no image does not shuffle the grid out of line.
             let mut frame = div()
                 .w_full()
                 .h(px(metrics.image_height))
@@ -561,8 +561,8 @@ mod tests {
 
     #[test]
     fn a_card_size_outside_the_sliders_range_is_drawn_at_its_bound() {
-        // The reader keeps `cardSize: 4000` as the file wrote it; only the
-        // draw bounds it, at the slider's own maximum.
+        // * The reader keeps `cardSize: 4000` as the file wrote it; only the
+        //   draw bounds it, at the slider's own maximum.
         let huge = metrics(&CardsLayout {
             card_size: 4000.,
             ..CardsLayout::default()
@@ -601,8 +601,8 @@ mod tests {
         let table = table_of(
             vec![a.clone(), b.clone()],
             vec![
-                // The no-value group leads under an ascending `groupBy`,
-                // which is observed; this only keeps the table's order.
+                // * The no-value group leads under an ascending `groupBy`,
+                //   which is observed; this only keeps the table's order.
                 Group {
                     key: None,
                     rows: vec![a.clone()],

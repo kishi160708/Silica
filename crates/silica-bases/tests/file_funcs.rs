@@ -36,11 +36,11 @@ fn silica() -> FileData {
         size: 483.0,
         ctime: Some(stamp("2026-10-25T15:28:44")),
         mtime: Some(stamp("2026-10-25T15:28:44")),
-        // Merged from the `tags` property and the inline `#rock`, with the
-        // `#` Obsidian carries.
+        // * Merged from the `tags` property and the inline `#rock`, with the
+        // * `#` Obsidian carries.
         tags: vec!["#rock".into(), "#igneous/extrusive".into()],
-        // The frontmatter `linkish: "[[Pumice]]"` and the body's `[[Pumice]]`
-        // and `[[Basalt]]`: three, in the order the run rendered them.
+        // * The frontmatter `linkish: "[[Pumice]]"` and the body's `[[Pumice]]`
+        // * and `[[Basalt]]`: three, in the order the run rendered them.
         links: vec![
             link("Pumice", "Pumice"),
             link("Pumice", "Pumice"),
@@ -50,7 +50,7 @@ fn silica() -> FileData {
         backlinks: vec![link("Pumice.md", "Pumice")],
         ..FileData::default()
     };
-    // The fixture note's frontmatter, in file order.
+    // * The fixture note's frontmatter, in file order.
     let props = &mut file.properties;
     props.insert("type".into(), Value::str("rock"));
     props.insert("status".into(), Value::str("todo"));
@@ -169,7 +169,7 @@ fn check(cases: &[(&str, &str)]) {
 #[test]
 fn file_properties_are_the_recorded_ones() {
     check(&[
-        // Observed, e17 and e14.
+        // * Observed, e17 and e14.
         ("file", "Silica.md"),
         ("file.toString()", "Silica.md"),
         ("file.isTruthy()", "true"),
@@ -183,17 +183,17 @@ fn file_properties_are_the_recorded_ones() {
         ("file.mtime", "2026-10-25T15:28:44"),
         ("file.file", "Silica.md"),
         ("file.properties.status", "todo"),
-        // `fullname` is in the completion list but was never evaluated:
-        // `unprobed`, and the reading is the file name with its extension.
+        // ? `fullname` is in the completion list but was never evaluated:
+        // ? `unprobed`, and the reading is the file name with its extension.
         ("file.fullname", "Silica.md"),
-        // Every name is case-insensitive; `file.NAME` and `file.Name` are
-        // observed, the rest follow the same dispatch.
+        // * Every name is case-insensitive; `file.NAME` and `file.Name` are
+        // * observed, the rest follow the same dispatch.
         ("file.NAME", "Silica"),
         ("file.Name", "Silica"),
         ("file.PATH", "Silica.md"),
         ("file.properties.STATUS", "todo"),
-        // The list-ish properties, through `List.toString()`'s observed
-        // `", "` join rather than the cell's own `,`.
+        // * The list-ish properties, through `List.toString()`'s observed
+        // * `", "` join rather than the cell's own `,`.
         ("file.tags", "#rock, #igneous/extrusive"),
         (
             "file.links",
@@ -206,8 +206,8 @@ fn file_properties_are_the_recorded_ones() {
 
 #[test]
 fn an_unknown_property_is_obsidians_own_refusal() {
-    // Observed, e08: every name off the table is refused by this wording, and
-    // a function name reached without its parentheses is one of those.
+    // * Observed, e08: every name off the table is refused by this wording, and
+    // * a function name reached without its parentheses is one of those.
     check(&[
         (
             "file.constructor",
@@ -221,7 +221,7 @@ fn an_unknown_property_is_obsidians_own_refusal() {
 
 #[test]
 fn an_unknown_function_is_obsidians_own_refusal() {
-    // Observed, e08.
+    // * Observed, e08.
     check(&[
         (
             "file.equals()",
@@ -256,27 +256,27 @@ fn an_unknown_function_is_obsidians_own_refusal() {
 #[test]
 fn hastag_is_the_one_case_insensitive_value_comparison() {
     check(&[
-        // Observed, e17: all three are true on a note tagged `#rock`, and the
-        // `#` is optional.
+        // * Observed, e17: all three are true on a note tagged `#rock`, and the
+        // * `#` is optional.
         ("file.hasTag(\"rock\")", "true"),
         ("file.hasTag(\"Rock\")", "true"),
         ("file.hasTag(\"#rock\")", "true"),
-        // Observed, e14: no values at all is false, not a refusal.
+        // * Observed, e14: no values at all is false, not a refusal.
         ("file.hasTag()", "false"),
         ("file.hasTag(\"nope\")", "false"),
-        // "any of the values": variadic.
+        // * "any of the values": variadic.
         ("file.hasTag(\"nope\", \"rock\")", "true"),
         ("file.hasTag(\"nope\", \"nope2\")", "false"),
-        // The nested tag, whole and by case.
+        // * The nested tag, whole and by case.
         ("file.hasTag(\"igneous/extrusive\")", "true"),
         ("file.hasTag(\"#IGNEOUS/Extrusive\")", "true"),
-        // `unprobed`: a parent of a nested tag matches, as it does in
-        // Obsidian's search and in `silica-search`.
+        // ? `unprobed`: a parent of a nested tag matches, as it does in
+        // ? Obsidian's search and in `silica-search`.
         ("file.hasTag(\"igneous\")", "true"),
         ("file.hasTag(\"extrusive\")", "false"),
         ("file.hasTag(\"roc\")", "false"),
-        // `unprobed`: the signature says String, so a RegExp is the same
-        // refusal every other String parameter gives.
+        // ? `unprobed`: the signature says String, so a RegExp is the same
+        // ? refusal every other String parameter gives.
         (
             "file.hasTag(/zz/)",
             "Type error in \"hasTag\", parameter \"values\". Expected String, given RegExp.",
@@ -290,13 +290,13 @@ fn hastag_is_the_one_case_insensitive_value_comparison() {
 fn hasproperty_asks_the_notes_own_key_set() {
     check(&[
         ("file.hasProperty(\"status\")", "true"),
-        // Names are case-insensitive.
+        // * Names are case-insensitive.
         ("file.hasProperty(\"STATUS\")", "true"),
         ("file.hasProperty(\"linkish\")", "true"),
-        // Present and empty is still present.
+        // * Present and empty is still present.
         ("file.hasProperty(\"empty\")", "true"),
         ("file.hasProperty(\"nosuch\")", "false"),
-        // Values are not: a property is matched by name, never by value.
+        // * Values are not: a property is matched by name, never by value.
         ("file.hasProperty(\"todo\")", "false"),
     ]);
 }
@@ -304,14 +304,14 @@ fn hasproperty_asks_the_notes_own_key_set() {
 #[test]
 fn infolder_matches_the_root_and_the_folders_above() {
     check(&[
-        // The row is at the root, where `file.folder` is `/`.
+        // * The row is at the root, where `file.folder` is `/`.
         ("file.inFolder(\"/\")", "true"),
         ("file.inFolder(\"\")", "true"),
         ("file.inFolder(\"Notes\")", "false"),
     ]);
 
-    // A row in a folder. `unprobed`: a folder holds the files of its
-    // subfolders, and the comparison ignores case, as vault paths do.
+    // ? A row in a folder. `unprobed`: a folder holds the files of its
+    // ? subfolders, and the comparison ignores case, as vault paths do.
     let nested = FileData {
         name: "Tuff".into(),
         basename: "Tuff".into(),
@@ -338,19 +338,19 @@ fn infolder_matches_the_root_and_the_folders_above() {
 #[test]
 fn haslink_resolves_both_sides_through_the_host() {
     check(&[
-        // The written target is `Pumice`; the file's path is `Pumice.md`.
+        // * The written target is `Pumice`; the file's path is `Pumice.md`.
         ("file.hasLink(\"Pumice\")", "true"),
         ("file.hasLink(\"Pumice.md\")", "true"),
         ("file.hasLink(\"Basalt\")", "true"),
-        // A Link and a File are both `dest`.
+        // * A Link and a File are both `dest`.
         ("file.hasLink(linkish)", "true"),
         ("file.hasLink(linkish.asFile())", "true"),
-        // The row does not link to itself, and `Bare.md` is unlinked.
+        // * The row does not link to itself, and `Bare.md` is unlinked.
         ("file.hasLink(file)", "false"),
         ("file.hasLink(\"Bare\")", "false"),
     ]);
 
-    // A target the host cannot resolve still compares by what was written.
+    // * A target the host cannot resolve still compares by what was written.
     let mut ghosted = silica();
     ghosted.links = vec![LinkValue {
         path: "Ghost".into(),
@@ -375,16 +375,16 @@ fn aslink_is_a_link_to_the_files_own_path() {
             display: None,
         })
     );
-    // Observed: the cell renders `Silica.md`, which is a Link's text when it
-    // carries no alias. `toString()` is the wikilink.
+    // * Observed: the cell renders `Silica.md`, which is a Link's text when it
+    // * carries no alias. `toString()` is the wikilink.
     let Value::Link(l) = &value else {
         unreachable!("just asserted a Link")
     };
     assert_eq!(l.text(), "Silica.md");
     assert_eq!(value.to_string(), "[[Silica.md]]");
 
-    // `unprobed`: the optional `display` becomes the alias, and a null one is
-    // no alias at all.
+    // ? `unprobed`: the optional `display` becomes the alias, and a null one is
+    // ? no alias at all.
     check(&[
         ("file.asLink(\"Cinder\")", "[[Silica.md|Cinder]]"),
         ("file.asLink(12)", "[[Silica.md|12]]"),
@@ -397,7 +397,7 @@ fn aslink_is_a_link_to_the_files_own_path() {
 #[test]
 fn a_link_resolves_to_its_file() {
     check(&[
-        // Observed, e06 and e11: `linkish` is `[[Pumice]]`.
+        // * Observed, e06 and e11: `linkish` is `[[Pumice]]`.
         ("linkish", "[[Pumice]]"),
         ("linkish.toString()", "[[Pumice]]"),
         ("linkish.asFile()", "Pumice.md"),
@@ -406,8 +406,8 @@ fn a_link_resolves_to_its_file() {
         ("linkish.isTruthy()", "true"),
     ]);
 
-    // `unprobed`: a target the host cannot resolve is null, and null absorbs
-    // from there.
+    // ? `unprobed`: a target the host cannot resolve is null, and null absorbs
+    // ? from there.
     let mut ghosted = silica();
     ghosted.properties.insert(
         "linkish".into(),
@@ -426,7 +426,7 @@ fn linksto_takes_a_file_and_nothing_else() {
     check(&[
         ("linkish.linksTo(linkish.asFile())", "true"),
         ("linkish.linksTo(file)", "false"),
-        // Observed, e14.
+        // * Observed, e14.
         (
             "linkish.linksTo()",
             "Cannot call function \"linksTo\", not enough arguments.",
@@ -443,8 +443,8 @@ fn linksto_takes_a_file_and_nothing_else() {
             "linkish.linksTo(/zz/, /zz/, /zz/)",
             "Type error in \"linksTo\", parameter \"file\". Expected File, given RegExp.",
         ),
-        // `unprobed`: the signature names File alone, so a String is refused
-        // the same way — unlike `hasLink`, whose signature lists three types.
+        // ? `unprobed`: the signature names File alone, so a String is refused
+        // ? the same way — unlike `hasLink`, whose signature lists three types.
         (
             "linkish.linksTo(\"Pumice\")",
             "Type error in \"linksTo\", parameter \"file\". Expected File, given String.",
@@ -454,9 +454,9 @@ fn linksto_takes_a_file_and_nothing_else() {
 
 #[test]
 fn a_link_is_a_string_receiver() {
-    // Observed, e14: everything but `asFile()` and `linksTo()` on a Link is
-    // the String set, working on the link's text. These answers come from
-    // `funcs::text`, not from `funcs::file`.
+    // * Observed, e14: everything but `asFile()` and `linksTo()` on a Link is
+    // * the String set, working on the link's text. These answers come from
+    // * `funcs::text`, not from `funcs::file`.
     check(&[
         ("linkish.lower()", "pumice"),
         ("linkish.title()", "Pumice"),
@@ -480,8 +480,8 @@ fn a_link_is_a_string_receiver() {
 
 #[test]
 fn the_refusals_are_obsidians_own_strings() {
-    // Observed, e14: the minimum arity first, then the parameter's type —
-    // two and three arguments are still the type error, never *too many*.
+    // * Observed, e14: the minimum arity first, then the parameter's type —
+    // * two and three arguments are still the type error, never *too many*.
     check(&[
         (
             "file.hasLink()",
@@ -531,9 +531,9 @@ fn the_refusals_are_obsidians_own_strings() {
             "file.inFolder(/zz/, /zz/, /zz/)",
             "Type error in \"inFolder\", parameter \"folder\". Expected String, given RegExp.",
         ),
-        // `unprobed`: the maximum is reached only once the declared parameter
-        // has type-checked, which is the order `funcs::number` records for
-        // `toFixed` and `funcs::text` for `contains`.
+        // ? `unprobed`: the maximum is reached only once the declared parameter
+        // ? has type-checked, which is the order `funcs::number` records for
+        // ? `toFixed` and `funcs::text` for `contains`.
         (
             "file.hasProperty(\"status\", \"status\")",
             "Cannot call function \"hasProperty\", too many arguments.",
@@ -557,8 +557,8 @@ fn the_refusals_are_obsidians_own_strings() {
 
 #[test]
 fn a_row_without_a_file_answers_null() {
-    // The dispatcher's rule, checked here because `file` is the one ident
-    // that can be missing: a view can be asked for a row that has no file.
+    // ! The dispatcher's rule, checked here because `file` is the one ident
+    // ! that can be missing: a view can be asked for a row that has no file.
     let ctx = SimpleContext::new();
     for expr in [
         "file.name",
@@ -579,16 +579,16 @@ fn a_row_without_a_file_answers_null() {
 
 #[test]
 fn this_is_the_base_file_and_its_name_keeps_the_extension() {
-    // Observed, e11 and e17: `this.file.name` is `Main.base` where the row's
-    // own `file.name` is `Silica`. That contrast is the whole evidence for
-    // what `name` holds — a file name with the `.md` dropped and any other
-    // extension kept.
+    // * Observed, e11 and e17: `this.file.name` is `Main.base` where the row's
+    // * own `file.name` is `Silica`. That contrast is the whole evidence for
+    // * what `name` holds — a file name with the `.md` dropped and any other
+    // * extension kept.
     //
-    // Only `this.file.*` is asserted here. What `this` itself is beyond that
-    // is not this module's to say and the run does not settle it: the
-    // completion list for `this.` is the File *functions* plus `file`,
-    // `note`, `formula`, `this` and the vault's frontmatter names, and none
-    // of the File properties, so `this` is not simply a File value.
+    // * Only `this.file.*` is asserted here. What `this` itself is beyond that
+    // * is not this module's to say and the run does not settle it: the
+    // * completion list for `this.` is the File *functions* plus `file`,
+    // * `note`, `formula`, `this` and the vault's frontmatter names, and none
+    // * of the File properties, so `this` is not simply a File value.
     check(&[
         ("this.file.name", "Main.base"),
         ("this.file.path", "Main.base"),

@@ -278,13 +278,13 @@ impl Cards {
             .get(&node.id)
             .expect("the entry was just inserted");
 
-        // At and below the threshold Obsidian hides a card's content: a
-        // text card shows a text icon, a note card its name; an image stays
-        // an image and a group keeps its background (it is the group). Its
-        // label is the view's. A link card keeps Silica's address card.
-        // OBSERVE: whether a PDF card keeps its pages when zoomed out the
-        // way an image does, or shows its name the way a note does; it
-        // shows its name here.
+        // * At and below the threshold Obsidian hides a card's content: a
+        //   text card shows a text icon, a note card its name; an image stays
+        //   an image and a group keeps its background (it is the group). Its
+        //   label is the view's. A link card keeps Silica's address card.
+        //   OBSERVE: whether a PDF card keeps its pages when zoomed out the
+        //   way an image does, or shows its name the way a note does; it
+        //   shows its name here.
         let zoomed_out = (scale as f64).log2() <= ZOOM_THRESHOLD;
         let keeps_content = matches!(entry.content, Content::Image(_))
             || matches!(node.kind, NodeType::Group | NodeType::Link);
@@ -314,11 +314,11 @@ impl Cards {
                     .size_full()
                     .object_fit(ObjectFit::Contain)
                     .into_any_element(),
-                // The same pages a note embed draws, filling the card: the
-                // zoom reaches them through the card's width.
+                // * The same pages a note embed draws, filling the card: the
+                //   zoom reaches them through the card's width.
                 Content::Pdf { absolute, page } => {
-                    // "Open" in the card's toolbar opens the file, through
-                    // the same link handler a card's links use.
+                    // * "Open" in the card's toolbar opens the file, through
+                    //   the same link handler a card's links use.
                     let path = node.file.clone().unwrap_or_default();
                     let open: crate::pdf::embed::OpenPath = {
                         let handler = self.on_link.clone();
@@ -352,17 +352,17 @@ impl Cards {
                     .object_fit(match style {
                         BackgroundStyle::Cover => ObjectFit::Cover,
                         BackgroundStyle::Ratio => ObjectFit::Contain,
-                        // gpui draws an image once; tiling would need the
-                        // image's own size, which it does not report before
-                        // painting. Fitting it is the nearest it can do.
+                        // * gpui draws an image once; tiling would need the
+                        //   image's own size, which it does not report before
+                        //   painting. Fitting it is the nearest it can do.
                         BackgroundStyle::Repeat => ObjectFit::Contain,
                     })
                     .into_any_element(),
                 Content::Empty => div().into_any_element(),
             }
         };
-        // The id scopes the element ids the renderer gives its runs of
-        // text (they start at 0 in every model) to this one card.
+        // * The id scopes the element ids the renderer gives its runs of
+        //   text (they start at 0 in every model) to this one card.
         div()
             .id(ElementId::Name(format!("card-{}", node.id).into()))
             .w(size.width)
@@ -476,8 +476,8 @@ impl Cards {
                         }
                     }
                     FileKind::Image => Content::Image(vault.absolute(&path)),
-                    // The node's `subpath` is the link's (`#page=2`), read
-                    // the way an embed's is.
+                    // * The node's `subpath` is the link's (`#page=2`), read
+                    //   the way an embed's is.
                     FileKind::Pdf => Content::Pdf {
                         absolute: vault.absolute(&path),
                         page: node
@@ -509,8 +509,8 @@ impl Cards {
                 let content = match locate(state, background) {
                     Some((path, _)) => Content::Background {
                         path: vault.absolute(&path),
-                        // Unset means `cover`: Obsidian writes the key only
-                        // when the user picked another style.
+                        // * Unset means `cover`: Obsidian writes the key only
+                        //   when the user picked another style.
                         style: node.background_style.unwrap_or(BackgroundStyle::Cover),
                     },
                     None => Content::Empty,
@@ -535,8 +535,8 @@ impl Cards {
         theme: &Theme,
         window: &mut Window,
     ) -> AnyElement {
-        // Every font size in the renderer is a multiple of the base, so a
-        // scaled base scales the text; the rem size scales the spacing.
+        // * Every font size in the renderer is a multiple of the base, so a
+        //   scaled base scales the text; the rem size scales the spacing.
         let mut scaled = theme.clone();
         scaled.base_font_size = theme.base_font_size * scale;
         let base = scaled.base_font_size;
@@ -562,14 +562,14 @@ impl Cards {
                 if !toggled.remove(&id) {
                     toggled.insert(id);
                 }
-                // The handler has no entity to notify; the window redraws
-                // and the next `render` reads the new fold state.
+                // * The handler has no entity to notify; the window redraws
+                //   and the next `render` reads the new fold state.
                 cx.refresh_windows();
             })
         };
         let host = ReadingHost {
             properties,
-            // The copy button copies; its check does not flash in a card.
+            // * The copy button copies; its check does not flash in a card.
             copied: None,
             on_copy: Rc::new(|_, _| {}),
             on_task: {
@@ -582,14 +582,14 @@ impl Cards {
                 })
             },
             preview_resolver: None,
-            // A canvas card has no player; its video opens in the system
-            // one, as it always has.
+            // * A canvas card has no player; its video opens in the system
+            //   one, as it always has.
             on_video: Rc::new(|path, _, _, cx| {
                 cx.open_url(&format!("file://{}", path.display()));
             }),
             video: Rc::new(std::cell::RefCell::new(None)),
-            // A canvas card has no canvas host either; the file card's own
-            // click opens it.
+            // * A canvas card has no canvas host either; the file card's own
+            //   click opens it.
             on_canvas: Rc::new(crate::reading::view::missing_canvas),
         };
         let renderer = Renderer::new(
@@ -598,7 +598,7 @@ impl Cards {
             available,
             &flipped,
             &types,
-            // Read-only, like the reading view.
+            // * Read-only, like the reading view.
             None,
             None,
             on_link,
@@ -718,8 +718,8 @@ fn locate(state: &VaultState, path: &str) -> Option<(String, FileKind)> {
     {
         return Some((file.path.clone(), file.kind));
     }
-    // Not in the scan (a file that just appeared, a folder the scan skips):
-    // the disk has the last word.
+    // * Not in the scan (a file that just appeared, a folder the scan skips):
+    //   the disk has the last word.
     if vault.exists(path) {
         let ext = path.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
         return Some((path.to_string(), FileKind::from_extension(ext)));
@@ -876,7 +876,7 @@ pub(crate) fn host_of(url: &str) -> String {
     let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
     let host = authority.rsplit('@').next().unwrap_or(authority);
     let host = if host.starts_with('[') {
-        // An IPv6 literal keeps its brackets and loses only a port after them.
+        // * An IPv6 literal keeps its brackets and loses only a port after them.
         match host.find(']') {
             Some(end) => &host[..=end],
             None => host,
@@ -988,7 +988,7 @@ mod tests {
     impl EmbedSource for Stub {
         fn resolve(&self, linktext: &str, _source: &str) -> Option<String> {
             let target = parse_linktext(linktext).path.trim_end_matches(".md");
-            // By file name, the way a shortest-path vault resolves.
+            // * By file name, the way a shortest-path vault resolves.
             self.0
                 .iter()
                 .map(|(p, _)| *p)
@@ -1039,9 +1039,9 @@ mod tests {
         let sub = parse_linktext("#One").subpath.unwrap();
         let model = build_section("Note.md", NOTE, &sub, &stub, BuildOptions::default()).unwrap();
         assert_eq!(headings(&model), ["One", "Deeper"]);
-        // Four blocks: the heading, a paragraph, the subheading, a paragraph.
+        // * Four blocks: the heading, a paragraph, the subheading, a paragraph.
         assert_eq!(model.blocks.len(), 4);
-        // The starts are positions in the note, so the view can scroll by them.
+        // * The starts are positions in the note, so the view can scroll by them.
         assert_eq!(model.starts[0], NOTE.find("## One").unwrap());
     }
 
@@ -1168,7 +1168,7 @@ mod tests {
         let mut cards = Cards::new();
         cards.tick = 10_000;
         for i in 0..MAX_ENTRIES + 10 {
-            // The first ten were last drawn long ago, the rest just now.
+            // * The first ten were last drawn long ago, the rest just now.
             let seen = if i < 10 { 0 } else { cards.tick - i as u64 };
             cards.entries.insert(
                 format!("n{i}"),
@@ -1180,7 +1180,7 @@ mod tests {
         assert!(!cards.entries.contains_key("n0"));
         assert!(cards.entries.contains_key("n10"));
 
-        // Every entry drawn this frame: the half seen longest ago goes.
+        // * Every entry drawn this frame: the half seen longest ago goes.
         let mut cards = Cards::new();
         cards.tick = 2 * MAX_ENTRIES as u64;
         for i in 0..2 * MAX_ENTRIES {
@@ -1266,7 +1266,7 @@ mod tests {
         assert_eq!(title, "Field.pdf");
         assert!(deps.contains(&Dep::path("docs/Field.pdf")), "{deps:?}");
 
-        // Without a subpath the card opens at the first page.
+        // * Without a subpath the card opens at the first page.
         node.subpath = None;
         let (content, _, _) = cards.build(&node, &state);
         assert!(matches!(content, Content::Pdf { page: None, .. }));

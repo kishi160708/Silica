@@ -67,10 +67,6 @@ use silica_formats::properties::{apply, new_block, plan, type_of, Change, Value}
 /// canvas's own right-click list does.
 pub const SEPARATOR: &str = "---";
 
-// ---------------------------------------------------------------------------
-// The column header's context menu
-// ---------------------------------------------------------------------------
-
 /// One row of the column header's context menu: the id a pick dispatches on,
 /// the label Obsidian draws, and whether picking it does anything here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -151,13 +147,9 @@ pub struct HeaderMenu {
     pub rows: Vec<MenuRow>,
 }
 
-// ---------------------------------------------------------------------------
-// What the menu writes into the view
-// ---------------------------------------------------------------------------
+// * What the menu writes into the view
 
-// ---------------------------------------------------------------------------
-// What a cell edit writes into the note
-// ---------------------------------------------------------------------------
+// * What a cell edit writes into the note
 
 /// The frontmatter key a column names, when the column is one a cell edit can
 /// write.
@@ -207,7 +199,7 @@ pub fn write_property(text: &str, key: &str, typed: &str, types: &PropertyTypes)
     if value == Value::Empty {
         return None;
     }
-    // A BOM is the one thing that may stand before the opening fence.
+    // * A BOM is the one thing that may stand before the opening fence.
     let at = if text.starts_with('\u{feff}') { 3 } else { 0 };
     let newline = if text.contains("\r\n") { "\r\n" } else { "\n" };
     let block = new_block(key, &value, newline);
@@ -229,9 +221,7 @@ pub fn resized_width(column_left: f32, pointer_x: f32) -> f32 {
     (pointer_x - column_left).max(MIN_COLUMN_WIDTH)
 }
 
-// ---------------------------------------------------------------------------
-// The state
-// ---------------------------------------------------------------------------
+// * The state
 
 /// The cell a field is open over: where it is drawn, and what it writes.
 ///
@@ -306,9 +296,7 @@ impl gpui::Render for ColumnDrag {
     }
 }
 
-// ---------------------------------------------------------------------------
-// The view's own methods
-// ---------------------------------------------------------------------------
+// * The view's own methods
 
 impl BasesView {
     // ----- the header menu ---------------------------------------------------
@@ -320,7 +308,7 @@ impl BasesView {
         position: Point<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        // Opening a menu is the last moment an open field can be written.
+        // * Opening a menu is the last moment an open field can be written.
         self.commit_cell_edit(cx);
         let Some(id) = self
             .table()
@@ -355,8 +343,8 @@ impl BasesView {
         let id = menu.id;
         match row {
             "hide-column" => {
-                // A view with no `order` shows the columns its rows imply,
-                // which is exactly the table's own column list.
+                // * A view with no `order` shows the columns its rows imply,
+                //   which is exactly the table's own column list.
                 let implied: Vec<String> = self
                     .table()
                     .map(|t| t.columns.iter().map(|c| c.id.clone()).collect())
@@ -366,9 +354,9 @@ impl BasesView {
             "sort-asc" => self.edit_view(move |view| prepend_sort(view, &id, ASC), cx),
             "sort-desc" => self.edit_view(move |view| prepend_sort(view, &id, DESC), cx),
             "clear-sort" => self.edit_view(move |view| clear_sort(view, &id), cx),
-            // *Summarize...* and *Edit property...* are drawn because they are
-            // observed and inert because what they open is not; see the module
-            // note.
+            // * *Summarize...* and *Edit property...* are drawn because they are
+            //   observed and inert because what they open is not; see the module
+            //   note.
             _ => {}
         }
         cx.notify();
@@ -495,9 +483,9 @@ impl BasesView {
             return field;
         }
         let field = cx.new(|cx| TextInput::new("", cx));
-        // Enter and Escape reach the field as its own Submit and Cancel, so
-        // nothing here has to race an action: the field is focused and the
-        // bindings are its key context's.
+        // * Enter and Escape reach the field as its own Submit and Cancel, so
+        //   nothing here has to race an action: the field is focused and the
+        //   bindings are its key context's.
         self.editing.subscription = Some(cx.subscribe(
             &field,
             |this, _, event: &InputEvent, cx| match event {
@@ -525,7 +513,7 @@ impl BasesView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Opening another cell is the last moment this one can be written.
+        // * Opening another cell is the last moment this one can be written.
         self.commit_cell_edit(cx);
         self.editing.menu = None;
         let Some(found) = self.cell_target(line, column) else {
@@ -722,7 +710,7 @@ mod tests {
     fn sorting_the_same_property_twice_leaves_one_entry() {
         let mut view = view_of("views:\n  - type: table\n    name: V\n");
         prepend_sort(&mut view, "status", ASC);
-        // The qualified spelling is the same property as the bare one.
+        // * The qualified spelling is the same property as the bare one.
         prepend_sort(&mut view, "note.status", DESC);
         assert_eq!(
             sorts(&view),
@@ -767,8 +755,8 @@ mod tests {
 
     #[test]
     fn the_last_column_is_never_hidden_into_an_empty_order() {
-        // An empty `order` is the key omitted, which means every implied
-        // column, so hiding the only one would put it straight back.
+        // * An empty `order` is the key omitted, which means every implied
+        //   column, so hiding the only one would put it straight back.
         let mut view =
             view_of("views:\n  - type: table\n    name: V\n    order:\n      - status\n");
         hide_column(&mut view, "status", &[]);
@@ -807,8 +795,8 @@ mod tests {
         let layout = silica_bases::TableLayout::of(&view);
         assert_eq!(layout.column_size.get("file.name"), Some(&232.));
         assert_eq!(layout.width_of("file.name"), Some(232.));
-        // And the bytes are the observed ones: the key is a mapping of the
-        // bare id to an integer, after every documented key of the view.
+        // * And the bytes are the observed ones: the key is a mapping of the
+        //   bare id to an integer, after every documented key of the view.
         let base = Base::from_yaml("views:\n  - type: table\n    name: V\n").expect("parses");
         let mut written = base.clone();
         silica_bases::layout::set_column_size(&mut written.views[0], "file.name", 232.);
@@ -869,7 +857,7 @@ mod tests {
         let types = PropertyTypes::default();
         let out = write_property("# Body\n", "status", "todo", &types).expect("a new block");
         assert_eq!(out, "---\nstatus: todo\n---\n# Body\n");
-        // And the BOM of a note that has one still comes first.
+        // * And the BOM of a note that has one still comes first.
         let out = write_property("\u{feff}# Body\r\n", "status", "todo", &types).expect("a block");
         assert_eq!(out, "\u{feff}---\r\nstatus: todo\r\n---\r\n# Body\r\n");
     }

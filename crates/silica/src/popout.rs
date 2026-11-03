@@ -45,7 +45,7 @@ pub fn open(
                 state: state.clone(),
                 reading: cx.new(ReadingView::new),
             });
-            // Build the model and set it on the reading view.
+            // * Build the model and set it on the reading view.
             let text = std::fs::read_to_string(state.vault().absolute(&path)).unwrap_or_default();
             let model = build_with(&path, &text, state.as_ref(), state.build_options());
             let reading = view.read(cx).reading.clone();

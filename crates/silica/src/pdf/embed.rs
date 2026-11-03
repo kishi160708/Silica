@@ -459,8 +459,8 @@ impl Element for Frame {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, DivFrameState) {
-        // Before the file loads, and for a file that never will, the sizes
-        // are unknown and the frame is the 800 px the box starts at.
+        // * Before the file loads, and for a file that never will, the sizes
+        //   are unknown and the frame is the 800 px the box starts at.
         let sizes = match documents(cx).document(&self.embed.absolute, cx) {
             DocState::Ready(loaded) => Some(loaded),
             _ => None,
@@ -468,8 +468,8 @@ impl Element for Frame {
         let height = self
             .embed
             .frame_height(sizes.as_ref().map(|l| &l.sizes[..]), self.available - 2.0);
-        // Un-keyed: the id gpui hands this element is the one the div's
-        // state is kept under, the way `Scaled` passes it through.
+        // * Un-keyed: the id gpui hands this element is the one the div's
+        //   state is kept under, the way `Scaled` passes it through.
         let mut frame = div()
             .w_full()
             .h(px(height))
@@ -736,12 +736,12 @@ impl Pages {
         let viewport_height =
             (f32::from(bounds.size.height) - (TOOLBAR_HEIGHT + 1.0) * self.scale).max(1.0);
         let fit = PageLayout::fit_scale(&loaded.sizes, self.page, client_width);
-        // The zoom in pdf.js's units, so the buttons step the way its do.
+        // * The zoom in pdf.js's units, so the buttons step the way its do.
         let zoom = state.zoom.get().unwrap_or(fit / CSS_UNITS);
         let layout = PageLayout::new(&loaded.sizes, zoom * CSS_UNITS, client_width);
         if !state.jumped.get() {
             if let Some(offset) = self.page.and_then(|p| layout.offset_of(p)) {
-                // The div clamps it to the content once that is laid out.
+                // * The div clamps it to the content once that is laid out.
                 state.scroll.set_offset(point(px(0.), px(-offset)));
             }
             state.jumped.set(true);
@@ -761,8 +761,8 @@ impl Pages {
             .h(px(layout.content.height))
             .flex_shrink_0()
             .children(layout.pages.iter().enumerate().map(|(ix, page)| {
-                // A page is opaque white under its ink, so the box is white
-                // before the render lands and the image covers it after.
+                // * A page is opaque white under its ink, so the box is white
+                //   before the render lands and the image covers it after.
                 let page_box = div()
                     .absolute()
                     .left(px(page.origin.x))
@@ -784,16 +784,16 @@ impl Pages {
             .id("pdf-embed-scroll")
             .track_scroll(&state.scroll)
             .overflow_scroll()
-            // The wheel scrolls the pages and nothing behind them: this
-            // listener runs after the div's own has moved it (gpui runs the
-            // bubble listeners innermost first, and the div's own is
-            // registered after this one).
+            // * The wheel scrolls the pages and nothing behind them: this
+            //   listener runs after the div's own has moved it (gpui runs the
+            //   bubble listeners innermost first, and the div's own is
+            //   registered after this one).
             .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
             .flex_1()
             .min_h_0()
             .w_full()
-            // OBSERVE: the viewer's ground; the box itself is transparent in
-            // Obsidian and pdf.js's viewer is a mid grey.
+            // * OBSERVE: the viewer's ground; the box itself is transparent in
+            //   Obsidian and pdf.js's viewer is a mid grey.
             .bg(self.theme.bg_secondary)
             .child(column)
             .into_any_element();
@@ -835,8 +835,8 @@ impl Element for Pages {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, ()) {
-        // The box is whatever its parent gives it; the pages are laid out
-        // inside those bounds in `prepaint`, once they are known.
+        // * The box is whatever its parent gives it; the pages are laid out
+        //   inside those bounds in `prepaint`, once they are known.
         let mut style = Style::default();
         style.size.width = relative(1.).into();
         style.size.height = relative(1.).into();
@@ -859,9 +859,9 @@ impl Element for Pages {
         });
         let (body, bar) = match documents(cx).document(&self.absolute, cx) {
             DocState::Ready(loaded) => self.pages(&loaded, bounds, &state, window),
-            // Observed on `broken.pdf`: the toolbar says "0 of 0" over an
-            // empty box, and nothing else. OBSERVE: whether a loading file
-            // looks the same; it does here.
+            // * Observed on `broken.pdf`: the toolbar says "0 of 0" over an
+            //   empty box, and nothing else. OBSERVE: whether a loading file
+            //   looks the same; it does here.
             DocState::Loading | DocState::Failed(_) => (
                 div().flex_1().min_h_0().w_full().into_any_element(),
                 ToolbarState {
@@ -964,7 +964,7 @@ mod tests {
         );
         assert_eq!(e.page, Some(2));
         assert_eq!(e.height, Some(400.0));
-        // Observed: `#height=300` drew 338 px, the toolbar over the content.
+        // * Observed: `#height=300` drew 338 px, the toolbar over the content.
         assert_eq!(e.box_height(), CHROME_HEIGHT + 400.0);
         assert_eq!(
             e.frame_height(Some(&letter(3)), 600.0),
@@ -1001,10 +1001,10 @@ mod tests {
     fn page_width_is_measured_on_the_opened_page() {
         let scale = PageLayout::fit_scale(&mixed(), None, 591.0) / CSS_UNITS;
         assert!((scale - 0.526494).abs() < 1e-4, "{scale}");
-        // Preview 10: `#page=3` fits the portrait page instead, 0.7446.
+        // * Preview 10: `#page=3` fits the portrait page instead, 0.7446.
         let scale = PageLayout::fit_scale(&mixed(), Some(2), 591.0) / CSS_UNITS;
         assert!((scale - 0.744613).abs() < 1e-4, "{scale}");
-        // A page the file does not have fits the first.
+        // * A page the file does not have fits the first.
         assert_eq!(
             PageLayout::fit_scale(&mixed(), Some(9), 591.0),
             PageLayout::fit_scale(&mixed(), None, 591.0)
@@ -1021,10 +1021,10 @@ mod tests {
         let layout = PageLayout::new(&sizes, scale, 591.0);
         assert_eq!(layout.pages.len(), 5);
         assert_eq!(layout.pages[0].top(), 0.0);
-        // Half a pixel in: a 590 px page centred in 591 (Obsidian's sat 0.66
-        // from the border).
+        // * Half a pixel in: a 590 px page centred in 591 (Obsidian's sat 0.66
+        //   from the border).
         assert_eq!(layout.pages[0].left(), 0.5);
-        // 591 × 417.9 at the scale, drawn 590 × 416 (rounded down to 2 px).
+        // * 591 × 417.9 at the scale, drawn 590 × 416 (rounded down to 2 px).
         assert_eq!(layout.pages[0].size.width, 590.0);
         let first_h = layout.pages[0].size.height;
         assert_eq!(first_h, 416.0);
@@ -1033,8 +1033,8 @@ mod tests {
         assert!(third.size.width < 591.0);
         assert!((third.left() - (591.0 - third.size.width) / 2.0).abs() < 1e-3);
         assert_eq!(layout.content.width, 591.0);
-        // 416 + 10 + 416 + 10 + 590 + 10 + 416 + 10 + 416; Obsidian measured
-        // 2321, its rects carrying pdf.js's page borders.
+        // * 416 + 10 + 416 + 10 + 590 + 10 + 416 + 10 + 416; Obsidian measured
+        //   2321, its rects carrying pdf.js's page borders.
         assert_eq!(layout.content.height, 2294.0);
         assert_eq!(layout.content.height, layout.pages[4].bottom());
     }
@@ -1059,18 +1059,18 @@ mod tests {
     #[test]
     fn only_the_pages_near_the_viewport_are_visible() {
         let layout = PageLayout::new(&letter(10), 1.0, 612.0);
-        // At the top, a 400 px viewport sees page 0 and prefetches nothing
-        // past the first page that starts beyond it plus the margin.
+        // * At the top, a 400 px viewport sees page 0 and prefetches nothing
+        //   past the first page that starts beyond it plus the margin.
         assert_eq!(layout.visible(0.0, 400.0), 0..1);
-        // Scrolled to page 5, with the prefetch reaching the page before.
+        // * Scrolled to page 5, with the prefetch reaching the page before.
         let at_five = layout.offset_of(5).unwrap();
         assert_eq!(layout.visible(at_five, 400.0), 4..6);
-        // Past the end, nothing.
+        // * Past the end, nothing.
         assert_eq!(
             layout.visible(layout.content.height + 1000.0, 400.0),
             10..10
         );
-        // An empty file has no pages to show.
+        // * An empty file has no pages to show.
         assert_eq!(PageLayout::new(&[], 1.0, 300.0).visible(0.0, 400.0), 0..0);
     }
 
@@ -1092,10 +1092,10 @@ mod tests {
         assert!((first - 455.88).abs() < 1.5, "{first}");
         let third = unforced_height(&mixed(), Some(2), inner);
         assert!((third - 873.84).abs() < 1.5, "{third}");
-        // An empty file is the toolbar alone.
+        // * An empty file is the toolbar alone.
         assert_eq!(unforced_height(&[], None, inner), CHROME_HEIGHT);
-        // An unforced embed is 800 px until the sizes are known, then the
-        // page's; through the embed itself.
+        // * An unforced embed is 800 px until the sizes are known, then the
+        //   page's; through the embed itself.
         let e = PdfEmbed::new(
             0,
             "doc.pdf".into(),

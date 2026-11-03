@@ -230,7 +230,7 @@ impl MetadataCache {
             let Some(meta) = self.files.get(source) else {
                 continue;
             };
-            // Properties first, the order they are written in the file.
+            // * Properties first, the order they are written in the file.
             for link in &meta.frontmatter_links {
                 if self.resolver.resolve(&link.link, source) == Some(path) {
                     out.push(Backlink {
@@ -285,7 +285,7 @@ pub struct PropertyEntry {
 /// (`cssclasses` at 0). Sorted by frequency, high to low, ties by name
 /// case-insensitively, which puts digits before letters.
 pub fn all_properties(cache: &MetadataCache, types: &PropertyTypes) -> Vec<PropertyEntry> {
-    // Lowercased key -> entry, in first-seen order.
+    // * Lowercased key -> entry, in first-seen order.
     let mut rows: Vec<(String, PropertyEntry)> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();
     let mut insert = |name: &str, ty: Option<PropertyType>, count: usize| {
@@ -595,14 +595,14 @@ mod tests {
         c.forget_path("Home.md");
         assert!(c.tags().get("project").is_none());
         assert!(c.resolve("Home", "x.md").is_none());
-        // Plan's link to Home is now unresolved after re-indexing Plan.
+        // * Plan's link to Home is now unresolved after re-indexing Plan.
         let plan = index_markdown("Back to [[Home|home]].");
         c.insert_file("Projects/Plan.md".into(), plan);
         assert_eq!(
             c.unresolved_links("Projects/Plan.md").unwrap().get("Home"),
             Some(&1)
         );
-        // Home comes back: re-resolving turns the unresolved link into a backlink.
+        // * Home comes back: re-resolving turns the unresolved link into a backlink.
         c.insert_file("Home.md".into(), index_markdown("# Home"));
         c.reresolve();
         assert!(c.unresolved_links("Projects/Plan.md").is_none());

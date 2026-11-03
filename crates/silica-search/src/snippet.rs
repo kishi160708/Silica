@@ -58,9 +58,9 @@ pub fn match_lines(text: &str, ranges: &[Range<usize>]) -> Vec<MatchLine> {
         let mut hits: Vec<Range<usize>> = Vec::new();
         while rix < ranges.len() && ranges[rix].start < line_end {
             let r = &ranges[rix];
-            // A stale result over a changed note can carry a range that no
-            // longer falls on a boundary; widen it to the characters it
-            // covers rather than splitting one.
+            // * A stale result over a changed note can carry a range that no
+            // * longer falls on a boundary; widen it to the characters it
+            // * covers rather than splitting one.
             let s = floor(body, r.start.saturating_sub(line_start));
             let e = ceil(body, r.end.saturating_sub(line_start));
             if e > s {
@@ -73,14 +73,14 @@ pub fn match_lines(text: &str, ranges: &[Range<usize>]) -> Vec<MatchLine> {
             }
         }
         if !hits.is_empty() {
-            // Window: a few words before the first hit, then up to WIDTH bytes.
+            // * Window: a few words before the first hit, then up to WIDTH bytes.
             let first = hits[0].start;
             let mut start = floor(body, first.saturating_sub(BEFORE));
             if start > 0 {
-                // Resume at the character after the whitespace nearest the
-                // left edge. That whitespace is not always one byte wide —
-                // NBSP and the typographic spaces arrive with pasted prose —
-                // so its own width is what moves the offset.
+                // * Resume at the character after the whitespace nearest the
+                // * left edge. That whitespace is not always one byte wide —
+                // * NBSP and the typographic spaces arrive with pasted prose —
+                // * so its own width is what moves the offset.
                 if let Some((at, ws)) = body[start..first]
                     .char_indices()
                     .find(|(_, c)| c.is_whitespace())
@@ -229,10 +229,10 @@ mod tests {
 
     #[test]
     fn a_multibyte_space_before_the_hit_does_not_split_a_character() {
-        // Each of these puts a wider-than-one-byte space just before the hit
-        // and far enough in that the window starts inside the lead-in: a
-        // non-breaking space (what pasted web text is full of), a thin space,
-        // and the CJK ideographic space.
+        // * Each of these puts a wider-than-one-byte space just before the hit
+        // * and far enough in that the window starts inside the lead-in: a
+        // * non-breaking space (what pasted web text is full of), a thin space,
+        // * and the CJK ideographic space.
         for space in ['\u{a0}', '\u{2009}', '\u{3000}'] {
             let text = format!("{}{space}needle tail", "a".repeat(45));
             let rows = shown(&text, "needle");
@@ -244,10 +244,10 @@ mod tests {
 
     #[test]
     fn every_alignment_of_a_multibyte_lead_in_is_safe() {
-        // The window opens a fixed number of bytes before the hit, so sliding
-        // the line along one byte at a time walks that edge through the middle
-        // of every character in the lead-in: an emoji, a CJK ideograph, a
-        // combining accent and a non-breaking space.
+        // * The window opens a fixed number of bytes before the hit, so sliding
+        // * the line along one byte at a time walks that edge through the middle
+        // * of every character in the lead-in: an emoji, a CJK ideograph, a
+        // * combining accent and a non-breaking space.
         let filler = "\u{1f642} \u{65e5}\u{672c}\u{8a9e} e\u{301}cole\u{a0}mot ";
         for pad in 0..filler.len() + 8 {
             let text = format!("{}{}needle tail", "x".repeat(pad), filler.repeat(4));
@@ -259,8 +259,8 @@ mod tests {
 
     #[test]
     fn a_long_multibyte_line_is_cut_on_a_boundary() {
-        // No ASCII anywhere, so both edges of the window land mid-character
-        // unless they are snapped.
+        // * No ASCII anywhere, so both edges of the window land mid-character
+        // * unless they are snapped.
         let text = format!("{}needle{}", "\u{65e5}".repeat(100), "\u{672c}".repeat(300));
         let rows = shown(&text, "needle");
         assert_eq!(rows[0].1, vec!["needle"]);
@@ -269,8 +269,8 @@ mod tests {
 
     #[test]
     fn a_hit_range_off_a_boundary_widens_instead_of_panicking() {
-        // What a stale result over a changed note looks like: the range cuts
-        // the three-byte character in half at both ends.
+        // * What a stale result over a changed note looks like: the range cuts
+        // * the three-byte character in half at both ends.
         let text = "日本語";
         let lines = match_lines(text, &[1..5]);
         assert_eq!(lines[0].snippet, text);
@@ -292,12 +292,12 @@ mod tests {
         );
         assert_eq!(m.offset, first);
         assert_eq!(&m.snippet[m.ranges[0].clone()], "needle");
-        // The blank line above "mango needle second" ends the context.
+        // * The blank line above "mango needle second" ends the context.
         let second = text.find("mango needle second").unwrap();
         let m = context_window(text, second, 3, 3, &hits);
         assert_eq!(m.snippet, "mango needle second");
         assert_eq!(m.ranges.len(), 1);
-        // No context asked for: the trimmed line alone, indentation gone.
+        // * No context asked for: the trimmed line alone, indentation gone.
         let text = "   indented needle here\nnext\n";
         let m = context_window(text, 0, 0, 0, &[12..18]);
         assert_eq!(m.snippet, "indented needle here");

@@ -94,15 +94,15 @@ use silica_bases::{eval_str, DateValue, FileData, LinkValue, SimpleContext, Valu
 /// `String(value.data ?? value)`, not `toString()`.
 fn rendered(v: &Value) -> String {
     match v {
-        // `String(array)` is `Array.prototype.join(",")`, which calls each
-        // element's own `toString`.
+        // * `String(array)` is `Array.prototype.join(",")`, which calls each
+        // * element's own `toString`.
         Value::List(items) => items
             .iter()
             .map(|i| i.to_string())
             .collect::<Vec<_>>()
             .join(","),
         Value::Tags(tags) => tags.join(","),
-        // `String(plainObject)`.
+        // * `String(plainObject)`.
         Value::Object(_) => "[object Object]".to_string(),
         other => other.to_string(),
     }
@@ -226,9 +226,9 @@ fn silica_row() -> FileData {
     );
     file.size = 483.0;
     file.tags = vec!["#rock".into(), "#igneous/extrusive".into()];
-    // Observed through `file.links`: a link carries the text it was written
-    // with as its display, and `Silica.md` links to Pumice twice and Basalt
-    // once.
+    // * Observed through `file.links`: a link carries the text it was written
+    // * with as its display, and `Silica.md` links to Pumice twice and Basalt
+    // * once.
     file.links = vec![
         displayed("Pumice", "Pumice"),
         displayed("Pumice", "Pumice"),
@@ -293,8 +293,8 @@ fn family(source: &str) -> &'static str {
     const TIME: &str = "Date/Duration";
     const FILE: &str = "File/Link";
 
-    // `file.properties` is an Object, so it is the List/Object family's even
-    // though it is reached through `file`.
+    // * `file.properties` is an Object, so it is the List/Object family's even
+    // * though it is reached through `file`.
     if source.starts_with("file.properties") || source.starts_with("this.note") {
         return LIST;
     }
@@ -370,7 +370,7 @@ fn receiver_of(source: &str) -> &str {
                 b'"' | b'\'' | b'/' => quote = Some(c),
                 b'(' | b'[' => depth += 1,
                 b')' | b']' => depth -= 1,
-                // A digit either side makes it a decimal point, not access.
+                // * A digit either side makes it a decimal point, not access.
                 b'.' if depth == 0
                     && !(i > 0 && bytes[i - 1].is_ascii_digit())
                     && !(i + 1 < bytes.len() && bytes[i + 1].is_ascii_digit()) =>
@@ -401,7 +401,7 @@ fn unquote(field: &str) -> Option<String> {
             'r' => out.push('\r'),
             '"' => out.push('"'),
             '\\' => out.push('\\'),
-            // The fixture writes no other escape.
+            // * The fixture writes no other escape.
             _ => return None,
         }
     }
@@ -458,8 +458,8 @@ fn every_statement_evaluates_to_what_obsidian_answered() {
         }
     }
 
-    // A floor, so that a fixture that stops being read fails here rather than
-    // passing while checking nothing.
+    // ! A floor, so that a fixture that stops being read fails here rather than
+    // ! passing while checking nothing.
     assert!(checked >= 1044, "only {checked} statements were compared");
 
     let passed = checked - wrong.len();

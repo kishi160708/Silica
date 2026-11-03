@@ -296,7 +296,7 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
             }
         }
         let mut i = self.pos;
-        // Always consume at least one byte so unhandled specials become text.
+        // * Always consume at least one byte so unhandled specials become text.
         i += self.text[i..].chars().next().map_or(1, char::len_utf8);
         while i < self.end {
             let c = b[i];
@@ -392,7 +392,7 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
         {
             return None;
         }
-        // Trailing punctuation and unbalanced parentheses are not part of the URL.
+        // * Trailing punctuation and unbalanced parentheses are not part of the URL.
         loop {
             let b = body.as_bytes();
             if len == 0 {
@@ -410,7 +410,7 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
                     break;
                 }
             } else if last == b';' {
-                // `&amp;` style entity at the end is excluded.
+                // * `&amp;` style entity at the end is excluded.
                 match body[..len - 1].rfind('&') {
                     Some(a)
                         if body[a + 1..len - 1]
@@ -511,8 +511,8 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
                 i += 1;
             }
         }
-        // No closer: the run is literal text. Obsidian retries from the next
-        // backtick instead of skipping the whole run.
+        // * No closer: the run is literal text. Obsidian retries from the next
+        // * backtick instead of skipping the whole run.
         let literal = if self.cx.opts.quirks { 1 } else { n };
         self.push_text(start, start + literal);
         self.pos = start + literal;
@@ -563,14 +563,14 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
         let (left, right, before_punct, after_punct) = self.flanking(start, end);
         let (can_open, can_close) = if ch == b'_' {
             if self.cx.opts.quirks {
-                // Obsidian drops CommonMark's bar on an underscore run
-                // *opening* inside a word, and for a run of two or more it
-                // drops the bar on closing there too. So `a_b_` is
-                // `a<em>b</em>` and `x__y__z` is `x<strong>y</strong>z`, while
-                // `a_b_c`, `snake_case_word` and `CONST_NAME_HERE` stay literal
-                // -- a single `_` still cannot close before an alphanumeric,
-                // which is what keeps ordinary identifiers out of it. Observed
-                // against Obsidian 1.14.4 (tools/probe-gen, 2026-10-29).
+                // ? Obsidian drops CommonMark's bar on an underscore run
+                // ? *opening* inside a word, and for a run of two or more it
+                // ? drops the bar on closing there too. So `a_b_` is
+                // ? `a<em>b</em>` and `x__y__z` is `x<strong>y</strong>z`, while
+                // ? `a_b_c`, `snake_case_word` and `CONST_NAME_HERE` stay literal
+                // ? -- a single `_` still cannot close before an alphanumeric,
+                // ? which is what keeps ordinary identifiers out of it. Observed
+                // ? against Obsidian 1.14.4 (tools/probe-gen, 2026-10-29).
                 let can_close = if n >= 2 {
                     right
                 } else {
@@ -647,7 +647,7 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
     }
 
     fn process_emphasis(&mut self, stack_bottom: Option<usize>) {
-        // openers_bottom keyed by (char, can_open, orig_count % 3).
+        // * openers_bottom keyed by (char, can_open, orig_count % 3).
         let mut openers_bottom: HashMap<(u8, bool, usize), Option<usize>> = HashMap::new();
         let mut closer = match stack_bottom {
             Some(b) => self.delims[b].next,
@@ -686,15 +686,15 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
                     let o_count = self.delims[o].text_end - self.delims[o].text_start;
                     let c_count = self.delims[c].text_end - self.delims[c].text_start;
                     let is_double = ch == b'~' || ch == b'=';
-                    // Obsidian nests `***x***` as strong outside em, so with
-                    // quirks on a three-on-three match takes one delimiter first.
+                    // * Obsidian nests `***x***` as strong outside em, so with
+                    // * quirks on a three-on-three match takes one delimiter first.
                     let triple = self.cx.opts.quirks && o_count >= 3 && c_count >= 3;
                     let use_count = if is_double || (o_count >= 2 && c_count >= 2 && !triple) {
                         2
                     } else {
                         1
                     };
-                    // Shrink the delimiter text nodes.
+                    // * Shrink the delimiter text nodes.
                     self.delims[o].text_end -= use_count;
                     self.delims[c].text_start += use_count;
                     let (o_node, c_node) = (self.delims[o].node, self.delims[c].node);
@@ -708,7 +708,7 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
                         kind: InlineKind::Text(self.slice(cs, ce)),
                         span: self.span(cs, ce),
                     };
-                    // Wrap the nodes between the delimiters.
+                    // * Wrap the nodes between the delimiters.
                     let mut children: Vec<Inline<'a>> =
                         self.nodes.drain(o_node + 1..c_node).collect();
                     let span = self.span(oe, cs);
@@ -723,7 +723,7 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
                     };
                     self.nodes.insert(o_node + 1, Inline { kind, span });
                     self.nodes_replaced(o_node + 1, c_node, 1);
-                    // Remove delimiters between opener and closer.
+                    // * Remove delimiters between opener and closer.
                     let mut between = self.delims[o].next;
                     while let Some(d) = between {
                         if d == c {
@@ -758,7 +758,7 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
                 }
             }
         }
-        // Remove all delimiters above stack_bottom.
+        // * Remove all delimiters above stack_bottom.
         while let Some(top) = self.delim_top {
             if Some(top) == stack_bottom {
                 break;
@@ -1035,8 +1035,8 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
     fn tag(&mut self) -> bool {
         let start = self.pos;
         let prev = self.text[..start].chars().next_back();
-        // Obsidian starts a tag after whitespace or right after another
-        // inline construct (a link, code span, tag, or emphasis delimiter).
+        // * Obsidian starts a tag after whitespace or right after another
+        // * inline construct (a link, code span, tag, or emphasis delimiter).
         let after_node = self.cx.opts.quirks
             && self.nodes.last().is_some_and(|n| {
                 n.span.end == self.src_pos(start)
@@ -1124,7 +1124,7 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
         let Some(inner) = rest.strip_prefix("%%") else {
             return false;
         };
-        // An inline comment does not cross a line break.
+        // * An inline comment does not cross a line break.
         let line_end = inner.find('\n').unwrap_or(inner.len());
         let Some(i) = inner[..line_end].find("%%") else {
             return false;

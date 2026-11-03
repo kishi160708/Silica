@@ -27,8 +27,8 @@ impl Url {
     /// does not need it.
     pub fn parse(url: &str) -> Result<Url, String> {
         let url = url.trim();
-        // The scheme comes off before any trailing slash does: trimming first
-        // turns a bare `http://` into `http:`, which then reads as a host.
+        // * The scheme comes off before any trailing slash does: trimming first
+        // * turns a bare `http://` into `http:`, which then reads as a host.
         let rest = match url.split_once("://") {
             Some(("http", rest)) => rest,
             Some(("https", _)) => {
@@ -94,8 +94,8 @@ pub fn request(
     timeout: Duration,
 ) -> Result<Response, String> {
     let address = format!("{}:{}", url.host, url.port);
-    // Resolve and connect with the same budget as the read: a wrong port on
-    // loopback refuses at once, but a wrong host must not hang forever.
+    // ! Resolve and connect with the same budget as the read: a wrong port on
+    // ! loopback refuses at once, but a wrong host must not hang forever.
     let mut stream = TcpStream::connect(&address).map_err(|e| {
         format!(
             "cannot reach {address}: {e}. Is the model server running? \
@@ -179,13 +179,13 @@ fn read_response(
         if let Some(start) = head_end {
             let body = &raw[start..];
             let done = if chunked {
-                // The terminal zero-length chunk; good enough without parsing
-                // every chunk header, since the de-chunker below does that.
+                // * The terminal zero-length chunk; good enough without parsing
+                // * every chunk header, since the de-chunker below does that.
                 find(body, b"\r\n0\r\n").is_some() || body.starts_with(b"0\r\n")
             } else if let Some(length) = length {
                 body.len() >= length
             } else {
-                false // No framing: only EOF ends it.
+                false // * No framing: only EOF ends it.
             };
             if done {
                 return Ok(Response {
@@ -198,7 +198,7 @@ fn read_response(
             format!("{address}: reading the response failed: {e} (after {timeout:?})")
         })?;
         if read == 0 {
-            // EOF. Everything that arrived is the message.
+            // * EOF. Everything that arrived is the message.
             let start = head_end
                 .ok_or_else(|| format!("{address}: closed before sending a complete header"))?;
             return Ok(Response {
@@ -220,7 +220,7 @@ fn decode(body: &[u8], chunked: bool, length: Option<usize>) -> String {
     let mut out: Vec<u8> = Vec::with_capacity(body.len());
     let mut rest = body;
     while let Some(at) = find(rest, b"\r\n") {
-        // A chunk header may carry extensions after a `;`.
+        // * A chunk header may carry extensions after a `;`.
         let header = String::from_utf8_lossy(&rest[..at]);
         let size = header.split(';').next().unwrap_or("").trim();
         let Ok(size) = usize::from_str_radix(size, 16) else {
@@ -263,7 +263,7 @@ mod tests {
         assert_eq!((u.port, u.prefix.as_str()), (8080, ""));
         assert_eq!(u.route("/models"), "/models");
 
-        // No scheme and no port: the defaults.
+        // * No scheme and no port: the defaults.
         let u = Url::parse("example.test").unwrap();
         assert_eq!((u.host.as_str(), u.port), ("example.test", 80));
     }
@@ -285,7 +285,7 @@ mod tests {
     #[test]
     fn decodes_a_plain_body() {
         assert_eq!(decode(b"hello", false, Some(5)), "hello");
-        // Trailing bytes past Content-Length are not part of the message.
+        // * Trailing bytes past Content-Length are not part of the message.
         assert_eq!(decode(b"hello there", false, Some(5)), "hello");
         assert_eq!(decode(b"hello", false, None), "hello");
     }
@@ -297,7 +297,7 @@ mod tests {
             decode(b"5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n", true, None),
             "hello world"
         );
-        // A chunk-extension on the header, and a truncated final chunk.
+        // * A chunk-extension on the header, and a truncated final chunk.
         assert_eq!(decode(b"5;x=1\r\nhello\r\n", true, None), "hello");
         assert_eq!(decode(b"ff\r\nshort", true, None), "short");
     }

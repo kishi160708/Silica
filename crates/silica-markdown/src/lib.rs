@@ -314,10 +314,10 @@ mod tests {
             parse_callout_header("[!note] Plain"),
             Some(("note", None, "Plain"))
         );
-        // The type is trimmed, so this is a `bad` callout; it used to be None
-        // here and a `bad` callout in the block parser.
+        // * The type is trimmed, so this is a `bad` callout; it used to be None
+        // * here and a `bad` callout in the block parser.
         assert_eq!(parse_callout_header("[! bad]"), Some(("bad", None, "")));
-        // Something must sit between the brackets, but it may be whitespace.
+        // * Something must sit between the brackets, but it may be whitespace.
         assert_eq!(parse_callout_header("[! ]"), Some(("", None, "")));
         assert_eq!(parse_callout_header("[!   ] T"), Some(("", None, "T")));
         assert_eq!(parse_callout_header("[!]"), None);

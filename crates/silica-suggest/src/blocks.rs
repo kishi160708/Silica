@@ -36,9 +36,9 @@ impl Placement {
             | SectionKind::Callout
             | SectionKind::Blockquote
             | SectionKind::Math => Placement::OwnLine,
-            // Nothing observed writes an id onto these, so Silica does not
-            // offer them: a thematic break, the frontmatter, an HTML block,
-            // a footnote definition, a comment, and the list as a whole.
+            // ? Nothing observed writes an id onto these, so Silica does not
+            // ? offer them: a thematic break, the frontmatter, an HTML block,
+            // ? a footnote definition, a comment, and the list as a whole.
             _ => return None,
         })
     }
@@ -93,8 +93,8 @@ pub fn id_insertion(
             text: format!(" ^{id}"),
         },
         Placement::OwnLine => {
-            // The newlines after the block collapse to one, so the id is a
-            // paragraph of its own rather than a line of the next block.
+            // * The newlines after the block collapse to one, so the id is a
+            // * paragraph of its own rather than a line of the next block.
             let rest = newline_run(text, at);
             let kept = if rest > 0 { nl } else { "" };
             IdInsertion {
@@ -204,7 +204,7 @@ mod tests {
     #[test]
     fn an_inline_id_goes_after_everything_on_the_line() {
         let text = "# Breaks\n\nEnds in two spaces.  \n\nEnds in a backslash\\\n";
-        // The hard break stays and the id follows it, as Obsidian writes it.
+        // * The hard break stays and the id follows it, as Obsidian writes it.
         assert_eq!(
             write(text, ends(text, "Ends in two spaces."), Placement::Inline),
             "# Breaks\n\nEnds in two spaces.   ^abc123\n\nEnds in a backslash\\\n"
@@ -213,8 +213,8 @@ mod tests {
             write(text, ends(text, "Ends in a backslash\\"), Placement::Inline),
             "# Breaks\n\nEnds in two spaces.  \n\nEnds in a backslash\\ ^abc123\n"
         );
-        // A list item takes it inline too, on its own line even when a
-        // nested item follows.
+        // * A list item takes it inline too, on its own line even when a
+        // * nested item follows.
         let list = "# Kind\n\n- parent item\n  - nested item\n- sibling item\n";
         assert_eq!(
             write(list, ends(list, "- parent item"), Placement::Inline),
@@ -224,7 +224,7 @@ mod tests {
 
     #[test]
     fn an_own_line_id_takes_a_blank_line_either_side() {
-        // Every shape of what follows a heading, as observed.
+        // ? Every shape of what follows a heading, as observed.
         let cases = [
             (
                 "## H at EOF, no trailing newline",
@@ -286,8 +286,8 @@ mod tests {
 
     #[test]
     fn the_end_of_a_file_keeps_its_shape() {
-        // An inline id leaves a file that ended without a newline ending
-        // without one; an own-line id brings one with it.
+        // * An inline id leaves a file that ended without a newline ending
+        // * without one; an own-line id brings one with it.
         let para = "# Eof\n\nlast paragraph, no trailing newline";
         assert_eq!(
             write(para, para.len(), Placement::Inline),
@@ -320,8 +320,8 @@ mod tests {
                 "for {kind:?}"
             );
         }
-        // A list is addressed by its items, and nothing is written onto a
-        // thematic break or the frontmatter.
+        // * A list is addressed by its items, and nothing is written onto a
+        // * thematic break or the frontmatter.
         for kind in [
             SectionKind::List,
             SectionKind::ThematicBreak,
@@ -336,8 +336,8 @@ mod tests {
 
     #[test]
     fn a_crlf_note_keeps_its_own_endings() {
-        // Obsidian writes LF here and leaves the file mixed; Silica writes
-        // the note's own ending throughout.
+        // * Obsidian writes LF here and leaves the file mixed; Silica writes
+        // * the note's own ending throughout.
         let text = "# Crlf\r\n\r\npara in a CRLF file.\r\n";
         let end = text.find("\r\n").expect("a first line");
         let ins = id_insertion(text, end, Placement::OwnLine, "abc123", "\r\n");
@@ -345,7 +345,7 @@ mod tests {
             ins.applied(text),
             "# Crlf\r\n\r\n^abc123\r\n\r\npara in a CRLF file.\r\n"
         );
-        // An inline id goes before the `\r`, not between it and the `\n`.
+        // * An inline id goes before the `\r`, not between it and the `\n`.
         let para = text.find("para in a CRLF file.").expect("the paragraph");
         let ins = id_insertion(text, para, Placement::Inline, "abc123", "\r\n");
         assert_eq!(
@@ -362,9 +362,9 @@ mod tests {
         assert!(id
             .chars()
             .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
-        // The same seed writes the same id, which is what the tests rely on.
+        // * The same seed writes the same id, which is what the tests rely on.
         assert_eq!(new_id(1, &empty), id);
-        // An id the note already uses is skipped.
+        // * An id the note already uses is skipped.
         let mut taken = BTreeMap::new();
         taken.insert(
             id.clone(),
@@ -381,8 +381,8 @@ mod tests {
         let empty = BTreeMap::new();
         let ids: std::collections::BTreeSet<String> =
             (0..500).map(|seed| new_id(seed, &empty)).collect();
-        // 500 seeds into 24 bits: a handful of collisions would be chance,
-        // a pile of them would mean the mixing is not doing its job.
+        // * 500 seeds into 24 bits: a handful of collisions would be chance,
+        // * a pile of them would mean the mixing is not doing its job.
         assert!(ids.len() > 495, "only {} distinct ids", ids.len());
     }
 }

@@ -441,9 +441,9 @@ impl GraphView {
     }
 
     pub fn set_state(&mut self, state: Arc<VaultState>, cx: &mut Context<Self>) {
-        // Only reload config from disk if we don't have unsaved panel changes.
-        // If config_dirty is true, the user has edited panel controls that
-        // haven't been saved to graph.json yet — keep those in memory.
+        // * Only reload config from disk if we don't have unsaved panel changes.
+        //   If config_dirty is true, the user has edited panel controls that
+        //   haven't been saved to graph.json yet — keep those in memory.
         if !self.config_dirty {
             self.config = state.vault().graph_config().unwrap_or_default();
         }
@@ -453,9 +453,9 @@ impl GraphView {
                 input.set_text(text, cx);
             }
         });
-        // A local graph does not start from `graph.json`: against a file
-        // holding `scale: 8` the global graph opened at 7.926 and the local
-        // one at 1 (see [[Specification#Observed graph.json write behavior]]).
+        // * A local graph does not start from `graph.json`: against a file
+        //   holding `scale: 8` the global graph opened at 7.926 and the local
+        //   one at 1 (see [[Specification#Observed graph.json write behavior]]).
         if !self.is_local()
             && adopts_saved_scale(self.config.scale, self.adopted_scale, self.user_adjusted)
         {
@@ -475,7 +475,7 @@ impl GraphView {
         self.current = path.clone();
         if self.local.is_some() && changed {
             self.local = path;
-            // A local graph around another note is a new view: frame it.
+            // * A local graph around another note is a new view: frame it.
             self.user_adjusted = false;
             self.rebuild(cx);
         } else if changed {
@@ -486,23 +486,23 @@ impl GraphView {
     pub fn set_local(&mut self, local: bool, cx: &mut Context<Self>) {
         let want = if local { self.current.clone() } else { None };
         let was_local = self.is_local();
-        // The camera as the outgoing graph leaves it, read before the switch
-        // resets the auto-fit.
+        // * The camera as the outgoing graph leaves it, read before the switch
+        //   resets the auto-fit.
         let camera = (self.scale, self.pinned_scale, self.user_adjusted);
         if self.local != want || (local && self.current.is_none()) {
             self.local = want;
             self.user_adjusted = false;
             if local {
-                // Opened at 1, centred on the note, whatever zoom the global
-                // graph was left at and whatever `graph.json` pins. The
-                // global camera is put aside rather than thrown away.
+                // * Opened at 1, centred on the note, whatever zoom the global
+                //   graph was left at and whatever `graph.json` pins. The
+                //   global camera is put aside rather than thrown away.
                 if !was_local {
                     self.global_camera = Some(camera);
                 }
                 self.pinned_scale = Some(1.0);
                 self.scale = 1.0;
             } else if let Some((scale, pinned, adjusted)) = self.global_camera.take() {
-                // Back to the global graph, where its own zoom was left.
+                // * Back to the global graph, where its own zoom was left.
                 self.scale = scale;
                 self.pinned_scale = pinned;
                 self.user_adjusted = adjusted;
@@ -562,9 +562,9 @@ impl GraphView {
         };
         self.generation += 1;
         let generation = self.generation;
-        // Read config from disk via graph.json — this picks up any changes
-        // made by save_now() or external edits, so the graph always shows
-        // the current graph.json state rather than a stale in-memory copy.
+        // * Read config from disk via graph.json — this picks up any changes
+        //   made by save_now() or external edits, so the graph always shows
+        //   the current graph.json state rather than a stale in-memory copy.
         let config = state.vault().graph_config().unwrap_or_default();
         let local = self.local.clone();
         let local_depth = self.local_depth;
@@ -572,8 +572,8 @@ impl GraphView {
         let local_backlinks = self.local_backlinks;
         let local_interlinks = self.local_interlinks;
 
-        // Compile color groups only when config.color_groups changes —
-        // avoids recompiling 97+ regexes against every node on every rebuild.
+        // * Compile color groups only when config.color_groups changes —
+        //   avoids recompiling 97+ regexes against every node on every rebuild.
         if self.cached_color_config != config.color_groups {
             self.cached_color_groups = config
                 .color_groups
@@ -622,7 +622,7 @@ impl GraphView {
     }
 
     fn apply(&mut self, built: Built, cx: &mut Context<Self>) {
-        // Keep positions of nodes that survive the rebuild.
+        // * Keep positions of nodes that survive the rebuild.
         let old: HashMap<String, (f32, f32)> = {
             let layout = self.layout.lock().unwrap_or_else(|e| e.into_inner());
             self.nodes
@@ -650,10 +650,10 @@ impl GraphView {
         self.neighbors = Arc::new(built.neighbors);
         self.hovered = None;
         self.layout = Arc::new(Mutex::new(layout));
-        // The loop over the old layout breaks on its next tick, when it sees
-        // the swap; clearing the flag here is what lets the new layout get a
-        // loop of its own, instead of inheriting a `running` that is already
-        // nobody's.
+        // * The loop over the old layout breaks on its next tick, when it sees
+        //   the swap; clearing the flag here is what lets the new layout get a
+        //   loop of its own, instead of inheriting a `running` that is already
+        //   nobody's.
         self.running = false;
         self.start_simulation(cx);
         cx.notify();
@@ -699,7 +699,7 @@ impl GraphView {
                             view.fit();
                         }
                         cx.notify();
-                        // A rebuild swapped the layout: this loop is stale.
+                        // * A rebuild swapped the layout: this loop is stale.
                         Arc::ptr_eq(&view.layout, &layout)
                     })
                     .unwrap_or(false);
@@ -779,7 +779,7 @@ impl GraphView {
         self.user_adjusted = true;
         let (wx, wy) = self.to_world(at);
         self.scale = (self.scale * factor).clamp(0.05, 8.0);
-        // Keep the world point under the cursor fixed.
+        // * Keep the world point under the cursor fixed.
         let c = self.center();
         let target = self.to_screen(wx, wy);
         self.offset.x += f32::from(at.x) - f32::from(target.x);
@@ -799,13 +799,13 @@ impl GraphView {
     }
 
     fn reset_view(&mut self, _: &ResetView, _: &mut Window, cx: &mut Context<Self>) {
-        // Count the reset as a user adjustment so the simulation loop
-        // (which calls fit() while !user_adjusted) does not override it.
+        // * Count the reset as a user adjustment so the simulation loop
+        //   (which calls fit() while !user_adjusted) does not override it.
         self.user_adjusted = true;
-        // Fit to the window is what the command promises, so a zoom carried
-        // over from graph.json gives way to it. Counting that zoom as adopted
-        // is what makes the reset last: the vault refresh behind the next
-        // note saved or created would otherwise pin the camera right back.
+        // * Fit to the window is what the command promises, so a zoom carried
+        //   over from graph.json gives way to it. Counting that zoom as adopted
+        //   is what makes the reset last: the vault refresh behind the next
+        //   note saved or created would otherwise pin the camera right back.
         self.pinned_scale = None;
         self.adopted_scale = self.config.scale;
         self.fit();
@@ -987,9 +987,9 @@ impl GraphView {
     /// them, relative to the content rather than the viewport, so the file
     /// has the whole graph in it however the reader has panned.
     pub fn export_png(&self, path: &std::path::Path, theme: &Theme) -> Result<(), String> {
-        // The picture is not the viewport: it is at least natural size, so a
-        // reader who has zoomed out for the overview still saves something
-        // whose labels can be read.
+        // * The picture is not the viewport: it is at least natural size, so a
+        //   reader who has zoomed out for the overview still saves something
+        //   whose labels can be read.
         let scale = self.scale.max(1.0);
         let layout = self.layout.lock().unwrap_or_else(|e| e.into_inner());
         let mut placed: Vec<crate::graph::image::Placed> = Vec::with_capacity(self.nodes.len());
@@ -1005,11 +1005,11 @@ impl GraphView {
             });
         }
         drop(layout);
-        // The picture is the content plus a margin for the labels and the
-        // outermost radii, so nothing is clipped at the edge.
-        // Labels are centred under their node and are often wider than it,
-        // so the box they need is measured rather than assumed: 11 px text
-        // is about 6 px a character, and half of that on either side.
+        // * The picture is the content plus a margin for the labels and the
+        //   outermost radii, so nothing is clipped at the edge.
+        //   Labels are centred under their node and are often wider than it,
+        //   so the box they need is measured rather than assumed: 11 px text
+        //   is about 6 px a character, and half of that on either side.
         let half_label = |i: usize| -> f32 {
             self.nodes
                 .get(i)
@@ -1690,9 +1690,9 @@ impl GraphView {
                     .child(
                         Self::icon_button("graph-controls-reset", "↺", theme).on_click(
                             cx.listener(|this, _, _, cx| {
-                                // Randomize the physics layout without touching zoom or pan.
-                                // user_adjusted = true keeps the simulation from calling fit()
-                                // and overriding the user's current view.
+                                // * Randomize the physics layout without touching zoom or pan.
+                                //   user_adjusted = true keeps the simulation from calling fit()
+                                //   and overriding the user's current view.
                                 let mut layout = Layout::new(
                                     this.nodes.len(),
                                     (*this.edges).clone(),
@@ -1850,7 +1850,7 @@ fn build(
         }
     };
 
-    // The search filter from graph.json narrows the note set.
+    // * The search filter from graph.json narrows the note set.
     let filter = config
         .search
         .as_deref()
@@ -1899,11 +1899,11 @@ fn build(
             }
         }
     }
-    // Obsidian's `localFile` is independent of `showAttachments` and of
-    // `showTags`: a local graph is centred on the file the user has open,
-    // whether or not the filters would show that file in the global graph.
-    // Without this the centre is missing from the index and the whole
-    // graph comes back empty.
+    // * Obsidian's `localFile` is independent of `showAttachments` and of
+    //   `showTags`: a local graph is centred on the file the user has open,
+    //   whether or not the filters would show that file in the global graph.
+    //   Without this the centre is missing from the index and the whole
+    //   graph comes back empty.
     if let Some(center) = local {
         let kind = if FileKind::from_path(center) == FileKind::Markdown {
             NodeKind::Note
@@ -1928,15 +1928,15 @@ fn build(
         if let Some(targets) = cache.resolved_links(path) {
             for target in targets.keys() {
                 let kind = FileKind::from_path(target);
-                // An edge into the centre is drawn whatever the filters
-                // say about its kind, for the same reason the node is.
+                // * An edge into the centre is drawn whatever the filters
+                //   say about its kind, for the same reason the node is.
                 let is_center = local == Some(target.as_str());
                 if kind != FileKind::Markdown && !show_attachments && !is_center {
                     continue;
                 }
                 let to = match index.get(target) {
                     Some(&ix) => ix,
-                    None if kind == FileKind::Markdown => continue, // filtered out
+                    None if kind == FileKind::Markdown => continue,
                     None => add(
                         &mut index,
                         &mut nodes,
@@ -1983,12 +1983,12 @@ fn build(
         }
     }
 
-    // Color groups: pre-compiled in GraphView::rebuild(), passed in as
-    // color_groups. First matching query wins. A group with an empty query
-    // is dropped before being passed in.
-    // Until 2026-10-28 this was not stated anywhere and the group coloured
-    // every note in the graph, because an `All` node with no children used to
-    // be vacuously true in the matcher. That default is gone.
+    // * Color groups: pre-compiled in GraphView::rebuild(), passed in as
+    //   color_groups. First matching query wins. A group with an empty query
+    //   is dropped before being passed in.
+    //   Until 2026-10-28 this was not stated anywhere and the group coloured
+    //   every note in the graph, because an `All` node with no children used to
+    //   be vacuously true in the matcher. That default is gone.
     if !color_groups.is_empty() {
         for node in nodes.iter_mut().filter(|n| n.kind == NodeKind::Note) {
             let (Some(meta), Some(text)) = (cache.file(&node.id), texts.get(&node.id)) else {
@@ -2014,10 +2014,10 @@ fn build(
     let mut edges: Vec<(u32, u32)> = edge_set.clone().into_iter().collect();
     edges.sort();
 
-    // Local graph: the centre and its neighbours out to `local_depth`.
+    // * Local graph: the centre and its neighbours out to `local_depth`.
     if let Some(center) = local {
-        // Added above whether the filters kept it or not, so the only way
-        // this misses is a centre that is not a vault path at all.
+        // * Added above whether the filters kept it or not, so the only way
+        //   this misses is a centre that is not a vault path at all.
         let Some(&c) = index.get(center) else {
             return Built {
                 nodes: Vec::new(),
@@ -2038,7 +2038,7 @@ fn build(
             let next_depth = depth + 1;
             for &(a, b) in &edges {
                 let (a, b) = (a as usize, b as usize);
-                // Direction: forelinks = n is the source, backlinks = n is the target.
+                // * Direction: forelinks = n is the source, backlinks = n is the target.
                 let is_out = local_forelinks && a == n;
                 let is_in = local_backlinks && b == n;
                 if !is_out && !is_in {
@@ -2051,8 +2051,8 @@ fn build(
                 }
             }
         }
-        // Interlinks: when off, drop edges between nodes at the same depth
-        // (edges that skip levels, not passing through the centre).
+        // * Interlinks: when off, drop edges between nodes at the same depth
+        //   (edges that skip levels, not passing through the centre).
         let edges: Vec<(u32, u32)> = if local_interlinks {
             edge_set.into_iter().collect()
         } else {
@@ -2123,8 +2123,8 @@ fn finish(
 
 impl Render for GraphView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // A group field that stopped being drawn while it held the keyboard
-        // would leave the keys outside every context; the graph takes them.
+        // * A group field that stopped being drawn while it held the keyboard
+        //   would leave the keys outside every context; the graph takes them.
         if self.editing_group.is_none() && self.group_field.focus_handle(cx).is_focused(window) {
             window.focus(&self.focus_handle, cx);
         }
@@ -2178,15 +2178,15 @@ impl Render for GraphView {
                             let sized =
                                 view.bounds.size.width > px(0.) && view.bounds.size.height > px(0.);
                             view.bounds = bounds;
-                            // fit() does nothing until the element has a size,
-                            // so a layout that settles before the first paint
-                            // would never be framed at all.
+                            // * fit() does nothing until the element has a size,
+                            //   so a layout that settles before the first paint
+                            //   would never be framed at all.
                             if !sized && !view.user_adjusted {
                                 view.fit();
                             }
                         });
-                        // The controls panel occludes: a press on one of its
-                        // sliders must not also pan the graph underneath.
+                        // * The controls panel occludes: a press on one of its
+                        //   sliders must not also pan the graph underneath.
                         window.insert_hitbox(bounds, HitboxBehavior::Normal)
                     },
                     move |bounds, hitbox, window, cx| {
@@ -2249,11 +2249,11 @@ impl Render for GraphView {
                             )
                         };
                         window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
-                            // Edges: one stroked path for plain ones, one for highlighted.
+                            // * Edges: one stroked path for plain ones, one for highlighted.
                             let mut plain = PathBuilder::stroke(px(1.0 * line_mult));
                             let mut bright = PathBuilder::stroke(px(1.5 * line_mult));
-                            // Arrowheads, filled, at the target end of each
-                            // edge just outside the node.
+                            // * Arrowheads, filled, at the target end of each
+                            //   edge just outside the node.
                             let mut plain_heads = PathBuilder::fill();
                             let mut bright_heads = PathBuilder::fill();
                             let mut any_plain = false;
@@ -2310,7 +2310,7 @@ impl Render for GraphView {
                                     }
                                 }
                             }
-                            // Nodes.
+                            // * Nodes.
                             let style = window.text_style();
                             let font_size = px(11.);
                             let mut labels = 0;
@@ -2347,7 +2347,7 @@ impl Render for GraphView {
                                     quad.border_color = color;
                                 }
                                 window.paint_quad(quad);
-                                // Labels fade in with zoom; the hovered node always shows.
+                                // * Labels fade in with zoom; the hovered node always shows.
                                 let show_label = Some(i) == hovered
                                     || Some(i) == current_ix
                                     || (scale >= label_from && labels < 400 && !dim);
@@ -2388,7 +2388,7 @@ impl Render for GraphView {
                         let hb = hitbox.clone();
                         window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
                             if phase == DispatchPhase::Bubble {
-                                // Over the panel nothing underneath is hovered.
+                                // * Over the panel nothing underneath is hovered.
                                 let over = hb.is_hovered(window);
                                 e.update(cx, |v, cx| {
                                     if over || v.drag.is_some() {
@@ -2658,7 +2658,7 @@ mod tests {
             node("Note.md", NodeKind::Note),
             node("lonely.png", NodeKind::Attachment),
         ];
-        // The centre alone, kept even though nothing links to it.
+        // * The centre alone, kept even though nothing links to it.
         let built = finish(nodes, Vec::new(), Some([1].into_iter().collect()), true);
         let kept: Vec<&str> = built.nodes.iter().map(|n| n.id.as_str()).collect();
         assert_eq!(kept, ["lonely.png"]);
@@ -2682,7 +2682,7 @@ mod tests {
         let (scale, offset) = frame(800.0, 600.0, (-100.0, -50.0, 100.0, 50.0), Some(4.0)).unwrap();
         assert_eq!(scale, 4.0);
         assert_eq!(offset, point(0.0, 0.0));
-        // Off-center bounds still get centered, at the pinned scale.
+        // * Off-center bounds still get centered, at the pinned scale.
         let (scale, offset) = frame(800.0, 600.0, (0.0, 0.0, 200.0, 100.0), Some(4.0)).unwrap();
         assert_eq!(scale, 4.0);
         assert_eq!(offset, point(-400.0, -200.0));
@@ -2710,15 +2710,15 @@ mod tests {
     /// Ctrl+0 by pinning the camera back to the zoom in graph.json.
     #[test]
     fn a_reset_outlives_the_next_refresh() {
-        // First sight of the saved zoom: adopt it.
+        // * First sight of the saved zoom: adopt it.
         assert!(adopts_saved_scale(Some(4.0), None, false));
-        // Every later refresh leaves the camera where it is, whether the
-        // reset cleared the pin or the user zoomed by hand.
+        // * Every later refresh leaves the camera where it is, whether the
+        //   reset cleared the pin or the user zoomed by hand.
         assert!(!adopts_saved_scale(Some(4.0), Some(4.0), false));
         assert!(!adopts_saved_scale(Some(4.0), None, true));
-        // A vault with no saved zoom never adopts one.
+        // * A vault with no saved zoom never adopts one.
         assert!(!adopts_saved_scale(None, None, false));
-        // The file changed under us: that is a new intention.
+        // * The file changed under us: that is a new intention.
         assert!(adopts_saved_scale(Some(2.0), Some(4.0), false));
     }
 

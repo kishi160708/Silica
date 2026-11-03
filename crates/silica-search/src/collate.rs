@@ -13,8 +13,8 @@ use std::cmp::Ordering;
 pub fn natural_cmp(a: &str, b: &str) -> Ordering {
     let mut x = a.chars().peekable();
     let mut y = b.chars().peekable();
-    // The case difference that decides otherwise equal names, kept until
-    // every primary comparison has come out equal.
+    // * The case difference that decides otherwise equal names, kept until
+    // * every primary comparison has come out equal.
     let mut tertiary = Ordering::Equal;
     loop {
         let (ca, cb) = match (x.peek().copied(), y.peek().copied()) {
@@ -28,7 +28,7 @@ pub fn natural_cmp(a: &str, b: &str) -> Ordering {
             let nb = digits(&mut y);
             match numeric_cmp(&na, &nb) {
                 Ordering::Equal => {
-                    // Same number, written differently: `07` after `7`.
+                    // * Same number, written differently: `07` after `7`.
                     if tertiary == Ordering::Equal {
                         tertiary = na.len().cmp(&nb.len());
                     }
@@ -46,8 +46,8 @@ pub fn natural_cmp(a: &str, b: &str) -> Ordering {
             other => return other,
         }
         if tertiary == Ordering::Equal && ca != cb {
-            // Lowercase sorts before uppercase, the tertiary level of the
-            // default collation.
+            // * Lowercase sorts before uppercase, the tertiary level of the
+            // * default collation.
             tertiary = cb.is_lowercase().cmp(&ca.is_lowercase());
         }
         x.next();

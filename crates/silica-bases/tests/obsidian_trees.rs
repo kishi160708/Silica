@@ -104,8 +104,8 @@ fn every_statement_parses_to_the_tree_obsidian_built() {
         wrong.len(),
         wrong.join("\n")
     );
-    // A floor, so that a fixture that stops being read fails here rather than
-    // passing while checking nothing.
+    // ! A floor, so that a fixture that stops being read fails here rather than
+    // ! passing while checking nothing.
     assert!(checked >= 277, "only {checked} trees were compared");
 }
 

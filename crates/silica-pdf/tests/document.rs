@@ -199,8 +199,8 @@ fn rotated_page_is_reported_and_drawn_rotated() {
     assert_size(doc.page_size(0).unwrap(), 100.0, 200.0);
     let bitmap = doc.render(0, 1.0).unwrap();
     assert_eq!((bitmap.width, bitmap.height), (100, 200));
-    // The unrotated page's bottom-left quadrant, turned clockwise, is the
-    // displayed page's top-left quarter.
+    // * The unrotated page's bottom-left quadrant, turned clockwise, is the
+    // * displayed page's top-left quarter.
     assert_eq!(pixel(&bitmap, 25, 50), [0, 0, 0, 255]);
     assert_eq!(pixel(&bitmap, 10, 10), [0, 0, 0, 255]);
     assert_eq!(pixel(&bitmap, 40, 90), [0, 0, 0, 255]);
@@ -249,8 +249,8 @@ fn garbage_is_an_error_not_a_panic() {
     for cut in [10, 100, 1000, pages.len() / 2, pages.len() - 30] {
         let truncated = pages[..cut].to_vec();
         match Document::open(truncated) {
-            // hayro repairs some truncations by scanning for objects; either
-            // outcome is fine as long as nothing panics and the pages read.
+            // ! hayro repairs some truncations by scanning for objects; either
+            // ! outcome is fine as long as nothing panics and the pages read.
             Ok(doc) => {
                 let _ = doc.sizes();
                 let _ = doc.outline();
@@ -338,9 +338,9 @@ fn render_timings() {
 #[test]
 fn pages_fixture_glyphs() {
     let doc = open("pages.pdf");
-    // Out of range.
+    // * Out of range.
     assert_eq!(doc.page_glyphs(5), None);
-    // Page 0 has the heading "One" and the sentence "This is page one."
+    // * Page 0 has the heading "One" and the sentence "This is page one."
     let glyphs = doc.page_glyphs(0).unwrap();
     assert!(!glyphs.is_empty(), "page 0 has no glyphs");
     let joined: String = glyphs.iter().map(|g| g.text.as_str()).collect();
@@ -348,7 +348,7 @@ fn pages_fixture_glyphs() {
         joined.contains("One") && joined.contains("This"),
         "joined glyphs {joined:?} lack expected words"
     );
-    // Every glyph sits within the A4 page bounds.
+    // * Every glyph sits within the A4 page bounds.
     let (w, h) = (A4_WIDTH, A4_HEIGHT);
     for g in &glyphs {
         assert!(
@@ -367,8 +367,8 @@ fn pages_fixture_glyphs() {
         );
         assert!(g.height > 0.0 && g.width >= 0.0, "bad glyph box {:?}", g);
     }
-    // Glyphs roughly left-aligned: the first glyph of the body line starts
-    // near the left margin, and the heading starts above the body.
+    // * Glyphs roughly left-aligned: the first glyph of the body line starts
+    // * near the left margin, and the heading starts above the body.
     let first = &glyphs[0];
     assert!(
         first.x < 200.0,
@@ -386,8 +386,8 @@ fn blank_page_has_no_glyphs() {
 fn glyphs_are_strictly_left_to_right_in_a_line() {
     let doc = open("pages.pdf");
     let glyphs = doc.page_glyphs(0).unwrap();
-    // Group glyphs into lines by y (within a few points), then assert
-    // non-decreasing x within each line.
+    // * Group glyphs into lines by y (within a few points), then assert
+    // * non-decreasing x within each line.
     let mut lines: Vec<Vec<&PdfGlyph>> = Vec::new();
     for g in &glyphs {
         if let Some(line) = lines.last_mut() {

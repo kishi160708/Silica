@@ -60,8 +60,8 @@ fn number_function_table() {
         ("12.345.floor()", "12"),
         ("12.345.isEmpty()", "false"),
         ("12.345.round()", "12"),
-        // Every type has these three, and the dispatcher owns them; they are
-        // here because the table observed them on a Number.
+        // * Every type has these three, and the dispatcher owns them; they are
+        // * here because the table observed them on a Number.
         ("12.345.isTruthy()", "true"),
         ("12.345.toString()", "12.345"),
     ] {
@@ -74,7 +74,7 @@ fn number_function_table() {
 fn number_values() {
     renders("density.toFixed(3)", "1.210");
     renders("negative.abs()", "4");
-    // Null absorbs: the dispatcher answers before this module is reached.
+    // * Null absorbs: the dispatcher answers before this module is reached.
     renders("nosuchprop.toFixed(2)", "null");
 }
 
@@ -162,7 +162,7 @@ fn unprobed_rounding_edges() {
     renders("0.125.toFixed(2)", "0.13");
     renders("1.21.toFixed(0)", "1");
     renders("(0 - 1.21).toFixed(3)", "-1.210");
-    // Infinity and NaN keep the way they print.
+    // * Infinity and NaN keep the way they print.
     renders("(1 / 0).toFixed(2)", "Infinity");
     renders("(0 / 0).toFixed(2)", "NaN");
     renders("(0 / 0).abs()", "NaN");

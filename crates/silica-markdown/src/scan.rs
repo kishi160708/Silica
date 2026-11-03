@@ -395,7 +395,7 @@ pub(crate) fn scan_autolink(s: &str, min_scheme: usize) -> Option<(usize, bool)>
     if b.first() != Some(&b'<') {
         return None;
     }
-    // URI autolink: scheme of 2..=32 chars then ':' then no spaces, '<' or '>'.
+    // * URI autolink: scheme of 2..=32 chars then ':' then no spaces, '<' or '>'.
     if b.get(1).is_some_and(|c| c.is_ascii_alphabetic()) {
         let mut i = 2;
         while i < b.len()
@@ -414,7 +414,7 @@ pub(crate) fn scan_autolink(s: &str, min_scheme: usize) -> Option<(usize, bool)>
             }
         }
     }
-    // Email autolink.
+    // * Email autolink.
     let mut i = 1;
     while i < b.len() && (b[i].is_ascii_alphanumeric() || b".!#$%&'*+/=?^_`{|}~-".contains(&b[i])) {
         i += 1;

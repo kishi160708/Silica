@@ -14,8 +14,8 @@
 use silica_formats::canvas::{Canvas, Edge, EndStyle, Node, NodeType, Side};
 
 // ---- constants ---------------------------------------------------------------
-// Observed in Obsidian 1.14.4 over CDP on 2026-10-21 unless marked otherwise;
-// see `docs/silica/Specification.md`, "Observed canvas view behavior".
+// * Observed in Obsidian 1.14.4 over CDP on 2026-10-21 unless marked otherwise;
+// * see `docs/silica/Specification.md`, "Observed canvas view behavior".
 
 /// Snap grid in canvas units: the dot pattern's spacing at scale 1.
 pub const GRID: f64 = 20.0;

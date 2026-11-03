@@ -140,9 +140,9 @@ mod tests {
         assert_eq!(literal("abc", ""), Vec::<Range<usize>>::new());
         assert_eq!(literal("Ärger ärger", "ärg"), vec![0..4, 7..11]);
         assert_eq!(literal("naïve", "ÏV"), vec![2..5]);
-        // ASCII query over non-ASCII text stays on char boundaries.
+        // * ASCII query over non-ASCII text stays on char boundaries.
         assert_eq!(literal("é a", "a"), vec![3..4]);
-        // Literal mode takes regex metacharacters as themselves.
+        // * Literal mode takes regex metacharacters as themselves.
         assert_eq!(literal("a.c abc", "a.c"), vec![0..3]);
     }
 
@@ -163,7 +163,7 @@ mod tests {
         };
         assert_eq!(find_matches("a1 b22 c", r"[a-z]\d+", re), vec![0..2, 3..6]);
         assert_eq!(find_matches("x\ny", "^y", re), vec![2..3]);
-        // Empty matches are skipped, an invalid pattern finds nothing.
+        // * Empty matches are skipped, an invalid pattern finds nothing.
         assert_eq!(find_matches("aaa", "b*", re), Vec::<Range<usize>>::new());
         assert_eq!(find_matches("aaa", "(", re), Vec::<Range<usize>>::new());
     }
@@ -181,7 +181,7 @@ mod tests {
             replacement_for(text, &m, &regex, re, "$2, $1 ($&) $$ $x"),
             "Smith, John (John Smith) $ $x"
         );
-        // Literal mode leaves dollars alone.
+        // * Literal mode leaves dollars alone.
         let lit = Options::default();
         let regex = compile("John", lit).unwrap();
         assert_eq!(replacement_for(text, &(0..4), &regex, lit, "$1"), "$1");

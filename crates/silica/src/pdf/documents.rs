@@ -238,8 +238,8 @@ impl Documents {
                 match image {
                     Some(image) => inner.insert_ready(key, image),
                     None => {
-                        // A page that will not render is asked for again
-                        // next frame otherwise, forever.
+                        // * A page that will not render is asked for again
+                        //   next frame otherwise, forever.
                         inner.pages.remove(&key);
                         Vec::new()
                     }
@@ -372,7 +372,7 @@ mod tests {
             assert!(inner.insert_ready(k(p), image(10, 10)).is_empty());
         }
         assert_eq!(inner.bytes, 1600);
-        // Page 0 is touched, so page 1 is the oldest.
+        // * Page 0 is touched, so page 1 is the oldest.
         inner.touch(&k(0));
         let gone = inner.evict(1000, None);
         assert_eq!(gone.len(), 2);
@@ -390,7 +390,7 @@ mod tests {
         let small = PageKey::new(path, 0, 1.0);
         inner.insert_ready(small.clone(), image(2, 2));
         let big = PageKey::new(path, 1, 1.0);
-        inner.bytes = PAGE_CACHE_BYTES; // pretend the cache is full already
+        inner.bytes = PAGE_CACHE_BYTES; // * pretend the cache is full already
         let gone = inner.insert_ready(big.clone(), image(4, 4));
         assert_eq!(gone.len(), 1);
         assert!(inner.pages.contains_key(&big));

@@ -84,8 +84,8 @@ pub fn native<R>(f: impl FnOnce(&[Box<dyn Plugin>]) -> R) -> R {
 /// `None` means no loaded plugin owns that id. Native plugins are checked
 /// first, then the compatibility hosts.
 pub fn run(id: &str, ctx: &PluginContext<'_>) -> Option<(Result<(), String>, Vec<String>)> {
-    // Native plugins are global: check first, running inside the borrow so
-    // we never hold the NATIVE lock across the return.
+    // * Native plugins are global: check first, running inside the borrow so
+    // * we never hold the NATIVE lock across the return.
     let native_hit = NATIVE.with(|native| {
         native.borrow().iter().find(|p| {
             p.commands().iter().any(|c| c.id == id)
@@ -100,9 +100,9 @@ pub fn run(id: &str, ctx: &PluginContext<'_>) -> Option<(Result<(), String>, Vec
         let loaded = loaded.as_ref()?;
         let hosts = &loaded.hosts;
         let host = hosts.iter().find(|host| host.has_command(id))?;
-        // Tell the host which note is open right before it runs. Without
-        // this the open-note guard compares against `None` and never fires,
-        // so a plugin could overwrite unsaved edits.
+        // ! Tell the host which note is open right before it runs. Without
+        // ! this the open-note guard compares against `None` and never fires,
+        // ! so a plugin could overwrite unsaved edits.
         host.set_open_note((ctx.current_note)());
         Some((host.run_command(id), host.take_notices()))
     })
@@ -234,7 +234,7 @@ module.exports = Counter;
             "written by the plugin"
         );
 
-        // The app's own ids are not the plugin's to answer for.
+        // ! The app's own ids are not the plugin's to answer for.
         let ctx = PluginContext {
             vault_root: std::path::Path::new(""),
             read_file: Box::new(|_| Err("no vault".to_string())),
@@ -251,7 +251,7 @@ module.exports = Counter;
             current_note: Box::new(|| None),
         };
         assert!(run("silica:open-settings", &ctx).is_none());
-        // A second ask for the same vault keeps the same runtime.
+        // * A second ask for the same vault keeps the same runtime.
         ensure(&root, vault.config_dir(), &registry);
         hosts(|hosts| assert_eq!(hosts.len(), 1));
         forget();
@@ -262,7 +262,7 @@ module.exports = Counter;
     fn a_native_plugin_command_runs_through_run() {
         register_native(Box::new(Counter));
 
-        // Native plugins are global: they run without a vault loaded.
+        // * Native plugins are global: they run without a vault loaded.
         let ctx = PluginContext {
             vault_root: std::path::Path::new(""),
             read_file: Box::new(|_| Err("no vault".to_string())),
@@ -279,14 +279,14 @@ module.exports = Counter;
             current_note: Box::new(|| None),
         };
 
-        // Native plugins are global: they run without a vault loaded.
+        // * Native plugins are global: they run without a vault loaded.
         let (outcome, _) = run("silica:counter:count", &ctx).expect("native plugin owns this command");
         outcome.expect("the command ran");
 
-        // Unknown id is not owned by any plugin -> None.
+        // * Unknown id is not owned by any plugin -> None.
         assert!(run("silica:counter:nope", &ctx).is_none());
 
-        // `forget` clears compat hosts, not native registrations.
+        // * `forget` clears compat hosts, not native registrations.
         forget();
         let (outcome, _) = run("silica:counter:count", &ctx).expect("native plugin still registered");
         outcome.expect("the command ran again");

@@ -70,9 +70,9 @@ impl Kind {
     fn enabled(self, opts: Options) -> bool {
         match self {
             Kind::Bracket | Kind::Quote => opts.brackets,
-            // The probe ran the selection rows with both toggles on, so
-            // which one owns `~ = $ %` is a judgement call; their wraps
-            // are all Markdown syntax, so the Markdown toggle gets them.
+            // ? The probe ran the selection rows with both toggles on, so
+            // ? which one owns `~ = $ %` is a judgement call; their wraps
+            // ? are all Markdown syntax, so the Markdown toggle gets them.
             Kind::Marker | Kind::WrapOnly => opts.markdown,
         }
     }
@@ -121,9 +121,9 @@ pub fn act(text: &str, sel: Range<usize>, typed: char, opts: Options, planted: b
     }
     let at = sel.start;
     let next = text[at..].chars().next();
-    // A closer typed over the one the editor planted steps past it; a
-    // planted one with no opener behind it is written again (`x|)` typed
-    // `)` gives `x))`), and so is one the editor planted on another line.
+    // * A closer typed over the one the editor planted steps past it; a
+    // * planted one with no opener behind it is written again (`x|)` typed
+    // * `)` gives `x))`), and so is one the editor planted on another line.
     if planted && next == Some(typed) {
         if let Some(kind) = closer_kind(typed) {
             if kind.enabled(opts) {
@@ -174,8 +174,8 @@ pub fn backspace_range(text: &str, at: usize, opts: Options) -> Range<usize> {
     let Some((close, kind)) = lone_char(&text[start..at]).and_then(pair) else {
         return start..at;
     };
-    // `~ = $ %` never plant a closer, so there is no pair of theirs to
-    // take away.
+    // ! `~ = $ %` never plant a closer, so there is no pair of theirs to
+    // ! take away.
     if kind == Kind::WrapOnly || !kind.enabled(opts) {
         return start..at;
     }
@@ -225,7 +225,7 @@ mod tests {
             assert_eq!(act_at("()", 1, open), Act::Close(close), "(|) {open}");
             assert_eq!(act_at("a\nb", 1, open), Act::Close(close), "a|\nb {open}");
         }
-        // Mid-line: a space ahead is enough, whatever came before.
+        // * Mid-line: a space ahead is enough, whatever came before.
         assert_eq!(act_at("para text here", 4, '('), Act::Close(')'));
         assert_eq!(act_at("x = 1", 3, '('), Act::Close(')'));
     }
@@ -247,9 +247,9 @@ mod tests {
         }
         assert_eq!(act_at("para text here", 4, '*'), Act::Insert);
         assert_eq!(act_at("x = 1", 3, '*'), Act::Insert);
-        // An empty document is the start of a line and the end of one.
+        // * An empty document is the start of a line and the end of one.
         assert_eq!(act_at("", 0, '*'), Act::Close('*'));
-        // Inside a closed code span the backtick ahead blocks the pair.
+        // * Inside a closed code span the backtick ahead blocks the pair.
         assert_eq!(act_at("x `say `", 7, '('), Act::Insert);
         assert_eq!(act_at("x `say `", 7, '*'), Act::Insert);
     }
@@ -281,10 +281,10 @@ mod tests {
             let planted = format!("x{close}");
             assert_eq!(act_at(&planted, 1, close), Act::Insert, "x|{close}");
         }
-        // A second bracket nests: the closing bracket ahead lets it close.
+        // * A second bracket nests: the closing bracket ahead lets it close.
         assert_eq!(act_planted("()", 1, '('), Act::Close(')'));
         assert_eq!(act_planted("[[]]", 2, '['), Act::Close(']'));
-        // A second `~` is just another character.
+        // * A second `~` is just another character.
         assert_eq!(act_at("~~", 1, '~'), Act::Insert);
     }
 
@@ -343,7 +343,7 @@ mod tests {
                 "{c} wrap with both off"
             );
         }
-        // The skip is part of the feature, so it goes away with it.
+        // * The skip is part of the feature, so it goes away with it.
         assert_eq!(act("()", 1..1, ')', off, true), Act::Insert);
         assert_eq!(act("\"\"", 1..1, '"', off, true), Act::Insert);
     }
@@ -354,13 +354,13 @@ mod tests {
         assert_eq!(backspace_range("()", 1, opts), 0..2);
         assert_eq!(backspace_range("**", 1, opts), 0..2);
         assert_eq!(backspace_range("[]", 1, opts), 0..2);
-        // Content inside: only the opener goes.
+        // * Content inside: only the opener goes.
         assert_eq!(backspace_range("(x)", 1, opts), 0..1);
-        // A plain character loses one.
+        // * A plain character loses one.
         assert_eq!(backspace_range("plain", 3, opts), 2..3);
-        // Nothing before the cursor.
+        // * Nothing before the cursor.
         assert_eq!(backspace_range("ab", 0, opts), 0..0);
-        // Multi-byte characters still go one character at a time.
+        // * Multi-byte characters still go one character at a time.
         assert_eq!(backspace_range("é", 2, opts), 0..2);
     }
 
@@ -373,8 +373,8 @@ mod tests {
         assert_eq!(backspace_range("\u{1f1eb}\u{1f1f7}", 8, opts), 0..8);
         let family = "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}";
         assert_eq!(backspace_range(family, family.len(), opts), 0..family.len());
-        // An opener carrying a combining mark is its own cluster, not half
-        // of a pair, so the closer after it stays.
+        // * An opener carrying a combining mark is its own cluster, not half
+        // * of a pair, so the closer after it stays.
         assert_eq!(backspace_range("(\u{301})", 3, opts), 0..3);
     }
 
@@ -386,7 +386,7 @@ mod tests {
         };
         assert_eq!(backspace_range("()", 1, off), 0..1);
         assert_eq!(backspace_range("**", 1, off), 0..1);
-        // `~ = $ %` never planted a closer, so they never take two.
+        // ! `~ = $ %` never planted a closer, so they never take two.
         assert_eq!(backspace_range("~~", 1, Options::default()), 0..1);
     }
 }

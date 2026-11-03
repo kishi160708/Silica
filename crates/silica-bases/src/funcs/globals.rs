@@ -121,8 +121,8 @@ fn args_from(
 fn date(ev: &mut Evaluator<'_>, name: &str, args: &[Expr]) -> EvalResult {
     let vals = args_from(ev, name, args, 1)?;
     let out = match &vals[0] {
-        // Null absorbs, as it does everywhere else in the language. `unprobed`:
-        // only a RegExp and a Number were ever refused here.
+        // ? Null absorbs, as it does everywhere else in the language. `unprobed`:
+        // ? only a RegExp and a Number were ever refused here.
         Value::Null => Value::Null,
         Value::Date(d) => Value::Date(*d),
         other => {
@@ -146,7 +146,7 @@ fn duration(ev: &mut Evaluator<'_>, name: &str, args: &[Expr]) -> EvalResult {
     let vals = args_from(ev, name, args, 1)?;
     let out = match &vals[0] {
         Value::Null => Value::Null,
-        // `unprobed`, by analogy with `date(when)`.
+        // ? `unprobed`, by analogy with `date(when)`.
         Value::Duration(d) => Value::Duration(*d),
         other => {
             let input = want_string(name, "input", other)?;
@@ -179,7 +179,7 @@ fn number(ev: &mut Evaluator<'_>, name: &str, args: &[Expr]) -> EvalResult {
         Value::Null => Ok(Value::Null),
         Value::Number(n) => Ok(Value::Number(*n)),
         Value::Bool(b) => Ok(Value::Number(if *b { 1.0 } else { 0.0 })),
-        // A Link is a String receiver everywhere else, so its text converts.
+        // * A Link is a String receiver everywhere else, so its text converts.
         other => match other.as_text() {
             Some(s) => Ok(Value::Number(str_as_number(s).unwrap_or(f64::NAN))),
             None => Err(EvalError::new(format!(
@@ -198,9 +198,9 @@ fn list(ev: &mut Evaluator<'_>, name: &str, args: &[Expr]) -> EvalResult {
         return Err(too_many(name));
     }
     Ok(match &vals[0] {
-        // Null absorbs rather than becoming a list of one null. `unprobed`.
+        // ? Null absorbs rather than becoming a list of one null. `unprobed`.
         Value::Null => Value::Null,
-        // "If the element is a list, return it unmodified."
+        // * "If the element is a list, return it unmodified."
         already @ (Value::List(_) | Value::Tags(_)) => already.clone(),
         other => Value::List(vec![other.clone()]),
     })
@@ -240,7 +240,7 @@ fn file(ev: &mut Evaluator<'_>, name: &str, args: &[Expr]) -> EvalResult {
     let vals = args_from(ev, name, args, 1)?;
     let wanted = match &vals[0] {
         Value::Null => None,
-        // `unprobed`: a File handed back as it came.
+        // ? `unprobed`: a File handed back as it came.
         Value::File(f) => {
             if args.len() > 1 {
                 return Err(too_many(name));

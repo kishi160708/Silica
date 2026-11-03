@@ -271,12 +271,12 @@ pub fn column(base: &Base, id: &str) -> Column {
 /// expression, so routing `Property` through `eval_str` would lose it.
 pub fn value_of(source: &ColumnSource, ctx: &dyn Context) -> Result<Value, EvalError> {
     match source {
-        // "A bare ident resolves to a frontmatter property"; a missing one is
-        // null, not an error.
+        // * "A bare ident resolves to a frontmatter property"; a missing one is
+        // * null, not an error.
         ColumnSource::Property(name) => Ok(ctx.property(name).unwrap_or(Value::Null)),
         ColumnSource::File(name) => match ctx.file() {
-            // Null absorbs everything, so a row with no file answers null
-            // rather than refusing.
+            // * Null absorbs everything, so a row with no file answers null
+            // * rather than refusing.
             None => Ok(Value::Null),
             Some(file) => {
                 let mut ev = Evaluator::new(ctx);
@@ -367,8 +367,8 @@ fn sorted(mut keyed: Vec<Keyed>, sort: &[Sort]) -> Vec<Keyed> {
     if sort.is_empty() {
         return keyed;
     }
-    // Stable, so rows that tie on every key keep the order the caller gave
-    // them — which is the vault's own order, and what an unsorted view shows.
+    // * Stable, so rows that tie on every key keep the order the caller gave
+    // * them — which is the vault's own order, and what an unsorted view shows.
     keyed.sort_by(|l, r| {
         for (i, entry) in sort.iter().enumerate() {
             let (Some(a), Some(b)) = (l.sort_keys.get(i), r.sort_keys.get(i)) else {
@@ -567,9 +567,9 @@ pub fn build(base: &Base, view_ix: usize, env: &Env) -> Table {
         }
     };
 
-    // "Unknown view type: nonsense", no rows, and the file still parses. The
-    // four registered types all draw the same rows, so only a fifth stops
-    // here.
+    // * "Unknown view type: nonsense", no rows, and the file still parses. The
+    // * four registered types all draw the same rows, so only a fifth stops
+    // * here.
     if !VIEW_KINDS
         .iter()
         .any(|k| k.eq_ignore_ascii_case(&view.kind))
@@ -604,9 +604,9 @@ pub fn build(base: &Base, view_ix: usize, env: &Env) -> Table {
     };
 
     let group_source = view.group_by.as_ref().map(|g| source_of(&g.property));
-    // The cards and kanban layouts' `image` key names a property that is not
-    // one of the columns, so its value is evaluated beside the cells rather
-    // than looked up among them.
+    // * The cards and kanban layouts' `image` key names a property that is not
+    // * one of the columns, so its value is evaluated beside the cells rather
+    // * than looked up among them.
     let image_source = image_property(view).map(|id| source_of(&id));
     let sort_sources: Vec<ColumnSource> =
         view.sort.iter().map(|s| source_of(&s.property)).collect();
@@ -627,8 +627,8 @@ pub fn build(base: &Base, view_ix: usize, env: &Env) -> Table {
                 .as_ref()
                 .map(|s| crate::cell::of(value_of(s, &ctx)));
             Keyed {
-                // A sort or group key that refuses is null here: it orders,
-                // it does not empty the view the way a filter does.
+                // * A sort or group key that refuses is null here: it orders,
+                // * it does not empty the view the way a filter does.
                 sort_keys: sort_sources
                     .iter()
                     .map(|s| value_of(s, &ctx).unwrap_or(Value::Null))

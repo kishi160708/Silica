@@ -228,9 +228,9 @@ fn collect_blocks(
                 content,
                 setext,
             } => {
-                // A setext heading's span runs through its underline, and
-                // the display layer cannot tell that line from a title
-                // that is itself a run of `=` or `-`, so split it here.
+                // ! A setext heading's span runs through its underline, and
+                // ! the display layer cannot tell that line from a title
+                // ! that is itself a run of `=` or `-`, so split it here.
                 let underline = setext
                     .then(|| line_range_at(src, lines, block.span.end.saturating_sub(1)))
                     .filter(|u| u.start > block.span.start);
@@ -483,7 +483,7 @@ mod tests {
             h[1],
             vec![(0..12, HighlightKind::Heading(HeadingPart::underline(1)))]
         );
-        // The title that looks like an underline: only the second row is one.
+        // * The title that looks like an underline: only the second row is one.
         let h = heads("==\n==\n");
         assert_eq!(
             h[0],
@@ -493,8 +493,8 @@ mod tests {
             h[1],
             vec![(0..2, HighlightKind::Heading(HeadingPart::underline(1)))]
         );
-        // Inside a quote the title span starts after the marker, and the
-        // underline covers the whole of its line.
+        // * Inside a quote the title span starts after the marker, and the
+        // * underline covers the whole of its line.
         let h = heads("> Title\n> ===\n");
         assert_eq!(
             h[0],
@@ -504,7 +504,7 @@ mod tests {
             h[1],
             vec![(0..5, HighlightKind::Heading(HeadingPart::underline(1)))]
         );
-        // An ATX heading is one span, underline false, markers included.
+        // * An ATX heading is one span, underline false, markers included.
         let h = heads("## Title ##\n");
         assert_eq!(
             h[0],

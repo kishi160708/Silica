@@ -103,10 +103,10 @@ pub fn allows_destination(url: &str) -> bool {
         return false;
     }
     let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    // Drop any userinfo, then any port.
+    // * Drop any userinfo, then any port.
     let host = authority.rsplit('@').next().unwrap_or(authority);
     let host = if host.starts_with('[') {
-        // A bracketed IPv6 literal.
+        // * A bracketed IPv6 literal.
         host.split(']')
             .next()
             .unwrap_or(host)
@@ -121,10 +121,10 @@ pub fn allows_destination(url: &str) -> bool {
     if let Ok(ip) = host.parse::<std::net::IpAddr>() {
         return !is_private(ip);
     }
-    // A DNS name: resolve it and refuse if every address it could reach is
-    // private. curl resolves again at connect time, but this check catches the
-    // common rebinding case and the `--resolve` argument below pins the one we
-    // validated.
+    // ! A DNS name: resolve it and refuse if every address it could reach is
+    //   private. curl resolves again at connect time, but this check catches the
+    //   common rebinding case and the `--resolve` argument below pins the one we
+    //   validated.
     match std::net::ToSocketAddrs::to_socket_addrs(&format!("{host}:80")) {
         Ok(mut addrs) => addrs.any(|a| !is_private(a.ip())),
         Err(_) => false,
@@ -167,20 +167,20 @@ fn is_private(ip: std::net::IpAddr) -> bool {
                 || v4.is_broadcast()
                 || v4.is_unspecified()
                 || v4.is_documentation()
-                // 100.64/10, carrier-grade NAT, which is a LAN in practice.
+                // * 100.64/10, carrier-grade NAT, which is a LAN in practice.
                 || (v4.octets()[0] == 100 && (64..128).contains(&v4.octets()[1]))
-                // 169.254 metadata endpoints are link-local and already
-                // covered; 0/8 and 240/4 are not routable either.
+                // * 169.254 metadata endpoints are link-local and already
+                //   covered; 0/8 and 240/4 are not routable either.
                 || v4.octets()[0] == 0
                 || v4.octets()[0] >= 240
         }
         IpAddr::V6(v6) => {
             v6.is_loopback()
                 || v6.is_unspecified()
-                // Unique local (fc00::/7) and link-local (fe80::/10).
+                // * Unique local (fc00::/7) and link-local (fe80::/10).
                 || (v6.segments()[0] & 0xfe00) == 0xfc00
                 || (v6.segments()[0] & 0xffc0) == 0xfe80
-                // An IPv4-mapped address is private if the IPv4 is.
+                // * An IPv4-mapped address is private if the IPv4 is.
                 || v6.to_ipv4_mapped().is_some_and(|v4| is_private(v4.into()))
         }
     }
@@ -216,8 +216,8 @@ impl SilicaHttpClient {
             std::env::temp_dir().join("silica").join("remote_images")
         };
         let _ = std::fs::create_dir_all(&cache_dir);
-        // A crashed run can leave partial downloads behind; sweep them before
-        // the cache is used, and keep the cache within its size budget.
+        // * A crashed run can leave partial downloads behind; sweep them before
+        //   the cache is used, and keep the cache within its size budget.
         sweep_temp_files(&cache_dir);
         evict_to_limit(&cache_dir, MAX_CACHE_BYTES);
         Self { cache_dir }
@@ -266,10 +266,10 @@ impl HttpClient for SilicaHttpClient {
             }
             .boxed();
         }
-        // Pin the connection to the public address the name resolves to, so
-        // DNS rebinding cannot send the request somewhere else at connect
-        // time. A name that cannot be resolved, or that resolves only to a
-        // private address, is refused.
+        // ! Pin the connection to the public address the name resolves to, so
+        //   DNS rebinding cannot send the request somewhere else at connect
+        //   time. A name that cannot be resolved, or that resolves only to a
+        //   private address, is refused.
         let Some(resolve_arg) = resolve_target(&uri) else {
             return async move {
                 Err(anyhow!(
@@ -300,9 +300,9 @@ impl HttpClient for SilicaHttpClient {
             let resolve_clone = resolve_arg.clone();
 
             std::thread::spawn(move || {
-                // Follow redirects manually, validating every hop, so a
-                // redirect chain cannot bounce to a private address that the
-                // original URL passed.
+                // * Follow redirects manually, validating every hop, so a
+                //   redirect chain cannot bounce to a private address that the
+                //   original URL passed.
                 let mut current_uri = uri_clone;
                 let mut current_resolve = resolve_clone;
                 let mut redirects = 0u32;
@@ -315,9 +315,9 @@ impl HttpClient for SilicaHttpClient {
                         let status = std::process::Command::new("curl")
                             .arg("-s")
                             .arg("-f")
-                            // No -L: we follow redirects ourselves so each hop
-                            // can be validated against the private-network
-                            // rules before the connection is made.
+                            // * No -L: we follow redirects ourselves so each hop
+                            //   can be validated against the private-network
+                            //   rules before the connection is made.
                             .arg("--proto").arg("=http,https")
                             .arg("--proto-redir").arg("=http,https")
                             .arg("--resolve").arg(&current_resolve)
@@ -368,8 +368,8 @@ impl HttpClient for SilicaHttpClient {
                                     }
                                 }
 
-                                // Final response (not a redirect, or too many
-                                // redirects): keep the body, discard headers.
+                                // * Final response (not a redirect, or too many
+                                //   redirects): keep the body, discard headers.
                                 let _ = std::fs::remove_file(&headers_path);
 
                                 match std::fs::metadata(&temp_path) {
@@ -383,9 +383,9 @@ impl HttpClient for SilicaHttpClient {
                                     }
                                     _ => {
                                         let _ = std::fs::rename(&temp_path, &cache_path_clone);
-                                        // Keep the cache within its size budget:
-                                        // evict the oldest entries if this write put
-                                        // it over the limit.
+                                        // * Keep the cache within its size budget:
+                                        //   evict the oldest entries if this write put
+                                        //   it over the limit.
                                         if let Some(dir) = cache_path_clone.parent() {
                                             evict_to_limit(dir, MAX_CACHE_BYTES);
                                         }
@@ -517,7 +517,7 @@ mod tests {
         assert!(allows_destination("https://example.com/x.png"));
         let resolve = resolve_target("http://example.com/x.png").unwrap();
         assert!(resolve.starts_with("example.com:80:"));
-        // The resolved address must not be private or loopback.
+        // ! The resolved address must not be private or loopback.
         let ip = resolve
             .split_once(':')
             .and_then(|(_, rest)| rest.split_once(':').map(|(_, ip)| ip))
@@ -572,7 +572,7 @@ mod tests {
         assert_eq!(dir_size(dir.path()), 30);
         evict_to_limit(dir.path(), 15);
         assert!(dir_size(dir.path()) <= 15, "the cache was not evicted");
-        // At least one file had to go; at least one had to stay.
+        // * At least one file had to go; at least one had to stay.
         let remaining: Vec<_> = ["a.bin", "b.bin", "c.bin"]
             .iter()
             .filter(|n| dir.path().join(n).exists())
@@ -594,9 +594,9 @@ mod tests {
     #[test]
     fn concurrent_writes_stay_under_limit_and_leave_no_temps() {
         // ! Simulates the cache under load: many threads write files and
-        //   evict concurrently, the way parallel image downloads would.
-        //   The cache must never exceed its budget, and no temp files may
-        //   survive the sweep.
+        //     evict concurrently, the way parallel image downloads would.
+        //     The cache must never exceed its budget, and no temp files may
+        //     survive the sweep.
         let dir = tempfile::tempdir().unwrap();
         let limit = 10_000;
         let threads = 8;
@@ -622,14 +622,14 @@ mod tests {
             h.join().unwrap();
         }
 
-        // The cache must be at or under the budget.
+        // * The cache must be at or under the budget.
         assert!(
             dir_size(&path) <= limit,
             "cache grew past its budget: {} > {limit}",
             dir_size(&path)
         );
 
-        // No temp files may remain.
+        // * No temp files may remain.
         for entry in std::fs::read_dir(&path).unwrap().flatten() {
             let name = entry.file_name();
             let name = name.to_string_lossy();
@@ -657,13 +657,13 @@ mod tests {
             extract_location(headers),
             Some("https://example.com/elsewhere".to_string())
         );
-        // Case-insensitive header name.
+        // * Case-insensitive header name.
         let headers_lower = "HTTP/1.1 301 Moved\r\nlocation: http://example.com/x\r\n";
         assert_eq!(
             extract_location(headers_lower),
             Some("http://example.com/x".to_string())
         );
-        // No Location header.
+        // * No Location header.
         let no_location = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n";
         assert_eq!(extract_location(no_location), None);
     }
@@ -671,8 +671,8 @@ mod tests {
     #[test]
     fn a_redirect_to_a_private_address_would_be_refused() {
         // ! The redirect-following loop calls allows_destination on every
-        //   Location header. A redirect to a private address must be caught
-        //   here, before curl ever connects to it.
+        //     Location header. A redirect to a private address must be caught
+        //     here, before curl ever connects to it.
         for url in [
             "http://127.0.0.1/secret",
             "http://10.0.0.5/admin",

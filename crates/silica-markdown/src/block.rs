@@ -556,7 +556,7 @@ impl<'a, 'o> BlockParser<'a, 'o> {
                 if self.opts.block_ids {
                     if let Some((bid, trailing_only)) = self.take_block_id(&mut lines) {
                         if trailing_only && lines.is_empty() {
-                            // A `^id` on its own attaches to the preceding block.
+                            // * A `^id` on its own attaches to the preceding block.
                             let parent = self.open.last_mut().unwrap();
                             if let Some(prev) = parent.children.last_mut() {
                                 prev.id = Some(bid);
@@ -823,16 +823,16 @@ impl<'a, 'o> BlockParser<'a, 'o> {
         }
 
         if !self.all_closed && !self.blank && self.tip().is_paragraph() {
-            // Lazy paragraph continuation.
+            // * Lazy paragraph continuation.
             self.add_line();
             self.extend_open_spans(self.open.len());
             return;
         }
 
-        // The same laziness one step earlier. A callout whose header line has
-        // just been taken has no open paragraph to continue, but Obsidian still
-        // draws an unprefixed next line into the body, so open the paragraph
-        // the header used to stand in for.
+        // * The same laziness one step earlier. A callout whose header line has
+        // * just been taken has no open paragraph to continue, but Obsidian still
+        // * draws an unprefixed next line into the body, so open the paragraph
+        // * the header used to stand in for.
         if !self.all_closed
             && !self.blank
             && matches!(self.tip().kind, NodeKind::BlockQuote { header: Some(_) })
@@ -863,7 +863,7 @@ impl<'a, 'o> BlockParser<'a, 'o> {
         }
 
         if self.line_consumed {
-            // Opening fence, table delimiter row, or similar: nothing left for the block.
+            // * Opening fence, table delimiter row, or similar: nothing left for the block.
         } else if self.tip().accepts_lines() {
             self.add_line();
             if let NodeKind::HtmlBlock { kind, .. } = self.tip().kind {
@@ -938,7 +938,7 @@ impl<'a, 'o> BlockParser<'a, 'o> {
             NodeKind::Item { content_indent, .. } => {
                 let content_indent = *content_indent;
                 if self.blank {
-                    // An open child higher on the stack counts as content too.
+                    // * An open child higher on the stack counts as content too.
                     if !self.open[i].has_children() && i + 1 == self.open.len() {
                         Continue::NotMatched
                     } else {
@@ -956,14 +956,14 @@ impl<'a, 'o> BlockParser<'a, 'o> {
                         .get(i + 1)
                         .is_some_and(|open| matches!(open.kind, NodeKind::BlockQuote { .. }))
                 {
-                    // A quote that `try_block_starts` kept inside this item
-                    // keeps its later lines there too. Those lines carry the
-                    // item's own indentation no more than the first one did, so
-                    // the test above rejects them and the quote would restart
-                    // as a sibling of the whole list -- `- item` / `> quote` /
-                    // `> more` put "more" in a second blockquote outside the
-                    // item. Match without consuming: the quote's own arm takes
-                    // the `>` on the next turn of the loop.
+                    // ! A quote that `try_block_starts` kept inside this item
+                    // ! keeps its later lines there too. Those lines carry the
+                    // ! item's own indentation no more than the first one did, so
+                    // ! the test above rejects them and the quote would restart
+                    // ! as a sibling of the whole list -- `- item` / `> quote` /
+                    // ! `> more` put "more" in a second blockquote outside the
+                    // ! item. Match without consuming: the quote's own arm takes
+                    // ! the `>` on the next turn of the loop.
                     Continue::Matched
                 } else {
                     Continue::NotMatched
@@ -1025,7 +1025,7 @@ impl<'a, 'o> BlockParser<'a, 'o> {
                 }
             }
             NodeKind::Table { .. } => {
-                // A row must contain a pipe; Obsidian ends the table otherwise.
+                // * A row must contain a pipe; Obsidian ends the table otherwise.
                 if self.blank || !self.rest().contains('|') {
                     Continue::NotMatched
                 } else {
@@ -1070,7 +1070,7 @@ impl<'a, 'o> BlockParser<'a, 'o> {
         let c = self.byte(self.next_nonspace)?;
         let tip_is_paragraph = self.open[container].is_paragraph();
 
-        // Block quote.
+        // * Block quote.
         if !self.indented && c == b'>' {
             let start = self.next_nonspace;
             self.advance_next_nonspace();
@@ -1078,8 +1078,8 @@ impl<'a, 'o> BlockParser<'a, 'o> {
             if self.byte(self.offset).is_some_and(is_space_or_tab) {
                 self.advance_offset(1, true);
             }
-            // Obsidian keeps a quote that directly follows a list item's text
-            // inside that item, where CommonMark would end the list.
+            // * Obsidian keeps a quote that directly follows a list item's text
+            // * inside that item, where CommonMark would end the list.
             if self.opts.quirks
                 && !self.all_closed
                 && self.open.len() == self.last_matched + 3
@@ -1094,10 +1094,10 @@ impl<'a, 'o> BlockParser<'a, 'o> {
             return Some(Start::Container);
         }
 
-        // Callout header: `[!type]` as the first line of a quote. This runs on
-        // the next pass through, after the `>` prefix above has been consumed,
-        // and consumes the whole line so that nothing downstream ever sees the
-        // header as body content. See [`CalloutHeader`] for why that matters.
+        // * Callout header: `[!type]` as the first line of a quote. This runs on
+        // * the next pass through, after the `>` prefix above has been consumed,
+        // * and consumes the whole line so that nothing downstream ever sees the
+        // * header as body content. See [`CalloutHeader`] for why that matters.
         if self.opts.callouts
             && !self.indented
             && c == b'['
@@ -1106,9 +1106,9 @@ impl<'a, 'o> BlockParser<'a, 'o> {
                 &self.open[container].kind,
                 NodeKind::BlockQuote { header: None }
             )
-            // The header belongs to the quote's first block, exactly as the
-            // old post-hoc reading required: `> text` then `> [!note]` is not
-            // a callout, and neither is a header after a heading.
+            // * The header belongs to the quote's first block, exactly as the
+            // * old post-hoc reading required: `> text` then `> [!note]` is not
+            // * a callout, and neither is a header after a heading.
             && !self.open[container].has_children()
         {
             if let Some((callout_type, fold, title_offset)) = parse_callout_header_raw(self.rest())
@@ -1136,7 +1136,7 @@ impl<'a, 'o> BlockParser<'a, 'o> {
             }
         }
 
-        // ATX heading.
+        // * ATX heading.
         if !self.indented && c == b'#' {
             let rest = self.rest();
             let hashes = rest.bytes().take_while(|&b| b == b'#').count();
@@ -1163,7 +1163,7 @@ impl<'a, 'o> BlockParser<'a, 'o> {
             }
         }
 
-        // Fenced code.
+        // * Fenced code.
         if !self.indented && (c == b'`' || c == b'~') {
             let rest = self.rest();
             let run = rest.bytes().take_while(|&b| b == c).count();
@@ -1193,7 +1193,7 @@ impl<'a, 'o> BlockParser<'a, 'o> {
             }
         }
 
-        // HTML block.
+        // * HTML block.
         if !self.indented && c == b'<' {
             if let Some(kind) = scan::html_block_start(self.rest(), tip_is_paragraph) {
                 self.close_unmatched_blocks();
@@ -1209,8 +1209,8 @@ impl<'a, 'o> BlockParser<'a, 'o> {
             }
         }
 
-        // Table (GFM): a one-line paragraph followed by a delimiter row. Obsidian
-        // does not let a table interrupt a longer paragraph.
+        // * Table (GFM): a one-line paragraph followed by a delimiter row. Obsidian
+        // * does not let a table interrupt a longer paragraph.
         let single_line_paragraph = matches!(
             &self.open[container].kind,
             NodeKind::Paragraph { lines } if lines.len() == 1
@@ -1253,14 +1253,14 @@ impl<'a, 'o> BlockParser<'a, 'o> {
             }
         }
 
-        // Setext heading underline. Obsidian only underlines a one-line paragraph.
+        // * Setext heading underline. Obsidian only underlines a one-line paragraph.
         let setext_ok = tip_is_paragraph && (!self.opts.quirks || single_line_paragraph);
         if !self.indented && setext_ok && (c == b'=' || c == b'-') {
             let rest = self.rest();
             let run = rest.bytes().take_while(|&b| b == c).count();
             if rest[run..].bytes().all(is_space_or_tab) {
                 self.close_unmatched_blocks();
-                // Reference definitions at the start of the paragraph are not heading text.
+                // * Reference definitions at the start of the paragraph are not heading text.
                 let lines = {
                     let NodeKind::Paragraph { lines } = &self.open[container].kind else {
                         unreachable!()
@@ -1282,7 +1282,7 @@ impl<'a, 'o> BlockParser<'a, 'o> {
                     self.offset = self.line.end;
                     return Some(Start::Leaf);
                 }
-                // Only definitions: the paragraph is empty and the underline is text.
+                // * Only definitions: the paragraph is empty and the underline is text.
                 let node = self.open.last_mut().unwrap();
                 if let NodeKind::Paragraph { lines } = &mut node.kind {
                     lines.clear();
@@ -1290,7 +1290,6 @@ impl<'a, 'o> BlockParser<'a, 'o> {
             }
         }
 
-        // Thematic break.
         if !self.indented && matches!(c, b'*' | b'-' | b'_') && is_thematic_break(self.rest()) {
             let start = self.next_nonspace;
             self.close_unmatched_blocks();
@@ -1299,8 +1298,8 @@ impl<'a, 'o> BlockParser<'a, 'o> {
             return Some(Start::Leaf);
         }
 
-        // Math block: `$$` opening a line without closing on it. A `$$...$$`
-        // pair on one line is inline display math inside a paragraph.
+        // * Math block: `$$` opening a line without closing on it. A `$$...$$`
+        // * pair on one line is inline display math inside a paragraph.
         if self.opts.math && !self.indented && c == b'$' && self.rest().starts_with("$$") {
             let rest = &self.rest()[2..];
             let start = self.next_nonspace;
@@ -1321,8 +1320,8 @@ impl<'a, 'o> BlockParser<'a, 'o> {
             }
         }
 
-        // Comment block: `%%` opening a line without closing on it. A closed
-        // `%%...%%` on one line is an inline comment inside a paragraph.
+        // * Comment block: `%%` opening a line without closing on it. A closed
+        // * `%%...%%` on one line is an inline comment inside a paragraph.
         if self.opts.comments && !self.indented && c == b'%' && self.rest().starts_with("%%") {
             let rest = &self.rest()[2..];
             let start = self.next_nonspace;
@@ -1343,7 +1342,7 @@ impl<'a, 'o> BlockParser<'a, 'o> {
             }
         }
 
-        // Footnote definition.
+        // * Footnote definition.
         if self.opts.footnotes && !self.indented && c == b'[' && !tip_is_paragraph {
             if let Some((label, len)) = scan_footnote_label(self.rest()) {
                 let start = self.next_nonspace;
@@ -1361,7 +1360,7 @@ impl<'a, 'o> BlockParser<'a, 'o> {
             }
         }
 
-        // List item.
+        // * List item.
         let in_list = matches!(self.open[container].kind, NodeKind::List { .. });
         if (!self.indented || in_list) && (matches!(c, b'-' | b'+' | b'*') || c.is_ascii_digit()) {
             if let Some(item) = self.parse_list_marker(tip_is_paragraph, in_list) {
@@ -1393,7 +1392,7 @@ impl<'a, 'o> BlockParser<'a, 'o> {
             }
         }
 
-        // Indented code: cannot interrupt a paragraph, even a lazily continued one.
+        // ! Indented code: cannot interrupt a paragraph, even a lazily continued one.
         if self.indented && !self.tip().is_paragraph() && !self.blank {
             self.advance_offset(4, true);
             self.close_unmatched_blocks();
@@ -1429,13 +1428,13 @@ impl<'a, 'o> BlockParser<'a, 'o> {
                 (ListKind::Ordered { start, delimiter }, digits + 1)
             }
         };
-        // The marker must be followed by whitespace or the end of the line.
+        // ! The marker must be followed by whitespace or the end of the line.
         match b.get(marker_len) {
             None => {}
             Some(&c) if is_space_or_tab(c) => {}
             _ => return None,
         }
-        // A list item cannot interrupt a paragraph with a blank first line.
+        // ! A list item cannot interrupt a paragraph with a blank first line.
         if tip_is_paragraph && rest[marker_len..].bytes().all(is_space_or_tab) {
             return None;
         }
@@ -1472,13 +1471,13 @@ impl<'a, 'o> BlockParser<'a, 'o> {
             let after = &self.src[self.offset..self.line.end];
             let ab = after.as_bytes();
             if ab.len() > 3 && ab[0] == b'[' && ab[2] == b']' && ab[1] != b'\n' {
-                // Obsidian needs whitespace after the bracket; `- [ ]` alone is text.
+                // * Obsidian needs whitespace after the bracket; `- [ ]` alone is text.
                 let ok = is_space_or_tab(ab[3]);
                 if ok {
                     task = Some(ab[1] as char);
-                    // `self.offset` is absolute into `self.src`, and any
-                    // container markers are already consumed, so a task inside
-                    // a blockquote or callout gets a correct span too.
+                    // * `self.offset` is absolute into `self.src`, and any
+                    // * container markers are already consumed, so a task inside
+                    // * a blockquote or callout gets a correct span too.
                     task_span = Some(Span::new(self.offset, self.offset + 3));
                     self.advance_offset(3, false);
                     if self.byte(self.offset).is_some_and(is_space_or_tab) {
@@ -1545,7 +1544,7 @@ fn atx_content(after_hashes: &str) -> (usize, usize) {
     let trimmed_start =
         after_hashes.len() - after_hashes.trim_start_matches(is_space_or_tab_char).len();
     let mut text = after_hashes[trimmed_start..].trim_end_matches(is_space_or_tab_char);
-    // Closing sequence: spaces, hashes, spaces at the end; or only hashes.
+    // * Closing sequence: spaces, hashes, spaces at the end; or only hashes.
     let stripped = text.trim_end_matches('#');
     if stripped.len() != text.len() {
         if stripped.is_empty() {
@@ -1666,10 +1665,10 @@ pub(crate) fn parse_callout_header_raw(line: &str) -> Option<(&str, Option<bool>
     let rest = line[lead..].strip_prefix("[!")?;
     let close = rest.find(']')?;
     let raw = &rest[..close];
-    // Obsidian wants *something* between the brackets and then trims it, so
-    // `[! bad]` is a `bad` callout and `[! ]` is one with an empty type (an
-    // empty `data-callout` and no default title), while a bare `[!]` is not a
-    // callout at all. Observed against 1.14.4 (tools/probe-gen, 2026-10-29).
+    // ? Obsidian wants *something* between the brackets and then trims it, so
+    // ? `[! bad]` is a `bad` callout and `[! ]` is one with an empty type (an
+    // ? empty `data-callout` and no default title), while a bare `[!]` is not a
+    // ? callout at all. Observed against 1.14.4 (tools/probe-gen, 2026-10-29).
     if raw.is_empty() || raw.contains('[') {
         return None;
     }
@@ -1680,7 +1679,7 @@ pub(crate) fn parse_callout_header_raw(line: &str) -> Option<(&str, Option<bool>
         Some(b'+') => (Some(false), 1),
         _ => (None, 0),
     };
-    // The header must end here or continue with a space before the title.
+    // * The header must end here or continue with a space before the title.
     let after = &after[skip..];
     if !after.is_empty() && !after.starts_with(is_space_or_tab_char) {
         return None;

@@ -168,8 +168,8 @@ impl LinkResolver {
             return None;
         }
         let source_folder = folder_of(&normalize(source_path)).to_lowercase();
-        // Prefer markdown when the link has no extension, then the vault
-        // root, then the source's folder, then the shortest path.
+        // * Prefer markdown when the link has no extension, then the vault
+        // * root, then the source's folder, then the shortest path.
         let score = |p: &&String| {
             let md = if want_ext.is_none() && FileKind::from_path(p).is_markdown() {
                 0
@@ -216,7 +216,7 @@ mod tests {
             "the source's folder beats a shorter path elsewhere"
         );
         assert_eq!(r.resolve("Plan", "Other.md"), Some("Projects/Plan.md"));
-        // Observed in Obsidian 1.14.4 (see the module docs).
+        // ? Observed in Obsidian 1.14.4 (see the module docs).
         let r = LinkResolver::new([
             "Aa/Dup.md",
             "Bb/Dup.md",

@@ -95,8 +95,8 @@ pub fn paint(
                 dashed,
                 color,
             } => {
-                // The rule is drawn no thinner than a device pixel, which
-                // is what a browser does with a fraction bar too.
+                // * The rule is drawn no thinner than a device pixel, which
+                //   is what a browser does with a fraction bar too.
                 let thickness = scale(*thickness).max(px(1.) / window.scale_factor());
                 let colour = colour(color);
                 if *dashed {
@@ -236,8 +236,8 @@ fn glyph_image(key: &GlyphKey) -> Option<Arc<GlyphImage>> {
     });
     GLYPHS.with(|g| {
         let mut g = g.borrow_mut();
-        // A session that changes sizes and themes grows this without bound
-        // otherwise; nothing in it costs more than a millisecond to redo.
+        // * A session that changes sizes and themes grows this without bound
+        //   otherwise; nothing in it costs more than a millisecond to redo.
         if g.len() > 4096 {
             g.clear();
         }
@@ -298,8 +298,7 @@ fn paint_glyph(
     let _ = window.paint_image(bounds, Corners::default(), glyph.image.clone(), 0, false);
 }
 
-// ---------------------------------------------------------------------------
-// Inline placeholders
+// * Inline placeholders
 
 /// The advance of each no-break space the text font has, at one size.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -372,8 +371,7 @@ pub fn inline_overflow(formula: &Formula, em: Pixels, ascent: Pixels, descent: P
     above.max(below) * 2.
 }
 
-// ---------------------------------------------------------------------------
-// Element
+// * Element
 
 /// A formula as a fixed-size element: the reading view's `$$` block and
 /// the math block widget, laid out by the box it stands in.
@@ -554,9 +552,9 @@ impl Element for Overlay {
             };
             let (ascent, descent) = (line.unwrapped_layout.ascent, line.unwrapped_layout.descent);
             let width = width_px(&inline.formula, self.em);
-            // The placeholder never breaks, so its end is on the same row
-            // unless the text system disagreed about the width; then the
-            // formula simply starts where the placeholder does.
+            // * The placeholder never breaks, so its end is on the same row
+            //   unless the text system disagreed about the width; then the
+            //   formula simply starts where the placeholder does.
             let end_x = self
                 .layout
                 .position_for_index(inline.range.end)
@@ -585,7 +583,7 @@ mod tests {
             narrow: px(2.),
         };
         let (s, total) = w.placeholder(px(27.));
-        // 2 figure (20) + 1 nbsp (24) + 1 narrow (26) + 1 narrow to cover.
+        // * 2 figure (20) + 1 nbsp (24) + 1 narrow (26) + 1 narrow to cover.
         assert_eq!(s, "\u{2007}\u{2007}\u{a0}\u{202f}\u{202f}");
         assert_eq!(total, px(28.));
         let (s, total) = w.placeholder(px(0.));

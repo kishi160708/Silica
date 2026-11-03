@@ -171,7 +171,7 @@ mod tests {
     fn an_untranslated_string_falls_back_rather_than_emptying() {
         let _guard = serial();
         set(Locale::Indonesian);
-        // A row name, deliberately not in the table.
+        // * A row name, deliberately not in the table.
         assert_eq!(t("Default view for new tabs"), "Default view for new tabs");
         set(Locale::English);
     }
@@ -187,14 +187,14 @@ mod tests {
     #[test]
     fn codes_round_trip_and_unknown_ones_are_english() {
         for (label, code) in Locale::ALL {
-            // Every code resolves to exactly the locale it names; "en" is
-            // English, so the check is against the pair, not "not English".
+            // * Every code resolves to exactly the locale it names; "en" is
+            //   English, so the check is against the pair, not "not English".
             assert_eq!(Locale::from_code(code).code(), *code);
             assert!(!label.is_empty());
         }
         assert_eq!(Locale::from_code("id-ID"), Locale::Indonesian);
         assert_eq!(Locale::from_code("in"), Locale::Indonesian);
-        // A vault from a newer build, or a typo, still opens.
+        // * A vault from a newer build, or a typo, still opens.
         assert_eq!(Locale::from_code("xx"), Locale::English);
         assert_eq!(Locale::from_code(""), Locale::English);
     }
@@ -204,9 +204,9 @@ mod tests {
         for (english, translated) in INDONESIAN {
             assert!(!english.is_empty());
             assert!(!translated.is_empty(), "{english} translates to nothing");
-            // A loanword is its own translation: "Editor" and "Vault" are
-            // spelled the same in Indonesian, and pretending otherwise
-            // would be inventing a word.
+            // * A loanword is its own translation: "Editor" and "Vault" are
+            //   spelled the same in Indonesian, and pretending otherwise
+            //   would be inventing a word.
             if !LOANWORDS.contains(english) {
                 assert_ne!(english, translated, "{english} was not translated");
             }
@@ -215,8 +215,8 @@ mod tests {
 
     #[test]
     fn the_labels_are_their_own_names() {
-        // A language name is never translated: a reader looking for their
-        // own language needs to see it written the way they write it.
+        // * A language name is never translated: a reader looking for their
+        //   own language needs to see it written the way they write it.
         let labels: Vec<&str> = Locale::ALL.iter().map(|(label, _)| *label).collect();
         assert!(labels.contains(&"Bahasa Indonesia"));
         assert!(labels.contains(&"English"));

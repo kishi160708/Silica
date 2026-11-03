@@ -50,10 +50,10 @@ static SOCKET: Mutex<Option<PathBuf>> = Mutex::new(None);
 /// one a reader thread; the readers hand requests to the main thread and block
 /// on the answer, so the app itself is only ever touched where gpui expects.
 pub fn start(path: PathBuf, window: WindowHandle<Workspace>, cx: &mut App) {
-    // A socket file outlives the run that bound it, and `bind` refuses an
-    // existing path, so a stale one has to go. One that still answers is
-    // not stale: taking its name away would leave another Silica's clients
-    // talking to a listener nobody will read.
+    // ! A socket file outlives the run that bound it, and `bind` refuses an
+    //   existing path, so a stale one has to go. One that still answers is
+    //   not stale: taking its name away would leave another Silica's clients
+    //   talking to a listener nobody will read.
     if UnixStream::connect(&path).is_ok() {
         eprintln!(
             "control: {} is already serving a running Silica; not binding",
@@ -69,11 +69,11 @@ pub fn start(path: PathBuf, window: WindowHandle<Workspace>, cx: &mut App) {
             return;
         }
     };
-    // Connecting to a Unix socket needs write permission on its name, and this
-    // one opens and rewrites the vault: the default mode leaves it to the
-    // umask, which on a stock login is permissive enough for anyone with a
-    // local account. Windows has no mode to set: there the socket takes its
-    // folder's ACL, so the caller chooses a folder of the user's own.
+    // * Connecting to a Unix socket needs write permission on its name, and this
+    //   one opens and rewrites the vault: the default mode leaves it to the
+    //   umask, which on a stock login is permissive enough for anyone with a
+    //   local account. Windows has no mode to set: there the socket takes its
+    //   folder's ACL, so the caller chooses a folder of the user's own.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -152,9 +152,9 @@ fn serve(stream: UnixStream, requests: async_channel::Sender<Pending>) {
         let request = match serde_json::from_str::<Request>(&line) {
             Ok(request) => request,
             Err(error) => {
-                // A line that is not a request is still answered, under id 0,
-                // and the connection stays open: a client that mistypes one
-                // call carries on with the next.
+                // * A line that is not a request is still answered, under id 0,
+                //   and the connection stays open: a client that mistypes one
+                //   call carries on with the next.
                 if write_line(&mut writer, &Response::err(0, error).line()).is_err() {
                     return;
                 }
@@ -162,9 +162,9 @@ fn serve(stream: UnixStream, requests: async_channel::Sender<Pending>) {
             }
         };
         let id = request.id;
-        // One channel per request: a handler that drops its sender without
-        // answering fails the `recv` instead of parking this thread on a
-        // reply that can never come.
+        // * One channel per request: a handler that drops its sender without
+        //   answering fails the `recv` instead of parking this thread on a
+        //   reply that can never come.
         let (reply, replies) = mpsc::channel::<String>();
         if requests.send_blocking(Pending { request, reply }).is_err() {
             return;
@@ -252,8 +252,8 @@ fn handle(
             wait_idle(ctl, request.id, frames, timeout, reply.clone())?;
             Ok(None)
         }
-        // Save the graph as a PNG at a path the caller names, so the export
-        // is exercised without driving a desktop save dialog.
+        // * Save the graph as a PNG at a path the caller names, so the export
+        //   is exercised without driving a desktop save dialog.
         "graph_png" => {
             let path = request.str_param("path")?;
             ctl.workspace(|ws, _window, cx| ws.export_graph_png(std::path::Path::new(&path), cx))
@@ -272,15 +272,15 @@ fn handle(
                 if !ws.is_loaded() {
                     return Err("the vault is still loading".to_string());
                 }
-                // Validated first and applied after: "open X in mode M"
-                // is about X, and switching before leaving would change the
-                // mode of the note being left -- which its history entry
-                // then remembers as the mode it was read in.
+                // * Validated first and applied after: "open X in mode M"
+                //   is about X, and switching before leaving would change the
+                //   mode of the note being left -- which its history entry
+                //   then remembers as the mode it was read in.
                 let mode = ws.open_mode(mode)?;
-                // A name that matches nothing is not an error: the
-                // protocol answers with a null current file, so a caller
-                // cannot mistake the note that is still open for the one it
-                // asked for.
+                // * A name that matches nothing is not an error: the
+                //   protocol answers with a null current file, so a caller
+                //   cannot mistake the note that is still open for the one it
+                //   asked for.
                 if !ws.open_by_name(name, cx) {
                     return Ok(json!({"current": Value::Null}));
                 }
@@ -295,10 +295,10 @@ fn handle(
             let path = request.str_param("path")?;
             let mode = request.opt_str("mode");
             ctl.workspace(|ws, window, cx| {
-                // Every pane is keyed on the vault's own spelling of the
-                // path; the caller's is only a request for it. Opening the
-                // raw string instead would leave the explorer, the
-                // backlinks and the outline looking up a key nothing has.
+                // * Every pane is keyed on the vault's own spelling of the
+                //   path; the caller's is only a request for it. Opening the
+                //   raw string instead would leave the explorer, the
+                //   backlinks and the outline looking up a key nothing has.
                 let key = ws
                     .vault_file_path(path)
                     .ok_or_else(|| format!("no such file in the vault: {path}"))?;
@@ -350,10 +350,10 @@ fn handle(
                         Ok(json!({"target": ws.type_into_focused(text, window, cx)}))
                     })
                     .map(Some),
-                // Outside the workspace lease: one keystroke carrying the
-                // whole string is what an IME commit looks like to gpui, and
-                // delivering it re-enters whatever view is focused, which
-                // may be the workspace itself.
+                // * Outside the workspace lease: one keystroke carrying the
+                //   whole string is what an IME commit looks like to gpui, and
+                //   delivering it re-enters whatever view is focused, which
+                //   may be the workspace itself.
                 "input" => ctl
                     .window(|window, cx| {
                         let typed = Keystroke {
@@ -373,9 +373,9 @@ fn handle(
             let modifiers = modifiers(request)?;
             let click_count = request.opt_usize("count").unwrap_or(1);
             ctl.window(|window, cx| {
-                // The move goes first so gpui's hover state and the hitboxes
-                // an `on_click` was registered against agree on what is under
-                // the pointer when the press lands.
+                // * The move goes first so gpui's hover state and the hitboxes
+                //   an `on_click` was registered against agree on what is under
+                //   the pointer when the press lands.
                 window.dispatch_event(
                     PlatformInput::MouseMove(MouseMoveEvent {
                         position,
@@ -413,14 +413,14 @@ fn handle(
             let button = button(request.opt_str("button"))?;
             let modifiers = modifiers(request)?;
             let event = match action {
-                // A move with a `button` named is a drag in progress: gpui
-                // starts an element's drag only from a move that says which
-                // button is held.
+                // * A move with a `button` named is a drag in progress: gpui
+                //   starts an element's drag only from a move that says which
+                //   button is held.
                 "move" => PlatformInput::MouseMove(MouseMoveEvent {
                     position,
-                    // Naming a button is what makes the move a drag; leaving
-                    // it out is a hover, which is how a control that only
-                    // appears under the pointer is revealed.
+                    // * Naming a button is what makes the move a drag; leaving
+                    //   it out is a hover, which is how a control that only
+                    //   appears under the pointer is revealed.
                     pressed_button: request.opt_str("button").map(|_| button),
                     modifiers,
                 }),
@@ -516,16 +516,16 @@ fn handle(
                     let now = window.viewport_size();
                     let width = width.unwrap_or_else(|| f32::from(now.width));
                     let height = height.unwrap_or_else(|| f32::from(now.height));
-                    // Zero, negative and non-finite are not sizes any
-                    // compositor accepts, and the request carries whatever
-                    // number the caller put in it.
+                    // * Zero, negative and non-finite are not sizes any
+                    //   compositor accepts, and the request carries whatever
+                    //   number the caller put in it.
                     if !(width.is_finite() && height.is_finite()) || width < 1.0 || height < 1.0 {
                         return Err(format!("{width}x{height} is not a window size"));
                     }
                     window.resize(size(px(width), px(height)));
                 }
-                // The window's origin is always zero on Wayland, so only the
-                // size is worth reporting.
+                // * The window's origin is always zero on Wayland, so only the
+                //   size is worth reporting.
                 let viewport = window.viewport_size();
                 Ok(json!({
                     "width": f32::from(viewport.width),
@@ -534,9 +534,9 @@ fn handle(
                     "active": window.is_window_active(),
                 }))
             })?;
-            // The title is the workspace's, not the platform window's: it
-            // is what the last paint set, so it says which note and which
-            // vault the window is showing.
+            // * The title is the workspace's, not the platform window's: it
+            //   is what the last paint set, so it says which note and which
+            //   vault the window is showing.
             let title = ctl.workspace(|ws, _, _| Ok(ws.window_title()))?;
             let mut result = result;
             if let Value::Object(map) = &mut result {
@@ -545,10 +545,10 @@ fn handle(
             Ok(Some(result))
         }
         "read_file" => {
-            // The path needs the vault, which only the main thread has; the
-            // disk does not, and a large attachment or a slow mount would
-            // hold up every frame and every other connection while it was
-            // read.
+            // * The path needs the vault, which only the main thread has; the
+            //   disk does not, and a large attachment or a slow mount would
+            //   hold up every frame and every other connection while it was
+            //   read.
             let path = request.str_param("path")?.to_string();
             let absolute = ctl.workspace(|ws, _, _| ws.vault_path(&path))?;
             let (id, reply) = (request.id, reply.clone());
@@ -581,11 +581,11 @@ fn handle(
                         .background_executor()
                         .spawn(async move {
                             let count = text.len();
-                            // The caller's bytes land on disk exactly as
-                            // given: nothing here preserves line endings or
-                            // a BOM, because the caller supplies the whole
-                            // file and Silica never rewrites bytes it did
-                            // not change.
+                            // * The caller's bytes land on disk exactly as
+                            //   given: nothing here preserves line endings or
+                            //   a BOM, because the caller supplies the whole
+                            //   file and Silica never rewrites bytes it did
+                            //   not change.
                             silica_vault::write_no_follow(&absolute, text.as_bytes())
                                 .map_err(|error| format!("{path}: {error}"))?;
                             Ok(json!({"bytes": count}))
@@ -617,9 +617,9 @@ fn handle(
             })?;
             let _ = reply.send(Response::ok(request.id, json!({"ok": true})).line());
             cleanup();
-            // The reply only reaches the client once the connection thread
-            // wakes up and writes it, which cannot happen while this handler
-            // is running: quit a beat later so the bytes get out.
+            // * The reply only reaches the client once the connection thread
+            //   wakes up and writes it, which cannot happen while this handler
+            //   is running: quit a beat later so the bytes get out.
             ctl.cx
                 .spawn(async move |cx| {
                     cx.background_executor().timer(POLL * 6).await;
@@ -658,10 +658,10 @@ fn wait_loaded(ctl: &mut Ctl, id: u64, timeout_ms: u64, reply: mpsc::Sender<Stri
         .spawn(async move |cx| {
             let deadline = wait_deadline(timeout_ms);
             loop {
-                // "Loaded" has to mean "finished opening": the vault indexes
-                // on a background thread and the startup flags only run once
-                // it lands, so a client that answered to `is_loaded` alone
-                // would read the window mid-arrangement and see no open note.
+                // * "Loaded" has to mean "finished opening": the vault indexes
+                //   on a background thread and the startup flags only run once
+                //   it lands, so a client that answered to `is_loaded` alone
+                //   would read the window mid-arrangement and see no open note.
                 let ready = win
                     .update(cx, |ws, _, _| ws.is_loaded() && ws.is_started())
                     .unwrap_or(false);
@@ -706,10 +706,10 @@ fn wait_idle(
                 let idle = drawn.get() >= frames && !parsing;
                 let timed_out = !idle && Instant::now() >= deadline;
                 if idle || timed_out {
-                    // Before the reply, and on the timed-out path too: the
-                    // chain dirties the window at every step, so one that
-                    // outlived its wait would repaint at full frame rate for
-                    // the rest of the run.
+                    // * Before the reply, and on the timed-out path too: the
+                    //   chain dirties the window at every step, so one that
+                    //   outlived its wait would repaint at full frame rate for
+                    //   the rest of the run.
                     done.set(true);
                     let result =
                         json!({"frames": drawn.get(), "parsing": parsing, "timed_out": timed_out});
@@ -763,8 +763,8 @@ fn button(name: Option<&str>) -> Result<MouseButton, String> {
 
 fn modifiers(request: &Request) -> Result<Modifiers, String> {
     let mut modifiers = Modifiers::none();
-    // Absent and `null` mean the same thing here as everywhere else in the
-    // protocol: no modifiers held.
+    // * Absent and `null` mean the same thing here as everywhere else in the
+    //   protocol: no modifiers held.
     if request.params.get("mods").is_none_or(Value::is_null) {
         return Ok(modifiers);
     }

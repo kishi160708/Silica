@@ -88,8 +88,8 @@ impl Answer {
     /// see which model spoke and how long it took.
     pub fn provenance(&self) -> String {
         let seconds = self.elapsed.as_secs_f64();
-        // Below a few tens of milliseconds the rate is division noise, not a
-        // measurement, so it is left off rather than printed as six figures.
+        // * Below a few tens of milliseconds the rate is division noise, not a
+        // * measurement, so it is left off rather than printed as six figures.
         let rate = if seconds >= 0.05 {
             format!(" · {:.1} tok/s", self.completion_tokens as f64 / seconds)
         } else {
@@ -163,8 +163,8 @@ impl Backend {
             "messages": messages,
             "stream": false,
         });
-        // Only send what the caller set: a server's own default is a better
-        // guess than one invented here.
+        // ? Only send what the caller set: a server's own default is a better
+        // ? guess than one invented here.
         if let Some(temperature) = ask.temperature {
             body["temperature"] = json!(temperature);
         }
@@ -196,8 +196,8 @@ impl Backend {
             )
         })?;
         if !response.ok() {
-            // Every one of the three servers puts its complaint somewhere
-            // different; show whichever is there.
+            // * Every one of the three servers puts its complaint somewhere
+            // * different; show whichever is there.
             let detail = value["error"]["message"]
                 .as_str()
                 .or_else(|| value["error"].as_str())
@@ -243,8 +243,8 @@ fn strip_thought(raw: &str) -> (String, usize) {
             trimmed[at + "</think>".len()..].trim().to_string(),
             at + "</think>".len(),
         ),
-        // An unterminated block means the model spent its whole budget
-        // thinking: say so rather than returning an empty answer.
+        // * An unterminated block means the model spent its whole budget
+        // * thinking: say so rather than returning an empty answer.
         None => (String::new(), trimmed.len()),
     }
 }
@@ -273,7 +273,7 @@ mod tests {
         let (text, dropped) = strip_thought("  plain answer  ");
         assert_eq!((text.as_str(), dropped), ("plain answer", 0));
 
-        // `<think>` that never closes leaves nothing to return.
+        // ! `<think>` that never closes leaves nothing to return.
         let (text, dropped) = strip_thought("<think>and on and on");
         assert!(text.is_empty());
         assert_eq!(dropped, "<think>and on and on".len());
@@ -306,7 +306,7 @@ mod tests {
         assert!(line.contains("qwen3:8b"), "{line}");
         assert!(line.contains("25.0 tok/s"), "{line}");
 
-        // A call too fast to measure reports no rate rather than six figures.
+        // * A call too fast to measure reports no rate rather than six figures.
         let instant = Answer {
             elapsed: Duration::from_millis(1),
             ..answer

@@ -121,8 +121,8 @@ impl BasesView {
         self.path = Some(path.to_string());
         self.source = text.to_string();
         self.state = Some(state);
-        // A different file starts on its first view, as opening one does,
-        // and carries none of the last one's unsaved state.
+        // * A different file starts on its first view, as opening one does,
+        //   and carries none of the last one's unsaved state.
         self.view_ix = 0;
         self.dirty = false;
         self.toolbar = super::toolbar::ToolbarState::default();
@@ -174,8 +174,8 @@ impl BasesView {
             return;
         }
         self.state = Some(state);
-        // A base the view has edited but not yet saved must not be re-parsed
-        // from the bytes on disk: the edit is in `base`, not in `source`.
+        // ! A base the view has edited but not yet saved must not be re-parsed
+        //   from the bytes on disk: the edit is in `base`, not in `source`.
         if self.dirty {
             self.resolve_table();
             self.rebuild();
@@ -221,8 +221,8 @@ impl BasesView {
         let resolved = rows::resolve(self.state.as_deref(), self.path.as_deref(), &self.source, 0);
         self.base = resolved.base;
         self.error = resolved.error;
-        // A base with no views has one default view, so index 0 is always
-        // valid; anything past the end falls back to it.
+        // * A base with no views has one default view, so index 0 is always
+        //   valid; anything past the end falls back to it.
         if self.view_ix > 0 && self.view_ix >= self.base.as_ref().map_or(0, |b| b.views.len()) {
             self.view_ix = 0;
         }
@@ -251,7 +251,7 @@ impl BasesView {
         self.table = Some(silica_bases::table::build(base, self.view_ix, &env));
         self.layout = match base.views.get(self.view_ix) {
             Some(view) => Layout::of(view),
-            // An empty base is one default table of the whole vault.
+            // * An empty base is one default table of the whole vault.
             None => Layout::default(),
         };
     }
@@ -353,9 +353,9 @@ impl BasesView {
         let ix = self.view_ix;
         self.edit_base(
             move |base| {
-                // An empty base has no view to edit: the default view is
-                // materialized so the change has somewhere to land, which is
-                // also what Obsidian's own close writes.
+                // * An empty base has no view to edit: the default view is
+                //   materialized so the change has somewhere to land, which is
+                //   also what Obsidian's own close writes.
                 if base.views.is_empty() {
                     base.views.push(View {
                         kind: silica_formats::base::DEFAULT_VIEW_TYPE.to_string(),
@@ -480,8 +480,8 @@ impl BasesView {
                     .text_size(px(FONT_UI_SMALL))
                     .text_color(theme.text_muted)
                     .children(message.lines().map(|line| {
-                        // An empty line still needs a line box, or the caret
-                        // under the snippet climbs onto the text above it.
+                        // * An empty line still needs a line box, or the caret
+                        //   under the snippet climbs onto the text above it.
                         div().child(SharedString::from(if line.is_empty() {
                             " ".to_string()
                         } else {
@@ -536,7 +536,7 @@ impl Render for BasesView {
         let body: Vec<AnyElement> = if let Some(message) = self.error.clone() {
             vec![self.render_error(true, &message, &theme)]
         } else if let Some(kind) = self.table.as_ref().and_then(|t| t.unknown_kind.clone()) {
-            // The file parsed; only the layout is one this build cannot draw.
+            // * The file parsed; only the layout is one this build cannot draw.
             vec![self.render_error(false, &format!("Unknown view type: {kind}"), &theme)]
         } else if self.table.is_some() {
             let mut body = Vec::new();
@@ -545,7 +545,7 @@ impl Render for BasesView {
                 Layout::Cards(_) => self.render_cards(&theme, cx),
                 Layout::List(_) => self.render_list(&theme, cx),
                 Layout::Kanban(_) => self.render_kanban(&theme, cx),
-                // An unknown type never reaches here; it is the branch above.
+                // * An unknown type never reaches here; it is the branch above.
                 Layout::Table(_) | Layout::Unknown(_) => self.render_table(&theme, cx),
             });
             body
@@ -570,8 +570,8 @@ mod tests {
 
     #[test]
     fn a_base_that_does_not_parse_has_a_message_and_no_table() {
-        // The parse itself is `silica-formats`'s; what matters here is that
-        // the shell keeps the message and draws no rows for it.
+        // * The parse itself is `silica-formats`'s; what matters here is that
+        //   the shell keeps the message and draws no rows for it.
         let resolved = rows::resolve(None, None, "views:\n  - type: table\n", 0);
         assert!(resolved.error.is_some(), "a view with no name is refused");
         assert!(resolved.base.is_none());

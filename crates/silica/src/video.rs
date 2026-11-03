@@ -104,7 +104,7 @@ pub fn probe(path: &Path) -> Option<Info> {
     if width == 0 || height == 0 {
         return None;
     }
-    // "30000/1001" or "0/0" for a still.
+    // * "30000/1001" or "0/0" for a still.
     let fps = stream
         .get("avg_frame_rate")
         .and_then(|v| v.as_str())
@@ -272,8 +272,8 @@ mod tests {
 
     #[test]
     fn decode_size_caps_the_width_and_keeps_the_aspect() {
-        // 1080 * 720/1920 = 405, then even: 404. The aspect is kept to a
-        // pixel, which is what the decode is for.
+        // * 1080 * 720/1920 = 405, then even: 404. The aspect is kept to a
+        //   pixel, which is what the decode is for.
         assert_eq!(info(1920, 1080).decode_size(), (720, 404));
         assert_eq!(info(3840, 2160).decode_size(), (720, 404));
         assert_eq!(info(320, 180).decode_size(), (320, 180));
@@ -283,7 +283,7 @@ mod tests {
     fn display_size_fits_the_available_width() {
         let (w, h) = info(1920, 1080).display_size(360.0);
         assert!((w - 360.0).abs() < 0.01, "{w}");
-        // The frame is 720 by 404, so half of it is 202.
+        // * The frame is 720 by 404, so half of it is 202.
         assert!((h - 202.0).abs() < 1.0, "{h}");
     }
 

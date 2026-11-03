@@ -57,7 +57,7 @@ impl Layout {
     pub fn new(n: usize, edges: Vec<(u32, u32)>, forces: Forces) -> Layout {
         let mut bodies = Vec::with_capacity(n);
         for i in 0..n {
-            let angle = i as f32 * 2.399_963; // golden angle
+            let angle = i as f32 * 2.399_963; // * golden angle
             let radius = 12.0 * (i as f32).sqrt();
             bodies.push(Body {
                 x: radius * angle.cos(),
@@ -95,7 +95,7 @@ impl Layout {
         let alpha = self.alpha;
         let f = self.forces;
 
-        // Repulsion through a quadtree.
+        // * Repulsion through a quadtree.
         let tree = QuadTree::build(&self.bodies);
         let mut fx = vec![0.0f32; n];
         let mut fy = vec![0.0f32; n];
@@ -103,7 +103,7 @@ impl Layout {
             let b = &self.bodies[i];
             tree.apply(b.x, b.y, i, f.repel * 1500.0, &mut fx[i], &mut fy[i]);
         }
-        // Attraction along edges.
+        // * Attraction along edges.
         for &(a, b) in &self.edges {
             let (a, b) = (a as usize, b as usize);
             if a == b || a >= n || b >= n {
@@ -118,7 +118,7 @@ impl Layout {
             fx[b] -= dx * pull;
             fy[b] -= dy * pull;
         }
-        // Centering: weak, so a large graph spreads out and the view fits it.
+        // * Centering: weak, so a large graph spreads out and the view fits it.
         for (i, b) in self.bodies.iter().enumerate() {
             fx[i] -= b.x * f.center * 0.002;
             fy[i] -= b.y * f.center * 0.002;
@@ -211,7 +211,7 @@ impl QuadTree {
     }
 
     fn insert(&mut self, node: usize, ix: usize, b: &Body, bodies: &[Body], depth: usize) {
-        // Accumulate center of mass on the way down.
+        // * Accumulate center of mass on the way down.
         {
             let n = &mut self.nodes[node];
             let total = n.mass + b.mass;
@@ -226,7 +226,7 @@ impl QuadTree {
                     return;
                 }
                 Some(other) if depth > 24 => {
-                    // Coincident points: keep the cell as a leaf with merged mass.
+                    // * Coincident points: keep the cell as a leaf with merged mass.
                     let _ = other;
                     return;
                 }
@@ -296,7 +296,7 @@ impl QuadTree {
             let mut dx = px - n.cx;
             let mut dy = py - n.cy;
             if dx == 0.0 && dy == 0.0 {
-                // Coincident points: nudge apart deterministically.
+                // * Coincident points: nudge apart deterministically.
                 dx = 0.01 * ((me % 7) as f32 + 1.0);
                 dy = 0.01 * ((me % 5) as f32 + 1.0);
             }

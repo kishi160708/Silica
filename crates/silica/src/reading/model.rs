@@ -46,7 +46,7 @@ impl BaseCache {
         path: &str,
         vault: &dyn EmbedSource,
     ) -> Option<Box<crate::bases::EmbeddedBase>> {
-        // The borrow ends before the resolve: nothing is held across it.
+        // * The borrow ends before the resolve: nothing is held across it.
         if let Some(hit) = self
             .seen
             .borrow()
@@ -373,8 +373,8 @@ pub fn build_with(
     let (mut blocks, mut starts) = b.blocks_with_starts(&doc.blocks);
     let mut footnotes = Vec::new();
     if let Some((section, offsets)) = b.footnote_section(&doc) {
-        // The appended section needs a start of its own, or an offset
-        // inside a definition resolves past the end of the list.
+        // * The appended section needs a start of its own, or an offset
+        //   inside a definition resolves past the end of the list.
         starts.push(offsets.iter().copied().min().unwrap_or(doc.source.len()));
         blocks.push(section);
         footnotes = offsets;
@@ -465,19 +465,19 @@ pub fn build_widgets(
     let mut out = Vec::new();
     for block in &doc.blocks {
         let widget = match &block.kind {
-            // The properties block is a widget so Live Preview can draw it as
-            // an editable table instead of raw YAML.
+            // * The properties block is a widget so Live Preview can draw it as
+            //   an editable table instead of raw YAML.
             BlockKind::Yaml { .. } => true,
             BlockKind::Table { .. } | BlockKind::Math { .. } => true,
             BlockKind::CodeBlock { info, .. } => {
                 info.as_deref().and_then(|i| i.split_whitespace().next()) == Some("mermaid")
             }
-            // A callout is drawn as the same tinted block the reading view
-            // draws; a cursor inside it still brings its source lines back.
+            // * A callout is drawn as the same tinted block the reading view
+            //   draws; a cursor inside it still brings its source lines back.
             BlockKind::Callout { .. } => true,
-            // Only the raw HTML the renderer can actually draw earns a
-            // widget. Anything else -- a comment, a script, a bare `<div>` --
-            // would fold its source lines away to show the same muted text.
+            // * Only the raw HTML the renderer can actually draw earns a
+            //   widget. Anything else -- a comment, a script, a bare `<div>` --
+            //   would fold its source lines away to show the same muted text.
             BlockKind::HtmlBlock { content } => html_images(content).is_some(),
             BlockKind::Paragraph { content } => match content.as_slice() {
                 [one] => matches!(
@@ -535,8 +535,8 @@ fn build_embedded(
     };
     b.footnotes.definitions = collect_definitions(&doc.blocks);
     let mut out = b.blocks(blocks, false);
-    // An embedded section is not jumped into, so its footnote offsets are
-    // of no use to anyone.
+    // * An embedded section is not jumped into, so its footnote offsets are
+    //   of no use to anyone.
     if let Some((section, _)) = b.footnote_section(doc) {
         out.push(section);
     }
@@ -651,9 +651,9 @@ impl<'v> Builder<'v> {
                         text: content.trim_end_matches('\n').to_string(),
                     });
                 }
-                // Obsidian renders and copies a code block with `\n`
-                // endings whatever the file holds, and its copy button
-                // drops exactly one trailing newline rather than trimming.
+                // * Obsidian renders and copies a code block with `\n`
+                //   endings whatever the file holds, and its copy button
+                //   drops exactly one trailing newline rather than trimming.
                 let body = if content.contains('\r') {
                     content.replace("\r\n", "\n")
                 } else {
@@ -670,9 +670,9 @@ impl<'v> Builder<'v> {
                 }
             }
             BlockKind::HtmlBlock { content } => match html_images(content) {
-                // Obsidian resolves a raw `<img src>` like a wikilink target
-                // and renders the run of them as one block, so they go
-                // through the same embeds a markdown image does.
+                // * Obsidian resolves a raw `<img src>` like a wikilink target
+                //   and renders the run of them as one block, so they go
+                //   through the same embeds a markdown image does.
                 Some(imgs) => {
                     let mut segments = Vec::with_capacity(imgs.len());
                     for img in imgs {
@@ -681,9 +681,9 @@ impl<'v> Builder<'v> {
                     }
                     RBlock::Paragraph(segments)
                 }
-                // Drawn when every tag in it is one the renderer knows; a
-                // fragment that holds anything else keeps its source, which
-                // is what this block has always shown.
+                // * Drawn when every tag in it is one the renderer knows; a
+                //   fragment that holds anything else keeps its source, which
+                //   is what this block has always shown.
                 None => {
                     let src = content.trim_end();
                     match raw_html::block(src, self.id()) {
@@ -705,21 +705,21 @@ impl<'v> Builder<'v> {
                 children,
             } => {
                 let title = if title.is_empty() {
-                    // Shared with the reading view's HTML and with Live
-                    // Preview: this was a fourth copy of the derivation, and
-                    // the only one that still left `-` in place, so a
-                    // `[!bad-type]` callout read "Bad-type" here.
+                    // * Shared with the reading view's HTML and with Live
+                    //   Preview: this was a fourth copy of the derivation, and
+                    //   the only one that still left `-` in place, so a
+                    //   `[!bad-type]` callout read "Bad-type" here.
                     RichText {
                         id: self.id(),
                         text: silica_markdown::callout_default_title(callout_type),
                         ..RichText::default()
                     }
                 } else {
-                    // The title is block-parsed; this view paints one run of
-                    // rich text, so flatten the tree's inlines into it. A
-                    // heading or a list written as a title therefore shows its
-                    // text without the block styling Obsidian gives it -- see
-                    // the callout block in docs/silica/Specification.md.
+                    // * The title is block-parsed; this view paints one run of
+                    //   rich text, so flatten the tree's inlines into it. A
+                    //   heading or a list written as a title therefore shows its
+                    //   text without the block styling Obsidian gives it -- see
+                    //   the callout block in docs/silica/Specification.md.
                     let flat: Vec<Inline<'_>> = silica_markdown::inline_runs(title)
                         .into_iter()
                         .flat_map(|run| run.iter().cloned())
@@ -792,9 +792,9 @@ impl<'v> Builder<'v> {
             |inline: &Inline<'_>| matches!(inline.kind, InlineKind::Math { display: true, .. });
         for (ix, inline) in content.iter().enumerate() {
             match &inline.kind {
-                // The space on either side of a display block inside a
-                // paragraph is the block's margin, not text to set: an HTML
-                // renderer collapses it at the block's edge.
+                // * The space on either side of a display block inside a
+                //   paragraph is the block's margin, not text to set: an HTML
+                //   renderer collapses it at the block's edge.
                 InlineKind::Text(t)
                     if ix
                         .checked_sub(1)
@@ -890,7 +890,7 @@ impl<'v> Builder<'v> {
 
     fn flush(&mut self, acc: &mut RichBuilder, out: &mut Vec<Segment>) {
         let text = std::mem::take(acc).finish(self.id());
-        // Whitespace between two embeds would render as an empty line.
+        // * Whitespace between two embeds would render as an empty line.
         if !text.text.trim().is_empty() {
             out.push(Segment::Text(text));
         }
@@ -943,11 +943,11 @@ impl<'v> Builder<'v> {
                     acc.styled(|s| s.link = true, |a| a.push(&shown));
                     acc.link(start, target);
                 } else {
-                    // The same rule the HTML renderer follows: Obsidian ends a
-                    // link at the first child that is a link of its own, and
-                    // what comes after that child is not part of it. Without
-                    // this the trailing text of `[md [[Links]] link](url)`
-                    // would still be clickable through to the outer link.
+                    // * The same rule the HTML renderer follows: Obsidian ends a
+                    //   link at the first child that is a link of its own, and
+                    //   what comes after that child is not part of it. Without
+                    //   this the trailing text of `[md [[Links]] link](url)`
+                    //   would still be clickable through to the outer link.
                     let split = children
                         .iter()
                         .position(silica_markdown::html::renders_as_anchor);
@@ -966,8 +966,8 @@ impl<'v> Builder<'v> {
                 children,
                 ..
             } => {
-                // External or reference-style images: shown as a link until
-                // remote images load.
+                // * External or reference-style images: shown as a link until
+                //   remote images load.
                 let start = acc.len();
                 let alt = plain_text(children);
                 let shown = if alt.is_empty() {
@@ -986,13 +986,13 @@ impl<'v> Builder<'v> {
                     None => wikilink_display(&link),
                 };
                 let start = acc.len();
-                // `rich()` is what headings, table cells and callout titles are
-                // built from, and none of them has anywhere to draw an embed's
-                // payload. The embed arm used to push the literal `![[Name]]`
-                // here, so an embed anywhere but a paragraph showed its own
-                // markup and was not even clickable; the link arm reads cleanly
-                // and navigates. Real inline embedding needs a run type `rich()`
-                // can carry, which is a larger change than this.
+                // * `rich()` is what headings, table cells and callout titles are
+                //   built from, and none of them has anywhere to draw an embed's
+                //   payload. The embed arm used to push the literal `![[Name]]`
+                //   here, so an embed anywhere but a paragraph showed its own
+                //   markup and was not even clickable; the link arm reads cleanly
+                //   and navigates. Real inline embedding needs a run type `rich()`
+                //   can carry, which is a larger change than this.
                 acc.styled(|s| s.link = true, |a| a.push(&shown));
                 acc.link(start, LinkTarget::Internal(target));
             }
@@ -1091,8 +1091,8 @@ impl<'v> Builder<'v> {
                         None => Vec::new(),
                     }
                 };
-            // An inline footnote is written where it is referenced, and a
-            // label nothing defines has nowhere else to point either.
+            // * An inline footnote is written where it is referenced, and a
+            //   label nothing defines has nowhere else to point either.
             offsets.push(at.unwrap_or(0));
             out.push((n, body));
         }
@@ -1146,21 +1146,21 @@ impl<'v> Builder<'v> {
                         self.note_embed(&path, parsed.subpath.as_ref(), &wikilink_display(&parsed))
                     }
                 }
-                // A base nests no further: its rows are notes, and a note
-                // inside one is a row rather than an embed, so the depth
-                // guard above has nothing to count here — and a note that
-                // embeds a base listing that same note still terminates,
-                // because a row is cells rather than another model. The cache
-                // is the cost guard instead: a view over the whole vault is
-                // the one embed worth never resolving twice.
+                // * A base nests no further: its rows are notes, and a note
+                //   inside one is a row rather than an embed, so the depth
+                //   guard above has nothing to count here — and a note that
+                //   embeds a base listing that same note still terminates,
+                //   because a row is cells rather than another model. The cache
+                //   is the cost guard instead: a view over the whole vault is
+                //   the one embed worth never resolving twice.
                 FileKind::Base => match self.bases.resolve(&path, self.vault) {
                     Some(base) => EmbedKind::Base(base),
                     None => EmbedKind::Missing,
                 },
-                // A PDF is resolved and nothing more: the file is parsed by
-                // the document cache when the embed is drawn, off the UI
-                // thread. The subpath (`#page=3&height=400`) is the link's
-                // own, not a heading, so it is read from the raw link text.
+                // * A PDF is resolved and nothing more: the file is parsed by
+                //   the document cache when the embed is drawn, off the UI
+                //   thread. The subpath (`#page=3&height=400`) is the link's
+                //   own, not a heading, so it is read from the raw link text.
                 FileKind::Pdf => {
                     let id = self.next_id;
                     self.next_id += 1;
@@ -1337,7 +1337,7 @@ fn html_images(content: &str) -> Option<Vec<HtmlImage>> {
     let mut rest = content.trim();
     while !rest.is_empty() {
         let after = match rest.get(..4) {
-            // Only `<img` itself, not `<image>` or some longer tag name.
+            // * Only `<img` itself, not `<image>` or some longer tag name.
             Some(tag) if tag.eq_ignore_ascii_case("<img") => &rest[4..],
             _ => return None,
         };
@@ -1378,16 +1378,16 @@ fn html_image(attrs: &str) -> Option<HtmlImage> {
         match name.as_str() {
             "src" => src = Some(percent_decode(&value).into_owned()),
             "alt" => alt = value,
-            // A raw dimension is CSS pixels; a `%` or a `calc()` is not
-            // something the embed can carry, so the block stays source.
+            // * A raw dimension is CSS pixels; a `%` or a `calc()` is not
+            //   something the embed can carry, so the block stays source.
             "width" => width = Some(value.parse().ok()?),
             "height" => height = Some(value.parse().ok()?),
             _ => {}
         }
     }
     let src = src?;
-    // A remote image is fetched by Obsidian and shown as a link here, the
-    // way a markdown image with a scheme already is.
+    // * A remote image is fetched by Obsidian and shown as a link here, the
+    //   way a markdown image with a scheme already is.
     if src.is_empty() || has_scheme(&src) {
         return None;
     }
@@ -1508,9 +1508,9 @@ fn block_by_id<'b, 'a>(blocks: &'b [Block<'a>], id: &str) -> Option<&'b Block<'a
     if found.is_some() {
         return found;
     }
-    // A list item id lives on the item's first paragraph in the cache but
-    // the block that carries it in the tree is the paragraph itself, which
-    // `walk_blocks` visits; nothing more to do here.
+    // * A list item id lives on the item's first paragraph in the cache but
+    //   the block that carries it in the tree is the paragraph itself, which
+    //   `walk_blocks` visits; nothing more to do here.
     None
 }
 
@@ -1607,9 +1607,9 @@ mod tests {
 
     #[test]
     fn an_embed_in_a_heading_reads_as_a_link_not_markup() {
-        // `rich()` builds headings, table cells and callout titles, and none
-        // of them has anywhere to draw an embed's payload, so the embed falls
-        // through to the link arm instead of showing its own `![[Name]]`.
+        // * `rich()` builds headings, table cells and callout titles, and none
+        //   of them has anywhere to draw an embed's payload, so the embed falls
+        //   through to the link arm instead of showing its own `![[Name]]`.
         let m = build("Self.md", "# Head ![[Other]]", &stub());
         let RBlock::Heading { text, .. } = &m.blocks[0] else {
             panic!("not a heading: {:?}", m.blocks[0]);
@@ -1762,7 +1762,7 @@ mod tests {
     #[test]
     fn an_embedded_base_is_its_own_kind_wherever_it_is_written() {
         let stub = stub();
-        // The same base twice, and once more inside an embedded note.
+        // * The same base twice, and once more inside an embedded note.
         let m = build(
             "Self.md",
             "![[Main.base]]\n\n![[Nester]]\n\n![[Main.base]]",
@@ -1777,13 +1777,13 @@ mod tests {
                 other => panic!("{other:?}"),
             }
         }
-        // A base inside an embedded note is a base there too: the note's own
-        // depth bounds the nesting, and the base below it adds none.
+        // * A base inside an embedded note is a base there too: the note's own
+        //   depth bounds the nesting, and the base below it adds none.
         let EmbedKind::Note { blocks, .. } = &first_embed(&m.blocks[1]).kind else {
             panic!("the middle embed is a note")
         };
         assert!(matches!(first_embed(&blocks[0]).kind, EmbedKind::Base(_)));
-        // And the view over the whole vault was resolved exactly once.
+        // * And the view over the whole vault was resolved exactly once.
         assert_eq!(stub.base_calls.get(), 1);
     }
 
@@ -1800,22 +1800,22 @@ mod tests {
             EmbedKind::Pdf(pdf) => pdf.clone(),
             other => panic!("{other:?}"),
         };
-        // The stub never read `Field.pdf` (it has no text to read): the
-        // model carries the path and the subpath and nothing else.
+        // * The stub never read `Field.pdf` (it has no text to read): the
+        //   model carries the path and the subpath and nothing else.
         let plain = pdf(0);
         assert_eq!(plain.path, "Field.pdf");
         assert_eq!(plain.absolute, PathBuf::from("/vault/Field.pdf"));
         assert_eq!((plain.page, plain.height), (None, None));
         assert_eq!(plain.box_height(), DEFAULT_HEIGHT);
-        // `#page=2` is the link's own subpath, not a heading: zero-based.
+        // * `#page=2` is the link's own subpath, not a heading: zero-based.
         assert_eq!(pdf(1).page, Some(1));
-        // `#height=` wins over the alias size; the alias is still the alt.
+        // * `#height=` wins over the alias size; the alias is still the alt.
         let sized = pdf(2);
         assert_eq!(sized.height, Some(200.0));
         assert_eq!(first_embed(&m.blocks[2]).width, Some(300.0));
-        // The markdown image form reads the same subpath.
+        // * The markdown image form reads the same subpath.
         assert_eq!(pdf(3).page, Some(2));
-        // Every embed has an id of its own, so two of one file scroll apart.
+        // * Every embed has an id of its own, so two of one file scroll apart.
         assert_ne!(pdf(0).id, pdf(1).id);
         assert!(matches!(first_embed(&m.blocks[4]).kind, EmbedKind::Missing));
     }
@@ -1832,11 +1832,11 @@ mod tests {
     fn a_base_nothing_answers_for_is_missing_rather_than_empty() {
         let stub = stub();
         let m = build("Self.md", "![[Nope.base]]\n\n![[Broken.base]]", &stub);
-        // A link that resolves to no file at all, and a file that exists and
-        // still answers no base: both are the embed's `Missing`.
+        // * A link that resolves to no file at all, and a file that exists and
+        //   still answers no base: both are the embed's `Missing`.
         assert!(matches!(first_embed(&m.blocks[0]).kind, EmbedKind::Missing));
         assert!(matches!(first_embed(&m.blocks[1]).kind, EmbedKind::Missing));
-        // The miss is remembered too, so a second mention asks nothing again.
+        // * The miss is remembered too, so a second mention asks nothing again.
         let m = build("Self.md", "![[Broken.base]]\n\n![[Broken.base]]", &stub);
         assert!(matches!(first_embed(&m.blocks[1]).kind, EmbedKind::Missing));
         assert_eq!(stub.base_calls.get(), 2, "once per model, not per embed");
@@ -1851,8 +1851,8 @@ mod tests {
         let two = plain.starts[2];
         assert!(matches!(&plain.blocks[2], RBlock::Heading { plain, .. } if plain == "Two"));
 
-        // The same note behind a block comment: one parsed block more, the
-        // same built blocks, and "Two" still the third of them.
+        // * The same note behind a block comment: one parsed block more, the
+        //   same built blocks, and "Two" still the third of them.
         let text = "%%\na block comment\n%%\n\n# One\n\nbody\n\n# Two\n";
         let with_comment = build("Self.md", text, &stub());
         assert_eq!(
@@ -1863,8 +1863,8 @@ mod tests {
         );
         assert_eq!(with_comment.blocks.len(), plain.blocks.len());
         assert!(matches!(&with_comment.blocks[2], RBlock::Heading { plain, .. } if plain == "Two"));
-        // The offsets moved by the comment's length, and `block_at` follows
-        // them rather than the index the parsed list would have given.
+        // * The offsets moved by the comment's length, and `block_at` follows
+        //   them rather than the index the parsed list would have given.
         assert!(with_comment.starts[2] > two);
         assert_eq!(
             with_comment.block_at(text.find("# Two").unwrap()),
@@ -1993,8 +1993,8 @@ mod tests {
             panic!("{:?}", items[0].children)
         };
         assert_eq!(nested[0].marker, Some(TaskMarker { line: 5, col: 4 }));
-        // The embedded item's bytes are another file's, so it carries no
-        // marker and the reading view leaves its box inert.
+        // * The embedded item's bytes are another file's, so it carries no
+        //   marker and the reading view leaves its box inert.
         let RBlock::Paragraph(segments) = m.blocks.last().unwrap() else {
             panic!("{:?}", m.blocks.last())
         };
@@ -2027,8 +2027,8 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
-        // A CRLF file renders and copies as LF, the way Obsidian does,
-        // while the file keeps its own endings.
+        // * A CRLF file renders and copies as LF, the way Obsidian does,
+        //   while the file keeps its own endings.
         let m = build("Self.md", "```\r\none\r\ntwo\r\n```\r\n", &stub());
         match &m.blocks[0] {
             RBlock::Code { text, copy, .. } => {
@@ -2062,8 +2062,8 @@ mod tests {
         assert_eq!(*fold, Some(true), "`-` opens collapsed, as in Obsidian");
         assert_eq!(title.text, "Careful");
         assert_eq!(children.len(), 1);
-        // The span covers every line of the callout, so Live Preview folds
-        // all three away behind the widget.
+        // * The span covers every line of the callout, so Live Preview folds
+        //   all three away behind the widget.
         assert_eq!(
             &src[w[0].span.clone()],
             "> [!warning]- Careful\n> body\n> more"
@@ -2091,8 +2091,8 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
-        // Consecutive raw imgs are one block and render as one run of
-        // images; a percent-escaped src is the vault path it decodes to.
+        // * Consecutive raw imgs are one block and render as one run of
+        //   images; a percent-escaped src is the vault path it decodes to.
         let m = build(
             "Self.md",
             "<img src='pic.png'/>\n<img src=pic%2Epng height=50>\n",
@@ -2114,9 +2114,9 @@ mod tests {
 
     #[test]
     fn other_html_blocks_stay_source() {
-        // A comment, a script and a remote image all reach the builder as
-        // the same `HtmlBlock`, and none of them is something the renderer
-        // can draw, so they keep their raw text and never fold their lines.
+        // * A comment, a script and a remote image all reach the builder as
+        //   the same `HtmlBlock`, and none of them is something the renderer
+        //   can draw, so they keep their raw text and never fold their lines.
         for src in [
             "<!-- a comment -->\n",
             "<script>window.x = 1</script>\n",
@@ -2153,7 +2153,7 @@ mod tests {
         let RBlock::Paragraph(segments) = &m.blocks[0] else {
             panic!("{:?}", m.blocks[0])
         };
-        // The space on either side of the block is its margin, not text.
+        // * The space on either side of the block is its margin, not text.
         let texts: Vec<_> = segments
             .iter()
             .map(|s| match s {
@@ -2166,8 +2166,8 @@ mod tests {
             texts,
             vec!["text:Inline x then", "math:y", "text:and after."]
         );
-        // Inline math is a styled run holding the TeX, for the view to
-        // typeset over a placeholder.
+        // * Inline math is a styled run holding the TeX, for the view to
+        //   typeset over a placeholder.
         let Segment::Text(first) = &segments[0] else {
             unreachable!()
         };
@@ -2181,7 +2181,7 @@ mod tests {
                 }
             )]
         );
-        // The block form is a block.
+        // * The block form is a block.
         let m = build_with("A.md", "$$\nz\n$$", &stub(), BuildOptions::default());
         assert_eq!(m.blocks[0], RBlock::Math("z".to_string()));
     }

@@ -16,8 +16,8 @@ use silica_markdown::extract_frontmatter;
 /// first. Silica recognises the block and edits it in place, keeping the BOM.
 pub fn note_properties(text: &str) -> Option<Properties> {
     let fm = extract_frontmatter(text)?;
-    // `fm.start` is the opening fence; the YAML runs from just after its line
-    // to the start of the closing fence line.
+    // * `fm.start` is the opening fence; the YAML runs from just after its line
+    // * to the start of the closing fence line.
     let yaml_start = text[fm.start..].find('\n')? + fm.start + 1;
     let yaml_end = yaml_start + fm.yaml.len();
     Some(parse(text, yaml_start..yaml_end, fm.start..fm.end))
@@ -42,7 +42,7 @@ mod tests {
     fn no_block_is_none() {
         assert!(note_properties("# Body\n").is_none());
         assert!(note_properties("").is_none());
-        // Unterminated, and `...` does not close it.
+        // * Unterminated, and `...` does not close it.
         assert!(note_properties("---\na: 1\n").is_none());
         assert!(note_properties("---\na: 1\n...\nbody\n").is_none());
     }

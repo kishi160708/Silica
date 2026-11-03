@@ -328,7 +328,7 @@ impl Render for CopyResults {
                     ),
             )
             .child(
-                // The textarea: two rows tall in Obsidian, scrolling.
+                // * The textarea: two rows tall in Obsidian, scrolling.
                 div()
                     .id("copy-results-text")
                     .h(px(56.))

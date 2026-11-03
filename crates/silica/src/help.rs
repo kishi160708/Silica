@@ -117,8 +117,8 @@ impl HelpWindow {
                     ..Default::default()
                 }),
                 app_id: Some("silica".into()),
-                // The desktop's own frame: a dialog has no tab strip to
-                // put the window buttons in.
+                // * The desktop's own frame: a dialog has no tab strip to
+                //   put the window buttons in.
                 window_decorations: Some(WindowDecorations::Server),
                 window_background: WindowBackgroundAppearance::Opaque,
                 window_min_size: Some(size(px(480.), px(480.))),
@@ -166,17 +166,17 @@ impl HelpWindow {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let go = row.go;
-        // All rows share the same background square; the primary row's button
-        // uses the accent color to single it out, matching Obsidian's design
-        // where only the "Open help" row's button is accent-colored.
+        // * All rows share the same background square; the primary row's button
+        //   uses the accent color to single it out, matching Obsidian's design
+        //   where only the "Open help" row's button is accent-colored.
         let (fg, border) = if row.primary {
             (gpui::white(), theme.accent)
         } else {
             (theme.text, theme.border)
         };
-        // Buttons need a contrasting background against the row: primary uses
-        // the accent color; compat rows use bg_secondary which is lighter than
-        // the row's bg so the pill stands out.
+        // * Buttons need a contrasting background against the row: primary uses
+        //   the accent color; compat rows use bg_secondary which is lighter than
+        //   the row's bg so the pill stands out.
         let button_bg = if row.primary {
             theme.accent
         } else {

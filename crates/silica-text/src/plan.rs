@@ -65,8 +65,8 @@ pub fn newline_plan(
 /// step of `unit` added after each line's quote markers, or one `tab_size`
 /// step removed, plus (with `renumber`) the new numbers of the ordered items
 /// the change unsettled, all in pre-edit coordinates for one undo step.
-// The two indent settings and the two switches are what the one command
-// takes; a struct for them would be read by exactly two callers.
+// * The two indent settings and the two switches are what the one command
+// * takes; a struct for them would be read by exactly two callers.
 #[allow(clippy::too_many_arguments)]
 pub fn indent_plan(
     text: &str,
@@ -84,7 +84,7 @@ pub fn indent_plan(
         &text[start..end]
     };
     let mut edits = Vec::new();
-    // Bytes each changed line gained before its marker, post minus pre.
+    // * Bytes each changed line gained before its marker, post minus pre.
     let mut deltas: HashMap<usize, isize> = HashMap::new();
     for l in lines.clone() {
         let lt = line_text(l);
@@ -101,8 +101,8 @@ pub fn indent_plan(
     if !renumber || edits.is_empty() {
         return edits;
     }
-    // The list block around the change: its lines up to a blank one
-    // either side, as they will read after the edit.
+    // * The list block around the change: its lines up to a blank one
+    // * either side, as they will read after the edit.
     let mut first = lines.start;
     while first > 0 && !line_text(first - 1).trim().is_empty() {
         first -= 1;
@@ -185,9 +185,9 @@ mod tests {
             apply("1. a\n2. b\n3. c", 4),
             ("1. a\n2. \n3. b\n4. c".into(), 8)
         );
-        // Splitting an item carries the rest of the text to the new one.
+        // * Splitting an item carries the rest of the text to the new one.
         assert_eq!(apply("- ab", 3), ("- a\n- b".into(), 6));
-        // An empty item clears; a nested one outdents and keeps the cursor.
+        // * An empty item clears; a nested one outdents and keeps the cursor.
         assert_eq!(apply("- a\n- ", 6), ("- a\n".into(), 4));
         assert_eq!(apply("- a\n\t- ", 7), ("- a\n- ".into(), 6));
         assert_eq!(apply("> q", 3), ("> q\n> ".into(), 6));
@@ -211,11 +211,11 @@ mod tests {
         let text = "1. a\n\t1. b\n2. c\n";
         let edits = indent_plan(text, &line_starts(text), 1..2, "", true, 4, false, true);
         assert_eq!(apply_many(text, edits), "1. a\n2. b\n3. c\n");
-        // Without smart lists only the indentation changes.
+        // * Without smart lists only the indentation changes.
         let text = "1. a\n2. b\n3. c\n";
         let edits = indent_plan(text, &line_starts(text), 1..2, "  ", true, 4, true, false);
         assert_eq!(apply_many(text, edits), "1. a\n  2. b\n3. c\n");
-        // A selection over two items indents both; numbers follow.
+        // * A selection over two items indents both; numbers follow.
         let text = "1. a\n2. b\n3. c\n4. d\n";
         let edits = indent_plan(text, &line_starts(text), 1..3, "\t", true, 4, true, true);
         assert_eq!(apply_many(text, edits), "1. a\n\t1. b\n\t2. c\n2. d\n");
@@ -229,7 +229,7 @@ mod tests {
         assert_eq!(shifted(5, &edits), 6);
         assert_eq!(shifted(11, &edits), 13);
         assert_eq!(shifted(20, &edits), 22);
-        // Inside a replaced range: after the replacement.
+        // * Inside a replaced range: after the replacement.
         let edits = vec![(3..6, "".to_string())];
         assert_eq!(shifted(4, &edits), 3);
     }

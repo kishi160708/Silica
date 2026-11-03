@@ -178,7 +178,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":1}}"#
         )
         .is_none());
-        // A null id is an absent id, so even an unknown notification is silent.
+        // ? A null id is an absent id, so even an unknown notification is silent.
         assert!(handle_line(&mut app, r#"{"id":null,"method":"frobnicate"}"#).is_none());
     }
 

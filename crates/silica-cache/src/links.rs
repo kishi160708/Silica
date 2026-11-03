@@ -169,7 +169,7 @@ pub fn rewrite_note(
         let renamed = renames.get(old_target);
         let new_target = renamed.map(String::as_str).unwrap_or(old_target);
         if renamed.is_none() {
-            // Only a note that moved can break its own links.
+            // * Only a note that moved can break its own links.
             if source_old == source_new || after.resolve(link, source_new) == Some(new_target) {
                 return None;
             }
@@ -254,7 +254,7 @@ fn rebuild_wikilink(original: &str, target: &Target<'_>) -> Option<String> {
         Some(i) => (&inner[..i], Some(&inner[i + 1..])),
         None => (inner, None),
     };
-    // `[[Note\|alias]]` (in a table, or as Obsidian's alias form): keep the backslash.
+    // * `[[Note\|alias]]` (in a table, or as Obsidian's alias form): keep the backslash.
     let (path_part, escaped) = match path_part.strip_suffix('\\') {
         Some(p) if alias.is_some() => (p, true),
         _ => (path_part, false),
@@ -263,7 +263,7 @@ fn rebuild_wikilink(original: &str, target: &Target<'_>) -> Option<String> {
         Some(i) => (path_part[..i].trim(), path_part[i..].trim_end()),
         None => (path_part.trim(), ""),
     };
-    // `[[#Heading]]` points into the note itself and never names a file.
+    // ! `[[#Heading]]` points into the note itself and never names a file.
     if written.is_empty() || written == target.new_path {
         return None;
     }
@@ -322,7 +322,7 @@ fn rebuild_markdown_link(original: &str, target: &Target<'_>) -> Option<String> 
     } else {
         encode_destination(&new_dest_path)
     };
-    // The written destination without percent-encoding and extension.
+    // * The written destination without percent-encoding and extension.
     let written_decoded = crate::percent_decode(dest_path);
     let written_path = written_decoded
         .strip_suffix(".md")
@@ -504,7 +504,7 @@ mod tests {
     #[test]
     fn moving_keeps_links_whose_text_is_unchanged() {
         let out = run(&[("A.md", "Moved/A.md")], LinkFormat::Shortest);
-        // Only the forms whose written path differs from `A` are touched.
+        // * Only the forms whose written path differs from `A` are touched.
         assert_eq!(
             out["B.md"].lines().nth(6).unwrap(),
             "[[A]] [[A]] [[A|alias]] [[A#Top]] [[A#^blk]] [[A#Top|al]] ![[A]] ![[A#Top]] [[A]] [[A | spaced]]"
@@ -514,7 +514,7 @@ mod tests {
             "[A](A.md) [text](A.md#Top) [t](<A.md>) ![[A|300]] ![i](A.md) [A](A.md) [A](A.md)"
         );
         assert_eq!(out["B.md"].lines().nth(1).unwrap(), "related: \"[[A]]\"");
-        // The moved note's own links still resolve, so it is not rewritten.
+        // * The moved note's own links still resolve, so it is not rewritten.
         assert!(!out.contains_key("Moved/A.md"));
         assert!(!out.contains_key("Sub/T.md"));
     }

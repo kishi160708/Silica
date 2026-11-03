@@ -233,7 +233,7 @@ fn function_table_list() {
         ("[3, 1, 2].sort()", S("1,2,3")),
         ("[3, 1, 2].stddev()", S("0.816496580927726")),
         ("[3, 1, 2].sum()", S("6")),
-        // The one case where the cell's text and `toString()` differ.
+        // * The one case where the cell's text and `toString()` differ.
         ("[3, 1, 2].toString()", S("3, 1, 2")),
         ("[3, 1, 2].unique()", S("1,2,3")),
         ("[3, 1, 2].length", S("3")),
@@ -251,11 +251,11 @@ fn no_lambda() {
             "listish.filter(v, v != \"beta\")",
             E("Cannot call function \"filter\", too many arguments."),
         ),
-        // A non-empty String is truthy, so a "quoted lambda" keeps everything.
+        // * A non-empty String is truthy, so a "quoted lambda" keeps everything.
         ("listish.filter(\"value != 'beta'\")", S("alpha,beta,alpha")),
         ("nums.map(value * 2)", S("6,2,4")),
         ("nums.map(value)", S("3,1,2")),
-        // An unknown ident is null, not an error.
+        // * An unknown ident is null, not an error.
         ("nums.map(item * 2)", S("null,null,null")),
         (
             "nums.reduce(value + 1)",
@@ -304,7 +304,7 @@ fn names_the_table_does_not_know() {
             "nums.indexOf(1)",
             E("Cannot find function \"indexOf\" on type List"),
         ),
-        // A Tags receiver names itself List in a refusal.
+        // * A Tags receiver names itself List in a refusal.
         (
             "tags.includes()",
             E("Cannot find function \"includes\" on type List"),
@@ -329,8 +329,8 @@ fn reduce_binds_only_acc() {
         ("nums.reduce(prev + value, 0)", S("null")),
         ("nums.reduce(a + value, 0)", S("null")),
         ("nums.reduce(acc, 0)", S("0")),
-        // `index` binds inside `reduce` as well, which the signature does not
-        // say.
+        // * `index` binds inside `reduce` as well, which the signature does not
+        // * say.
         ("nums.reduce(index, 0)", S("2")),
         ("nums.reduce(value + index, 0)", S("4")),
     ]);
@@ -358,7 +358,7 @@ fn chained_on_fixtures() {
         ("nums.filter(value > 1).join(\"-\")", S("3-2")),
         ("aliases", S("Cinder")),
         ("tags", S("#rock,#igneous/extrusive")),
-        // Case-insensitive, like every other name in the language.
+        // * Case-insensitive, like every other name in the language.
         ("[1,2].sum()", S("3")),
         ("[1,2].SUM()", S("3")),
     ]);
@@ -404,8 +404,8 @@ fn function_table_object() {
                #rock, #igneous/extrusive,Cinder",
             ),
         ),
-        // `e08-methods.byType.object.calls`: a name off the prototype is not a
-        // name in the table.
+        // * `e08-methods.byType.object.calls`: a name off the prototype is not a
+        // * name in the table.
         (
             "note.equals()",
             E("Cannot find function \"equals\" on type Object"),
@@ -425,8 +425,8 @@ fn function_table_object() {
 #[test]
 fn unprobed_choices() {
     check(&[
-        // No number in the list: null, as `earliest()` answers null for a list
-        // with no date.
+        // * No number in the list: null, as `earliest()` answers null for a list
+        // * with no date.
         ("[].sum()", S("null")),
         ("[].mean()", S("null")),
         ("[].median()", S("null")),
@@ -435,18 +435,18 @@ fn unprobed_choices() {
         ("[].stddev()", S("null")),
         ("[].isEmpty()", S("true")),
         ("[].unique()", S("")),
-        // A non-number is skipped, not coerced: "the number values in the
-        // list".
+        // * A non-number is skipped, not coerced: "the number values in the
+        // * list".
         ("[1, \"nope\", 3].sum()", S("4")),
         ("[1, \"nope\", 3].mean()", S("2")),
         ("[1, null, 3].min()", S("1")),
-        // `"42"` is a String, so it is not one of the number values.
+        // * `"42"` is a String, so it is not one of the number values.
         ("[numish].sum()", S("null")),
-        // An even count takes the mean of the two middle numbers.
+        // * An even count takes the mean of the two middle numbers.
         ("[4, 1, 3, 2].median()", S("2.5")),
-        // `flat()` goes all the way down.
+        // * `flat()` goes all the way down.
         ("[[1, [2, 3]], 4].flat()", S("1,2,3,4")),
-        // `slice` is start-inclusive, end-exclusive, and clamps.
+        // * `slice` is start-inclusive, end-exclusive, and clamps.
         ("nums.slice(1)", S("1,2")),
         ("nums.slice(0, 2)", S("3,1")),
         ("nums.slice(2, 1)", S("")),
@@ -456,32 +456,32 @@ fn unprobed_choices() {
             "nums.slice(0, 1, 2)",
             E("Cannot call function \"slice\", too many arguments."),
         ),
-        // `containsAll` / `containsAny` are variadic, each argument a value.
+        // * `containsAll` / `containsAny` are variadic, each argument a value.
         ("listish.containsAll(\"alpha\", \"beta\")", S("true")),
         ("listish.containsAll(\"alpha\", \"gamma\")", S("false")),
         ("listish.containsAny(\"gamma\", \"beta\")", S("true")),
-        // `contains` compares the way `==` compares.
+        // * `contains` compares the way `==` compares.
         ("nums.contains(\"3\")", S("true")),
-        // `earliest` / `latest` pick over the date values and ignore the
-        // rest. They also read a String that parses as a date, which this
-        // table cannot show yet: `funcs::time::parse_date` is still a stub, so
-        // `["2026-03-01", when].latest()` would answer `when`.
+        // ? `earliest` / `latest` pick over the date values and ignore the
+        // ? rest. They also read a String that parses as a date, which this
+        // ? table cannot show yet: `funcs::time::parse_date` is still a stub, so
+        // ? `["2026-03-01", when].latest()` would answer `when`.
         ("[when, stamp].earliest()", S("2026-01-02")),
         ("[when, stamp].latest()", S("2026-01-02T03:04:05")),
         ("[when, \"nope\"].latest()", S("2026-01-02")),
-        // `sort` puts two numbers in numeric order and everything else in the
-        // order of its rendered text; the sort is stable.
+        // * `sort` puts two numbers in numeric order and everything else in the
+        // * order of its rendered text; the sort is stable.
         ("[\"b\", \"a\", \"c\"].sort()", S("a,b,c")),
         ("[10, 9].sort()", S("9,10")),
         ("[\"10\", \"9\"].sort()", S("10,9")),
-        // `unique` is keyed by rendered text, and the distinct elements come
-        // back in a plain object's key order: index-like keys ascending, then
-        // the rest first-seen.
+        // * `unique` is keyed by rendered text, and the distinct elements come
+        // * back in a plain object's key order: index-like keys ascending, then
+        // * the rest first-seen.
         ("[\"beta\", \"alpha\", \"beta\"].unique()", S("beta,alpha")),
         ("[2, \"2\", 1].unique()", S("1,2")),
-        // `Object.filter` binds `value`; `key` is Obsidian's own documented
-        // name for the other one and is not bound here — it needs a `key`
-        // field on `Scope`.
+        // ? `Object.filter` binds `value`; `key` is Obsidian's own documented
+        // ? name for the other one and is not bound here — it needs a `key`
+        // ? field on `Scope`.
         ("note.filter(value == \"rock\").keys()", S("type")),
         ("note.map(value).length", S("22")),
     ]);

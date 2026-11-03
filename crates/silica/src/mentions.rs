@@ -51,7 +51,7 @@ impl Finder {
         if parts.is_empty() {
             return None;
         }
-        // Longest first so "Plan B" wins over "Plan" at the same position.
+        // * Longest first so "Plan B" wins over "Plan" at the same position.
         parts.sort_by_key(|p| std::cmp::Reverse(p.len()));
         let pattern = format!(
             r"(?:^|[^\p{{L}}\p{{N}}_])({})(?:[^\p{{L}}\p{{N}}_]|$)",
@@ -116,7 +116,7 @@ fn inside_link(line: &str, at: usize) -> bool {
             return true;
         }
     }
-    // The destination part of `[text](dest)`.
+    // * The destination part of `[text](dest)`.
     if let Some(open) = before.rfind("](") {
         if !before[open..].contains(')') && after.contains(')') {
             return true;

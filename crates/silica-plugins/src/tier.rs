@@ -218,8 +218,8 @@ mod tests {
 
     #[test]
     fn desktop_only_is_believed_over_a_clean_source() {
-        // The manifest is the plugin's own statement; a scan that finds
-        // nothing must not overrule it.
+        // * The manifest is the plugin's own statement; a scan that finds
+        // * nothing must not overrule it.
         assert_eq!(
             classify(&manifest(Some(true)), "module.exports = {}", false),
             Tier::Refused(Refusal::DesktopOnly)
@@ -245,7 +245,7 @@ mod tests {
     fn requiring_a_node_module_is_refused_and_named() {
         let tier = classify(&manifest(None), r#"require("fs")"#, false);
         assert_eq!(tier, Tier::Refused(Refusal::Node("fs".to_string())));
-        // `node:` prefixed names are the same module.
+        // * `node:` prefixed names are the same module.
         assert_eq!(
             classify(&manifest(None), r#"require('node:child_process')"#, false),
             Tier::Refused(Refusal::Node("node:child_process".to_string()))
@@ -259,8 +259,8 @@ mod tests {
 
     #[test]
     fn codemirror_is_checked_before_the_dom() {
-        // A plugin that drives CodeMirror touches the DOM too; the more
-        // specific reason is the one worth showing.
+        // * A plugin that drives CodeMirror touches the DOM too; the more
+        // * specific reason is the one worth showing.
         let tier = classify(&manifest(None), "new EditorView({})", false);
         assert_eq!(tier, Tier::Refused(Refusal::CodeMirror));
     }
@@ -279,8 +279,8 @@ mod tests {
 
     #[test]
     fn a_markdown_post_processor_is_compat_not_refused() {
-        // The host stores post-processor registrations and can run them, so a
-        // plugin that registers one is compatibility tier, not refused.
+        // * The host stores post-processor registrations and can run them, so a
+        // * plugin that registers one is compatibility tier, not refused.
         let source = r#"
 const { Plugin } = require("obsidian");
 class P extends Plugin {
@@ -298,8 +298,8 @@ module.exports = P;
 
     #[test]
     fn a_settings_tab_is_not_dom_work() {
-        // The shim turns these into rows; refusing them would refuse almost
-        // every vault-only plugin, which is the tier that can run.
+        // * The shim turns these into rows; refusing them would refuse almost
+        // * every vault-only plugin, which is the tier that can run.
         let source = r#"
 const { Plugin, PluginSettingTab, Setting } = require("obsidian");
 class Tab extends PluginSettingTab {

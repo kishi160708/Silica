@@ -96,8 +96,8 @@ pub fn toggle_wrap_colored(
 ) -> Toggle {
     let m = marker.len();
     let colored = marker == "==";
-    // How many bytes of colour emoji sit at `at`; none for the other
-    // markers, whose pairs carry nothing.
+    // * How many bytes of colour emoji sit at `at`; none for the other
+    // * markers, whose pairs carry nothing.
     let emoji_len = |at: usize| -> usize {
         if colored {
             color_at(text, at).map_or(0, |(_, n)| n)
@@ -105,9 +105,9 @@ pub fn toggle_wrap_colored(
             0
         }
     };
-    // `open` is the opener's range, emoji included; `close` the closer's.
+    // * `open` is the opener's range, emoji included; `close` the closer's.
     let found: Option<(Range<usize>, Range<usize>)> = (|| {
-        // The markers inside the selection: `[==🔴word==]`.
+        // * The markers inside the selection: `[==🔴word==]`.
         if sel.len() >= 2 * m
             && marker_at(text, sel.start, marker)
             && marker_at(text, sel.end - m, marker)
@@ -118,7 +118,7 @@ pub fn toggle_wrap_colored(
                 return Some((sel.start..sel.start + m + e, sel.end - m..sel.end));
             }
         }
-        // The markers just outside it: `==🔴[word]==` or `==[🔴word]==`.
+        // * The markers just outside it: `==🔴[word]==` or `==[🔴word]==`.
         if !marker_at(text, sel.end, marker) || marker_at(text, sel.end + m, marker) {
             return None;
         }
@@ -403,8 +403,8 @@ pub fn block_insert_plan(
             let trailing = text.len() - text.trim_end_matches('\n').len();
             let definition = format!("{}[^{n}]: \n", "\n".repeat(2usize.saturating_sub(trailing)));
             let at = caret + reference.len();
-            // At the very end the two insertions are one, so they cannot
-            // land in the wrong order.
+            // ! At the very end the two insertions are one, so they cannot
+            // ! land in the wrong order.
             let edits = if caret == text.len() {
                 vec![(caret..caret, format!("{reference}{definition}"))]
             } else {
@@ -445,8 +445,8 @@ pub fn clear_formatting_plan(
         BlockKind::Paragraph { content } | BlockKind::Heading { content, .. } => {
             inline_lists.push(content)
         }
-        // A callout's title is block-parsed, so its inlines come out of the
-        // block tree rather than straight off the field.
+        // * A callout's title is block-parsed, so its inlines come out of the
+        // * block tree rather than straight off the field.
         BlockKind::Callout { title, .. } => {
             inline_lists.extend(silica_markdown::inline_runs(title))
         }
@@ -490,7 +490,7 @@ pub fn clear_formatting_plan(
             }
         });
     }
-    // The prefix of each line the selection covers from its start.
+    // * The prefix of each line the selection covers from its start.
     let first = line_starts.partition_point(|&s| s <= sel.start) - 1;
     let last = line_starts.partition_point(|&s| s < sel.end).max(first + 1) - 1;
     for l in first..=last {
@@ -511,7 +511,7 @@ pub fn clear_formatting_plan(
         end += heading.end;
         if start + end <= sel.end {
             cuts.push(start + p.indent.start..start + end);
-            // The indentation is kept; only what follows it goes.
+            // * The indentation is kept; only what follows it goes.
             if let Some(last) = cuts.last_mut() {
                 last.start = start + p.quotes.start.min(end);
             }
@@ -635,7 +635,7 @@ pub fn line_prefix_plan(
         match kind {
             LinePrefix::Quote => {
                 if all {
-                    // The outermost `> ` of however many the line carries.
+                    // * The outermost `> ` of however many the line carries.
                     let at = lt.find('>').unwrap_or(0);
                     let mut end = at + 1;
                     if lt.as_bytes().get(end) == Some(&b' ') {
@@ -653,8 +653,8 @@ pub fn line_prefix_plan(
                     edits.push((start + span.start..start + span.end, String::new()));
                     continue;
                 }
-                // An item of the other kind is rewritten; one of this kind
-                // is left alone, except that an ordered list renumbers.
+                // * An item of the other kind is rewritten; one of this kind
+                // * is left alone, except that an ordered list renumbers.
                 let ordered = kind == LinePrefix::Ordered;
                 if has_prefix(&p, kind) && !ordered {
                     continue;
@@ -676,7 +676,7 @@ pub fn line_prefix_plan(
             }
         }
     }
-    // A renumbering pass leaves the items that already had their number.
+    // * A renumbering pass leaves the items that already had their number.
     edits.retain(|(r, new)| text[r.clone()] != **new);
     edits
 }
@@ -735,8 +735,8 @@ pub fn swap_lines_plan(
         let above = line_starts[lines.start - 1]..block.start;
         let moved = &text[block.clone()];
         let other = &text[above.clone()];
-        // Only the last line of the file lacks a terminator, and after the
-        // swap it is a different line that is last.
+        // * Only the last line of the file lacks a terminator, and after the
+        // * swap it is a different line that is last.
         let new = match moved.strip_suffix('\n') {
             Some(_) => format!("{moved}{other}"),
             None => format!("{moved}\n{}", &other[..other.len() - 1]),
@@ -809,9 +809,9 @@ mod tests {
         let text = "alpha beta";
         assert_eq!(toggle_wrap(text, 0..5, "**", 0), Toggle::Wrap(0..5));
         let text = "**alpha** beta";
-        // The markers inside the selection.
+        // * The markers inside the selection.
         assert_eq!(toggle_wrap(text, 0..9, "**", 0), Toggle::Strip(0..2, 7..9));
-        // The markers just outside it.
+        // * The markers just outside it.
         assert_eq!(toggle_wrap(text, 2..7, "**", 0), Toggle::Strip(0..2, 7..9));
     }
 
@@ -867,14 +867,14 @@ mod tests {
             let s = starts(text);
             apply(text, checklist_plan(text, &s, 0..s.len() - 1))
         };
-        // Every line has a box: check all unless all are checked.
+        // * Every line has a box: check all unless all are checked.
         assert_eq!(all("- [ ] a\n- [x] b\n"), "- [x] a\n- [x] b\n");
         assert_eq!(all("- [x] a\n- [x] b\n"), "- [ ] a\n- [ ] b\n");
         assert_eq!(all("- [ ] a\n\n- [ ] b\n"), "- [x] a\n\n- [x] b\n");
-        // No line has one: add one to all.
+        // * No line has one: add one to all.
         assert_eq!(all("- a\n- b\n"), "- [ ] a\n- [ ] b\n");
         assert_eq!(all("a\nb\n"), "- [ ] a\n- [ ] b\n");
-        // Some do: invert each line's.
+        // * Some do: invert each line's.
         assert_eq!(all("- [ ] a\n- b\n"), "- a\n- [ ] b\n");
     }
 
@@ -925,8 +925,8 @@ mod tests {
         assert_eq!(all("a\n- b\n"), "- a\n- b\n");
         assert_eq!(all("a\n- [ ] b\n"), "- a\n- b\n");
         assert_eq!(all("a\n- b\n- [ ] c\n"), "- a\n- b\n- c\n");
-        // Silica's converging rule where Obsidian oscillates: each list
-        // line advances on its own.
+        // * Silica's converging rule where Obsidian oscillates: each list
+        // * line advances on its own.
         assert_eq!(all("- a\n- [ ] b\n"), "- [ ] a\n- [x] b\n");
         assert_eq!(all("- a\n\n- [x] b\n"), "- [ ] a\n\n- b\n");
     }
@@ -939,7 +939,6 @@ mod tests {
             let (edits, sel) = block_insert_plan(text, &s, caret, kind);
             (apply(text, edits), sel)
         };
-        // Callout.
         let (out, sel) = run("", 0, BlockInsert::Callout);
         assert_eq!(out, "\n> [!NOTE] Title\n> Contents\n");
         assert_eq!(&out[sel.clone()], "NOTE");
@@ -947,7 +946,7 @@ mod tests {
         let (out, sel) = run("alpha beta\n", 3, BlockInsert::Callout);
         assert_eq!(out, "> [!NOTE]\n> alpha beta\n");
         assert_eq!(sel, 4..8);
-        // Code block and math block.
+        // * Code block and math block.
         let (out, sel) = run("\n", 0, BlockInsert::CodeBlock);
         assert_eq!(out, "```\n\n```\n");
         assert_eq!(sel, 4..4);
@@ -957,7 +956,6 @@ mod tests {
         let (out, sel) = run("x\n", 1, BlockInsert::MathBlock);
         assert_eq!(out, "$$\nx\n$$\n");
         assert_eq!(sel, 4..4);
-        // Horizontal rule.
         let (out, sel) = run("", 0, BlockInsert::HorizontalRule);
         assert_eq!(out, "\n---\n");
         assert_eq!(sel, 5..5);
@@ -966,11 +964,10 @@ mod tests {
         assert_eq!(sel, 17..17);
         let (out, _) = run("hello world", 5, BlockInsert::HorizontalRule);
         assert_eq!(out, "hello\n\n---\n world");
-        // Tag.
         let (out, sel) = run("ab", 1, BlockInsert::Tag);
         assert_eq!(out, "a#b");
         assert_eq!(sel, 2..2);
-        // Footnote: max plus one, the definition at the very end.
+        // * Footnote: max plus one, the definition at the very end.
         let (out, sel) = run("body text", 9, BlockInsert::Footnote);
         assert_eq!(out, "body text[^1]\n\n[^1]: \n");
         assert_eq!(sel, 13..13);
@@ -1005,7 +1002,7 @@ mod tests {
         assert_eq!(whole("see [[Other|alias]] end"), "see [[Other|alias]] end");
         assert_eq!(whole("nothing to clear"), "nothing to clear");
         assert_eq!(whole("==\u{1f534}red== `x`"), "red x");
-        // A bare caret changes nothing.
+        // * A bare caret changes nothing.
         assert_eq!(clear("**bold**", 3..3), "**bold**");
     }
 
@@ -1021,7 +1018,7 @@ mod tests {
             Toggle::Wrap(0..4)
         );
         let text = "==\u{1f534}word==";
-        // The same colour, inner word or the whole span: strip.
+        // * The same colour, inner word or the whole span: strip.
         assert_eq!(
             toggle_wrap_colored(text, 6..10, "==", red, 0),
             Toggle::Strip(0..6, 10..12)
@@ -1030,17 +1027,17 @@ mod tests {
             toggle_wrap_colored(text, 0..12, "==", red, 0),
             Toggle::Strip(0..6, 10..12)
         );
-        // A selection that starts on the emoji is the inner text too.
+        // * A selection that starts on the emoji is the inner text too.
         assert_eq!(
             toggle_wrap_colored(text, 2..10, "==", red, 0),
             Toggle::Strip(0..6, 10..12)
         );
-        // Another colour replaces the emoji in place.
+        // * Another colour replaces the emoji in place.
         assert_eq!(
             toggle_wrap_colored(text, 6..10, "==", Some(Blue), 0),
             Toggle::Recolor(2..6, Blue.emoji())
         );
-        // A colour over a plain highlight inserts the emoji.
+        // * A colour over a plain highlight inserts the emoji.
         assert_eq!(
             toggle_wrap_colored("==word==", 2..6, "==", red, 0),
             Toggle::Recolor(2..2, Red.emoji())
@@ -1049,7 +1046,7 @@ mod tests {
             toggle_wrap_colored("==word==", 0..8, "==", red, 0),
             Toggle::Recolor(2..2, Red.emoji())
         );
-        // The plain toggle takes a coloured highlight off whole.
+        // * The plain toggle takes a coloured highlight off whole.
         assert_eq!(
             toggle_wrap_colored(text, 6..10, "==", None, 0),
             Toggle::Strip(0..6, 10..12)

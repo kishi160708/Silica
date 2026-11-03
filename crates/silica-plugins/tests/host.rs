@@ -155,7 +155,7 @@ fn a_vault_only_plugin_registers_what_it_added() {
     assert_eq!(registered.post_processors.len(), 1);
     assert_eq!(registered.code_blocks[0].language, "counter");
 
-    // The settings tab is the rows its own `display()` produced.
+    // * The settings tab is the rows its own `display()` produced.
     assert_eq!(registered.tabs.len(), 1);
     let tab = &registered.tabs[0];
     assert_eq!(tab.name, "Counter");
@@ -170,7 +170,7 @@ fn a_vault_only_plugin_registers_what_it_added() {
     assert_eq!(tab.rows[3].options.len(), 2);
     assert_eq!(tab.rows[4].value, serde_json::json!("Rebuild"));
 
-    // What the plugin saved is on disk, where a real Obsidian would find it.
+    // * What the plugin saved is on disk, where a real Obsidian would find it.
     let data = fs::read_to_string(fixture.plugin.join("data.json")).expect("data.json written");
     assert!(data.contains("\"prefix\":\"count-\""), "{data}");
 

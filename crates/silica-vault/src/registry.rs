@@ -316,8 +316,8 @@ mod tests {
         assert_ne!(a, b);
         let again = reg.record_open(&dir.path().join("A"), 3);
         assert_eq!(again, a);
-        // Reopening A does not move it: the list keeps the document's order,
-        // the order the vaults were first opened in.
+        // * Reopening A does not move it: the list keeps the document's order,
+        // * the order the vaults were first opened in.
         let listed = reg.vaults();
         assert_eq!(listed.len(), 2);
         assert_eq!(listed[0].0, a);
@@ -346,7 +346,7 @@ mod tests {
         .unwrap();
         let mut reg = VaultRegistry::load(&path).unwrap();
         let (one, two) = (format!("{V}/one"), format!("{V}/two"));
-        // Key order, not recency: `two` is the newer `ts` and still second.
+        // * Key order, not recency: `two` is the newer `ts` and still second.
         assert_eq!(reg.vaults()[0].1.path, Path::new(&one));
         assert_eq!(reg.vaults()[1].1.path, Path::new(&two));
         assert_eq!(reg.find(Path::new(&one)).unwrap().0, "d9bdd8d517a88dd3");

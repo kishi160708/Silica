@@ -287,11 +287,11 @@ fn eval_inner(
 ) -> bool {
     match node {
         Node::All(children) => {
-            // A group with no term holds no matcher, so nothing matches it.
-            // Vacuous truth here is the bug behind `foo OR`, which parses as
-            // `foo` OR an empty right-hand side: an empty `All` answering
-            // true listed the whole vault. `Node::Any(vec![])` already
-            // answers false, and this is the same rule for the other side.
+            // * A group with no term holds no matcher, so nothing matches it.
+            // * Vacuous truth here is the bug behind `foo OR`, which parses as
+            // * `foo` OR an empty right-hand side: an empty `All` answering
+            // * true listed the whole vault. `Node::Any(vec![])` already
+            // * answers false, and this is the same rule for the other side.
             if children.is_empty() {
                 return false;
             }
@@ -330,8 +330,8 @@ fn eval_inner(
             };
             let mut found = find_all(re, scope.text, scope.base, &mut hits.content);
             if scope.names_file {
-                // Obsidian matches a bare term against the file name as well
-                // as the content, and highlights the hit in the result title.
+                // * Obsidian matches a bare term against the file name as well
+                // * as the content, and highlights the hit in the result title.
                 found |= find_all(re, file.name(), 0, &mut hits.name);
             }
             found || (re.as_str().is_empty())
@@ -359,9 +359,9 @@ fn eval_inner(
                 hits,
             ),
             Field::File => {
-                // The child ran over the name, so its ranges are name ranges:
-                // an explicit `file:` hit highlights the title the same way a
-                // bare term's does.
+                // * The child ran over the name, so its ranges are name ranges:
+                // * an explicit `file:` hit highlights the title the same way a
+                // * bare term's does.
                 let mut local = MatchSet::default();
                 let name = file.name();
                 let found = eval(
@@ -396,7 +396,7 @@ fn eval_inner(
                 )
             }
             Field::Tag => {
-                // A non-literal tag query (regex, group): match against each tag.
+                // * A non-literal tag query (regex, group): match against each tag.
                 file.tags.iter().any(|t| {
                     let mut local = MatchSet::default();
                     eval(
@@ -555,7 +555,7 @@ fn eval_ranges(
     case_sensitive: bool,
     hits: &mut MatchSet,
 ) -> bool {
-    // Ranges are in content coordinates; only those inside the current scope apply.
+    // * Ranges are in content coordinates; only those inside the current scope apply.
     let scope_end = scope.base + scope.text.len();
     let mut any = false;
     for r in ranges {
@@ -830,7 +830,7 @@ mod tests {
 
     #[test]
     fn property_queries() {
-        // A property hit highlights its key's line in the frontmatter.
+        // * A property hit highlights its key's line in the frontmatter.
         assert_eq!(run("[status]"), Some(vec!["status".into()]));
         assert_eq!(run("[Status]"), Some(vec!["status".into()]));
         assert_eq!(run("[missing]"), None);
@@ -853,7 +853,7 @@ mod tests {
 
     #[test]
     fn bare_terms_match_the_file_name_too() {
-        // "note" is in the name only, "fox" in both, "quick" in the content only.
+        // * "note" is in the name only, "fox" in both, "quick" in the content only.
         assert_eq!(run("note"), Some(vec![]));
         assert_eq!(names("note"), Some(vec!["Note".into()]));
         assert_eq!(names("fox"), Some(vec!["Fox".into()]));
@@ -861,7 +861,7 @@ mod tests {
         assert_eq!(names("\"fox note\""), Some(vec!["Fox Note".into()]));
         assert_eq!(names("/n.te/"), Some(vec!["Note".into()]));
         assert_eq!(names("note.md"), Some(vec!["Note.md".into()]));
-        // A name hit satisfies its half of an AND and of an OR.
+        // * A name hit satisfies its half of an AND and of an OR.
         assert_eq!(
             run("note quick"),
             Some(vec!["Quick".into(), "quick".into()])
@@ -880,7 +880,7 @@ mod tests {
         assert_eq!(run("task:note"), None);
         assert_eq!(run("[status:note]"), None);
         assert_eq!(run("path:note"), Some(vec![]), "the path still matches");
-        // An explicit file: hit highlights the title, like a bare term's.
+        // * An explicit file: hit highlights the title, like a bare term's.
         assert_eq!(names("file:note"), Some(vec!["Note".into()]));
         assert_eq!(names("path:projects"), Some(vec![]));
     }
@@ -907,8 +907,8 @@ mod tests {
     /// tree: two of these shapes parse cleanly and went wrong only here.
     #[test]
     fn half_typed_queries_match_as_obsidian_does() {
-        // `and` sits in a note that also holds `foo`, so a query that read
-        // the dangling `AND` as an ordinary word would match it.
+        // * `and` sits in a note that also holds `foo`, so a query that read
+        // * the dangling `AND` as an ordinary word would match it.
         let vault = [
             ("apple.md", "apple and foo at the root\n"),
             ("notes/apple.md", "apple in a folder, with foo in it\n"),
@@ -918,7 +918,7 @@ mod tests {
         let results = |q: &str| -> Vec<&'static str> {
             let search = Search::new(q).unwrap();
             if search.is_empty() {
-                // No matcher: the pane returns before listing anything.
+                // * No matcher: the pane returns before listing anything.
                 return Vec::new();
             }
             let mut out = Vec::new();

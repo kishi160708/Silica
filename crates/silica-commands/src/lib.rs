@@ -50,7 +50,7 @@ pub fn default_hotkeys() -> BTreeMap<&'static str, Vec<Hotkey>> {
     bind(&mut m, "editor:toggle-bold", &["Mod"], "B");
     bind(&mut m, "editor:toggle-italics", &["Mod"], "I");
     bind(&mut m, "editor:toggle-comments", &["Mod"], "/");
-    // Obsidian registers this one with a lowercase key.
+    // * Obsidian registers this one with a lowercase key.
     bind(&mut m, "editor:toggle-checklist-status", &["Mod"], "l");
     bind(&mut m, "editor:delete-paragraph", &["Mod"], "D");
     bind(&mut m, "editor:follow-link", &["Alt"], "Enter");
@@ -373,9 +373,9 @@ mod tests {
             "Command palette: Open command palette"
         );
         assert_eq!(reg.get("app:go-back").unwrap().name, "Navigate back");
-        // Not registered on desktop: kept, but unnamed.
+        // * Not registered on desktop: kept, but unnamed.
         assert!(!reg.get("editor:undo").unwrap().is_named());
-        // Registration order starts with the editor's file commands.
+        // * Registration order starts with the editor's file commands.
         assert_eq!(reg.iter().next().unwrap().id, "editor:save-file");
         assert_eq!(reg.named().count(), names.len());
     }
@@ -416,9 +416,9 @@ mod tests {
             modifiers: mods.iter().map(|m| m.to_string()).collect(),
             key: key.to_string(),
         };
-        // `Mod` is Obsidian's platform modifier: Cmd on macOS, Ctrl
-        // everywhere else. A literal `Ctrl` stays Ctrl on every platform,
-        // because on macOS the two are different keys.
+        // * `Mod` is Obsidian's platform modifier: Cmd on macOS, Ctrl
+        // * everywhere else. A literal `Ctrl` stays Ctrl on every platform,
+        // * because on macOS the two are different keys.
         let (md, mk) = if cfg!(target_os = "macos") {
             ("Cmd", "cmd")
         } else {
@@ -450,10 +450,10 @@ mod tests {
         assert_eq!(keystroke(&hk(&[], "F1")).unwrap(), "f1");
         assert_eq!(keystroke(&hk(&["Hyper"], "F1")), None);
 
-        // The mapping above mirrors the implementation's `cfg!`, so it would
-        // still pass with the two branches swapped. These hold whichever way
-        // round they are: on macOS `Mod` is the Cmd key and so matches `Meta`
-        // while differing from `Ctrl`; elsewhere it is the Ctrl key.
+        // * The mapping above mirrors the implementation's `cfg!`, so it would
+        // * still pass with the two branches swapped. These hold whichever way
+        // * round they are: on macOS `Mod` is the Cmd key and so matches `Meta`
+        // * while differing from `Ctrl`; elsewhere it is the Ctrl key.
         let m = |mods: &[&str]| hotkey_label(&hk(mods, "F"));
         if cfg!(target_os = "macos") {
             assert_eq!(m(&["Mod"]), m(&["Meta"]));
@@ -475,9 +475,9 @@ mod tests {
 /// `workspace:`, `markdown:` and the rest), which answer `None` and are
 /// never taken away.
 pub fn plugin_of(id: &str) -> Option<&'static str> {
-    // Obsidian's oldest core plugins register ids with no prefix at all.
-    // There are seven of them and they are named here, because nothing in
-    // the id says which plugin it came from.
+    // * Obsidian's oldest core plugins register ids with no prefix at all.
+    // * There are seven of them and they are named here, because nothing in
+    // * the id says which plugin it came from.
     let unprefixed = match id {
         "daily-notes" => Some("daily-notes"),
         "insert-template" | "insert-current-date" | "insert-current-time" => Some("templates"),
@@ -489,7 +489,7 @@ pub fn plugin_of(id: &str) -> Option<&'static str> {
         return Some(id);
     }
     let prefix = id.split_once(':')?.0;
-    // `outgoing-links:open` is the `outgoing-link` plugin's.
+    // * `outgoing-links:open` is the `outgoing-link` plugin's.
     let prefix = match prefix {
         "outgoing-links" => "outgoing-link",
         other => other,
@@ -509,11 +509,11 @@ mod plugin_tests {
         assert_eq!(plugin_of("graph:open"), Some("graph"));
         assert_eq!(plugin_of("daily-notes:goto-prev"), Some("daily-notes"));
         assert_eq!(plugin_of("file-explorer:new-file"), Some("file-explorer"));
-        // The one prefix Obsidian spells differently from the plugin.
+        // * The one prefix Obsidian spells differently from the plugin.
         assert_eq!(plugin_of("outgoing-links:open"), Some("outgoing-link"));
-        // The app's own commands belong to no plugin and never go away.
+        // ! The app's own commands belong to no plugin and never go away.
         assert_eq!(plugin_of("app:go-back"), None);
-        // The seven Obsidian registers with no prefix at all.
+        // * The seven Obsidian registers with no prefix at all.
         assert_eq!(plugin_of("daily-notes"), Some("daily-notes"));
         assert_eq!(plugin_of("insert-template"), Some("templates"));
         assert_eq!(plugin_of("insert-current-date"), Some("templates"));
@@ -535,7 +535,7 @@ mod plugin_tests {
         assert!(reg.get("graph:open").is_none(), "graph commands stayed");
         assert!(reg.get("app:go-back").is_some(), "an app command went");
         assert!(reg.iter().count() < before);
-        // The index still answers for what is left.
+        // * The index still answers for what is left.
         let ids: Vec<String> = reg.iter().map(|c| c.id.clone()).collect();
         for id in ids {
             assert_eq!(reg.get(&id).map(|g| g.id.clone()), Some(id));

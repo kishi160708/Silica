@@ -255,7 +255,7 @@ fn a_parameter_of_the_wrong_type() {
             );
         }
     }
-    // `link`'s first parameter is named `self`, not `path`.
+    // * `link`'s first parameter is named `self`, not `path`.
     for args in [
         "/zz/",
         "/zz/, /zz/",
@@ -326,7 +326,7 @@ fn link_builds_a_link() {
 fn file_resolves_a_path() {
     renders("file(\"Silica.md\")", "Silica.md");
     renders("file(\"Pumice.md\").basename", "Pumice");
-    // "Attempt to locate": a path that resolves to nothing is null. `unprobed`.
+    // ? "Attempt to locate": a path that resolves to nothing is null. `unprobed`.
     renders("file(\"NoSuchNote.md\")", "null");
 }
 
@@ -345,9 +345,9 @@ fn date_accepts_a_date() {
 fn if_is_lazy() {
     renders("if(true, 1, nosuchfunction())", "1");
     renders("if(false, nosuchfunction(), 2)", "2");
-    // A false condition with no third argument is null. `unprobed`.
+    // ? A false condition with no third argument is null. `unprobed`.
     renders("if(false, 1)", "null");
-    // The condition is coerced through truthiness, not required to be Boolean.
+    // * The condition is coerced through truthiness, not required to be Boolean.
     renders("if(\"\", 1, 2)", "2");
     renders("if(density, 1, 2)", "1");
     renders("if(nosuchprop, 1, 2)", "2");
@@ -366,7 +366,7 @@ fn unprobed_readings() {
         "escapeHTML()",
         "Cannot call function \"escapeHTML\", not enough arguments.",
     );
-    // Null absorbs, as it does for a method call and for arithmetic.
+    // * Null absorbs, as it does for a method call and for arithmetic.
     for expr in [
         "number(nosuchprop)",
         "list(nosuchprop)",
@@ -381,22 +381,22 @@ fn unprobed_readings() {
     ] {
         renders(expr, "null");
     }
-    // `list` returns a list unchanged.
+    // * `list` returns a list unchanged.
     renders("list(nums)", "3, 1, 2");
-    // `number` converts by type: a Boolean is 1 or 0, a string that is not a
-    // number is NaN, and a type with no number in it refuses by name.
+    // * `number` converts by type: a Boolean is 1 or 0, a string that is not a
+    // * number is NaN, and a type with no number in it refuses by name.
     renders("number(true)", "1");
     renders("number(false)", "0");
     renders("number(12.5)", "12.5");
     renders("number(\"abc\")", "NaN");
     refuses("number(nums)", "Unable to convert \"List\" to a number.");
-    // `min`/`max` coerce the way a comparison does and pass over the rest.
+    // * `min`/`max` coerce the way a comparison does and pass over the rest.
     renders("min(3, 1, 2)", "1");
     renders("max(3, 1, 2)", "3");
     renders("min(\"3\", 2)", "2");
     renders("min(text)", "null");
     renders("max(1)", "1");
-    // `now()`, `today()` and `random()` take no arguments.
+    // * `now()`, `today()` and `random()` take no arguments.
     refuses(
         "now(1)",
         "Cannot call function \"now\", too many arguments.",

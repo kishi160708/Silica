@@ -90,7 +90,7 @@ pub fn render(
     cx: &mut Context<Editor>,
 ) -> impl IntoElement {
     let height = state.height();
-    // Below the line unless it would fall out of the view.
+    // * Below the line unless it would fall out of the view.
     let below = anchor.bottom + height <= anchor.height;
     let top = if below {
         anchor.bottom

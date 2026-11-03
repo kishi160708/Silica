@@ -57,7 +57,7 @@ pub fn format(format: &str, at: &Stamp) -> String {
     let bytes = format.as_bytes();
     let mut i = 0;
     while i < format.len() {
-        // A bracketed run is literal, brackets dropped.
+        // * A bracketed run is literal, brackets dropped.
         if bytes[i] == b'[' {
             match format[i + 1..].find(']') {
                 Some(end) => {
@@ -208,7 +208,7 @@ mod tests {
 
     #[test]
     fn every_token_matches_what_obsidian_rendered() {
-        // Taken verbatim from the probe's `en.rows` table.
+        // * Taken verbatim from the probe's `en.rows` table.
         let observed: &[(&str, [&str; 5])] = &[
             ("YYYY", ["2026", "2024", "2026", "2026", "2026"]),
             ("YY", ["26", "24", "26", "26", "26"]),
@@ -249,7 +249,7 @@ mod tests {
 
     #[test]
     fn the_formats_a_vault_actually_writes() {
-        let d = &dates()[3]; // 2026-10-18 09:07:03, a Sunday
+        let d = &dates()[3]; // * 2026-10-18 09:07:03, a Sunday
         assert_eq!(format("YYYY-MM-DD", d), "2026-10-18");
         assert_eq!(format("YYYY-MM-DD HH:mm", d), "2026-10-18 09:07");
         assert_eq!(format("HH:mm", d), "09:07");
@@ -260,13 +260,13 @@ mod tests {
     #[test]
     fn brackets_pass_through_verbatim() {
         let d = &dates()[3];
-        // The probe's own `{{date:YYYY[-]MM-DD ddd}}` rendered this way.
+        // * The probe's own `{{date:YYYY[-]MM-DD ddd}}` rendered this way.
         assert_eq!(format("YYYY[-]MM-DD ddd", d), "2026-10-18 Sun");
-        // A bracketed token is text, not a token.
+        // * A bracketed token is text, not a token.
         assert_eq!(format("[YYYY] YYYY", d), "YYYY 2026");
         assert_eq!(format("[Daily] YYYY", d), "Daily 2026");
-        // An unclosed bracket: moment's own handling was not observed, so
-        // the rest is passed through as written rather than guessed at.
+        // ? An unclosed bracket: moment's own handling was not observed, so
+        // ? the rest is passed through as written rather than guessed at.
         assert_eq!(format("YYYY [and on", d), "2026 [and on");
     }
 
@@ -274,10 +274,10 @@ mod tests {
     fn a_token_that_is_not_implemented_is_named_rather_than_guessed() {
         assert!(unsupported_tokens("YYYY-MM-DD").is_empty());
         assert!(unsupported_tokens("dddd, MMMM Do YYYY").is_empty());
-        // Week numbers and zones are the ones a vault might still use.
+        // * Week numbers and zones are the ones a vault might still use.
         assert_eq!(unsupported_tokens("GGGG-[W]WW"), ["GGGG", "WW"]);
         assert_eq!(unsupported_tokens("YYYY-MM-DD Z"), ["Z"]);
-        // A bracketed one is literal text, not a token.
+        // * A bracketed one is literal text, not a token.
         assert!(unsupported_tokens("YYYY[W]MM").is_empty());
     }
 

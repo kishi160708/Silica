@@ -79,9 +79,9 @@ pub fn open_path(path: &std::path::Path) -> Result<(), LaunchError> {
 
 #[cfg(target_os = "windows")]
 fn platform_open(url: &str) -> Result<(), String> {
-    // `ShellExecuteW` is the shell's *API*, not its parser: the URL arrives as
-    // one argument and is never re-read for `&` or `|`. This is the whole
-    // point of the module; do not "simplify" it back to `cmd /C start`.
+    // ! `ShellExecuteW` is the shell's *API*, not its parser: the URL arrives as
+    // ! one argument and is never re-read for `&` or `|`. This is the whole
+    // ! point of the module; do not "simplify" it back to `cmd /C start`.
     use std::os::windows::ffi::OsStrExt;
     #[link(name = "shell32")]
     extern "system" {
@@ -102,7 +102,7 @@ fn platform_open(url: &str) -> Result<(), String> {
     }
     let operation = wide("open");
     let file = wide(url);
-    // A return value of 32 or less is the shell's way of saying it failed.
+    // * A return value of 32 or less is the shell's way of saying it failed.
     let result = unsafe {
         ShellExecuteW(
             std::ptr::null_mut(),
@@ -121,8 +121,8 @@ fn platform_open(url: &str) -> Result<(), String> {
 
 #[cfg(target_os = "macos")]
 fn platform_open(url: &str) -> Result<(), String> {
-    // `open` takes one argument and does not parse it; `--` ends its options
-    // so a URL that begins with `-` cannot be read as a flag.
+    // * `open` takes one argument and does not parse it; `--` ends its options
+    // * so a URL that begins with `-` cannot be read as a flag.
     std::process::Command::new("open")
         .arg("--")
         .arg(url)
@@ -160,7 +160,7 @@ mod tests {
         assert_eq!(scheme_of("https://example.com"), Some("https".into()));
         assert_eq!(scheme_of("HTTPS://example.com"), Some("https".into()));
         assert_eq!(scheme_of("mailto:a@b.c"), Some("mailto".into()));
-        // A colon inside a path is not a scheme.
+        // * A colon inside a path is not a scheme.
         assert_eq!(scheme_of("notes/a:b.md"), None);
         assert_eq!(scheme_of("?a:b"), None);
         assert_eq!(scheme_of("#a:b"), None);
@@ -169,8 +169,8 @@ mod tests {
 
     #[test]
     fn launcher_schemes_are_refused() {
-        // Each of these would start a program or read a file if handed to the
-        // desktop, so none of them gets that far.
+        // * Each of these would start a program or read a file if handed to the
+        // * desktop, so none of them gets that far.
         for url in [
             "file:///etc/passwd",
             "ms-msdt:/id PCWDiagnostic",
@@ -196,8 +196,8 @@ mod tests {
 
     #[test]
     fn a_shell_metacharacter_in_an_allowed_url_is_only_a_character() {
-        // The old Windows path ran this through `cmd`, where `&` starts a
-        // second command. It is now just part of the query string.
+        // * The old Windows path ran this through `cmd`, where `&` starts a
+        // * second command. It is now just part of the query string.
         let scheme = scheme_of("https://example.com/?a=1&calc.exe").unwrap();
         assert_eq!(scheme, "https");
         assert!(ALLOWED_SCHEMES.contains(&scheme.as_str()));

@@ -43,7 +43,7 @@ pub(crate) fn parse_reference_definition(text: &str) -> Option<(&str, &str, Opti
     i += dest_len;
     let after_dest = i;
 
-    // Optional title, separated by whitespace, must end its line.
+    // * Optional title, separated by whitespace, must end its line.
     let j = skip_spnl(b, i);
     if j > i {
         if let Some((title_len, title)) = scan_link_title(&text[j..]) {

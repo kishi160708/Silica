@@ -520,7 +520,7 @@ mod tests {
     fn every_method_documents_itself() {
         for spec in METHODS {
             assert!(!spec.name.is_empty());
-            // A summary is help text, so it is a sentence, not a label.
+            // * A summary is help text, so it is a sentence, not a label.
             assert!(
                 spec.summary.len() > 20 && spec.summary.ends_with('.'),
                 "`{}` needs a real summary, got {:?}",
@@ -542,8 +542,8 @@ mod tests {
     fn methods_are_found_by_name() {
         assert_eq!(method("state").expect("exists").name, "state");
         assert!(method("frobnicate").is_none());
-        // Required params come before optional ones everywhere, which is what
-        // lets a client read a schema's `required` as a prefix of the list.
+        // * Required params come before optional ones everywhere, which is what
+        // * lets a client read a schema's `required` as a prefix of the list.
         for spec in METHODS {
             let mut optional_seen = false;
             for param in spec.params {
@@ -576,17 +576,17 @@ mod tests {
             .collect();
         assert_eq!(required, vec!["path", "text"]);
 
-        // An optional param is a property but not required.
+        // * An optional param is a property but not required.
         let schema = params_schema(method("state").expect("exists"));
         assert_eq!(schema["properties"]["rows"]["type"], "integer");
         assert_eq!(schema["required"], serde_json::json!([]));
 
-        // No params still schemas as an object, so every tool has one.
+        // * No params still schemas as an object, so every tool has one.
         let schema = params_schema(method("ping").expect("exists"));
         assert_eq!(schema["properties"], serde_json::json!({}));
         assert_eq!(schema["required"], serde_json::json!([]));
 
-        // A list param keeps its item type.
+        // * A list param keeps its item type.
         let schema = params_schema(method("keys").expect("exists"));
         assert_eq!(schema["properties"]["keys"]["type"], "array");
         assert_eq!(schema["properties"]["keys"]["items"]["type"], "string");

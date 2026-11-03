@@ -208,29 +208,29 @@ const BAD_FILTER: &str = "filters:\n  and:\n    - 'density >>> 1'\nviews:\n  - t
 
 #[test]
 fn a_base_filter_that_cannot_parse_empties_the_view() {
-    // e10-invalid / BadFilter.base: `filtersJson` holds
-    // `{"type":"invalid","parseError":"Unable to parse formula. (position 0)"}`,
-    // and the view shows `rowCount: 0`, `resultCount: "0 results"`,
-    // `cellText: []` — with `errorDom` `[{text: "", hidden: true}]`. No banner,
-    // no notice: the view is simply empty.
+    // * e10-invalid / BadFilter.base: `filtersJson` holds
+    // * `{"type":"invalid","parseError":"Unable to parse formula. (position 0)"}`,
+    // * and the view shows `rowCount: 0`, `resultCount: "0 results"`,
+    // * `cellText: []` — with `errorDom` `[{text: "", hidden: true}]`. No banner,
+    // * no notice: the view is simply empty.
     let base = base(BAD_FILTER);
     let table = table::build(&base, 0, &env(probe_vault()));
 
     assert!(table.rows.is_empty(), "a broken filter shows no rows");
     assert_eq!(table.unknown_kind, None, "and it is not a view-type error");
-    // The header row is still drawn: the step read `headers: ["file name"]`
-    // off the same empty view.
+    // * The header row is still drawn: the step read `headers: ["file name"]`
+    // * off the same empty view.
     assert_eq!(headers(&table), vec!["file name".to_string()]);
 }
 
 #[test]
 fn a_base_filter_that_cannot_evaluate_empties_the_view() {
-    // The same silence for the other failure. `when - "2026-01-01"` parses
-    // (`parseErr: null`) and then refuses: the e11-cells oracle answers
-    // `valueErr: "Invalid operator between Date and String"`. A refusal is
-    // false, exactly as an unparseable statement is, so no row survives —
-    // including the eight rows with no `when` at all, for which the statement
-    // is null rather than an error.
+    // * The same silence for the other failure. `when - "2026-01-01"` parses
+    // * (`parseErr: null`) and then refuses: the e11-cells oracle answers
+    // * `valueErr: "Invalid operator between Date and String"`. A refusal is
+    // * false, exactly as an unparseable statement is, so no row survives —
+    // * including the eight rows with no `when` at all, for which the statement
+    // * is null rather than an error.
     let yaml = "filters:\n  and:\n    - 'when - \"2026-01-01\"'\nviews:\n  - type: table\n    name: V\n    order:\n      - file.name\n";
     let table = table::build(&base(yaml), 0, &env(probe_vault()));
 
@@ -240,12 +240,12 @@ fn a_base_filter_that_cannot_evaluate_empties_the_view() {
 
 #[test]
 fn a_views_own_filter_that_fails_empties_the_view_too() {
-    // The run only ever broke a *base's* filter, so this is the one rule here
-    // carried across by symmetry. Both halves of the symmetry are observed:
-    // `filters` is a view's own key, written between `name` and `groupBy`
-    // (s11-bytes, the view key order), and the filter panel holds two
-    // sections, "All views" and "This view" (s20-panels-table). The statement
-    // is `BadFilter.base`'s own.
+    // * The run only ever broke a *base's* filter, so this is the one rule here
+    // * carried across by symmetry. Both halves of the symmetry are observed:
+    // * `filters` is a view's own key, written between `name` and `groupBy`
+    // * (s11-bytes, the view key order), and the filter panel holds two
+    // * sections, "All views" and "This view" (s20-panels-table). The statement
+    // * is `BadFilter.base`'s own.
     let yaml = "views:\n  - type: table\n    name: V\n    filters:\n      and:\n        - 'density >>> 1'\n    order:\n      - file.name\n";
     let table = table::build(&base(yaml), 0, &env(probe_vault()));
 
@@ -255,10 +255,10 @@ fn a_views_own_filter_that_fails_empties_the_view_too() {
 
 #[test]
 fn a_view_filter_narrows_the_bases_filter() {
-    // Two sections, both applied: "All views" is the base's `filters` and
-    // "This view" is the view's own (s20-panels-table's filter panel). The
-    // base's keeps the three rocks; the view's keeps the two whose status is
-    // `todo`.
+    // * Two sections, both applied: "All views" is the base's `filters` and
+    // * "This view" is the view's own (s20-panels-table's filter panel). The
+    // * base's keeps the three rocks; the view's keeps the two whose status is
+    // * `todo`.
     let yaml = "filters:\n  and:\n    - file.hasTag(\"rock\")\nviews:\n  - type: table\n    name: V\n    filters:\n      and:\n        - 'status == \"todo\"'\n    order:\n      - file.name\n";
     let table = table::build(&base(yaml), 0, &env(probe_vault()));
 
@@ -275,11 +275,11 @@ const BAD_FORMULA: &str = "formulas:\n  broken: 'density +'\n  alsoBroken: 'nosu
 
 #[test]
 fn a_formula_that_cannot_parse_renders_an_empty_cell() {
-    // e10-invalid / BadFormula.base: `broken: "density +"` has
-    // `ast: {type: "invalid", parseError: "Unable to parse formula. (position
-    // 0)"}`, and every captured row's second cell is `""`. The view is *not*
-    // emptied — `rowCount: 9`, "9 results" — so a broken formula costs one
-    // cell, where a broken filter costs every row.
+    // * e10-invalid / BadFormula.base: `broken: "density +"` has
+    // * `ast: {type: "invalid", parseError: "Unable to parse formula. (position
+    // * 0)"}`, and every captured row's second cell is `""`. The view is *not*
+    // * emptied — `rowCount: 9`, "9 results" — so a broken formula costs one
+    // * cell, where a broken filter costs every row.
     let table = table::build(&base(BAD_FORMULA), 0, &env(probe_vault()));
 
     assert_eq!(table.rows.len(), 9, "9 results");
@@ -294,10 +294,10 @@ fn a_formula_that_cannot_parse_renders_an_empty_cell() {
 
 #[test]
 fn a_formula_whose_evaluation_fails_renders_the_refusal() {
-    // The same step's third column. `nosuchfunction(1)` parses — its `ast` is
-    // a `function` node — and refuses at evaluation, and every captured row
-    // reads `Cannot find function "nosuchfunction"`. The refusal *is* the
-    // cell's content.
+    // * The same step's third column. `nosuchfunction(1)` parses — its `ast` is
+    // * a `function` node — and refuses at evaluation, and every captured row
+    // * reads `Cannot find function "nosuchfunction"`. The refusal *is* the
+    // * cell's content.
     let table = table::build(&base(BAD_FORMULA), 0, &env(probe_vault()));
 
     let want = "Cannot find function \"nosuchfunction\"".to_string();
@@ -307,11 +307,11 @@ fn a_formula_whose_evaluation_fails_renders_the_refusal() {
 
 #[test]
 fn a_call_on_a_null_property_is_empty_rather_than_a_refusal() {
-    // The fourth column, which is the one that could be mistaken for the
-    // third. `density.nosuchmethod()` would refuse on a Number, but the four
-    // rows the step captured — `BadFilter.base`, `BadFormula.base`,
-    // `BadSummary.base` and `Bare` — have no `density`, and every one of them
-    // reads `""`. Null absorbs the call before the name is ever looked up.
+    // * The fourth column, which is the one that could be mistaken for the
+    // * third. `density.nosuchmethod()` would refuse on a Number, but the four
+    // * rows the step captured — `BadFilter.base`, `BadFormula.base`,
+    // * `BadSummary.base` and `Bare` — have no `density`, and every one of them
+    // * reads `""`. Null absorbs the call before the name is ever looked up.
     let table = table::build(&base(BAD_FORMULA), 0, &env(probe_vault()));
 
     assert_eq!(&column_text(&table, 3)[..4], &[""; 4]);
@@ -350,13 +350,13 @@ fn silica_row(exprs: &[(&str, &str)]) -> Vec<silica_bases::Cell> {
 
 #[test]
 fn a_boolean_renders_as_a_disabled_checkbox() {
-    // e11-cells, `firstRowHtml`: the `"3" > 2` column is
-    // `<div class="bases-table-cell bases-rendered-value"
-    //  data-property-type="checkbox"><input disabled="true"
-    //  type="checkbox"></div>`, and the cell's text is `""` — while the
-    // oracle's answer for the same statement is the *true* Boolean
-    // `{icon: "lucide-check-square", str: "true"}`. So a true boolean draws no
-    // text at all.
+    // * e11-cells, `firstRowHtml`: the `"3" > 2` column is
+    // * `<div class="bases-table-cell bases-rendered-value"
+    // * data-property-type="checkbox"><input disabled="true"
+    // * type="checkbox"></div>`, and the cell's text is `""` — while the
+    // * oracle's answer for the same statement is the *true* Boolean
+    // * `{icon: "lucide-check-square", str: "true"}`. So a true boolean draws no
+    // * text at all.
     let cells = silica_row(&[("cCoerceGt", "\"3\" > 2")]);
 
     assert_eq!(cells[1].value, Value::Bool(true));
@@ -366,11 +366,11 @@ fn a_boolean_renders_as_a_disabled_checkbox() {
 
 #[test]
 fn a_cells_type_tag_is_text_number_or_checkbox() {
-    // The same `firstRowHtml`, read across: `data-property-type` was `text`
-    // for `"ab" + "cd"` (abcd), `number` for `1 + 2 * 3` (7), `checkbox` for
-    // `"3" > 2`, `text` for `1 + "2"` — a String, because `+` with a String
-    // concatenates, so the tag follows the value and not the column — and
-    // `text` with empty content for all three of the null statements.
+    // * The same `firstRowHtml`, read across: `data-property-type` was `text`
+    // * for `"ab" + "cd"` (abcd), `number` for `1 + 2 * 3` (7), `checkbox` for
+    // * `"3" > 2`, `text` for `1 + "2"` — a String, because `+` with a String
+    // * concatenates, so the tag follows the value and not the column — and
+    // * `text` with empty content for all three of the null statements.
     let cells = silica_row(&[
         ("cStr", "\"ab\" + \"cd\""),
         ("cNum", "1 + 2 * 3"),
@@ -405,10 +405,10 @@ fn a_cells_type_tag_is_text_number_or_checkbox() {
 
 #[test]
 fn an_unknown_view_type_shows_a_message_instead_of_rows() {
-    // s12-broken / BrokenView.base, verbatim: the file parses — `serializable`
-    // holds the view with `type: "nonsense"` and the bytes survive both the
-    // open and the close — and the view shows `errorDom`
-    // `"Unknown view type: nonsense"` with `rowCount: 0`.
+    // * s12-broken / BrokenView.base, verbatim: the file parses — `serializable`
+    // * holds the view with `type: "nonsense"` and the bytes survive both the
+    // * open and the close — and the view shows `errorDom`
+    // * `"Unknown view type: nonsense"` with `rowCount: 0`.
     let yaml = "views:\n  - type: nonsense\n    name: Odd\n    order:\n      - file.name\n";
     let parsed = Base::from_yaml(yaml).expect("an unknown view type is not a parse error");
     assert_eq!(parsed.views[0].kind, "nonsense");
@@ -427,13 +427,13 @@ fn an_unknown_view_type_shows_a_message_instead_of_rows() {
 
 #[test]
 fn an_empty_base_file_is_one_default_table_view() {
-    // s13-commands: `bases:new-file` created `Untitled.base` as a zero-byte
-    // file (`size: 0`, `text: ""`), and the view's model reports
-    // `serializable: {views: [{type: "table", name: "View"}]}` with
-    // `rowCount: 22` — every note in the vault. s11-bytes says the same of
-    // `Zero.base` and of `EmptyMap.base` (`{}`), both `viewName: "View"`,
-    // both 22 rows. So an empty base is not an empty view: it is one default
-    // table over the whole vault.
+    // * s13-commands: `bases:new-file` created `Untitled.base` as a zero-byte
+    // * file (`size: 0`, `text: ""`), and the view's model reports
+    // * `serializable: {views: [{type: "table", name: "View"}]}` with
+    // * `rowCount: 22` — every note in the vault. s11-bytes says the same of
+    // * `Zero.base` and of `EmptyMap.base` (`{}`), both `viewName: "View"`,
+    // * both 22 rows. So an empty base is not an empty view: it is one default
+    // * table over the whole vault.
     for yaml in ["", "{}\n"] {
         let parsed = base(yaml);
         assert!(parsed.views.is_empty(), "the file itself has no views");
@@ -447,10 +447,10 @@ fn an_empty_base_file_is_one_default_table_view() {
 
 #[test]
 fn a_view_with_no_sort_keeps_the_order_it_was_given() {
-    // e11-cells rendered its nine rows as BadFilter.base, BadFormula.base,
-    // BadSummary.base, Bare, Basalt, Cells.base, Main.base, Pumice, Silica —
-    // the vault's own order, with no `sort` in the view at all. The engine
-    // must not invent one: whoever fills `Env::files` decides.
+    // * e11-cells rendered its nine rows as BadFilter.base, BadFormula.base,
+    // * BadSummary.base, Bare, Basalt, Cells.base, Main.base, Pumice, Silica —
+    // * the vault's own order, with no `sort` in the view at all. The engine
+    // * must not invent one: whoever fills `Env::files` decides.
     let table = table::build(
         &base("views:\n  - type: table\n    name: V\n    order:\n      - file.name\n"),
         0,
@@ -475,14 +475,14 @@ fn a_view_with_no_sort_keeps_the_order_it_was_given() {
 
 #[test]
 fn limit_cuts_the_rows_off_the_end() {
-    // **Not observed cutting.** The only limited view in the run was
-    // `Main.base` with `limit: 10` over five results, so no fixture ever lost
-    // a row. What is observed is the key (`limit: 10`, written as a bare
-    // number between `sort` and `summaries`) and the control that writes it:
-    // the results panel's "Limit number of results" number input, with
-    // `min="1"` and the placeholder "e.g. 10", beside a "Show all (3)" action
-    // that counts rows (s20-panels-table). Cutting the end of the view's own
-    // order is the only reading of those two together.
+    // ? **Not observed cutting.** The only limited view in the run was
+    // ? `Main.base` with `limit: 10` over five results, so no fixture ever lost
+    // ? a row. What is observed is the key (`limit: 10`, written as a bare
+    // ? number between `sort` and `summaries`) and the control that writes it:
+    // ? the results panel's "Limit number of results" number input, with
+    // ? `min="1"` and the placeholder "e.g. 10", beside a "Show all (3)" action
+    // ? that counts rows (s20-panels-table). Cutting the end of the view's own
+    // ? order is the only reading of those two together.
     let yaml =
         "views:\n  - type: table\n    name: V\n    order:\n      - file.name\n    limit: 3\n";
     let table = table::build(&base(yaml), 0, &env(probe_vault()));
@@ -502,12 +502,12 @@ fn limit_cuts_the_rows_off_the_end() {
 
 #[test]
 fn sort_follows_the_property_and_the_direction() {
-    // s11-bytes: `sort:` / `  - property: status` / `    direction: DESC`,
-    // and s23-header-and-results watched *Sort Z → A* prepend
-    // `{property: file.name, direction: DESC}` to that list while the sort
-    // panel labelled the pair "status" / "Z → A". So `ASC` is A→Z and `DESC`
-    // is Z→A; an absent direction is the ascending one, which is what the
-    // panel shows a fresh sort as.
+    // * s11-bytes: `sort:` / `  - property: status` / `    direction: DESC`,
+    // * and s23-header-and-results watched *Sort Z → A* prepend
+    // * `{property: file.name, direction: DESC}` to that list while the sort
+    // * panel labelled the pair "status" / "Z → A". So `ASC` is A→Z and `DESC`
+    // * is Z→A; an absent direction is the ascending one, which is what the
+    // * panel shows a fresh sort as.
     let rocks = vec![
         silica_note(),
         probe_vault()[4].clone(),
@@ -534,10 +534,10 @@ fn sort_follows_the_property_and_the_direction() {
 
 #[test]
 fn a_second_sort_entry_breaks_the_first_ones_ties() {
-    // `sort` is a list, and s23-header-and-results left a real two-entry one
-    // behind: `[{property: file.name, direction: DESC}, {property: status,
-    // direction: DESC}]`. Basalt and Silica are both `todo`; `density` is
-    // what separates them.
+    // * `sort` is a list, and s23-header-and-results left a real two-entry one
+    // * behind: `[{property: file.name, direction: DESC}, {property: status,
+    // * direction: DESC}]`. Basalt and Silica are both `todo`; `density` is
+    // * what separates them.
     let rocks = vec![
         silica_note(),
         probe_vault()[4].clone(),
@@ -553,11 +553,11 @@ fn a_second_sort_entry_breaks_the_first_ones_ties() {
 
 #[test]
 fn group_by_splits_the_rows_and_its_direction_orders_the_groups() {
-    // s11-bytes: `groupBy:` / `  property: status` / `  direction: ASC`, and
-    // the group panel is the same property-plus-direction pair the sort panel
-    // is, labelled "A → Z" (s20-panels-table). `Table::rows` is the groups
-    // flattened, so the grouping decides the row order before `sort` does
-    // inside each group.
+    // * s11-bytes: `groupBy:` / `  property: status` / `  direction: ASC`, and
+    // * the group panel is the same property-plus-direction pair the sort panel
+    // * is, labelled "A → Z" (s20-panels-table). `Table::rows` is the groups
+    // * flattened, so the grouping decides the row order before `sort` does
+    // * inside each group.
     let rocks = vec![
         silica_note(),
         probe_vault()[4].clone(),
@@ -602,13 +602,13 @@ fn group_by_splits_the_rows_and_its_direction_orders_the_groups() {
 
 #[test]
 fn the_no_value_group_is_its_own_group_and_comes_first() {
-    // s24-names-and-copy copied the rendered table as TSV:
-    // `"status\tPrice per unit\n\t\n\t\ntodo\t0.02\ntodo\t0.06"` — two rows
-    // with no status above two `todo` rows, under
-    // `groupBy: {property: status, direction: ASC}` and in spite of a
-    // `sort` on `status` that was `DESC`. So a row with no value for the
-    // grouped property lands in a group of its own, and that group is first
-    // in an ascending one.
+    // * s24-names-and-copy copied the rendered table as TSV:
+    // * `"status\tPrice per unit\n\t\n\t\ntodo\t0.02\ntodo\t0.06"` — two rows
+    // * with no status above two `todo` rows, under
+    // * `groupBy: {property: status, direction: ASC}` and in spite of a
+    // * `sort` on `status` that was `DESC`. So a row with no value for the
+    // * grouped property lands in a group of its own, and that group is first
+    // * in an ascending one.
     let rows = vec![
         probe_vault()[7].clone(), // Pumice, status done
         file("Empty.md", &["rock"], vec![("type", text("rock"))]),
@@ -634,19 +634,19 @@ fn the_no_value_group_is_its_own_group_and_comes_first() {
 
 #[test]
 fn a_column_header_is_the_display_name_the_base_gives_it() {
-    // s06-column-resize read the real header row off `Main.base`, whose
-    // `order` is `[file.name, status, formula.ppu]` and whose `properties`
-    // are `status: {displayName: Status, unknownPropKey: kept}`,
-    // `formula.ppu: {displayName: Price per unit}` and
-    // `file.ext: {displayName: Extension}`. The headers came back
-    // `["file name", "status", "Price per unit"]`, and s24's copied TSV
-    // repeats two of them in its header line.
+    // * s06-column-resize read the real header row off `Main.base`, whose
+    // * `order` is `[file.name, status, formula.ppu]` and whose `properties`
+    // * are `status: {displayName: Status, unknownPropKey: kept}`,
+    // * `formula.ppu: {displayName: Price per unit}` and
+    // * `file.ext: {displayName: Extension}`. The headers came back
+    // * `["file name", "status", "Price per unit"]`, and s24's copied TSV
+    // * repeats two of them in its header line.
     //
-    // Two things follow, and both contradict "the id's last segment":
+    // * Two things follow, and both contradict "the id's last segment":
     //
-    // - `formula.ppu`'s display name lands, so a `properties` key does name a
-    //   column — when it is the *qualified* id.
-    // - `file.name` is "file name", not "name".
+    // * - `formula.ppu`'s display name lands, so a `properties` key does name a
+    // * column — when it is the *qualified* id.
+    // * - `file.name` is "file name", not "name".
     let yaml = "properties:\n  status:\n    displayName: Status\n    unknownPropKey: kept\n  formula.ppu:\n    displayName: Price per unit\n  file.ext:\n    displayName: Extension\nformulas:\n  ppu: '(density / silica).toFixed(2)'\nviews:\n  - type: table\n    name: My table\n    order:\n      - file.name\n      - status\n      - formula.ppu\n";
     let table = table::build(&base(yaml), 0, &env(vec![silica_note()]));
 
@@ -662,20 +662,20 @@ fn a_column_header_is_the_display_name_the_base_gives_it() {
 
 #[test]
 fn a_bare_properties_key_does_not_name_a_bare_column() {
-    // The same header row, isolated. `properties.status.displayName` is
-    // `Status` and the column `status` still rendered as `status`, while
-    // `formula.ppu`'s landed — so the lookup is by the qualified id
-    // (`note.status`), which a hand-written bare key never matches. The
-    // *writer* is the other way round and leaves a bare id bare: "a
-    // hand-written bare `status` came back `status`".
+    // * The same header row, isolated. `properties.status.displayName` is
+    // * `Status` and the column `status` still rendered as `status`, while
+    // * `formula.ppu`'s landed — so the lookup is by the qualified id
+    // * (`note.status`), which a hand-written bare key never matches. The
+    // * *writer* is the other way round and leaves a bare id bare: "a
+    // * hand-written bare `status` came back `status`".
     let bare = "properties:\n  status:\n    displayName: Status\nviews:\n  - type: table\n    name: V\n    order:\n      - status\n";
     let table = table::build(&base(bare), 0, &env(vec![silica_note()]));
     assert_eq!(headers(&table), vec!["status".to_string()]);
 
-    // **Not separately observed**: no fixture carried a qualified `note.*`
-    // key. This is the `formula.ppu` mechanism applied to the namespace the
-    // UI writes (`image: note.aliases`, s22-view-config), and the demo
-    // vault's own bases rely on it.
+    // ? **Not separately observed**: no fixture carried a qualified `note.*`
+    // ? key. This is the `formula.ppu` mechanism applied to the namespace the
+    // ? UI writes (`image: note.aliases`, s22-view-config), and the demo
+    // ? vault's own bases rely on it.
     let qualified = "properties:\n  note.status:\n    displayName: Status\nviews:\n  - type: table\n    name: V\n    order:\n      - note.status\n";
     let table = table::build(&base(qualified), 0, &env(vec![silica_note()]));
     assert_eq!(headers(&table), vec!["Status".to_string()]);
@@ -698,10 +698,10 @@ fn demo_base(name: &str) -> (String, Base) {
 
 #[test]
 fn the_demo_vaults_bases_are_the_bytes_obsidian_writes() {
-    // The standing rule: never write a file Silica did not change. A `.base`
-    // is canonicalized rather than preserved, so "unchanged" means the bytes
-    // the serializer would emit — opening one of these in Silica, or in
-    // Obsidian, must not move its mtime.
+    // ! The standing rule: never write a file Silica did not change. A `.base`
+    // ! is canonicalized rather than preserved, so "unchanged" means the bytes
+    // ! the serializer would emit — opening one of these in Silica, or in
+    // ! Obsidian, must not move its mtime.
     for name in ["Rocks.base", "Volcanoes.base"] {
         let (bytes, parsed) = demo_base(name);
         assert_eq!(parsed.to_yaml(), bytes, "{name} is not in canonical form");
@@ -806,10 +806,10 @@ fn the_demo_vaults_rock_table_shows_the_rocks() {
         ],
         "densest first"
     );
-    // `(density / 2.8 * 100).round()` on Basalt's 2.9.
+    // * `(density / 2.8 * 100).round()` on Basalt's 2.9.
     assert_eq!(all.rows[0].cells[4].text, "104");
     assert_eq!(all.rows[0].cells[4].kind, CellKind::Number);
-    // Tuff has no `silica`, and a missing property is an empty cell.
+    // * Tuff has no `silica`, and a missing property is an empty cell.
     assert_eq!(all.rows[4].cells[2].text, "");
 
     let vesicular = table::build(&parsed, 1, &env(demo_rocks()));

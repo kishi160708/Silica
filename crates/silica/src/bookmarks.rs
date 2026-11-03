@@ -277,9 +277,9 @@ impl Render for BookmarksPane {
                     .on_click(cx.listener(move |this, _, _, cx| event(this, cx)))
                     .child(glyph)
             };
-        // Obsidian's header, in its order: "Bookmark the active tab...",
-        // "New group", "Collapse all". Its fourth button, the search
-        // filter, is not built.
+        // * Obsidian's header, in its order: "Bookmark the active tab...",
+        //   "New group", "Collapse all". Its fourth button, the search
+        //   filter, is not built.
         let header = div()
             .flex()
             .flex_row()

@@ -45,15 +45,15 @@ fn main() {
     let config = match model::Config::from_env() {
         Ok(config) => config,
         Err(e) => {
-            // A bad SILICA_LLM_URL cannot be reported through the handshake,
-            // and a server that answers every call with the same error is
-            // worse than one that refuses to start.
+            // ! A bad SILICA_LLM_URL cannot be reported through the handshake,
+            // ! and a server that answers every call with the same error is
+            // ! worse than one that refuses to start.
             eprintln!("silica-llm-mcp: SILICA_LLM_URL: {e}");
             std::process::exit(2);
         }
     };
-    // The handshake has no room for this, and a wrong endpoint or model name
-    // is the first thing to go wrong, so say both before answering anything.
+    // * The handshake has no room for this, and a wrong endpoint or model name
+    // * is the first thing to go wrong, so say both before answering anything.
     eprintln!(
         "silica-llm-mcp {} -> {} (model: {}, timeout {} ms, digest cap {} KiB)",
         env!("CARGO_PKG_VERSION"),

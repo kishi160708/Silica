@@ -161,8 +161,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("escape", CloseFind, Some("FindPanel")),
         KeyBinding::new("tab", FocusOtherField, Some("FindPanel")),
         KeyBinding::new("shift-tab", FocusOtherField, Some("FindPanel")),
-        // The popup's own keys, in the context the editor only carries
-        // while it is open, so Ctrl+N still makes a new note otherwise.
+        // * The popup's own keys, in the context the editor only carries
+        //   while it is open, so Ctrl+N still makes a new note otherwise.
         KeyBinding::new("ctrl-n", MoveDown, Some("SuggestPopup")),
         KeyBinding::new("ctrl-p", MoveUp, Some("SuggestPopup")),
     ]);
@@ -371,9 +371,9 @@ impl Shaped {
         }
         let d = self.display.to_display(col);
         if self.row_starts().any(|start| start == d) {
-            // gpui reports a byte that falls on a wrap point at the right
-            // edge of the row before, which strands the caret a row above
-            // the text it is in and leaves Home with nowhere for End to go.
+            // * gpui reports a byte that falls on a wrap point at the right
+            //   edge of the row before, which strands the caret a row above
+            //   the text it is in and leaves Home with nowhere for End to go.
             return (wrap::row_of(self.row_starts(), d), px(0.));
         }
         match self.line.position_for_index(d, self.row_height) {
@@ -722,10 +722,10 @@ impl Editor {
                 current: None,
             },
             _subscriptions: subscriptions,
-            // A view that has not been given a file yet belongs to none,
-            // and a placeholder name here would read as one: the shell
-            // would mount this editor on launch over an empty vault and
-            // take a whole note's worth of typing that nothing saves.
+            // * A view that has not been given a file yet belongs to none,
+            //   and a placeholder name here would read as one: the shell
+            //   would mount this editor on launch over an empty vault and
+            //   take a whole note's worth of typing that nothing saves.
             name: SharedString::default(),
             buf: TextBuffer::new(),
             scroll_line: 0,
@@ -790,8 +790,8 @@ impl Editor {
         self.suggest = None;
         self.hover_preview = None;
         self.table_field = None;
-        // Fold ids are per-note counters, so another note's would collapse
-        // whichever callout happened to land on the same number.
+        // * Fold ids are per-note counters, so another note's would collapse
+        //   whichever callout happened to land on the same number.
         self.callout_folds.clear();
         self.foldables = Arc::new(Vec::new());
         self.folds = fold::Folds::default();
@@ -809,8 +809,8 @@ impl Editor {
         self.frame_samples = Sample::default();
         self.parse_samples = Sample::default();
         self.parse_latency = Sample::default();
-        // The matches point into the note that was open; drop them rather
-        // than let the panel count or step through another note's offsets.
+        // * The matches point into the note that was open; drop them rather
+        //   than let the panel count or step through another note's offsets.
         self.find.matches.clear();
         self.find.current = None;
         self.refresh_matches(cx);
@@ -1133,8 +1133,8 @@ impl Editor {
     /// other than this editor's own tab.
     pub fn link_target_at_cursor(&self) -> Option<LinkTarget> {
         let cursor = self.cursor();
-        // Not `rendered_only`: a cursor inside a link is exactly what
-        // makes Live Preview reveal its source.
+        // * Not `rendered_only`: a cursor inside a link is exactly what
+        //   makes Live Preview reveal its source.
         self.link_at(cursor.line, cursor.col, false)
     }
 
@@ -1378,8 +1378,8 @@ impl Editor {
         self.buf.head = self.buf.clamp_offset(end);
         self.buf.goal = None;
         self.buf.marked = None;
-        // Like any other cursor move: refresh a popup that is open, and
-        // close it once the cursor has left its query.
+        // * Like any other cursor move: refresh a popup that is open, and
+        //   close it once the cursor has left its query.
         self.update_suggest(false, cx);
         self.reveal_cursor(window);
         cx.notify();
@@ -1462,9 +1462,9 @@ impl Editor {
         let text = self.buf.line_text(line);
         let display = if self.live_preview {
             let spans = self.highlights.get(line).map(Vec::as_slice).unwrap_or(&[]);
-            // An inline formula is shaped as a placeholder the width it
-            // typesets to, at the body size: a heading's scale is applied
-            // to the shaped line, placeholder included.
+            // * An inline formula is shaped as a placeholder the width it
+            //   typesets to, at the body size: a heading's scale is applied
+            //   to the shaped line, placeholder included.
             let math = |tex: &str, block: bool| -> Option<String> {
                 let (size, spaces) = self.spaces.as_ref()?;
                 let formula = silica_math::typeset(tex, block).ok()?;
@@ -1474,8 +1474,8 @@ impl Editor {
         } else {
             DisplayLine::verbatim(text, 1.0, Default::default())
         };
-        // A folded line shows `…` after its text in both editing modes:
-        // raw source mode was observed folding exactly like Live Preview.
+        // * A folded line shows `…` after its text in both editing modes:
+        //   raw source mode was observed folding exactly like Live Preview.
         if self.folds.is_folded(line) {
             return display.with_fold_placeholder(text.len());
         }
@@ -1618,9 +1618,9 @@ impl Editor {
             .filter(|r| **r != fold::PROPERTIES_RANGE)
             .map(|r| r.from)
             .collect();
-        // Before the first parse there is nothing to resolve against: the
-        // `from` lines wait for it. (A note with nothing foldable keeps
-        // them waiting, which costs nothing.)
+        // * Before the first parse there is nothing to resolve against: the
+        //   `from` lines wait for it. (A note with nothing foldable keeps
+        //   them waiting, which costs nothing.)
         if self.foldables.is_empty() {
             self.pending_folds = Some(froms);
         } else {
@@ -1666,7 +1666,7 @@ impl Editor {
     ) {
         let line = self.line_at_point(position);
         if line != self.hover_line {
-            // Only a change that moves an indicator is worth a frame.
+            // * Only a change that moves an indicator is worth a frame.
             let affects = |l: Option<usize>| l.is_some_and(|l| self.foldable_at(l).is_some());
             let repaint = affects(line) || affects(self.hover_line);
             self.hover_line = line;
@@ -1735,14 +1735,14 @@ impl Editor {
     }
 
     fn widget_is_folded(&self, entry: &(Range<usize>, Widget)) -> bool {
-        // The properties block stays a table wherever the cursor is: it is
-        // edited in its own fields, not by revealing the YAML. `Show as
-        // source` in `propertiesInDocument` is what reveals it instead.
+        // * The properties block stays a table wherever the cursor is: it is
+        //   edited in its own fields, not by revealing the YAML. `Show as
+        //   source` in `propertiesInDocument` is what reveals it instead.
         if matches!(entry.1.block, RBlock::Properties(_)) {
             return self.properties_in_document != PropertiesInDocument::Source;
         }
-        // A table stays a grid wherever the cursor is, the way Obsidian's
-        // `table-editor` does: its cells are typed into directly.
+        // * A table stays a grid wherever the cursor is, the way Obsidian's
+        //   `table-editor` does: its cells are typed into directly.
         if matches!(entry.1.block, RBlock::Table { .. }) {
             return true;
         }
@@ -1967,7 +1967,7 @@ impl Editor {
             self.scroll_px = row_px;
             return;
         }
-        // Walk down from the anchor; stop once past the viewport.
+        // * Walk down from the anchor; stop once past the viewport.
         let mut y = -self.scroll_px;
         let mut line = self.scroll_line;
         let mut cursor_y = None;
@@ -1984,7 +1984,7 @@ impl Editor {
                 return;
             }
         }
-        // Put the cursor's row at the bottom of the view.
+        // * Put the cursor's row at the bottom of the view.
         self.scroll_row_to(c.line, row_px, h - rh, window);
     }
 
@@ -2092,7 +2092,7 @@ impl Editor {
     }
 
     fn after_edit(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
-        // An edit never happens out of sight.
+        // * An edit never happens out of sight.
         self.unfold_at_cursor();
         self.request_parse(cx);
         self.refresh_matches(cx);
@@ -2182,13 +2182,13 @@ impl Editor {
                 .await;
             this.update(cx, |editor, cx| {
                 let parse_ms = result.1.as_secs_f64() * 1000.0;
-                // A slightly stale decoration set is better than none while typing.
+                // * A slightly stale decoration set is better than none while typing.
                 editor.highlights = Arc::new(result.0);
                 let widgets = result.6;
                 editor
                     .widget_heights
                     .retain(|first, _| widgets.iter().any(|(l, _)| l.start == *first));
-                // Widgets change the heights above the cursor: keep it on screen.
+                // * Widgets change the heights above the cursor: keep it on screen.
                 let same_widgets = editor.widgets.len() == widgets.len()
                     && editor
                         .widgets
@@ -2200,11 +2200,11 @@ impl Editor {
                 }
                 editor.widgets = Arc::new(widgets);
                 editor.flairs = Arc::new(result.7);
-                // Unlike the decorations, a stale set of foldables is worse
-                // than none: resolving the folds against another text's
-                // lines would drop them. Only the parse of the current text
-                // settles them, and a record waiting for the first parse
-                // waits for that one.
+                // * Unlike the decorations, a stale set of foldables is worse
+                //   than none: resolving the folds against another text's
+                //   lines would drop them. Only the parse of the current text
+                //   settles them, and a record waiting for the first parse
+                //   waits for that one.
                 if editor.generation == generation {
                     editor.foldables = Arc::new(result.8);
                     if let Some(froms) = editor.pending_folds.take() {
@@ -2253,8 +2253,8 @@ impl Editor {
         }
         self.buf.marked = None;
         self.buf.forget_planted();
-        // A cursor move refreshes a popup that is open, and closes it once
-        // the cursor has left the query.
+        // * A cursor move refreshes a popup that is open, and closes it once
+        //   the cursor has left the query.
         self.update_suggest(false, cx);
         self.reveal_cursor(window);
         cx.notify();
@@ -2285,8 +2285,8 @@ impl Editor {
             primary: cursors.primary,
         });
         self.buf.marked = None;
-        // A cursor move refreshes a popup that is open, and closes it once
-        // the cursor has left the query.
+        // * A cursor move refreshes a popup that is open, and closes it once
+        //   the cursor has left the query.
         self.update_suggest(false, cx);
         self.reveal_cursor(window);
         cx.notify();
@@ -2302,7 +2302,7 @@ impl Editor {
         self.move_each(select, window, cx, |this, _, s| {
             let sel = s.range();
             let target = if !select && !s.is_empty() {
-                // A plain arrow collapses the selection to its edge.
+                // * A plain arrow collapses the selection to its edge.
                 if left {
                     sel.start
                 } else {
@@ -2342,7 +2342,7 @@ impl Editor {
         let lh = self.layout.line_height;
         let c = self.buf.cursor_at(head);
         let Some(shaped) = self.shape(window, c.line).filter(|_| lh > px(0.)) else {
-            // No layout yet: move by buffer lines.
+            // * No layout yet: move by buffer lines.
             let line = (c.line as isize + delta).clamp(0, self.line_count() as isize - 1) as usize;
             let col = self.buf.clamp_col(line, c.col);
             return (self.buf.line_starts()[line] + col, None);
@@ -2353,8 +2353,8 @@ impl Editor {
         let mut row = start_row;
         let mut rows = shaped.rows();
         let mut remaining = delta;
-        // The lines a fold hides are not on screen, so a vertical step
-        // passes over them.
+        // * The lines a fold hides are not on screen, so a vertical step
+        //   passes over them.
         let above = |l: usize| (0..l).rev().find(|&c| !self.line_hidden(c));
         let below = |l: usize| (l + 1..self.line_count()).find(|&c| !self.line_hidden(c));
         while remaining != 0 {
@@ -2383,7 +2383,7 @@ impl Editor {
             }
         }
         let target = if line == c.line && row == start_row {
-            // Nowhere to go: the first row goes to the start, the last to the end.
+            // * Nowhere to go: the first row goes to the start, the last to the end.
             if delta < 0 {
                 self.buf.line_starts()[line]
             } else {
@@ -2516,9 +2516,9 @@ impl Editor {
         if self.suggest_step(-1, cx) {
             return;
         }
-        // Leaving the line forgets the closers auto-pairing planted on it:
-        // coming back and typing one writes it (Specification.md,
-        // "Observed auto-pair behavior").
+        // * Leaving the line forgets the closers auto-pairing planted on it:
+        //   coming back and typing one writes it (Specification.md,
+        //   "Observed auto-pair behavior").
         self.buf.forget_planted();
         self.vertical(-1, false, window, cx);
     }
@@ -2668,10 +2668,10 @@ impl Editor {
     }
 
     fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
-        // An open field takes the keys the way backspace and delete give
-        // them to it. It carries a caret and no selection, so there is
-        // nothing for Ctrl+A to take; what it must not do is select the
-        // document behind the field, which the next Ctrl+X would delete.
+        // ! An open field takes the keys the way backspace and delete give
+        //   them to it. It carries a caret and no selection, so there is
+        //   nothing for Ctrl+A to take; what it must not do is select the
+        //   document behind the field, which the next Ctrl+X would delete.
         if self.field_kind().is_some() {
             return;
         }
@@ -2682,8 +2682,8 @@ impl Editor {
     // ----- editing actions -------------------------------------------------------
 
     fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
-        // A properties field has the pill gesture behind it, so it takes the
-        // press through its own path.
+        // * A properties field has the pill gesture behind it, so it takes the
+        //   press through its own path.
         if self.property_field.is_some() {
             self.backspace_property_field(window, cx);
             return;
@@ -2698,7 +2698,7 @@ impl Editor {
         } else {
             EditKind::Other
         };
-        // Backspace between an empty pair takes both characters.
+        // * Backspace between an empty pair takes both characters.
         let opts = self.auto_pair();
         self.delete_all(
             move |buf, at| autopair::backspace_range(buf.text(), at, opts),
@@ -2752,15 +2752,15 @@ impl Editor {
         if self.accept_suggestion(Accept::Whole, window, cx) {
             return;
         }
-        // Enter in a properties field commits it, as Obsidian's does, and in
-        // a list's trailing input leaves that input focused for the next
-        // item.
+        // * Enter in a properties field commits it, as Obsidian's does, and in
+        //   a list's trailing input leaves that input focused for the next
+        //   item.
         if self.property_field.is_some() {
             self.enter_property_field(window, cx);
             return;
         }
-        // In a table cell it commits and drops into the cell below, or just
-        // commits on the last row.
+        // * In a table cell it commits and drops into the cell below, or just
+        //   commits on the last row.
         if self.table_field.is_some() {
             if !self.step_table_cell(0, 1, window, cx) {
                 self.commit_table_field(Some(window), cx, None);
@@ -2786,17 +2786,17 @@ impl Editor {
         if self.accept_suggestion(Accept::Inside, window, cx) {
             return;
         }
-        // Tab walks the cells of a table, committing each as it leaves it.
+        // * Tab walks the cells of a table, committing each as it leaves it.
         if self.table_field.is_some() && self.step_table_cell(1, 0, window, cx) {
             return;
         }
-        // Tab commits a key field and moves to that property's value, as
-        // Obsidian's key input does (`enterkeyhint="next"`). From a value
-        // field it just commits, since there is nothing after it.
+        // * Tab commits a key field and moves to that property's value, as
+        //   Obsidian's key input does (`enterkeyhint="next"`). From a value
+        //   field it just commits, since there is nothing after it.
         if let Some(field) = self.property_field.clone() {
             self.commit_property_field(Some(window), cx);
-            // The key the commit left behind: what was typed, for both a
-            // rename and a newly named row.
+            // * The key the commit left behind: what was typed, for both a
+            //   rename and a newly named row.
             let key = field.text.trim().to_string();
             if field.part == Part::Key && !key.is_empty() {
                 if let Some(row) = self.property_rows().into_iter().find(|r| r.key == key) {
@@ -2872,7 +2872,7 @@ impl Editor {
         let Some(item) = cx.read_from_clipboard() else {
             return;
         };
-        // Into the open field, which drops the newlines a row cannot hold.
+        // * Into the open field, which drops the newlines a row cannot hold.
         if let Some(field) = self.active_field() {
             if let Some(text) = item.text() {
                 field.insert(&text);
@@ -2881,7 +2881,7 @@ impl Editor {
             return;
         }
 
-        // Attachment paste: image or external file paths
+        // * Attachment paste: image or external file paths
         if let Some(state) = self.suggest_vault.clone() {
             if !self.name.is_empty() {
                 let image_entry = item.entries.iter().find_map(|entry| match entry {
@@ -2909,11 +2909,11 @@ impl Editor {
         let Some(text) = item.text() else {
             return;
         };
-        // "Convert pasted HTML to Markdown": a page puts both forms on the
-        // clipboard, and the plain one has lost the markup. gpui never asks
-        // for the HTML, so it is read from the desktop's paste tool, and
-        // only when the clipboard really holds markup — a copy from a
-        // terminal leaves the text alone.
+        // * "Convert pasted HTML to Markdown": a page puts both forms on the
+        //   clipboard, and the plain one has lost the markup. gpui never asks
+        //   for the HTML, so it is read from the desktop's paste tool, and
+        //   only when the clipboard really holds markup — a copy from a
+        //   terminal leaves the text alone.
         let text = self
             .suggest_vault
             .as_ref()
@@ -3094,11 +3094,11 @@ impl Editor {
             Some(t) => self.find.query.update(cx, |q, cx| q.set_text(t, cx)),
             None => self.refresh_matches(cx),
         }
-        // Obsidian's panel opens on the query whichever command opened
-        // it; `replace` only decides whether the replacement row shows.
-        // The whole query is selected the way a browser input's is, so the
-        // first keystroke replaces the last note's query instead of
-        // appending to it, and the old query is still there to keep.
+        // * Obsidian's panel opens on the query whichever command opened
+        //   it; `replace` only decides whether the replacement row shows.
+        //   The whole query is selected the way a browser input's is, so the
+        //   first keystroke replaces the last note's query instead of
+        //   appending to it, and the old query is still there to keep.
         self.find.query.update(cx, |q, cx| q.select_all(cx));
         window.focus(&self.find.query.focus_handle(cx), cx);
         cx.notify();
@@ -3122,8 +3122,8 @@ impl Editor {
         } else {
             &self.find.query
         };
-        // Tabbing into a field selects what it holds, as it does between
-        // two HTML inputs.
+        // * Tabbing into a field selects what it holds, as it does between
+        //   two HTML inputs.
         field.update(cx, |f, cx| f.select_all(cx));
         window.focus(&field.focus_handle(cx), cx);
         cx.notify();
@@ -3235,7 +3235,7 @@ impl Editor {
 
     /// [`Editor::find_all`] for the command line (`--find-all`).
     pub fn find_all_matches(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // A query set in the same update has not reported its change yet.
+        // * A query set in the same update has not reported its change yet.
         self.refresh_matches(cx);
         if self.find.matches.is_empty() {
             return;
@@ -3291,7 +3291,7 @@ impl Editor {
             .iter()
             .map(|m| (m.clone(), self.replacement_for(m, cx)))
             .collect();
-        // The cursor lands after the last replacement in the new text.
+        // * The cursor lands after the last replacement in the new text.
         let last_end = edits.last().map(|(r, _)| r.end).unwrap_or(0);
         let cursor = shifted(last_end, &edits);
         self.edit_many_no_window(edits, cursor, cx);
@@ -3324,8 +3324,8 @@ impl Editor {
         if !opening && self.suggest.is_none() {
             return;
         }
-        // One query, one cursor: a suggestion inserted at several at once
-        // would be several different links.
+        // * One query, one cursor: a suggestion inserted at several at once
+        //   would be several different links.
         if self.cursor_count() > 1 || self.property_field.is_some() {
             self.close_suggest(cx);
             return;
@@ -3359,8 +3359,8 @@ impl Editor {
         let vault = state.vault();
         let cache = state.cache();
         let show_unsupported = state.app().show_unsupported_files.unwrap_or(false);
-        // Only a `#^` query asks for a note's text, so this costs nothing
-        // on the common `[[` keystroke.
+        // * Only a `#^` query asks for a note's text, so this costs nothing
+        //   on the common `[[` keystroke.
         let texts = |path: &str| state.texts().get(path).map(|t| t.to_string());
         suggest::suggestions(
             t,
@@ -3428,9 +3428,9 @@ impl Editor {
         }) else {
             return false;
         };
-        // A block with no id of its own cannot be linked until one is
-        // written. The id goes in first, into this note or into the other
-        // one, and the link is only written if that succeeded.
+        // * A block with no id of its own cannot be linked until one is
+        //   written. The id goes in first, into this note or into the other
+        //   one, and the link is only written if that succeeded.
         let (item, own_note) = match item {
             suggest::Item::Block {
                 path,
@@ -3478,8 +3478,8 @@ impl Editor {
         let range = line_start + t.range.start..line_start + t.range.end + ins.consume;
         let mut cursor = range.start + ins.cursor;
         self.suggest = None;
-        // An id written into this very note is part of the same edit, so
-        // one undo takes back the whole accept.
+        // * An id written into this very note is part of the same edit, so
+        //   one undo takes back the whole accept.
         let mut edits = vec![(range.clone(), ins.text)];
         if let Some(id_ins) = own_note {
             if id_ins.range.start <= range.start {
@@ -3488,9 +3488,9 @@ impl Editor {
             }
             edits.push((id_ins.range, id_ins.text));
         }
-        // One undo step, and the cursor where the insertion asks for it:
-        // after the link for Enter, inside the brackets for Tab, where
-        // `after_edit` opens the popup again on what is left to type.
+        // * One undo step, and the cursor where the insertion asks for it:
+        //   after the link for Enter, inside the brackets for Tab, where
+        //   `after_edit` opens the popup again on what is left to type.
         self.edit_many(edits, cursor, None, window, cx);
         true
     }
@@ -3516,8 +3516,8 @@ impl Editor {
             path.to_string()
         };
         let own = target == self.name.as_ref();
-        // The note being edited is planned against the buffer, which is
-        // ahead of the disk; another note against its own bytes.
+        // * The note being edited is planned against the buffer, which is
+        //   ahead of the disk; another note against its own bytes.
         let text = if own {
             self.buf.text().to_string()
         } else {
@@ -3533,8 +3533,8 @@ impl Editor {
         } else {
             newline_of(&text)
         };
-        // A block an id cannot be written onto is refused rather than
-        // written to, so a link Silica writes always resolves.
+        // ! A block an id cannot be written onto is refused rather than
+        //   written to, so a link Silica writes always resolves.
         let Some(insertion) = blocks::plan_id(&text, end, placement, &id, nl) else {
             cx.emit(EditorEvent::Reported(
                 format!("No id can be written onto that block in {target}").into(),
@@ -3651,9 +3651,9 @@ impl Editor {
         }
         let y = position.y - layout.bounds.origin.y;
         let x = position.x - layout.content_x;
-        // A point above the first line or below the last still names a row,
-        // so the caret has somewhere to go, but it is on no line of text:
-        // `on_line` carries that down to the glyph.
+        // * A point above the first line or below the last still names a row,
+        //   so the caret has somewhere to go, but it is on no line of text:
+        //   `on_line` carries that down to the glyph.
         let (vl, row, on_line) = match layout
             .visible
             .iter()
@@ -3716,7 +3716,7 @@ impl Editor {
                     LinkTarget::Internal(body.to_string())
                 }
                 HighlightKind::Link => {
-                    // `[text](dest "title")`; reference links are not followed.
+                    // * `[text](dest "title")`; reference links are not followed.
                     let Some(open) = t.rfind("](") else {
                         continue;
                     };
@@ -3793,10 +3793,10 @@ impl Editor {
         let Some(hit) = self.display_hit(window, event.position) else {
             return false;
         };
-        // The left margin, the blank space past the end of a row, and the
-        // area above and below the document are on no construct: the click
-        // places the caret and nothing more. Only what was drawn under the
-        // pointer can be worked.
+        // * The left margin, the blank space past the end of a row, and the
+        //   area above and below the document are on no construct: the click
+        //   places the caret and nothing more. Only what was drawn under the
+        //   pointer can be worked.
         let Some(d) = hit.glyph else {
             return false;
         };
@@ -3858,12 +3858,12 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         let Some(block) = self.properties() else {
-            // No block yet: a new property creates one above the body.
+            // * No block yet: a new property creates one above the body.
             if let Some(props::Change::Set { key, value }) = changes.first() {
                 let nl = if self.buf.crlf() { "\r\n" } else { "\n" };
                 let text = props::new_block(key, value, nl);
-                // The buffer holds no BOM (it travels in `self.buf.bom()` and is
-                // put back on save), so the block goes at offset zero.
+                // * The buffer holds no BOM (it travels in `self.buf.bom()` and is
+                //   put back on save), so the block goes at offset zero.
                 self.edit(0..0, &text, EditKind::Other, window, cx);
             }
             return;
@@ -3875,8 +3875,8 @@ impl Editor {
             .into_iter()
             .map(|e| (e.start..e.end, e.text))
             .collect();
-        // Keep the cursor where it was, clamped: the block above it may have
-        // grown or shrunk, and the caret lives in a field, not the document.
+        // * Keep the cursor where it was, clamped: the block above it may have
+        //   grown or shrunk, and the caret lives in a field, not the document.
         let head = self.buf.head.min(self.buf.len());
         let after = Cursors {
             sels: vec![Sel::at(head)],
@@ -3921,17 +3921,17 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // A click is not a Backspace: whatever pill one selected, it loses
-        // the selection.
+        // * A click is not a Backspace: whatever pill one selected, it loses
+        //   the selection.
         self.selected_pill = None;
         match action {
             PropertyAction::Edit { target, part } => {
                 self.property_menu = None;
                 self.commit_property_field(Some(window), cx);
-                // A value opens through `value_field`, which lands in the
-                // empty input after the pills when the row holds a list:
-                // opening a list whole would commit it back through the
-                // joined-string round trip and split an item at its comma.
+                // * A value opens through `value_field`, which lands in the
+                //   empty input after the pills when the row holds a list:
+                //   opening a list whole would commit it back through the
+                //   joined-string round trip and split an item at its comma.
                 let row = match (&target, part) {
                     (Target::Existing(key), Part::Value) => {
                         self.property_rows().into_iter().find(|r| &r.key == key)
@@ -3953,8 +3953,8 @@ impl Editor {
             PropertyAction::EditItem { key, index } => {
                 self.property_menu = None;
                 self.commit_property_field(Some(window), cx);
-                // The commit above may have rewritten the block, so the row
-                // the field is built from is read after it, not before.
+                // * The commit above may have rewritten the block, so the row
+                //   the field is built from is read after it, not before.
                 if let Some(row) = self.property_rows().into_iter().find(|r| r.key == key) {
                     self.property_field = Some(row.item_field(index.min(row.items.len())));
                 }
@@ -3994,9 +3994,9 @@ impl Editor {
                     let change = properties::retype(&row, ty);
                     self.apply_property_changes(&[change], Some(window), cx);
                 }
-                // The assignment belongs in the vault's `types.json`, which
-                // the workspace owns; it writes the file and hands the new
-                // table back through `set_property_types`.
+                // * The assignment belongs in the vault's `types.json`, which
+                //   the workspace owns; it writes the file and hands the new
+                //   table back through `set_property_types`.
                 self.property_types
                     .types
                     .insert(key.clone(), ty.as_str().to_string());
@@ -4009,7 +4009,7 @@ impl Editor {
                 cx.notify();
             }
             PropertyAction::OpenTypeMenu { key } => {
-                // A second click on the same icon closes the menu.
+                // * A second click on the same icon closes the menu.
                 self.property_menu = if self.property_menu.as_deref() == Some(key.as_str()) {
                     None
                 } else {
@@ -4043,8 +4043,8 @@ impl Editor {
     fn table_action(&mut self, action: TableAction, window: &mut Window, cx: &mut Context<Self>) {
         let TableAction::Edit { span } = action;
         self.commit_property_field(Some(window), cx);
-        // The click arrives in the coordinates the widget was built from,
-        // which the commit may shift.
+        // * The click arrives in the coordinates the widget was built from,
+        //   which the commit may shift.
         let span = self
             .commit_table_field(Some(window), cx, Some(span.clone()))
             .unwrap_or(span);
@@ -4078,9 +4078,9 @@ impl Editor {
     ) -> Option<Range<usize>> {
         let CellEdit { span, was, field } = self.table_field.take()?;
         let text = table::cell_text(&field.text);
-        // The bytes have to be the ones the field was opened on: anything
-        // else means the document moved underneath, and the vault is the
-        // source of truth.
+        // * The bytes have to be the ones the field was opened on: anything
+        //   else means the document moved underneath, and the vault is the
+        //   source of truth.
         if self.buf.text().get(span.clone()) != Some(was.as_str()) || text == was {
             cx.notify();
             return keep;
@@ -4120,8 +4120,8 @@ impl Editor {
             return false;
         };
         self.commit_table_field(Some(window), cx, None);
-        // The table is re-read after the commit: the cell's own bytes may
-        // have changed length.
+        // * The table is re-read after the commit: the cell's own bytes may
+        //   have changed length.
         let Some(at) = table::table_at(self.buf.text(), span.start) else {
             return false;
         };
@@ -4139,7 +4139,7 @@ impl Editor {
                 .and_then(|cells| cells.get(col))
                 .cloned()
         } else if dx > 0 {
-            // Past the last cell of a row, Tab goes on to the next row.
+            // * Past the last cell of a row, Tab goes on to the next row.
             match at.cells.get(row).map(|c| c.len()) {
                 Some(len) if col + 1 < len => at.cells[row].get(col + 1).cloned(),
                 _ => at.cells.get(row + 1).and_then(|c| c.first()).cloned(),
@@ -4175,8 +4175,8 @@ impl Editor {
             None => None,
         };
         self.commit_property_field(Some(window), cx);
-        // The row is read after the commit: its list has just grown by the
-        // item that was typed, and the new input appends after it.
+        // * The row is read after the commit: its list has just grown by the
+        //   item that was typed, and the new input appends after it.
         if let Some(row) =
             again.and_then(|key| self.property_rows().into_iter().find(|row| row.key == key))
         {
@@ -4212,9 +4212,9 @@ impl Editor {
             if let Some(change) = change {
                 self.apply_property_changes(&[change], Some(window), cx);
             }
-            // The field carries the list as it was before the removal, so it
-            // is rebuilt from the row as it now stands: committing the stale
-            // snapshot would write the removed item back.
+            // * The field carries the list as it was before the removal, so it
+            //   is rebuilt from the row as it now stands: committing the stale
+            //   snapshot would write the removed item back.
             self.property_field = self
                 .property_rows()
                 .into_iter()
@@ -4304,7 +4304,7 @@ impl Editor {
         self.buf.goal = None;
         self.buf.marked = None;
         if event.modifiers.alt && event.click_count == 1 {
-            // Alt+click adds a cursor (or removes the one it lands on).
+            // * Alt+click adds a cursor (or removes the one it lands on).
             let mut cursors = self.buf.cursors();
             if let Some(ix) = cursors
                 .sels
@@ -4493,9 +4493,9 @@ fn collect_flairs(blocks: &[Block<'_>], line_of: &dyn Fn(usize) -> usize, out: &
                 info,
                 content,
             } => {
-                // The same normalization the reading model does: Obsidian
-                // renders and copies with `\n` endings whatever the file
-                // holds, and drops exactly one trailing newline.
+                // * The same normalization the reading model does: Obsidian
+                //   renders and copies with `\n` endings whatever the file
+                //   holds, and drops exactly one trailing newline.
                 let body = match content.contains('\r') {
                     true => content.replace("\r\n", "\n"),
                     false => content.to_string(),
@@ -4591,8 +4591,8 @@ impl EntityInputHandler for Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // A properties field takes the keystrokes while it is open; the
-        // document changes once, when the field commits.
+        // * A properties field takes the keystrokes while it is open; the
+        //   document changes once, when the field commits.
         if let Some(field) = self.active_field() {
             field.insert(new_text);
             cx.notify();
@@ -4607,10 +4607,10 @@ impl EntityInputHandler for Editor {
             .map(|r| self.line_relative(r))
             .or_else(|| self.buf.marked.clone());
         match range {
-            // A ranged replacement (IME) addresses the primary cursor's line.
+            // * A ranged replacement (IME) addresses the primary cursor's line.
             Some(range) => self.edit(range, new_text, kind, Some(window), cx),
-            // Auto-pairing is a typed character only: a paste has its own
-            // path and an IME commit arrives as a range above.
+            // * Auto-pairing is a typed character only: a paste has its own
+            //   path and an IME commit arrives as a range above.
             None => self.type_char(new_text, kind, window, cx),
         }
     }
@@ -4675,8 +4675,8 @@ impl Render for Editor {
         self.palette = Palette::from_theme(&theme);
         let base = theme.base_font_size;
         let panel = self.find.open.then(|| self.render_find_panel(&theme, cx));
-        // The popup is drawn over the text, anchored under the query it is
-        // offering rows for.
+        // * The popup is drawn over the text, anchored under the query it is
+        //   offering rows for.
         let popup = self.suggest.take().map(|state| {
             let element = self
                 .suggest_anchor(&state)
@@ -4685,8 +4685,8 @@ impl Render for Editor {
             element
         });
         let editor = div()
-            // A second identifier while the popup is up: its own bindings
-            // match deeper than the workspace's and so shadow them.
+            // * A second identifier while the popup is up: its own bindings
+            //   match deeper than the workspace's and so shadow them.
             .key_context(if self.suggest.is_some() {
                 "Editor SuggestPopup"
             } else {
@@ -4786,7 +4786,7 @@ impl Editor {
                 .hover(|s| s.bg(theme.bg_active))
                 .child(label)
         };
-        // A toggle shows its state with the accent color.
+        // * A toggle shows its state with the accent color.
         let toggle = |id: &'static str, label: &'static str, on: bool, theme: &Theme| {
             let mut b = button(id, label, theme).border_1();
             b = if on {
@@ -4889,8 +4889,7 @@ impl Editor {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Element
+// * Element
 
 /// Styles one flattened highlight segment on top of the base text style.
 /// `done` marks a checked task's line, whose text is muted and struck
@@ -4911,10 +4910,10 @@ fn run_for(
     for kind in kinds {
         match kind {
             HighlightKind::Heading(h) => {
-                // The setext underline row is the heading's markup: it keeps
-                // the heading colour and its own line, but body weight and
-                // body size (`line_block`), which is what Obsidian computes
-                // for `cm-formatting-header` — 16 px at 400.
+                // * The setext underline row is the heading's markup: it keeps
+                //   the heading colour and its own line, but body weight and
+                //   body size (`line_block`), which is what Obsidian computes
+                //   for `cm-formatting-header` — 16 px at 400.
                 if !h.underline {
                     font.weight = FontWeight::BOLD;
                 }
@@ -4992,8 +4991,8 @@ fn runs_for_display(
             runs.push(run);
         }
     };
-    // The stretches no construct covers take the same treatment, which on a
-    // done task is most of the line.
+    // * The stretches no construct covers take the same treatment, which on a
+    //   done task is most of the line.
     let plain = |len: usize| run_for(&[], base, len, p, done);
     for piece in &display.pieces {
         match piece {
@@ -5051,7 +5050,7 @@ fn shape_display(
 ) -> Shaped {
     let runs = runs_for_display(&display, spans, style, p);
     let size = font_size * display.scale;
-    // Headings keep Obsidian's tighter line height, never below the body's.
+    // * Headings keep Obsidian's tighter line height, never below the body's.
     let row_height = if display.scale > 1.0 {
         (size * 1.2).max(line_height)
     } else {
@@ -5069,9 +5068,9 @@ fn shape_display(
         .ok()
         .and_then(|lines| lines.into_iter().next())
         .unwrap_or_default();
-    // A line with a tall inline formula (a fraction, a sum with limits)
-    // grows to hold it, the way CodeMirror's line grows around an inline
-    // widget; every wrapped row of the line shares the height.
+    // * A line with a tall inline formula (a fraction, a sum with limits)
+    //   grows to hold it, the way CodeMirror's line grows around an inline
+    //   widget; every wrapped row of the line shares the height.
     let mut row_height = row_height;
     if !display.math.is_empty() {
         let layout = &line.unwrapped_layout;
@@ -5188,10 +5187,10 @@ impl Element for EditorElement {
         cx: &mut App,
     ) -> Self::PrepaintState {
         let started = Instant::now();
-        // The listeners this element registers are raw window listeners,
-        // which fire for any point inside its bounds; a panel over the text
-        // — the find panel, a modal — owns its own clicks, and this hitbox
-        // is how a listener asks whether one of those took the point first.
+        // * The listeners this element registers are raw window listeners,
+        //   which fire for any point inside its bounds; a panel over the text
+        //   — the find panel, a modal — owns its own clicks, and this hitbox
+        //   is how a listener asks whether one of those took the point first.
         let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
         let text_style = window.text_style();
         let font_size = text_style.font_size.to_pixels(window.rem_size());
@@ -5199,18 +5198,18 @@ impl Element for EditorElement {
         let theme = cx.global::<Theme>().clone();
         let entity = self.editor.clone();
 
-        // The editor is leased for the frame so widgets (GPUI elements
-        // built from the reading renderer) can be laid out with the app
-        // at hand while its lines are read.
+        // * The editor is leased for the frame so widgets (GPUI elements
+        //   built from the reading renderer) can be laid out with the app
+        //   at hand while its lines are read.
         self.editor.update(cx, |editor, cx| {
-            // Measured before any line is shaped, so this frame's inline
-            // formulas already have placeholders.
+            // * Measured before any line is shaped, so this frame's inline
+            //   formulas already have placeholders.
             editor.spaces = Some((
                 font_size,
                 SpaceWidths::measure(window.text_system(), &text_style.font(), font_size),
             ));
-            // A cursor sent into a fold from outside (a link, a search hit,
-            // an outline row) opens it before anything is laid out.
+            // * A cursor sent into a fold from outside (a link, a search hit,
+            //   an outline row) opens it before anything is laid out.
             if editor.pending_reveal {
                 editor.unfold_at_cursor();
             }
@@ -5231,8 +5230,8 @@ impl Element for EditorElement {
             } else {
                 available
             };
-            // Reserve a gutter for line numbers when enabled; shift content
-            // right so line numbers sit in the left margin.
+            // * Reserve a gutter for line numbers when enabled; shift content
+            //   right so line numbers sit in the left margin.
             let gutter = if editor.show_line_number && count > 0 {
                 let digits = count.to_string().len().max(1);
                 px(16.) + digits as f32 * font_size * 0.6
@@ -5268,15 +5267,15 @@ impl Element for EditorElement {
                     });
                 }
             });
-            // The properties block's fold state travels in the toggled set,
-            // the same place the reading view keeps callout folds.
+            // * The properties block's fold state travels in the toggled set,
+            //   the same place the reading view keeps callout folds.
             let mut no_toggles = editor.callout_folds.clone();
             if editor.properties_folded {
                 no_toggles.insert(crate::properties::PROPERTIES_FOLD_ID);
             }
             let property_types = editor.property_types.clone();
-            // Live Preview's properties block is editable: the open field is
-            // drawn with its caret, and clicks come back as actions.
+            // * Live Preview's properties block is editable: the open field is
+            //   drawn with its caret, and clicks come back as actions.
             let properties_host = PropertiesHost {
                 field: editor.property_field.clone(),
                 selected_pill: editor.selected_pill,
@@ -5328,21 +5327,21 @@ impl Element for EditorElement {
             let hover_line = editor.hover_line;
             while line < count && y < bounds.bottom_left().y {
                 if let Some(end) = fold::hidden_end(&hidden, line) {
-                    // Inside a fold: these lines are not on screen at all.
+                    // * Inside a fold: these lines are not on screen at all.
                     line = end + 1;
                     continue;
                 }
                 if let Some((wlines, widget)) = editor.folded_widget(line) {
                     let wlines = wlines.clone();
                     if line != wlines.start || editor.widget_is_hidden(widget) {
-                        // Scrolled into a folded widget: its lines take no
-                        // room. A hidden properties block takes none at all.
+                        // * Scrolled into a folded widget: its lines take no
+                        //   room. A hidden properties block takes none at all.
                         line = wlines.end;
                         continue;
                     }
-                    // An embed keeps its clicks so its links work, and a
-                    // table keeps them because its cells take their own:
-                    // neither ever unfolds to its source.
+                    // * An embed keeps its clicks so its links work, and a
+                    //   table keeps them because its cells take their own:
+                    //   neither ever unfolds to its source.
                     let embed = matches!(widget.block, RBlock::Paragraph(_) | RBlock::Table { .. });
                     let mut element = div()
                         .w(content_width)
@@ -5434,16 +5433,16 @@ impl Element for EditorElement {
                             .text_color(palette.muted)
                             .cursor(CursorStyle::Arrow)
                             .hover(|s| s.bg(theme.bg_secondary))
-                            // The editor's own window listener runs ahead
-                            // of this element and would put the caret on
-                            // the fence line; Obsidian's flair leaves the
-                            // caret where it was, so the mouse stops here.
+                            // * The editor's own window listener runs ahead
+                            //   of this element and would put the caret on
+                            //   the fence line; Obsidian's flair leaves the
+                            //   caret where it was, so the mouse stops here.
                             .block_mouse_except_scroll()
                             .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                                // An empty fence copies nothing at all, the
-                                // same rule the reading view's button
-                                // follows -- and with nothing copied there
-                                // is nothing to announce.
+                                // * An empty fence copies nothing at all, the
+                                //   same rule the reading view's button
+                                //   follows -- and with nothing copied there
+                                //   is nothing to announce.
                                 if payload.is_empty() {
                                     return;
                                 }
@@ -5461,11 +5460,11 @@ impl Element for EditorElement {
                             window,
                             cx,
                         );
-                        // Obsidian's rule is `right: 6px; top: 6px` against
-                        // a line box with padding of its own, which comes
-                        // out very nearly centred on the fence line: its
-                        // flair is 26 px tall on a 29 px line. Centring it
-                        // here is that picture without the padding.
+                        // * Obsidian's rule is `right: 6px; top: 6px` against
+                        //   a line box with padding of its own, which comes
+                        //   out very nearly centred on the fence line: its
+                        //   flair is 26 px tall on a 29 px line. Centring it
+                        //   here is that picture without the padding.
                         element.prepaint_at(
                             point(
                                 content_x + content_width - measured.width - px(6.),
@@ -5477,11 +5476,11 @@ impl Element for EditorElement {
                         flair_elements.push(element);
                     }
                 }
-                // The fold indicator: Obsidian's `cm-fold-indicator`, a
-                // hover-revealed chevron at `left: -15px` on a heading line
-                // and `-10px` on a list line, shown whenever the line is
-                // folded. Mouse-down rather than click, blocking the mouse,
-                // for the reason the callout chevron gives.
+                // * The fold indicator: Obsidian's `cm-fold-indicator`, a
+                //   hover-revealed chevron at `left: -15px` on a heading line
+                //   and `-10px` on a list line, shown whenever the line is
+                //   folded. Mouse-down rather than click, blocking the mouse,
+                //   for the reason the callout chevron gives.
                 if let Some(f) = foldables.iter().find(|f| f.line == line) {
                     let folded = editor.folds.is_folded(line);
                     if folded || hover_line == Some(line) {
@@ -5526,7 +5525,7 @@ impl Element for EditorElement {
                 }
                 let range = editor.buf.line_range(line);
                 if !matches.is_empty() {
-                    // Matches touching this line, by binary search on their starts.
+                    // * Matches touching this line, by binary search on their starts.
                     let first = matches.partition_point(|m| m.end < range.start);
                     for (ix, m) in matches.iter().enumerate().skip(first) {
                         if m.start > range.end {
@@ -5622,14 +5621,14 @@ impl Element for EditorElement {
             for w in &widgets {
                 let height = w.bounds.size.height;
                 let previous = editor.widget_heights.insert(w.lines.start, height);
-                // Whatever the reveal that got us here was computed from
-                // has to be what the measurement is checked against, or the
-                // first jump over a widget never gets its correction: a
-                // widget nothing had measured yet was estimated by
-                // `height_of` at one line each, and a table or a code fence
-                // is nothing like that tall. A widget that grew later -- an
-                // image that has just loaded -- is the same case with a real
-                // previous height.
+                // * Whatever the reveal that got us here was computed from
+                //   has to be what the measurement is checked against, or the
+                //   first jump over a widget never gets its correction: a
+                //   widget nothing had measured yet was estimated by
+                //   `height_of` at one line each, and a table or a code fence
+                //   is nothing like that tall. A widget that grew later -- an
+                //   image that has just loaded -- is the same case with a real
+                //   previous height.
                 let estimate = previous.unwrap_or(editor.layout.line_height * w.lines.len() as f32);
                 if estimate != height {
                     editor.pending_reveal = true;
@@ -5640,8 +5639,8 @@ impl Element for EditorElement {
                 .iter()
                 .any(|(v, _)| v.line == cursor_line_ix)
                 .then(|| {
-                    // The input handler needs the cursor line's layout between
-                    // frames; shaping it again hits GPUI's per-frame layout cache.
+                    // * The input handler needs the cursor line's layout between
+                    //   frames; shaping it again hits GPUI's per-frame layout cache.
                     Arc::new(shape_display(
                         window,
                         &text_style,
@@ -5670,8 +5669,8 @@ impl Element for EditorElement {
                 ),
                 size(px(SCROLLBAR_WIDTH), bounds.size.height),
             );
-            // The part of the first line scrolled off the top moves the
-            // thumb between lines, so it does not step.
+            // * The part of the first line scrolled off the top moves the
+            //   thumb between lines, so it does not step.
             let first = lines
                 .first()
                 .filter(|(v, _)| v.line == scroll_line)
@@ -5688,8 +5687,8 @@ impl Element for EditorElement {
                 });
             let last_top = editor.last_top_line(window);
             let scrollbar = Scrollbar::layout(track, count, first, last_top, fits);
-            // Indent guides: one vertical segment per tab level under each
-            // indented visible line, at content_x + tab_size * level.
+            // * Indent guides: one vertical segment per tab level under each
+            //   indented visible line, at content_x + tab_size * level.
             let indent_guides = if editor.show_indent_guide {
                 let tab_size_px = font_size * editor.tab_size as f32;
                 let mut guides = Vec::new();
@@ -5713,8 +5712,8 @@ impl Element for EditorElement {
                 Vec::new()
             };
 
-            // Spellcheck: find misspelled words on visible lines and
-            // compute their paint rectangles for squiggly underlines.
+            // * Spellcheck: find misspelled words on visible lines and
+            //   compute their paint rectangles for squiggly underlines.
             let spellcheck_words = if editor.spellcheck {
                 let mut words = Vec::new();
                 for (visible, shaped) in &lines {
@@ -5768,11 +5767,11 @@ impl Element for EditorElement {
         window: &mut Window,
         cx: &mut App,
     ) {
-        // Vim mode: when vim_mode is on and not in insert mode, keystrokes
-        // are vim commands, not text input. Intercept them here so they never
-        // reach the buffer's default input handler. This must run during
-        // paint, not prepaint: `on_key_event` asserts it is called from a
-        // paint pass.
+        // * Vim mode: when vim_mode is on and not in insert mode, keystrokes
+        //   are vim commands, not text input. Intercept them here so they never
+        //   reach the buffer's default input handler. This must run during
+        //   paint, not prepaint: `on_key_event` asserts it is called from a
+        //   paint pass.
         let editor_entity = self.editor.clone();
         window.on_key_event(move |event: &KeyDownEvent, phase, _window, cx| {
             if phase != DispatchPhase::Bubble {
@@ -5905,8 +5904,8 @@ impl Element for EditorElement {
             for quad in prepaint.selection.drain(..) {
                 window.paint_quad(quad);
             }
-            // Indent guides: faint vertical lines under indented lines,
-            // painted behind the text.
+            // * Indent guides: faint vertical lines under indented lines,
+            //   painted behind the text.
             let palette = &self.editor.read(cx).palette;
             let mut guide = palette.muted;
             guide.a = 0.25;
@@ -5916,8 +5915,8 @@ impl Element for EditorElement {
                     guide,
                 ));
             }
-            // Spellcheck squiggly underlines: draw a sine-wave path under
-            // each misspelled word.
+            // * Spellcheck squiggly underlines: draw a sine-wave path under
+            //   each misspelled word.
             let palette = &self.editor.read(cx).palette;
             let mut misspelled = palette.text;
             misspelled.a = 1.0;
@@ -5937,7 +5936,7 @@ impl Element for EditorElement {
             }
             for (visible, shaped) in prepaint.lines.iter() {
                 let origin = point(content_x, bounds.origin.y + visible.top);
-                // Line numbers in the gutter, right-aligned.
+                // * Line numbers in the gutter, right-aligned.
                 if prepaint.line_number_gutter > px(0.) {
                     let theme = cx.global::<Theme>();
                     let number = (visible.line + 1).to_string();
@@ -5962,7 +5961,7 @@ impl Element for EditorElement {
                         cx,
                     );
                 }
-                // Run backgrounds (code, highlights) are a separate pass.
+                // * Run backgrounds (code, highlights) are a separate pass.
                 let _ = shaped.line.paint_background(
                     origin,
                     visible.row_height,
@@ -5979,9 +5978,9 @@ impl Element for EditorElement {
                     window,
                     cx,
                 );
-                // Inline formulas over their placeholders, on the text
-                // baseline and centred in the placeholder's slack, in the
-                // text colour: rendered math is not markup.
+                // * Inline formulas over their placeholders, on the text
+                //   baseline and centred in the placeholder's slack, in the
+                //   text colour: rendered math is not markup.
                 for m in &shaped.display.math {
                     let Ok(formula) = silica_math::typeset(&m.tex, m.block) else {
                         continue;
@@ -6013,7 +6012,7 @@ impl Element for EditorElement {
             for w in prepaint.widgets.iter_mut() {
                 w.element.paint(window, cx);
             }
-            // Over the lines: a flair sits on its fence line's text.
+            // * Over the lines: a flair sits on its fence line's text.
             for flair in prepaint.flairs.iter_mut() {
                 flair.paint(window, cx);
             }
@@ -6066,8 +6065,8 @@ impl Element for EditorElement {
         let editor = self.editor.clone();
         let hitbox = prepaint.hitbox.clone();
         window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
-            // `should_handle_scroll` rather than `is_hovered`: a wheel event
-            // is not an interaction with what is directly under the pointer.
+            // * `should_handle_scroll` rather than `is_hovered`: a wheel event
+            //   is not an interaction with what is directly under the pointer.
             if phase == DispatchPhase::Bubble && hitbox.should_handle_scroll(window) {
                 let delta = event.delta.pixel_delta(line_height).y;
                 editor.update(cx, |editor, cx| editor.scroll_by(-delta, window, cx));
@@ -6111,7 +6110,7 @@ impl Element for EditorElement {
             if editor.pending_reveal {
                 editor.pending_reveal = false;
                 editor.reveal_cursor(window);
-                // A notify during paint is dropped; ask for the next frame.
+                // * A notify during paint is dropped; ask for the next frame.
                 let id = cx.entity_id();
                 window.on_next_frame(move |_, cx| cx.notify(id));
             }
@@ -6141,9 +6140,9 @@ mod tests {
 
     #[test]
     fn a_flair_per_fence_with_obsidians_label() {
-        // The six display names that were read out of a running Obsidian,
-        // an unregistered info string kept verbatim, and a fence with none
-        // at all, whose flair is there with an empty label.
+        // * The six display names that were read out of a running Obsidian,
+        //   an unregistered info string kept verbatim, and a fence with none
+        //   at all, whose flair is there with an empty label.
         let src = "```js\nconst CASE_LANG = 1;\n```\n\n```silica-made-up\nunregistered info\n```\n\n```\nno info string\n```\n";
         assert_eq!(
             flairs(src),
@@ -6167,8 +6166,8 @@ mod tests {
 
     #[test]
     fn an_indented_block_has_no_flair_and_a_nested_fence_has_one() {
-        // A note of eight blocks whose only indented one was the fifth
-        // showed seven flairs, so the fence line is what carries it.
+        // * A note of eight blocks whose only indented one was the fifth
+        //   showed seven flairs, so the fence line is what carries it.
         assert_eq!(flairs("    four space indented\n    second line\n"), vec![]);
         assert_eq!(
             flairs("> ```\n> in a blockquote\n> ```\n"),
@@ -6178,14 +6177,14 @@ mod tests {
             flairs("- item\n\n  ```js\n  in a list\n  ```\n"),
             vec![(2, "JavaScript".into(), "in a list".into())]
         );
-        // A CRLF file's block copies as LF, and exactly one trailing
-        // newline comes off -- the rule the reading view's button follows.
+        // * A CRLF file's block copies as LF, and exactly one trailing
+        //   newline comes off -- the rule the reading view's button follows.
         assert_eq!(
             flairs("```\r\none\r\ntwo\r\n\r\n```\r\n"),
             vec![(0, String::new(), "one\ntwo\n".into())]
         );
-        // An empty fence carries a flair that copies nothing; the click
-        // path writes nothing rather than emptying the clipboard.
+        // * An empty fence carries a flair that copies nothing; the click
+        //   path writes nothing rather than emptying the clipboard.
         assert_eq!(
             flairs("```\n```\n"),
             vec![(0, String::new(), String::new())]
@@ -6194,9 +6193,9 @@ mod tests {
 
     #[test]
     fn end_of_display_is_the_end_of_the_source_line() {
-        // Trailing markup displays nothing, so `to_source` has no piece to
-        // match at the end and walks back into the link text; the click
-        // path must land after the `]]` instead.
+        // * Trailing markup displays nothing, so `to_source` has no piece to
+        //   match at the end and walks back into the link text; the click
+        //   path must land after the `]]` instead.
         let d = display("see [[Welcome]]");
         assert_eq!(d.text, "see Welcome");
         assert_eq!(d.to_source(d.text.len()), 13);
@@ -6235,8 +6234,8 @@ mod tests {
         assert_eq!(buf.text(), "[[Welcome]]");
         assert_eq!(buf.head, 11);
 
-        // A string that is not one character is not a keystroke: it goes
-        // in as it stands, the way a paste does.
+        // * A string that is not one character is not a keystroke: it goes
+        //   in as it stands, the way a paste does.
         let mut buf = TextBuffer::new();
         assert!(Editor::type_char_in(&mut buf, "((", EditKind::Typing, opts));
         assert_eq!(buf.text(), "((");
@@ -6248,8 +6247,8 @@ mod tests {
         for i in 0..d.text.len() {
             assert_eq!(source_index(&d, i), d.to_source(i), "display byte {i}");
         }
-        // The last glyph of the link text is still inside the link's span,
-        // which is what makes a click on it follow the link.
+        // * The last glyph of the link text is still inside the link's span,
+        //   which is what makes a click on it follow the link.
         assert!(source_index(&d, 10) < 15);
 
         let d = display("plain line");

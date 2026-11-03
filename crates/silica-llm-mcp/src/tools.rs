@@ -221,8 +221,8 @@ fn run(backend: &Backend, tool: &Tool, arguments: &Value) -> Result<String, Stri
                 temperature: Some(0.0),
                 max_tokens: arguments.get("max_tokens").and_then(Value::as_u64),
                 json: false,
-                // A digest wants the answer, not the deliberation, and the
-                // general presets think by default.
+                // * A digest wants the answer, not the deliberation, and the
+                // * general presets think by default.
                 enable_thinking: Some(false),
             })?;
             Ok(format!(
@@ -391,12 +391,12 @@ mod tests {
         assert!(whole.note.contains("4 lines"), "{}", whole.note);
         assert!(whole.body.contains("ok one"));
 
-        // The filter is case-insensitive, and the note records the count.
+        // * The filter is case-insensitive, and the note records the count.
         let only = read_excerpt(&backend_with(1 << 20), &path, Some("failed"), false).unwrap();
         assert_eq!(only.body, "FAILED two\nfailed four");
         assert!(only.note.contains("2 lines contain"), "{}", only.note);
 
-        // Truncation says which end was kept.
+        // * Truncation says which end was kept.
         let head = read_excerpt(&backend_with(10), &path, None, false).unwrap();
         assert!(head.note.contains("first 10 bytes"), "{}", head.note);
         assert_eq!(head.body.len(), 10);
@@ -404,7 +404,7 @@ mod tests {
         assert!(tail.note.contains("last 10 bytes"), "{}", tail.note);
         assert!(tail.body.ends_with("four\n"));
 
-        // A filter that matches nothing is an error, not an empty summary.
+        // * A filter that matches nothing is an error, not an empty summary.
         let none = read_excerpt(&backend_with(1 << 20), &path, Some("zzz"), false);
         assert!(none.unwrap_err().contains("none contain"));
         std::fs::remove_dir_all(&dir).ok();

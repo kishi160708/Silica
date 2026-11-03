@@ -53,7 +53,7 @@ fn render_uncached(source: &str, dark: bool) -> Result<Arc<RenderImage>, String>
     let tree = usvg::Tree::from_str(&svg, &opt).map_err(|e| format!("{e}"))?;
 
     let size = tree.size();
-    let scale = 2.0f32; // 2x scale for sharp HiDPI rendering
+    let scale = 2.0f32; // * 2x scale for sharp HiDPI rendering
     let w = (size.width() * scale).ceil().max(1.0) as u32;
     let h = (size.height() * scale).ceil().max(1.0) as u32;
 
@@ -64,7 +64,7 @@ fn render_uncached(source: &str, dark: bool) -> Result<Arc<RenderImage>, String>
     resvg::render(&tree, transform, &mut pixmap.as_mut());
 
     let mut rgba = pixmap.take();
-    // GPUI expects BGRA8 textures (swap red and blue)
+    // * GPUI expects BGRA8 textures (swap red and blue)
     for pixel in rgba.chunks_exact_mut(4) {
         pixel.swap(0, 2);
     }

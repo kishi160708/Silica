@@ -123,7 +123,7 @@ impl Table {
                 push_delimiter(&mut out, &widths, &self.alignments);
             }
         }
-        // The last line carries no newline: the span it replaces had none.
+        // * The last line carries no newline: the span it replaces had none.
         out.pop();
         out
     }
@@ -141,7 +141,7 @@ impl Table {
 
     /// Byte offset of the cell at `row`, `col` in the whole rendered table.
     fn cursor_at(&self, text: &str, row: usize, col: usize) -> usize {
-        // Row 0 is the header, and the delimiter follows it.
+        // * Row 0 is the header, and the delimiter follows it.
         let line = if row == 0 { 0 } else { row + 1 };
         let start: usize = text.split_inclusive('\n').take(line).map(|l| l.len()).sum();
         start + self.cell_start(row, col)
@@ -156,7 +156,7 @@ fn pad(cell: &str, to: usize, align: Alignment) -> String {
     let room = to.saturating_sub(width(cell));
     match align {
         Alignment::Right => format!("{}{cell}", " ".repeat(room)),
-        // The odd space goes on the right.
+        // * The odd space goes on the right.
         Alignment::Center => {
             let left = room / 2;
             format!("{}{cell}{}", " ".repeat(left), " ".repeat(room - left))
@@ -250,11 +250,11 @@ pub fn table_at(text: &str, offset: usize) -> Option<TableAt> {
     for row in rows {
         push(row, &mut table);
     }
-    // Which cell the cursor is in: the row whose line holds it, and the
-    // last cell that starts at or before it.
+    // * Which cell the cursor is in: the row whose line holds it, and the
+    // * last cell that starts at or before it.
     let line_of = |at: usize| text[span.start..at.min(span.end)].matches('\n').count();
     let line = line_of(offset);
-    // Line 1 is the delimiter; the header owns its alignment.
+    // * Line 1 is the delimiter; the header owns its alignment.
     let row = if line == 0 { 0 } else { line.saturating_sub(1) };
     let row = row.min(table.rows.len() - 1);
     let col = spans
@@ -312,8 +312,8 @@ pub fn apply(at: &TableAt, cmd: TableCommand) -> Option<TableEdit> {
             row += 1;
         }
         TableCommand::RowDelete => {
-            // The header is a row like any other: deleting it promotes the
-            // one below, and the last row standing cannot go.
+            // ! The header is a row like any other: deleting it promotes the
+            // ! one below, and the last row standing cannot go.
             if rows <= 1 {
                 return None;
             }
@@ -396,7 +396,7 @@ pub fn cell_text(typed: &str) -> String {
     while let Some(c) = chars.next() {
         match c {
             '\n' | '\r' => out.push(' '),
-            // One already escaped stays as it is.
+            // * One already escaped stays as it is.
             '\\' if chars.peek() == Some(&'|') => {
                 out.push('\\');
                 out.push(chars.next().expect("peeked"));
@@ -416,7 +416,7 @@ pub fn insert_table() -> TableEdit {
         rows: vec![vec![String::new(); 2]; 2],
     };
     let text = format!("\n{}\n", table.render());
-    // The cursor goes in the first header cell, just past its pipe.
+    // * The cursor goes in the first header cell, just past its pipe.
     TableEdit {
         text,
         cursor: "\n|".len(),
@@ -441,12 +441,12 @@ mod tests {
 
     #[test]
     fn any_command_rewrites_the_whole_table() {
-        // Obsidian pads every cell, however the table was written.
+        // * Obsidian pads every cell, however the table was written.
         assert_eq!(
             run("|A|B|\n|-|-|\n|1|2|\n|3|4|\n", "1", TableCommand::RowAfter),
             "| A   | B   |\n| --- | --- |\n| 1   | 2   |\n|     |     |\n| 3   | 4   |\n"
         );
-        // Outer pipes are added to a table written without them.
+        // * Outer pipes are added to a table written without them.
         assert_eq!(
             run("A | B\n--- | ---\n1 | 2\n", "1 |", TableCommand::RowAfter),
             "| A   | B   |\n| --- | --- |\n| 1   | 2   |\n|     |     |\n"
@@ -463,7 +463,7 @@ mod tests {
             run(PADDED, "1", TableCommand::RowAfter),
             "| A   | B   |\n| --- | --- |\n| 1   | 2   |\n|     |     |\n| 3   | 4   |\n"
         );
-        // The first body row swaps with the header; the delimiter stays put.
+        // * The first body row swaps with the header; the delimiter stays put.
         assert_eq!(
             run(PADDED, "1", TableCommand::RowUp),
             "| 1   | 2   |\n| --- | --- |\n| A   | B   |\n| 3   | 4   |\n"
@@ -480,7 +480,7 @@ mod tests {
             run(PADDED, "1", TableCommand::RowDelete),
             "| A   | B   |\n| --- | --- |\n| 3   | 4   |\n"
         );
-        // Deleting the header promotes the row below it.
+        // * Deleting the header promotes the row below it.
         assert_eq!(
             run(PADDED, "A", TableCommand::RowDelete),
             "| 1   | 2   |\n| --- | --- |\n| 3   | 4   |\n"
@@ -529,7 +529,7 @@ mod tests {
             run(PADDED, "B", TableCommand::AlignRight),
             "| A   |   B |\n| --- | --: |\n| 1   |   2 |\n| 3   |   4 |\n"
         );
-        // Wider columns grow the delimiter and keep the odd space right.
+        // * Wider columns grow the delimiter and keep the odd space right.
         let ragged = "| Long header | B |\n| --- | ------ |\n| x | yyyyyy |\n| z | w |\n";
         assert_eq!(
             run(ragged, "yyyyyy", TableCommand::AlignCenter),
@@ -548,7 +548,7 @@ mod tests {
             run(aligned, "A", TableCommand::RowAfter),
             "| A   |  B  |   C |\n| :-- | :-: | --: |\n|     |     |     |\n| 1   |  2  |   3 |\n"
         );
-        // Alignment travels with the column it belongs to.
+        // * Alignment travels with the column it belongs to.
         assert_eq!(
             run(aligned, "A", TableCommand::ColRight),
             "|  B  | A   |   C |\n| :-: | :-- | --: |\n|  2  | 1   |   3 |\n"
@@ -573,7 +573,7 @@ mod tests {
             ),
             "| A   | B   | C   |\n| --- | --- | --- |\n| 1   |     |     |\n|     |     |     |\n"
         );
-        // `\|` keeps the cell whole, and the escape is written back.
+        // * `\|` keeps the cell whole, and the escape is written back.
         let escaped = "| a | b |\n| --- | --- |\n| x \\| y | [[Alpha]] |\n";
         assert_eq!(
             run(escaped, "Alpha", TableCommand::RowAfter),
@@ -583,11 +583,11 @@ mod tests {
 
     #[test]
     fn a_header_the_parser_rejects_is_not_a_table() {
-        // A `|` inside a code span splits a cell, so this header has three
-        // cells against the delimiter's two and GFM makes it a paragraph.
-        // Obsidian's table editor is looser and would rewrite it into a
-        // three-column table; Silica acts on what the parser calls a table,
-        // so the command does not apply rather than turning prose into one.
+        // * A `|` inside a code span splits a cell, so this header has three
+        // * cells against the delimiter's two and GFM makes it a paragraph.
+        // * Obsidian's table editor is looser and would rewrite it into a
+        // * three-column table; Silica acts on what the parser calls a table,
+        // * so the command does not apply rather than turning prose into one.
         let rich = "| `a|b` | **bold** |\n| --- | --- |\n| x | y |\n";
         assert!(table_at(rich, rich.find("bold").unwrap()).is_none());
     }
@@ -595,7 +595,7 @@ mod tests {
     #[test]
     fn a_command_that_cannot_apply_writes_nothing() {
         let at = table_at(PADDED, PADDED.find('A').unwrap()).unwrap();
-        // Nothing is above the header, nothing is left of the first column.
+        // * Nothing is above the header, nothing is left of the first column.
         assert_eq!(apply(&at, TableCommand::RowUp), None);
         assert_eq!(apply(&at, TableCommand::ColLeft), None);
         let one = "| A |\n| --- |\n| 1 |\n";
@@ -607,10 +607,10 @@ mod tests {
     fn the_cursor_is_found_in_the_right_cell() {
         let at = table_at(PADDED, PADDED.find('4').unwrap()).unwrap();
         assert_eq!((at.row, at.col), (2, 1));
-        // The delimiter belongs to the header, whose alignment it carries.
+        // * The delimiter belongs to the header, whose alignment it carries.
         let at = table_at(PADDED, PADDED.find("---").unwrap()).unwrap();
         assert_eq!(at.row, 0);
-        // Text outside any table is not in one.
+        // * Text outside any table is not in one.
         let src = "para\n\n| A |\n| --- |\n| 1 |\n\nafter\n";
         assert!(table_at(src, 0).is_none());
         assert!(table_at(src, src.find("after").unwrap()).is_none());
@@ -620,11 +620,11 @@ mod tests {
     #[test]
     fn typed_cell_text_keeps_the_row_whole() {
         assert_eq!(cell_text("plain"), "plain");
-        // A bare pipe would split the cell; an escaped one is already safe.
+        // * A bare pipe would split the cell; an escaped one is already safe.
         assert_eq!(cell_text("x|y"), "x\\|y");
         assert_eq!(cell_text("x\\|y"), "x\\|y");
         assert_eq!(cell_text("a|b|c"), "a\\|b\\|c");
-        // A newline would end the row.
+        // * A newline would end the row.
         assert_eq!(cell_text("two\nlines"), "two lines");
         assert_eq!(cell_text("`a|b`"), "`a\\|b`");
     }
@@ -638,15 +638,15 @@ mod tests {
 
     #[test]
     fn the_cursor_lands_in_the_cell_it_was_in() {
-        // The cell the cursor was in, in the rewritten table.
+        // * The cell the cursor was in, in the rewritten table.
         let at = table_at(PADDED, PADDED.find('4').unwrap()).unwrap();
         let edit = apply(&at, TableCommand::RowCopy).unwrap();
         assert_eq!(&edit.text[edit.cursor..edit.cursor + 1], "4");
         let at = table_at(PADDED, PADDED.find('A').unwrap()).unwrap();
         let edit = apply(&at, TableCommand::ColAfter).unwrap();
-        // The new column is empty, and the cursor sits in it.
+        // * The new column is empty, and the cursor sits in it.
         assert_eq!(&edit.text[edit.cursor..edit.cursor + 3], "   ");
-        // A multibyte cell still lands on a character boundary.
+        // * A multibyte cell still lands on a character boundary.
         let wide = "| é | b |\n| --- | --- |\n| ü | x |\n";
         let at = table_at(wide, wide.find('x').unwrap()).unwrap();
         let edit = apply(&at, TableCommand::RowAfter).unwrap();

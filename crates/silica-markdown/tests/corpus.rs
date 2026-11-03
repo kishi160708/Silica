@@ -60,7 +60,7 @@ fn notes(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 // ---------------------------------------------------------------------------
-// HTML canonicalization
+// * HTML canonicalization
 
 #[derive(Debug)]
 enum Tok {
@@ -596,7 +596,7 @@ fn canonicalize(html: &str) -> Vec<String> {
                     });
                     continue;
                 }
-                // A block element inside <p> closes the paragraph, as the browser does.
+                // * A block element inside <p> closes the paragraph, as the browser does.
                 if BLOCK_TAGS.contains(&name.as_str()) && name != "p" {
                     if let Some(pos) = stack
                         .iter()

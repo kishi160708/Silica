@@ -182,7 +182,7 @@ fn drive_session(buf: &mut TextBuffer, at: usize, note: &Path) {
     step(buf, "Ctrl+Backspace");
     buf.paste("pasted\nover two lines");
     step(buf, "paste");
-    // A selection replaced by typing, then the cursor's line cut.
+    // * A selection replaced by typing, then the cursor's line cut.
     let head = buf.head;
     buf.set_cursor(head, Some(head.saturating_sub(12)));
     buf.insert_all("x", EditKind::Typing);
@@ -194,8 +194,8 @@ fn drive_session(buf: &mut TextBuffer, at: usize, note: &Path) {
         None,
     );
     step(buf, "cutting the line");
-    // The formatting commands, over whatever the session has left under
-    // the cursor.
+    // * The formatting commands, over whatever the session has left under
+    // * the cursor.
     buf.toggle_wrap("**");
     step(buf, "Ctrl+B");
     buf.toggle_checklist();
@@ -218,8 +218,8 @@ fn drive_session(buf: &mut TextBuffer, at: usize, note: &Path) {
     step(buf, "Move line down");
     buf.delete_paragraph();
     step(buf, "Delete paragraph");
-    // Deleting the paragraph can empty a note that was empty to start
-    // with, and the session has to have written something.
+    // * Deleting the paragraph can empty a note that was empty to start
+    // * with, and the session has to have written something.
     buf.insert_all("tail", EditKind::Typing);
     step(buf, "typing after the deletion");
 }
@@ -266,8 +266,8 @@ fn opening_every_note_and_saving_it_changes_no_bytes() {
         with_crlf += usize::from(buf.crlf());
         check_invariants(&buf, note, "open");
     }
-    // The corpus has to keep covering both, or this test proves nothing
-    // about them.
+    // * The corpus has to keep covering both, or this test proves nothing
+    // * about them.
     assert!(with_bom > 0, "no note in the corpus has a byte order mark");
     assert!(with_crlf > 0, "no note in the corpus uses CRLF");
 }
@@ -413,7 +413,7 @@ fn accepting_a_suggestion_replaces_only_the_query_and_undoes_cleanly() {
         for at in probe_offsets(&TextBuffer::from_file(&raw)) {
             let mut buf = TextBuffer::from_file(&raw);
             let before = buf.text().to_string();
-            // Type the query the way the editor's keystrokes do.
+            // * Type the query the way the editor's keystrokes do.
             buf.set_cursor(at, None);
             buf.insert_all("[[al", EditKind::Typing);
             check_invariants(&buf, &note, "suggest typing");
@@ -441,8 +441,8 @@ fn accepting_a_suggestion_replaces_only_the_query_and_undoes_cleanly() {
                 note.display()
             );
             check_invariants(&buf, &note, "suggest accept");
-            // Only the query is replaced: the bytes before it and the bytes
-            // after what it consumed are the note's own.
+            // * Only the query is replaced: the bytes before it and the bytes
+            // * after what it consumed are the note's own.
             let want = format!(
                 "{}{}{}",
                 &before[..range.start],
@@ -472,12 +472,12 @@ fn writing_a_block_id_touches_only_that_block_and_reindexes_onto_it() {
     for note in notes_under_test() {
         let raw = std::fs::read_to_string(&note).unwrap();
         let buf = TextBuffer::from_file(&raw);
-        // The planning is over the file's own bytes, endings and all.
+        // * The planning is over the file's own bytes, endings and all.
         let text = raw.as_str();
         let nl = if buf.crlf() { "\r\n" } else { "\n" };
         let meta = index_markdown(buf.text());
-        // Three blocks per note is enough to cover the shapes without
-        // making the corpus pass take minutes.
+        // * Three blocks per note is enough to cover the shapes without
+        // * making the corpus pass take minutes.
         let blocks: Vec<_> = meta
             .sections
             .iter()
@@ -486,23 +486,23 @@ fn writing_a_block_id_touches_only_that_block_and_reindexes_onto_it() {
             .take(3)
             .collect();
         for (end, placement) in blocks {
-            // The cache's offsets are into the buffer's text, which has had
-            // a BOM and CRLF taken off; map back onto the raw bytes.
+            // * The cache's offsets are into the buffer's text, which has had
+            // * a BOM and CRLF taken off; map back onto the raw bytes.
             let Some(end) = raw_offset(&raw, buf.text(), end) else {
                 continue;
             };
             let id = new_id(end as u64, &meta.blocks);
-            // A block an id cannot be written onto is refused rather than
-            // written to: an unclosed code fence runs to the end of the
-            // file, and an id after it would land inside the fence.
+            // ! A block an id cannot be written onto is refused rather than
+            // ! written to: an unclosed code fence runs to the end of the
+            // ! file, and an id after it would land inside the fence.
             let Some(ins) = plan_id(text, end, placement, &id, nl) else {
                 refused += 1;
                 continue;
             };
             let after = ins.applied(text);
             checked += 1;
-            // Only the insertion changed: everything before it and
-            // everything after what it replaced is the note's own bytes.
+            // * Only the insertion changed: everything before it and
+            // * everything after what it replaced is the note's own bytes.
             assert_eq!(
                 &after[..ins.range.start],
                 &text[..ins.range.start],
@@ -515,15 +515,15 @@ fn writing_a_block_id_touches_only_that_block_and_reindexes_onto_it() {
                 "bytes after the id moved in {}",
                 note.display()
             );
-            // The id reads back onto a block, which is what makes the link
-            // Silica just wrote resolve rather than dangle.
+            // * The id reads back onto a block, which is what makes the link
+            // * Silica just wrote resolve rather than dangle.
             let reindexed = index_markdown(TextBuffer::from_file(&after).text());
             assert!(
                 reindexed.blocks.contains_key(&id),
                 "the id did not re-index onto a block in {} ({placement:?})",
                 note.display()
             );
-            // A note is only ever written with its own endings.
+            // ! A note is only ever written with its own endings.
             if buf.crlf() {
                 assert!(
                     !ins.text.contains('\n') || ins.text.contains("\r\n"),
@@ -534,7 +534,7 @@ fn writing_a_block_id_touches_only_that_block_and_reindexes_onto_it() {
         }
     }
     assert!(checked > 100, "only {checked} blocks were written to");
-    // The refusals are the rare shape, not the common one.
+    // ! The refusals are the rare shape, not the common one.
     assert!(
         refused * 20 < checked,
         "{refused} blocks of {checked} refused an id"
@@ -547,7 +547,7 @@ fn raw_offset(raw: &str, text: &str, at: usize) -> Option<usize> {
     if raw.len() == text.len() {
         return (at <= raw.len()).then_some(at);
     }
-    // Walk both, skipping what the buffer dropped.
+    // * Walk both, skipping what the buffer dropped.
     let (mut r, mut t) = (0usize, 0usize);
     let rb = raw.as_bytes();
     while t < at && r < rb.len() {
@@ -576,8 +576,8 @@ fn inserting_a_template_writes_only_its_own_bytes_and_undoes_cleanly() {
         minute: 53,
         second: 9,
     };
-    // A template with every placeholder, its own CRLF endings and a byte
-    // order mark: only its text may reach the note.
+    // * A template with every placeholder, its own CRLF endings and a byte
+    // * order mark: only its text may reach the note.
     let raw_template = "\u{feff}# {{title}}\r\n\r\nWritten {{date}} at {{time}}.\r\n";
     let template = TextBuffer::from_file(raw_template).text().to_string();
     for note in notes_under_test() {
@@ -640,7 +640,7 @@ fn a_table_command_stays_inside_its_table_and_undoes_cleanly() {
     for note in notes_under_test() {
         let raw = std::fs::read_to_string(&note).unwrap();
         let text = TextBuffer::from_file(&raw).text().to_string();
-        // Every table in the note, through the cursor in its first cell.
+        // * Every table in the note, through the cursor in its first cell.
         for found in tables(&text) {
             count += 1;
             for cmd in COMMANDS {
@@ -650,8 +650,8 @@ fn a_table_command_stays_inside_its_table_and_undoes_cleanly() {
                     continue;
                 }
                 check_invariants(&buf, &note, "table command");
-                // A table command rewrites its whole table, and Obsidian's
-                // does too — but nothing outside it may move.
+                // * A table command rewrites its whole table, and Obsidian's
+                // * does too — but nothing outside it may move.
                 let after = buf.text().to_string();
                 assert_eq!(
                     &after[..found.start],
@@ -679,21 +679,21 @@ fn a_table_command_stays_inside_its_table_and_undoes_cleanly() {
 
 #[test]
 fn a_save_refuses_a_file_that_changed_underneath() {
-    // The gate is a week of mixed use in both apps, and this is the shape
-    // that loses data: a note is open and edited here, the other app saves
-    // it, and the autosave writes the whole buffer over that save. The
-    // buffer keeps a fingerprint of the bytes it last knew on disk so the
-    // save can refuse.
+    // ! The gate is a week of mixed use in both apps, and this is the shape
+    // ! that loses data: a note is open and edited here, the other app saves
+    // ! it, and the autosave writes the whole buffer over that save. The
+    // ! buffer keeps a fingerprint of the bytes it last knew on disk so the
+    // ! save can refuse.
     for note in notes_under_test() {
         let raw = std::fs::read_to_string(&note).unwrap();
         let mut buf = TextBuffer::from_file(&raw);
-        // Nothing has happened: the file on disk is the file we loaded.
+        // * Nothing has happened: the file on disk is the file we loaded.
         assert!(
             buf.disk_unchanged(&raw),
             "a freshly loaded note did not match its own bytes: {}",
             note.display()
         );
-        // Our own edits do not change what is on disk.
+        // ! Our own edits do not change what is on disk.
         buf.set_cursor(0, None);
         buf.insert_all("typed", EditKind::Typing);
         assert!(
@@ -701,14 +701,14 @@ fn a_save_refuses_a_file_that_changed_underneath() {
             "editing changed what the buffer thinks is on disk: {}",
             note.display()
         );
-        // The other app saves: one byte is enough to notice.
+        // * The other app saves: one byte is enough to notice.
         let theirs = format!("{raw}\nwritten by the other app\n");
         assert!(
             !buf.disk_unchanged(&theirs),
             "a change underneath went unnoticed in {}",
             note.display()
         );
-        // Once we save, what we wrote is what is on disk.
+        // * Once we save, what we wrote is what is on disk.
         let ours = buf.file_contents();
         buf.mark_saved();
         buf.mark_on_disk(&ours);
@@ -719,7 +719,7 @@ fn a_save_refuses_a_file_that_changed_underneath() {
 
 #[test]
 fn an_edited_file_keeps_its_line_ending_and_byte_order_mark() {
-    // The one corpus note written the Windows way, with both.
+    // * The one corpus note written the Windows way, with both.
     let note = corpus_root().join("edge/CRLF.md");
     let raw = std::fs::read_to_string(&note).unwrap();
     let mut buf = TextBuffer::from_file(&raw);
@@ -874,10 +874,10 @@ fn config_dirs() -> Vec<PathBuf> {
         corpus_root().join(".obsidian"),
         repo.parent().unwrap().join("docs/silica/.obsidian"),
     ];
-    // The gate's real vault, when one is named: its `.obsidian` is the set a
-    // person actually accumulated, which the repository's two cannot imitate
-    // — files missing outright, an `appearance.json` that is a bare `{}`, no
-    // trailing newline. A tree that is not a vault root simply has none.
+    // ! The gate's real vault, when one is named: its `.obsidian` is the set a
+    // ! person actually accumulated, which the repository's two cannot imitate
+    // ! — files missing outright, an `appearance.json` that is a bare `{}`, no
+    // ! trailing newline. A tree that is not a vault root simply has none.
     if let Some(root) = std::env::var_os("SILICA_ROUNDTRIP_VAULT") {
         let dir = PathBuf::from(root).join(".obsidian");
         if dir.is_dir() {
@@ -963,10 +963,10 @@ fn every_config_file_is_written_back_byte_identical() {
             &dir,
             "types.json",
         ));
-        // The per-plugin files. Obsidian does not create any of them until a
-        // setting in that plugin is written, so no set here has one yet and
-        // these contribute nothing — they are listed so a set that does have
-        // one covers it, `switcher.json` above all: the app writes it.
+        // * The per-plugin files. Obsidian does not create any of them until a
+        // * setting in that plugin is written, so no set here has one yet and
+        // * these contribute nothing — they are listed so a set that does have
+        // * one covers it, `switcher.json` above all: the app writes it.
         checked += usize::from(config_round_trips::<SwitcherConfig>(
             &vault,
             &dir,
@@ -987,21 +987,21 @@ fn every_config_file_is_written_back_byte_identical() {
             &dir,
             "daily-notes.json",
         ));
-        // Every set has to contribute, or naming a vault proves nothing
-        // about its own `.obsidian`.
+        // * Every set has to contribute, or naming a vault proves nothing
+        // * about its own `.obsidian`.
         assert!(
             checked > before,
             "no config file round-tripped in {}",
             dir.display()
         );
     }
-    // `workspace.json` is deliberately not here: Silica neither models nor
-    // writes it (`docs/silica/.obsidian` keeps it out of version control for
-    // the same reason).
-    //
-    // The two repository sets hold eight files between them. No set in the
-    // repository has a `hotkeys.json` or a `types.json`, so those two writers
-    // are only covered when a vault that has them is named.
+    // * `workspace.json` is deliberately not here: Silica neither models nor
+    // * writes it (`docs/silica/.obsidian` keeps it out of version control for
+    // * the same reason).
+    // *
+    // * The two repository sets hold eight files between them. No set in the
+    // * repository has a `hotkeys.json` or a `types.json`, so those two writers
+    // * are only covered when a vault that has them is named.
     assert!(
         checked >= 8,
         "only {checked} config files were round-tripped"
@@ -1090,12 +1090,12 @@ fn every_canvas_obsidian_saved_is_written_back_byte_identical() {
     let (mut checked, mut authored_elsewhere, mut empty) = (0, Vec::new(), Vec::new());
     for path in &canvases {
         let before = std::fs::read_to_string(path).unwrap();
-        // `canvas:new-file` writes a zero-byte file, and Obsidian puts JSON
-        // in it only once the canvas holds something (see
-        // [[Specification#Observed canvas write behavior]]), so an untouched
-        // new canvas is a real vault state with nothing to round trip. It is
-        // skipped rather than failed: a vault that holds one is not a vault
-        // the writer has mangled.
+        // ? `canvas:new-file` writes a zero-byte file, and Obsidian puts JSON
+        // ? in it only once the canvas holds something (see
+        // ? [[Specification#Observed canvas write behavior]]), so an untouched
+        // ? new canvas is a real vault state with nothing to round trip. It is
+        // ? skipped rather than failed: a vault that holds one is not a vault
+        // ? the writer has mangled.
         if before.trim().is_empty() {
             empty.push(path.display().to_string());
             continue;
@@ -1184,9 +1184,9 @@ fn every_base_obsidian_saved_is_written_back_byte_identical() {
     let (mut checked, mut authored_elsewhere, mut empty) = (0, Vec::new(), Vec::new());
     for path in &bases {
         let before = std::fs::read_to_string(path).unwrap();
-        // `bases:new-file` writes a zero-byte file, and Obsidian puts YAML in
-        // it only once the base is opened and given its default view, so an
-        // untouched new base is a real vault state with nothing to round trip.
+        // * `bases:new-file` writes a zero-byte file, and Obsidian puts YAML in
+        // * it only once the base is opened and given its default view, so an
+        // * untouched new base is a real vault state with nothing to round trip.
         if before.trim().is_empty() {
             empty.push(path.display().to_string());
             continue;

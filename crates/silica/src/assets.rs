@@ -243,8 +243,8 @@ mod tests {
 
     #[test]
     fn every_callout_type_draws_the_icon_obsidian_draws() {
-        // The whole of the probe's table, aliases and all, plus a type
-        // Obsidian does not know: it falls back to note's pencil.
+        // * The whole of the probe's table, aliases and all, plus a type
+        //   Obsidian does not know: it falls back to note's pencil.
         let table = [
             ("note", "pencil"),
             ("abstract", "clipboard-list"),
@@ -284,7 +284,7 @@ mod tests {
                 "{path} is not bundled"
             );
         }
-        // The fold chevron, drawn in both states.
+        // * The fold chevron, drawn in both states.
         for name in ["chevron-down", "chevron-right"] {
             assert!(Assets.load(&format!("icons/{name}.svg")).unwrap().is_some());
         }
@@ -293,13 +293,13 @@ mod tests {
     #[test]
     fn the_logo_loads_and_keeps_its_own_colours() {
         let bytes = Assets.load(LOGO.0).unwrap().expect("logo.png");
-        // It is a PNG with transparency, no svg markup.
+        // * It is a PNG with transparency, no svg markup.
         assert!(
             !std::str::from_utf8(&bytes).unwrap_or("").contains("<svg"),
             "the logo is not an svg"
         );
-        // No stop fades out: a mark that ramps to transparent takes the
-        // colour of whatever is behind it, which is how the drawing arrived.
+        // * No stop fades out: a mark that ramps to transparent takes the
+        //   colour of whatever is behind it, which is how the drawing arrived.
         assert!(
             !std::str::from_utf8(&bytes)
                 .unwrap_or("")
@@ -319,7 +319,7 @@ mod tests {
     #[test]
     fn the_fonts_are_truetype() {
         for bytes in fonts() {
-            // A TrueType face starts with the 0x00010000 sfnt version.
+            // * A TrueType face starts with the 0x00010000 sfnt version.
             assert_eq!(&bytes[..4], &[0, 1, 0, 0]);
         }
     }

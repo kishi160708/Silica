@@ -43,9 +43,7 @@ pub fn same_property(a: &str, b: &str) -> bool {
     qualified_id(a).eq_ignore_ascii_case(&qualified_id(b))
 }
 
-// ---------------------------------------------------------------------------
-// sort
-// ---------------------------------------------------------------------------
+// * sort
 
 /// Whether the view already sorts by `property`.
 pub fn is_sorted(view: &View, property: &str) -> bool {
@@ -104,9 +102,7 @@ pub fn set_sort_direction(view: &mut View, ix: usize, direction: &str) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// groupBy
-// ---------------------------------------------------------------------------
+// * groupBy
 
 /// `groupBy.property`. A view with no `groupBy` gets one in the ascending
 /// direction, which is the direction an absent one means.
@@ -132,9 +128,7 @@ pub fn set_group_direction(view: &mut View, direction: &str) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// order
-// ---------------------------------------------------------------------------
+// * order
 
 /// *Hide column*, and the properties panel's unchecking.
 ///
@@ -189,20 +183,18 @@ pub fn toggle_property(view: &mut View, shown: &[String], id: &str) {
         hide_column(view, id, shown);
         return;
     }
-    // A view with no `order` shows the columns its rows imply, so naming one
-    // more column has to name those as well: appending the id alone would
-    // write an `order` of one, and the view would lose every column it was
-    // already showing. **Unprobed** — no fixture reached the panel without an
-    // `order` — but the alternative is a box that collapses the table.
+    // ? A view with no `order` shows the columns its rows imply, so naming one
+    //   more column has to name those as well: appending the id alone would
+    //   write an `order` of one, and the view would lose every column it was
+    //   already showing. **Unprobed** — no fixture reached the panel without an
+    //   `order` — but the alternative is a box that collapses the table.
     if view.order.is_empty() {
         view.order = shown.to_vec();
     }
     add_property(view, id);
 }
 
-// ---------------------------------------------------------------------------
-// limit
-// ---------------------------------------------------------------------------
+// * limit
 
 /// What the "Limit number of results" input writes: a bare number, or no
 /// `limit` key at all for an empty or unreadable field. *Show all (n)* is the
@@ -250,7 +242,7 @@ mod tests {
 
     #[test]
     fn an_id_is_written_exactly_as_the_caller_spelled_it() {
-        // The writer does not qualify a bare id, so neither does this.
+        // * The writer does not qualify a bare id, so neither does this.
         let mut view = a_table();
         prepend_sort(&mut view, "status", ASC);
         add_property(&mut view, "status");
@@ -308,8 +300,8 @@ mod tests {
 
     #[test]
     fn neither_surface_ever_empties_order() {
-        // An empty `order` is the key omitted, which means every implied
-        // column, so the last column would come straight back.
+        // * An empty `order` is the key omitted, which means every implied
+        //   column, so the last column would come straight back.
         let mut one = view_of("views:\n  - type: table\n    name: V\n    order:\n      - status\n");
         hide_column(&mut one, "status", &[]);
         assert_eq!(one.order, vec!["status".to_string()]);

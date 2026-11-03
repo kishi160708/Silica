@@ -159,8 +159,8 @@ impl<'a> Parser<'a> {
                 if close.is_some_and(|c| c.eq_ignore_ascii_case(&name)) {
                     return out;
                 }
-                // A stray close for a different element: its content has
-                // already been read, so there is nothing to do.
+                // * A stray close for a different element: its content has
+                //   already been read, so there is nothing to do.
                 continue;
             }
             if self.starts_with("<") {
@@ -181,7 +181,7 @@ impl<'a> Parser<'a> {
     fn parse_element(&mut self) -> Option<Element> {
         let open_len = self.peek_tag_name(1).len();
         if open_len == 0 {
-            // A stray `<`: it is text.
+            // * A stray `<`: it is text.
             self.pos += 1;
             return None;
         }
@@ -194,9 +194,9 @@ impl<'a> Parser<'a> {
                 children: Vec::new(),
             });
         }
-        // A void element has no children by definition: treating it as empty
-        // is both what Markdown wants and what stops it eating the next
-        // paragraph.
+        // * A void element has no children by definition: treating it as empty
+        //   is both what Markdown wants and what stops it eating the next
+        //   paragraph.
         if VOID.contains(&tag.as_str()) {
             return Some(Element {
                 tag,
@@ -205,9 +205,9 @@ impl<'a> Parser<'a> {
             });
         }
         if self.depth >= MAX_DEPTH {
-            // Past the limit: consume this element's content without
-            // recursing into it, so the input is still read to the end and
-            // the elements around it survive.
+            // * Past the limit: consume this element's content without
+            //   recursing into it, so the input is still read to the end and
+            //   the elements around it survive.
             self.skip_past_close(&tag);
             return Some(Element {
                 tag,
@@ -257,9 +257,9 @@ impl<'a> Parser<'a> {
     /// closed itself. Leaves `pos` after the `>`.
     fn parse_attrs(&mut self) -> (Vec<(String, String)>, bool) {
         let mut attrs = Vec::new();
-        self.pos += 1; // the '<'
-                       // Skip the tag name, stopping at the `>` or `/` that ends it: a tag
-                       // with no attributes has no whitespace to stop on.
+        self.pos += 1; // * the '<'
+                       // * Skip the tag name, stopping at the `>` or `/` that ends it: a tag
+                       //   with no attributes has no whitespace to stop on.
         while self.pos < self.src.len() {
             let c = self.src[self.pos];
             if is_space(c) || c == b'>' || c == b'/' {
@@ -414,7 +414,7 @@ fn decode_entities(s: &str) -> String {
                 continue;
             }
         }
-        // Copy one whole character, not one byte.
+        // * Copy one whole character, not one byte.
         let ch = s[i..].chars().next().unwrap_or('\u{fffd}');
         out.push(ch);
         i += ch.len_utf8();
@@ -579,8 +579,8 @@ fn write_block(el: &Element, out: &mut String, depth: usize) {
         }
         "ul" | "ol" => write_list(el, out, depth),
         "table" => write_table(el, out),
-        // A definition list has no Markdown of its own: the term becomes a
-        // bold line and the definitions sit under it.
+        // * A definition list has no Markdown of its own: the term becomes a
+        //   bold line and the definitions sit under it.
         "dl" => {
             for child in &el.children {
                 if let Node::Element(e) = child {
@@ -603,16 +603,16 @@ fn write_block(el: &Element, out: &mut String, depth: usize) {
             }
         }
         "li" => {
-            // An `li` outside a list: write it as a bullet rather than
-            // dropping the marker.
+            // * An `li` outside a list: write it as a bullet rather than
+            //   dropping the marker.
             let text = inline_of(&el.children);
             if !text.trim().is_empty() {
                 push_block(out, &format!("- {}", text.trim()));
             }
         }
         _ => {
-            // `p`, `div`, `section` and the rest: their content is blocks of
-            // its own. A paragraph is one line.
+            // * `p`, `div`, `section` and the rest: their content is blocks of
+            //   its own. A paragraph is one line.
             let mut inner = String::new();
             write_blocks(&el.children, &mut inner, depth);
             let inner = inner.trim();
@@ -624,7 +624,7 @@ fn write_block(el: &Element, out: &mut String, depth: usize) {
 }
 
 fn write_pre(el: &Element, out: &mut String) {
-    // `<pre><code class="language-rust">` names the fence's language.
+    // * `<pre><code class="language-rust">` names the fence's language.
     let mut lang = String::new();
     if let Some(Node::Element(code)) = el
         .children
@@ -641,8 +641,8 @@ fn write_pre(el: &Element, out: &mut String) {
     while body.ends_with('\n') {
         body.pop();
     }
-    // A fence must be longer than any run of backticks inside the body, or
-    // the code closes the fence and the rest leaks out as Markdown.
+    // * A fence must be longer than any run of backticks inside the body, or
+    //   the code closes the fence and the rest leaks out as Markdown.
     let fence = "`".repeat(longest_backtick_run(&body).max(2) + 1);
     push_block(out, &format!("{fence}{lang}\n{body}\n{fence}"));
 }
@@ -656,8 +656,8 @@ fn write_list(el: &Element, out: &mut String, depth: usize) {
             continue;
         }
         let mut body = String::new();
-        // The item's own text comes first, then any nested list indented
-        // under it.
+        // * The item's own text comes first, then any nested list indented
+        //   under it.
         let mut inline = String::new();
         for node in &li.children {
             match node {
@@ -703,9 +703,9 @@ fn write_list(el: &Element, out: &mut String, depth: usize) {
         let mut lines = body.lines();
         let first = lines.next().unwrap_or("");
         let mut item = format!("{marker} {first}");
-        // A continuation line is indented to the marker's width, but a
-        // line that already starts with spaces is a nested list's own
-        // indent and keeps it.
+        // * A continuation line is indented to the marker's width, but a
+        //   line that already starts with spaces is a nested list's own
+        //   indent and keeps it.
         for line in lines {
             item.push('\n');
             if line.starts_with(' ') {
@@ -767,7 +767,7 @@ fn write_table(el: &Element, out: &mut String) {
     if cols == 0 {
         return;
     }
-    // A `th` row is the header even without a `<thead>`.
+    // * A `th` row is the header even without a `<thead>`.
     let has_th = el
         .children
         .iter()
@@ -820,9 +820,9 @@ fn write_inline(el: &Element, out: &mut String) {
             let text = raw_text(&el.children);
             let text = text.trim();
             if !text.is_empty() {
-                // Same rule as a block fence, one level down: one backtick
-                // more than the longest run inside, and a space on each side
-                // when the text itself starts or ends with one.
+                // * Same rule as a block fence, one level down: one backtick
+                //   more than the longest run inside, and a space on each side
+                //   when the text itself starts or ends with one.
                 let fence = "`".repeat(longest_backtick_run(text) + 1);
                 let pad = if text.starts_with('`') || text.ends_with('`') {
                     " "
@@ -855,7 +855,7 @@ fn write_inline(el: &Element, out: &mut String) {
             out.push_str(&format!("![{}]({})", alt, escape_target(src)));
         }
         "sup" => {
-            // Markdown has no superscript; the caret reads the same in text.
+            // * Markdown has no superscript; the caret reads the same in text.
             let text = collapsed_inline(&el.children);
             if !text.is_empty() {
                 out.push_str(&format!("^{text}^"));
@@ -874,7 +874,7 @@ fn write_inline(el: &Element, out: &mut String) {
             }
         }
         _ => {
-            // A span, a font, a label: its text, without the wrapper.
+            // * A span, a font, a label: its text, without the wrapper.
             for child in &el.children {
                 match child {
                     Node::Text(t) => out.push_str(t),
@@ -896,8 +896,8 @@ fn wrap(el: &Element, out: &mut String, marker: &str) {
     if text.is_empty() {
         return;
     }
-    // Leading or trailing spaces inside emphasis are lost by every Markdown
-    // parser; move them outside the markers.
+    // * Leading or trailing spaces inside emphasis are lost by every Markdown
+    //   parser; move them outside the markers.
     let lead =
         collapsed_inline(&el.children).len() - collapsed_inline(&el.children).trim_start().len();
     let spaced = " ".repeat(lead);
@@ -926,8 +926,8 @@ fn is_unsafe_target(href: &str) -> bool {
         Some((scheme, _)) => scheme.trim().to_ascii_lowercase(),
         None => return false,
     };
-    // A colon before any `/`, `?` or `#` opens a scheme; anything else is a
-    // path segment that happens to contain a colon.
+    // * A colon before any `/`, `?` or `#` opens a scheme; anything else is a
+    //   path segment that happens to contain a colon.
     if scheme.contains('/') || scheme.contains('?') || scheme.contains('#') {
         return false;
     }
@@ -1069,16 +1069,16 @@ mod tests {
             md(r#"<p><a href="https://example.com/a">text</a></p>"#),
             "[text](https://example.com/a)"
         );
-        // An anchor to nowhere, or a script, keeps only its text.
+        // * An anchor to nowhere, or a script, keeps only its text.
         assert_eq!(md(r##"<p><a href="#top">top</a></p>"##), "top");
         assert_eq!(md(r##"<p><a href="javascript:x()">bad</a></p>"##), "bad");
     }
 
     #[test]
     fn every_void_element_stops_where_it_ends() {
-        // A void element must not eat what follows it. The second paragraph
-        // is the canary: it only survives if `<img>`, `<input>`, `<wbr>` and
-        // the rest are recognised as childless.
+        // ! A void element must not eat what follows it. The second paragraph
+        //   is the canary: it only survives if `<img>`, `<input>`, `<wbr>` and
+        //   the rest are recognised as childless.
         assert_eq!(
             md(r##"<p>first</p><img src="p.png" alt="p"><p>second</p>"##),
             "first\n\n![p](p.png)\n\nsecond"
@@ -1102,7 +1102,7 @@ mod tests {
             let html = format!(r##"<a href="{scheme}:alert(1)">click</a>"##);
             assert_eq!(md(&html), "click", "{scheme} survived as a link");
         }
-        // An ordinary scheme and a path containing a colon are untouched.
+        // * An ordinary scheme and a path containing a colon are untouched.
         assert_eq!(
             md(r##"<a href="HTTPS://example.com/a:b">x</a>"##),
             "[x](HTTPS://example.com/a:b)"
@@ -1111,7 +1111,7 @@ mod tests {
 
     #[test]
     fn deep_nesting_does_not_blow_the_stack() {
-        // Far past MAX_DEPTH; a recursive parser without a limit dies here.
+        // * Far past MAX_DEPTH; a recursive parser without a limit dies here.
         let mut html = String::new();
         for _ in 0..5_000 {
             html.push_str("<div>");
@@ -1120,12 +1120,12 @@ mod tests {
         for _ in 0..5_000 {
             html.push_str("</div>");
         }
-        // Nothing beyond the limit is kept, so there is nothing to convert —
-        // `None` is the honest answer, and the point is that it returns.
+        // * Nothing beyond the limit is kept, so there is nothing to convert —
+        //   `None` is the honest answer, and the point is that it returns.
         let out = convert(&html).unwrap_or_default();
         assert!(out.len() < 64, "the limit did not hold: {out:?}");
-        // Shallow-but-deep input still converts: the limit is not a hair
-        // trigger.
+        // * Shallow-but-deep input still converts: the limit is not a hair
+        //   trigger.
         let mut shallow = String::new();
         for _ in 0..40 {
             shallow.push_str("<div>");
@@ -1139,14 +1139,14 @@ mod tests {
 
     #[test]
     fn a_fence_outgrows_the_backticks_it_holds() {
-        // Three backticks in the body would close a three-backtick fence.
+        // * Three backticks in the body would close a three-backtick fence.
         assert_eq!(
             md("<pre><code>a```b</code></pre>"),
             "````\na```b\n````",
             "the fence must be longer than the run inside it"
         );
         assert_eq!(md("<pre>plain</pre>"), "```\nplain\n```");
-        // Inline code likewise, and it pads when the text touches a backtick.
+        // * Inline code likewise, and it pads when the text touches a backtick.
         assert_eq!(md("<code>a``b</code>"), "```a``b```");
         assert_eq!(md("<code>`x`</code>"), "`` `x` ``");
     }
@@ -1169,7 +1169,7 @@ mod tests {
             md("<pre><code class=\"language-rust\">fn main() {\n    1\n}</code></pre>"),
             "```rust\nfn main() {\n    1\n}\n```"
         );
-        // No language: a bare fence.
+        // * No language: a bare fence.
         assert_eq!(md("<pre>plain</pre>"), "```\nplain\n```");
     }
 
@@ -1188,7 +1188,7 @@ mod tests {
                 <tbody><tr><td>1</td><td>2</td></tr></tbody></table>"),
             "| A | B |\n| --- | --- |\n| 1 | 2 |"
         );
-        // A pipe in a cell is escaped, or the row would gain a column.
+        // * A pipe in a cell is escaped, or the row would gain a column.
         assert_eq!(
             md("<table><tr><th>A</th></tr><tr><td>a|b</td></tr></table>"),
             "| A |\n| --- |\n| a\\|b |"
@@ -1205,7 +1205,7 @@ mod tests {
     #[test]
     fn entities_are_decoded() {
         assert_eq!(md("<p>a &amp; b &lt; c &#8212; d</p>"), "a & b < c — d");
-        // An entity the table does not know stays as written.
+        // * An entity the table does not know stays as written.
         assert_eq!(md("<p>&weird;</p>"), "&weird;");
     }
 
@@ -1227,7 +1227,7 @@ mod tests {
 
     #[test]
     fn a_plain_string_is_not_converted() {
-        // A page that puts its plain copy on the clipboard as text/html.
+        // * A page that puts its plain copy on the clipboard as text/html.
         assert_eq!(convert("just some text"), None);
         assert_eq!(convert(""), None);
         assert_eq!(convert("   \n  "), None);
@@ -1236,7 +1236,7 @@ mod tests {
     #[test]
     fn whitespace_collapses_the_way_a_browser_draws_it() {
         assert_eq!(md("<p>a\n      b</p>"), "a b");
-        // But a <br> is a real break.
+        // * But a <br> is a real break.
         assert_eq!(md("<p>a<br>\n     b</p>"), "a\nb");
     }
 }

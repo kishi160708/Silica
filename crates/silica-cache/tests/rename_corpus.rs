@@ -112,7 +112,7 @@ fn check(renames: &[(String, String)], format: LinkFormat) {
         .collect();
     let rewrites = before.plan_rename_rewrites(renames, format, &|p| texts.get(p).cloned());
 
-    // Apply the renames and rewrites to a copy of the vault.
+    // * Apply the renames and rewrites to a copy of the vault.
     let new_paths: Vec<String> = paths
         .iter()
         .map(|p| {
@@ -196,7 +196,7 @@ fn moving_folders_keeps_every_link_in_every_format() {
         .collect();
     folders.sort();
     folders.dedup();
-    // Move the first three folders under a new one and rename the fourth.
+    // * Move the first three folders under a new one and rename the fourth.
     let mut renames = Vec::new();
     for (i, folder) in folders.iter().take(4).enumerate() {
         let target = if i < 3 {
