@@ -10,7 +10,7 @@
   <img alt="Rust" src="https://img.shields.io/badge/100%25-Rust-E8590C?style=flat-square&logo=rust&logoColor=white">
   <img alt="Linux, Windows, macOS" src="https://img.shields.io/badge/Linux%20%7C%20Windows%20%7C%20macOS-2b2b2b?style=flat-square">
   <img alt="MIT" src="https://img.shields.io/badge/license-MIT-2b2b2b?style=flat-square">
-  <img alt="v0.5.6" src="https://img.shields.io/badge/status-early%20alpha%20v0.5.6-f2545b?style=flat-square">
+  <img alt="v0.5.7" src="https://img.shields.io/badge/status-early%20alpha%20v0.5.7-f2545b?style=flat-square">
 </p>
 
 Silica is a native desktop knowledge base written in Rust on GPUI. It opens an Obsidian vault exactly as it sits on disk: the same folder, the same `.obsidian` configuration, the same Markdown dialect, the same `.canvas` and `.base` files. There is no import step, no conversion, and no second copy of anything. The vault folder is the only source of truth. Silica is an independent, clean-room implementation and is not affiliated with Obsidian.
@@ -58,6 +58,7 @@ Gate: 190 ms cold against a 2.00 s budget — PASS.
 | `silica-pdf` | PDF rendering: pages, outline, title, page text |
 | `silica-math` | TeX math typesetting (KaTeX-compatible) |
 | `silica-control` | Control socket protocol (`--control`) and `silica-mcp` |
+| `silica-highlight` | Prism.js tokenizer for fenced code blocks; Obsidian-compatible token names painted from `--code-*` theme tokens |
 
 ## Running it
 
