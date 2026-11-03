@@ -1,0 +1,18 @@
+[package]
+name = "silica-highlight"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+# Prism's patterns use lookahead and lookbehind, which `regex` does not have.
+# `fancy-regex` is pure Rust, wraps `regex` for the parts it can, and falls
+# back to a backtracking engine for the rest. Only `silica-highlight` needs it.
+fancy-regex = { workspace = true }
+
+[dev-dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }

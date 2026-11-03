@@ -19,6 +19,7 @@ members = [
     "crates/silica-pdf",
     "crates/silica-math",
     "crates/silica-plugins",
+    "crates/silica-highlight",
     "crates/silica-bench",
 ]
 
@@ -65,6 +66,10 @@ walkdir = "2"
 tempfile = "3"
 rayon = "1"
 regex = "1"
+# Prism's patterns use lookahead and lookbehind, which `regex` does not have.
+# `fancy-regex` is pure Rust, wraps `regex` for the parts it can, and falls
+# back to a backtracking engine for the rest. Only `silica-highlight` needs it.
+fancy-regex = "0.16"
 notify = "8"
 # Pure Rust PDF rasterizer for the PDF view and `![[x.pdf]]` embeds. The default
 # features embed the 14 standard fonts and the CMaps, so a PDF without its own
