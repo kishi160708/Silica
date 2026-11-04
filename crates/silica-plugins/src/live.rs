@@ -324,6 +324,7 @@ module.exports = Counter;
             metadata_cache: Box::new(|_| Err("no vault".to_string())),
             open_note: Box::new(|_| Err("no vault".to_string())),
             current_note: Box::new(|| None),
+            notify: Box::new(|_| {}),
         };
         let (outcome, _) = run("counter:hello", &ctx).expect("the plugin owns this command");
         outcome.expect("the command ran");
@@ -347,6 +348,7 @@ module.exports = Counter;
             metadata_cache: Box::new(|_| Err("no vault".to_string())),
             open_note: Box::new(|_| Err("no vault".to_string())),
             current_note: Box::new(|| None),
+            notify: Box::new(|_| {}),
         };
         assert!(run("silica:open-settings", &ctx).is_none());
         // * A second ask for the same vault keeps the same runtime.
@@ -375,6 +377,7 @@ module.exports = Counter;
             metadata_cache: Box::new(|_| Err("no vault".to_string())),
             open_note: Box::new(|_| Err("no vault".to_string())),
             current_note: Box::new(|| None),
+            notify: Box::new(|_| {}),
         };
 
         // * Native plugins are global: they run without a vault loaded.
@@ -445,6 +448,7 @@ module.exports = W;
             metadata_cache: Box::new(|_| Ok("{}".into())),
             open_note: Box::new(|_| Ok(())),
             current_note: Box::new(move || Some(open.clone())),
+            notify: Box::new(|_| {}),
         };
         let (outcome, _) = run("w:hit", &ctx).expect("the plugin owns it");
         assert!(outcome.is_err(), "the write was allowed: {outcome:?}");

@@ -125,6 +125,20 @@ impl Plugin for Backlink {
                         }
                     }
                 }
+                // * The count and the names are the whole point of the
+                // * command; before this the vector was built and dropped.
+                match backlinks.len() {
+                    0 => (ctx.notify)("No backlinks"),
+                    1 => (ctx.notify)(&format!("1 backlink: {}", backlinks[0])),
+                    n => {
+                        let mut names = backlinks.join(", ");
+                        if names.len() > 200 {
+                            names.truncate(200);
+                            names.push('…');
+                        }
+                        (ctx.notify)(&format!("{n} backlinks: {names}"));
+                    }
+                }
                 Ok(())
             }
             _ => Err(format!("'{id}' is not a command this plugin registered")),
@@ -162,6 +176,35 @@ impl Plugin for OutgoingLink {
                 let current = (ctx.current_note)().unwrap_or_default();
                 if current.is_empty() {
                     return Err("No note is open".to_string());
+                }
+                // * The note's own `links` from the metadata cache. This used
+                // * to check that the open note existed and stop, so the
+                // * command reported success without showing anything.
+                let metadata = (ctx.metadata_cache)(&current)?;
+                let meta: serde_json::Value =
+                    serde_json::from_str(&metadata).map_err(|e| e.to_string())?;
+                let links: Vec<String> = meta
+                    .get("links")
+                    .and_then(|v| v.as_array())
+                    .map(|array| {
+                        array
+                            .iter()
+                            .filter_map(|l| l.get("link").and_then(|v| v.as_str()))
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                match links.len() {
+                    0 => (ctx.notify)("No outgoing links"),
+                    1 => (ctx.notify)(&format!("1 outgoing link: {}", links[0])),
+                    n => {
+                        let mut names = links.join(", ");
+                        if names.len() > 200 {
+                            names.truncate(200);
+                            names.push('…');
+                        }
+                        (ctx.notify)(&format!("{n} outgoing links: {names}"));
+                    }
                 }
                 Ok(())
             }
@@ -291,7 +334,15 @@ impl Plugin for WordCount {
                     return Err("No note is open".to_string());
                 }
                 let content = (ctx.read_file)(&current)?;
-                let _words = content.split_whitespace().count();
+                // * The count was computed and thrown away. Words, not
+                // * whitespace runs: a note's prose is words, and the two agree
+                // * only when nothing but spaces separates them.
+                let words = content.split_whitespace().count();
+                let chars = content.chars().count();
+                let reading_minutes = (words as f64 / 200.0).ceil().max(1.0) as u64;
+                (ctx.notify)(&format!(
+                    "{words} words, {chars} characters (~{reading_minutes} min read)"
+                ));
                 Ok(())
             }
             _ => Err(format!("'{id}' is not a command this plugin registered")),
@@ -790,6 +841,19 @@ impl Plugin for TagPane {
                     }
                 }
 
+                // * The collected tags are what the command is for; before
+                // * this the set was built and dropped.
+                if tags.is_empty() {
+                    (ctx.notify)("No tags in this vault");
+                } else {
+                    let names: Vec<&str> = tags.iter().map(String::as_str).collect();
+                    let mut listed = names.join(", ");
+                    if listed.len() > 200 {
+                        listed.truncate(200);
+                        listed.push('…');
+                    }
+                    (ctx.notify)(&format!("{} tags: {listed}", tags.len()));
+                }
                 Ok(())
             }
             _ => Err(format!("'{id}' is not a command this plugin registered")),
@@ -983,5 +1047,137 @@ mod date_tests {
         assert_eq!(parts[0].len(), 4, "{today}");
         assert_eq!(parts[1].len(), 2, "{today}");
         assert_eq!(parts[2].len(), 2, "{today}");
+    }
+}
+
+/// Commands that gather something and show it.
+///
+/// Each of these computed an answer and returned `Ok(())` without putting the
+/// answer anywhere, so the work happened and the user saw nothing.
+#[cfg(test)]
+mod report_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::rc::Rc;
+
+    /// A context over a fixed set of notes and metadata, recording notices.
+    struct Harness {
+        notices: Rc<RefCell<Vec<String>>>,
+    }
+
+    impl Harness {
+        fn new(notes: &[(&str, &str)], meta: HashMap<String, String>, open: &str) -> (Self, PluginContext<'static>) {
+            let notices = Rc::new(RefCell::new(Vec::new()));
+            let shown = Rc::clone(&notices);
+            let files: Vec<String> = notes.iter().map(|(p, _)| p.to_string()).collect();
+            let bodies: HashMap<String, String> = notes
+                .iter()
+                .map(|(p, b)| (p.to_string(), b.to_string()))
+                .collect();
+            let current = open.to_string();
+            let ctx = PluginContext {
+                vault_root: std::path::Path::new("."),
+                read_file: Box::new(move |p| {
+                    bodies
+                        .get(p)
+                        .cloned()
+                        .ok_or_else(|| format!("no such file: {p}"))
+                }),
+                write_file: Box::new(|_, _| Ok(())),
+                append_file: Box::new(|_, _| Ok(())),
+                create_file: Box::new(|_, _| Ok(())),
+                create_folder: Box::new(|_| Ok(())),
+                delete_file: Box::new(|_| Ok(())),
+                rename_file: Box::new(|_, _| Ok(())),
+                list_dir: Box::new(move |_| Ok(files.clone())),
+                file_exists: Box::new(|_| Ok(true)),
+                metadata_cache: Box::new(move |p| {
+                    meta.get(p)
+                        .cloned()
+                        .ok_or_else(|| format!("no metadata: {p}"))
+                }),
+                open_note: Box::new(|_| Ok(())),
+                current_note: Box::new(move || Some(current.clone())),
+                notify: Box::new(move |line: &str| shown.borrow_mut().push(line.to_string())),
+            };
+            (Self { notices }, ctx)
+        }
+    }
+
+    #[test]
+    fn backlinks_are_reported_not_discarded() {
+        let mut meta = HashMap::new();
+        meta.insert(
+            "A.md".to_string(),
+            r#"{"links":[{"link":"B.md"}]}"#.to_string(),
+        );
+        meta.insert(
+            "B.md".to_string(),
+            r#"{"links":[]}"#.to_string(),
+        );
+        let (h, ctx) = Harness::new(&[("A.md", ""), ("B.md", "")], meta, "B.md");
+        Backlink.run_command("backlink:show", None, &ctx).unwrap();
+
+        let shown = h.notices.borrow();
+        assert_eq!(shown.len(), 1, "one line is shown");
+        assert!(shown[0].contains("1 backlink"), "{}", shown[0]);
+        assert!(shown[0].contains("A.md"), "the linking note is named");
+    }
+
+    #[test]
+    fn a_note_with_no_backlinks_says_so() {
+        let mut meta = HashMap::new();
+        meta.insert("B.md".to_string(), r#"{"links":[]}"#.to_string());
+        let (h, ctx) = Harness::new(&[("B.md", "")], meta, "B.md");
+        Backlink.run_command("backlink:show", None, &ctx).unwrap();
+        assert_eq!(h.notices.borrow().as_slice(), ["No backlinks"]);
+    }
+
+    #[test]
+    fn outgoing_links_are_reported() {
+        let mut meta = HashMap::new();
+        meta.insert(
+            "A.md".to_string(),
+            r#"{"links":[{"link":"B.md"},{"link":"C.md"}]}"#.to_string(),
+        );
+        let (h, ctx) = Harness::new(&[("A.md", "")], meta, "A.md");
+        OutgoingLink
+            .run_command("outgoing-link:show", None, &ctx)
+            .unwrap();
+
+        let shown = h.notices.borrow();
+        assert_eq!(shown.len(), 1);
+        assert!(shown[0].contains("2 outgoing links"), "{}", shown[0]);
+        assert!(shown[0].contains("B.md") && shown[0].contains("C.md"));
+    }
+
+    #[test]
+    fn the_word_count_is_shown() {
+        let (h, ctx) = Harness::new(&[("A.md", "one two three four five")], HashMap::new(), "A.md");
+        WordCount
+            .run_command("word-count:show", None, &ctx)
+            .unwrap();
+
+        let shown = h.notices.borrow();
+        assert_eq!(shown.len(), 1);
+        assert!(shown[0].starts_with("5 words"), "{}", shown[0]);
+    }
+
+    #[test]
+    fn the_collected_tags_are_shown() {
+        let (h, ctx) = Harness::new(
+            &[("A.md", "#alpha some text #beta"), ("B.md", "no tags here")],
+            HashMap::new(),
+            "A.md",
+        );
+        TagPane
+            .run_command("tag-pane:show", None, &ctx)
+            .unwrap();
+
+        let shown = h.notices.borrow();
+        assert_eq!(shown.len(), 1);
+        assert!(shown[0].contains("2 tags"), "{}", shown[0]);
+        assert!(shown[0].contains("alpha") && shown[0].contains("beta"));
     }
 }

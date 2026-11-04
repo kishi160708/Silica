@@ -39,6 +39,14 @@ thread_local! {
     /// and returned `Ok(())`, so a plugin's "open note" did nothing at all.
     static PLUGIN_OPEN_QUEUE: std::cell::RefCell<Vec<String>> =
         const { std::cell::RefCell::new(Vec::new()) };
+
+    /// Lines a plugin asked the app to show, waiting for the next frame.
+    ///
+    /// A plugin that gathers something — backlinks, a word count — has no
+    /// return value to put it in, so it hands the line over here and the
+    /// render pass reports it like any other notice.
+    static PLUGIN_NOTICE_QUEUE: std::cell::RefCell<Vec<String>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 use crate::search::{CopyEntry, SearchEvent, SearchPane};
 use crate::settings::{self, SettingChange, SettingsEvent, SettingsView};
@@ -4556,6 +4564,9 @@ impl Workspace {
                 }
             }),
             current_note: Box::new(move || current.clone()),
+            notify: Box::new(|line: &str| {
+                PLUGIN_NOTICE_QUEUE.with(|q| q.borrow_mut().push(line.to_string()));
+            }),
         };
 
         if let Some((outcome, _notices)) = silica_plugins::live::run(id, &ctx) {
@@ -14926,6 +14937,12 @@ impl Render for Workspace {
         });
         if let Some(path) = plugin_open {
             self.open_file(path, None, cx);
+        }
+        // * What a plugin computed, shown the way the app's own notices are.
+        let plugin_notices: Vec<String> =
+            PLUGIN_NOTICE_QUEUE.with(|q| q.borrow_mut().drain(..).collect());
+        for line in plugin_notices {
+            self.report(line, cx);
         }
         let corners = self.corners;
         if let Some(kind) = self.pending_canvas_pick.take() {
