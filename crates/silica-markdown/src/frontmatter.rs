@@ -84,9 +84,37 @@ mod tests {
         assert_eq!(fm.yaml, "k: v\n...\n");
     }
 
+    /// The YAML body is preserved byte-for-byte, including complex structures
+    /// a line-level rewrite would mangle: multi-line strings, anchors, aliases,
+    /// nested mappings, and quoted values.
+    #[test]
+    fn yaml_body_is_preserved_byte_for_byte() {
+        let cases = [
+            "---\ntitle: \"a string with 'quotes' and : colons\"\n---\nbody\n",
+            "---\naliases:\n  - One\n  - \"Two, with comma\"\n---\nbody\n",
+            "---\nanchor: &ref\n  key: value\nalias: *ref\n---\nbody\n",
+            "---\ntags:\n  - tag one\n  - tag two\n---\nbody\n",
+            "---\ncssclass: multi\n  line\n  class\n---\nbody\n",
+        ];
+        for src in cases {
+            let fm = extract_frontmatter(src).unwrap();
+            assert_eq!(&src[fm.start + 4..fm.end - 4], fm.yaml, "{src:?}");
+            // * The block closes on the second fence; everything after it is untouched.
+            assert_eq!(&src[fm.end..], "body\n", "{src:?}");
+        }
+    }
+
+    /// A `...` line inside the YAML body is part of the body, not a closer.
+    #[test]
+    fn ellipsis_inside_yaml_body_is_preserved() {
+        let src = "---\na: \"... not a closer\"\n---\nbody\n";
+        let fm = extract_frontmatter(src).unwrap();
+        assert_eq!(fm.yaml, "a: \"... not a closer\"\n");
+    }
+
     #[test]
     fn unterminated_block_is_not_frontmatter() {
         assert!(extract_frontmatter("---\nk: v\nno end").is_none());
-        assert!(extract_frontmatter("---").is_none());
+        assert!(extract_frontmatter("---\n").is_none());
     }
 }
