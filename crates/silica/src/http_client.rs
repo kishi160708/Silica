@@ -359,6 +359,9 @@ impl HttpClient for SilicaHttpClient {
                         let status = std::process::Command::new("curl")
                             .arg("-s")
                             .arg("-f")
+                            .arg("--no-config")
+                            .arg("--noproxy")
+                            .arg("*")
                             // * No -L: we follow redirects ourselves so each hop
                             //   can be validated against the private-network
                             //   rules before the connection is made.
