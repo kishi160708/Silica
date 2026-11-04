@@ -28,6 +28,18 @@ use crate::pdf::view::{PdfEvent, PdfView};
 use crate::popout::PopoutWindow;
 use crate::prompt::{Prompt, PromptEvent, PromptSpec};
 use crate::reading::{self, LinkTarget, ReadingEvent, ReadingView, TaskMarker, TaskToggled};
+
+thread_local! {
+    /// Notes a plugin asked to open, waiting for the workspace to act.
+    ///
+    /// The plugin callback is a plain closure with no view to call, so it can
+    /// only record the request; the render pass drains it and opens the note
+    /// through `open_file`, which is where history, the reading view and the
+    /// editor all follow. Before this the callback checked the file existed
+    /// and returned `Ok(())`, so a plugin's "open note" did nothing at all.
+    static PLUGIN_OPEN_QUEUE: std::cell::RefCell<Vec<String>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
 use crate::search::{CopyEntry, SearchEvent, SearchPane};
 use crate::settings::{self, SettingChange, SettingsEvent, SettingsView};
 use crate::switcher::{QuickSwitcher, SwitcherEvent};
@@ -4537,9 +4549,9 @@ impl Workspace {
                     if !full_path.exists() {
                         return Err(format!("'{path}' does not exist"));
                     }
-                    // * Open the note by setting current and reloading the model
-                    //   This is handled by the workspace; for now just return OK
-                    //   and let the caller handle it. The plugin signals success.
+                    // * Recorded, not opened: this closure has no view. The
+                    // * render pass drains the queue and calls `open_file`.
+                    PLUGIN_OPEN_QUEUE.with(|q| q.borrow_mut().push(path.to_string()));
                     Ok(())
                 }
             }),
@@ -14899,6 +14911,21 @@ impl Render for Workspace {
                 self.recompute_theme(&state, window, cx);
                 cx.notify();
             }
+        }
+        // * A plugin that asked to open a note gets it opened here, where
+        //   `open_file` can update history, the reading view and the editor.
+        //   Only the first is taken per frame: opening flushes the current
+        //   save and records history, and a plugin asking for several notes in
+        //   one callback means the last one it named, not a flicker through
+        //   all of them.
+        let plugin_open = PLUGIN_OPEN_QUEUE.with(|q| {
+            let mut queue = q.borrow_mut();
+            let first = queue.first().cloned();
+            queue.clear();
+            first
+        });
+        if let Some(path) = plugin_open {
+            self.open_file(path, None, cx);
         }
         let corners = self.corners;
         if let Some(kind) = self.pending_canvas_pick.take() {

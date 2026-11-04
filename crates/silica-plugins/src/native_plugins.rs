@@ -8,6 +8,22 @@ use crate::native::{NativeCommand, Plugin, PluginContext};
 use serde_json::Value;
 use std::time::SystemTime;
 
+/// Today's civil date, in the local zone, as `YYYY-MM-DD`.
+///
+/// The Gregorian calendar is not 365 days a year and months are not 30 days:
+/// the old arithmetic here read 2024-03-01 as 2024-02-29 and drifted a day
+/// every four years, so the daily note opened the wrong file. `Stamp` already
+/// does the civil conversion the rest of the app uses.
+///
+/// The zone offset is taken from the OS rather than assumed UTC, because a
+/// daily note is named for the day the user is having.
+fn today_local() -> String {
+    // * `chrono::Local` is what the rest of the app uses for a wall-clock day,
+    // * so the daily note and the template's `{{date}}` agree.
+    chrono::Local::now().format("%Y-%m-%d").to_string()
+}
+
+
 /// Daily notes: create or open today's dated note (YYYY-MM-DD.md).
 pub struct DailyNotes;
 
@@ -35,18 +51,7 @@ impl Plugin for DailyNotes {
     ) -> Result<(), String> {
         match id {
             "daily-notes:open" => {
-                let today = SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .map(|d| {
-                        let secs = d.as_secs();
-                        let days = secs / 86400;
-                        let year = 1970u32 + (days / 365) as u32;
-                        let day_of_year = days % 365;
-                        let month = 1u32 + (day_of_year / 30) as u32;
-                        let day = 1u32 + (day_of_year % 30) as u32;
-                        format!("{year:04}-{month:02}-{day:02}")
-                    })
-                    .unwrap_or_else(|_| "unknown".to_string());
+                let today = today_local();
 
                 let path = format!("{today}.md");
                 if (ctx.file_exists)(&path)? {
@@ -368,18 +373,7 @@ impl Plugin for ZkPrefixer {
         match id {
             "zk-prefixer:create" => {
                 let title = value.and_then(|v| v.as_str()).unwrap_or("note");
-                let now = SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .map(|d| {
-                        let secs = d.as_secs();
-                        let days = secs / 86400;
-                        let year = 1970u32 + (days / 365) as u32;
-                        let day_of_year = days % 365;
-                        let month = 1u32 + (day_of_year / 30) as u32;
-                        let day = 1u32 + (day_of_year % 30) as u32;
-                        format!("{year:04}-{month:02}-{day:02}")
-                    })
-                    .unwrap_or_else(|_| "unknown".to_string());
+                let now = today_local();
                 let path = format!("{now}-{title}.md");
                 let content = format!("# {title}\n\n");
                 (ctx.create_file)(&path, &content)?;
@@ -641,18 +635,7 @@ impl Plugin for AudioRecorder {
     ) -> Result<(), String> {
         match id {
             "audio-recorder:record" => {
-                let now = SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .map(|d| {
-                        let secs = d.as_secs();
-                        let days = secs / 86400;
-                        let year = 1970u32 + (days / 365) as u32;
-                        let day_of_year = days % 365;
-                        let month = 1u32 + (day_of_year / 30) as u32;
-                        let day = 1u32 + (day_of_year % 30) as u32;
-                        format!("{year:04}-{month:02}-{day:02}")
-                    })
-                    .unwrap_or_else(|_| "unknown".to_string());
+                let now = today_local();
 
                 let path = format!("{now}-audio.md");
                 let content = format!("# Audio recording - {now}\n\n*Recording not yet implemented.*\n\nTo record audio, use your system's recording software and attach the audio file here.\n");
@@ -897,18 +880,7 @@ impl Plugin for SlashCommand {
 
                 match cmd {
                     "daily" => {
-                        let today = SystemTime::now()
-                            .duration_since(SystemTime::UNIX_EPOCH)
-                            .map(|d| {
-                                let secs = d.as_secs();
-                                let days = secs / 86400;
-                                let year = 1970u32 + (days / 365) as u32;
-                                let day_of_year = days % 365;
-                                let month = 1u32 + (day_of_year / 30) as u32;
-                                let day = 1u32 + (day_of_year % 30) as u32;
-                                format!("{year:04}-{month:02}-{day:02}")
-                            })
-                            .unwrap_or_else(|_| "unknown".to_string());
+                        let today = today_local();
                         let path = format!("{today}.md");
                         if !(ctx.file_exists)(&path)? {
                             let content = format!("# {today}\n\n{args}");
@@ -945,4 +917,71 @@ pub fn register_all() {
     register_native(Box::new(TagPane));
     register_native(Box::new(Workspaces));
     register_native(Box::new(SlashCommand));
+}
+
+#[cfg(test)]
+mod date_tests {
+    use super::*;
+
+    /// The civil conversion the calendar actually has, at the boundaries the
+    /// old 365-day/30-day arithmetic got wrong.
+    fn civil(unix: i64, offset: i64) -> (i64, u32, u32) {
+        let stamp = silica_templates::Stamp::from_unix(unix, offset);
+        (stamp.year, stamp.month, stamp.day)
+    }
+
+    /// A leap day is a real date, and the day after it is March.
+    #[test]
+    fn a_leap_day_is_the_twenty_ninth_of_february() {
+        // * 2024-02-29 12:00 UTC.
+        assert_eq!(civil(1_709_208_000, 0), (2024, 2, 29));
+        // * The next day is March, not February 30th.
+        assert_eq!(civil(1_709_208_000 + 86_400, 0), (2024, 3, 1));
+    }
+
+    /// A year boundary is the 1st of January, not a 366th of December.
+    #[test]
+    fn a_year_boundary_rolls_to_january() {
+        // * 2024-12-31 12:00 UTC, then the next day.
+        let end = 1_735_646_400;
+        assert_eq!(civil(end, 0), (2024, 12, 31));
+        assert_eq!(civil(end + 86_400, 0), (2025, 1, 1));
+    }
+
+    /// A month boundary is the 1st of the next month, and the months are not
+    /// all thirty days.
+    #[test]
+    fn month_lengths_are_the_calendars() {
+        // * 2024-01-31 -> February 1st.
+        let jan_end = 1_706_702_400;
+        assert_eq!(civil(jan_end, 0), (2024, 1, 31));
+        assert_eq!(civil(jan_end + 86_400, 0), (2024, 2, 1));
+        // * 2024-04-30 -> May 1st.
+        let apr_end = 1_714_478_400;
+        assert_eq!(civil(apr_end, 0), (2024, 4, 30));
+        assert_eq!(civil(apr_end + 86_400, 0), (2024, 5, 1));
+    }
+
+    /// The offset moves the civil date, which is what makes a daily note
+    /// follow the user's day rather than UTC's.
+    #[test]
+    fn a_zone_offset_moves_the_day() {
+        // * 2024-03-01 00:30 UTC is still 2024-02-29 west of Greenwich.
+        let instant = 1_709_253_000;
+        assert_eq!(civil(instant, 0), (2024, 3, 1));
+        assert_eq!(civil(instant, -3600), (2024, 2, 29));
+        assert_eq!(civil(instant, 8 * 3600), (2024, 3, 1));
+    }
+
+    /// What the app produces is a date the vault can name a file with.
+    #[test]
+    fn todays_name_is_iso_shaped() {
+        let today = today_local();
+        assert_eq!(today.len(), 10, "{today}");
+        let parts: Vec<&str> = today.split('-').collect();
+        assert_eq!(parts.len(), 3, "{today}");
+        assert_eq!(parts[0].len(), 4, "{today}");
+        assert_eq!(parts[1].len(), 2, "{today}");
+        assert_eq!(parts[2].len(), 2, "{today}");
+    }
 }

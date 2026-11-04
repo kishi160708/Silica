@@ -9,6 +9,12 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+# Gregorian date maths for the date-dependent core plugins; the crate is
+# clock-free and already carries the civil-calendar conversion.
+# The local calendar day, in the user's zone: a daily note is named for
+# the day the user is having, not for UTC's.
+chrono.workspace = true
+silica-templates.workspace = true
 silica-vault.workspace = true
 silica-formats.workspace = true
 silica-cache.workspace = true
