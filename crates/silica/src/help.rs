@@ -159,12 +159,7 @@ impl HelpWindow {
         window.remove_window();
     }
 
-    fn render_row(
-        &self,
-        row: &'static Row,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> gpui::Div {
+    fn render_row(&self, row: &'static Row, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
         let go = row.go;
         // * All rows share the same background square; the primary row's button
         //   uses the accent color to single it out, matching Obsidian's design

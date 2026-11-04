@@ -27,15 +27,13 @@ use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::os::windows::io::{AsRawHandle, FromRawHandle};
 use std::path::{Component, Path, PathBuf};
 
-use windows_sys::Win32::Foundation::{
-    GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
-};
+use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateDirectoryW, CreateFileW, DELETE, DeleteFileW, FILE_ATTRIBUTE_NORMAL,
-    FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-    FILE_RENAME_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FileRenameInfo,
-    GetFileInformationByHandle, GetFinalPathNameByHandleW, RemoveDirectoryW,
-    SetFileInformationByHandle, VOLUME_NAME_DOS,
+    CreateDirectoryW, CreateFileW, DeleteFileW, FileRenameInfo, GetFileInformationByHandle,
+    GetFinalPathNameByHandleW, RemoveDirectoryW, SetFileInformationByHandle, DELETE,
+    FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_RENAME_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, VOLUME_NAME_DOS,
 };
 
 /// `CREATE_ALWAYS`: truncate an existing file or make a new one.
@@ -238,13 +236,20 @@ pub fn write_at(root: &Path, relative: &Path, bytes: &[u8]) -> io::Result<()> {
     let parent = full.parent().unwrap_or(&root);
     let parent_handle = open_verified(&root, parent, GENERIC_READ | GENERIC_WRITE, true)?;
 
-    // * A dot-name cannot collide with a note, and the pid keeps two processes
-    // * writing the same note from sharing a companion.
-    let temp_name = format!(
-        ".{}.{}.silica-tmp",
-        name.to_string_lossy(),
-        std::process::id()
-    );
+    // * Unique per write. Two saves of one note from two threads — or two
+    // * windows on the same vault — would otherwise share a companion and
+    // * truncate each other's bytes; the pid alone does not separate threads.
+    let unique = {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0);
+        format!("{}-{n}-{nanos}", std::process::id())
+    };
+    let temp_name = format!(".{}.{unique}.silica-tmp", name.to_string_lossy());
     let temp_path = parent.join(&temp_name);
     let temp_wide = wide(temp_path.as_os_str())?;
     let handle = unsafe {

@@ -51,6 +51,7 @@ http_client = { workspace = true }
 # one of its `image` frames.
 image.workspace = true
 mermaid-rs-renderer.workspace = true
+lru.workspace = true
 resvg.workspace = true
 usvg.workspace = true
 rodio.workspace = true

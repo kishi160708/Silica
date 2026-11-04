@@ -117,9 +117,8 @@ fn parse_tag(src: &str) -> Option<(bool, String, &str, usize)> {
         None => (false, after),
     };
     let head = src.len() - rest.len();
-    let end = rest.find(|c: char| {
-        !(c.is_ascii_alphanumeric() || c == '-' || c == ':' || c == '_')
-    })?;
+    let end =
+        rest.find(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == ':' || c == '_'))?;
     if end == 0 {
         return None;
     }
@@ -256,11 +255,7 @@ impl RichBuilder {
     /// Closes the innermost open tag with this effect. A close tag with no
     /// open counterpart (`</b>` on its own) is dropped.
     fn html_close_effect(&mut self, want: Effect) {
-        let Some(at) = self
-            .html_stack
-            .iter()
-            .rposition(|o| o.effect == Some(want))
-        else {
+        let Some(at) = self.html_stack.iter().rposition(|o| o.effect == Some(want)) else {
             return;
         };
         self.html_stack.remove(at);
@@ -422,8 +417,7 @@ mod tests {
 
     #[test]
     fn anchors_carry_their_targets() {
-        let (text, runs, links) =
-            drawn("<a href=\"https://e.com/x\">link</a>").expect("drawn");
+        let (text, runs, links) = drawn("<a href=\"https://e.com/x\">link</a>").expect("drawn");
         assert_eq!(text, "link");
         assert!(runs[0].1.link || links.len() == 1);
         assert!(matches!(&links[0], LinkTarget::External(h) if h == "https://e.com/x"));

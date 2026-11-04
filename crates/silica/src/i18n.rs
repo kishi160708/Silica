@@ -76,7 +76,6 @@ static CURRENT: AtomicU8 = AtomicU8::new(0);
 /// Sets the locale in force and answers the one it replaced, so a caller can
 /// skip a repaint when nothing changed.
 pub fn set(locale: Locale) -> Locale {
-    
     Locale::from_index(CURRENT.swap(locale.index(), Ordering::Relaxed))
 }
 
@@ -145,7 +144,9 @@ mod tests {
     static SERIAL: Mutex<()> = Mutex::new(());
 
     fn serial() -> std::sync::MutexGuard<'static, ()> {
-        SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     #[test]

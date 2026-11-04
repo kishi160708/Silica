@@ -23,8 +23,8 @@ use crate::theme::{Theme, FONT_UI_SMALL, FONT_UI_SMALLER, ICON_SIZE};
 use crate::workspace::{Changes, VaultState};
 use gpui::{
     anchored, deferred, div, list, prelude::*, px, relative, rgb, Anchor, App, ClickEvent, Context,
-    Entity, EventEmitter, FocusHandle, Focusable, HighlightStyle, ListAlignment, ListState, MouseButton, Pixels,
-    Point, SharedString, StyledText, Subscription, Window,
+    Entity, EventEmitter, FocusHandle, Focusable, HighlightStyle, ListAlignment, ListState,
+    MouseButton, Pixels, Point, SharedString, StyledText, Subscription, Window,
 };
 use rayon::prelude::*;
 use serde_json::{json, Value};
@@ -198,11 +198,7 @@ struct SearchMenuItem {
 /// The menu for a search target.
 fn search_menu_items(target: &SearchTarget) -> Vec<SearchMenuItem> {
     use SearchEvent as E;
-    let item = |label, icon, event| SearchMenuItem {
-        label,
-        icon,
-        event,
-    };
+    let item = |label, icon, event| SearchMenuItem { label, icon, event };
     match target {
         SearchTarget::File(path) => vec![
             item(
@@ -215,21 +211,9 @@ fn search_menu_items(target: &SearchTarget) -> Vec<SearchMenuItem> {
                 "separator-vertical",
                 E::OpenToRight(path.clone()),
             ),
-            item(
-                "Rename...",
-                "pen-line",
-                E::Rename(path.clone()),
-            ),
-            item(
-                "Delete",
-                "trash-2",
-                E::Delete(path.clone()),
-            ),
-            item(
-                "Copy path",
-                "clipboard",
-                E::CopyPath(path.clone()),
-            ),
+            item("Rename...", "pen-line", E::Rename(path.clone())),
+            item("Delete", "trash-2", E::Delete(path.clone())),
+            item("Copy path", "clipboard", E::CopyPath(path.clone())),
             item(
                 "Open in default app",
                 "arrow-up-right",
@@ -291,16 +275,19 @@ impl SearchPane {
                 }
             }
         })];
-        subscriptions.push(cx.subscribe(&replace_input, |this, _, event: &InputEvent, cx| {
-            match event {
-                InputEvent::Submit => this.replace_all(cx),
-                InputEvent::Cancel => {
-                    this.replace_open = false;
-                    cx.notify();
-                }
-                _ => {}
-            }
-        }));
+        subscriptions.push(
+            cx.subscribe(
+                &replace_input,
+                |this, _, event: &InputEvent, cx| match event {
+                    InputEvent::Submit => this.replace_all(cx),
+                    InputEvent::Cancel => {
+                        this.replace_open = false;
+                        cx.notify();
+                    }
+                    _ => {}
+                },
+            ),
+        );
         SearchPane {
             input,
             replace_input,
@@ -421,9 +408,13 @@ impl SearchPane {
             };
             let new_text = apply_replacements(&orig_text, &file.hits, re.as_ref(), &replacement);
             if new_text != orig_text
-                && state.vault().write_bytes(&file.path, new_text.as_bytes()).is_ok() {
-                    modified.push(FileChange::Modified(file.path.clone()));
-                }
+                && state
+                    .vault()
+                    .write_bytes(&file.path, new_text.as_bytes())
+                    .is_ok()
+            {
+                modified.push(FileChange::Modified(file.path.clone()));
+            }
         }
 
         if !modified.is_empty() {
@@ -1306,7 +1297,8 @@ impl SearchPane {
                 .cursor_pointer()
                 .tooltip(tooltip("Clear replacement"))
                 .on_click(cx.listener(|this, _, window, cx| {
-                    this.replace_input.update(cx, |input, cx| input.set_text("", cx));
+                    this.replace_input
+                        .update(cx, |input, cx| input.set_text("", cx));
                     window.focus(&this.replace_input.focus_handle(cx), cx);
                 }))
                 .child(
@@ -1663,8 +1655,8 @@ impl SearchPane {
     fn render_menu(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let m = self.context_menu.as_ref()?;
         let items = search_menu_items(&m.target);
-        let mut list = menu("search-menu", theme)
-            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+        let mut list =
+            menu("search-menu", theme).on_mouse_down_out(cx.listener(|this, _, _, cx| {
                 this.close_menu(cx);
             }));
         for (ix, item) in items.into_iter().enumerate() {
@@ -2100,9 +2092,9 @@ fn find_regex_in_query(query: &Query, case_sensitive: bool) -> Option<regex::Reg
         }
         Query::CaseSensitive(inner) => find_regex_in_query(inner, true),
         Query::CaseInsensitive(inner) => find_regex_in_query(inner, false),
-        Query::All(children) | Query::Any(children) => {
-            children.iter().find_map(|c| find_regex_in_query(c, case_sensitive))
-        }
+        Query::All(children) | Query::Any(children) => children
+            .iter()
+            .find_map(|c| find_regex_in_query(c, case_sensitive)),
         Query::Field(_, inner) => find_regex_in_query(inner, case_sensitive),
         _ => None,
     }

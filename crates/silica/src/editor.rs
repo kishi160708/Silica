@@ -38,10 +38,10 @@ use gpui::{
     Bounds, ClipboardItem, Context, CursorStyle, DispatchPhase, Element, ElementId,
     ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable, Font,
     FontStyle, FontWeight, GlobalElementId, Hitbox, HitboxBehavior, Hsla, InspectorElementId,
-    KeyBinding, KeyDownEvent, LayoutId, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, PathBuilder,
-    Pixels, Point, ScrollWheelEvent, SharedString, StrikethroughStyle, Style, Subscription, Task,
-    TextAlign, TextRun, TextStyle, UTF16Selection, UnderlineStyle, Window, WrappedLine,
-    WeakEntity,
+    KeyBinding, KeyDownEvent, LayoutId, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, PaintQuad, PathBuilder, Pixels, Point, ScrollWheelEvent, SharedString,
+    StrikethroughStyle, Style, Subscription, Task, TextAlign, TextRun, TextStyle, UTF16Selection,
+    UnderlineStyle, WeakEntity, Window, WrappedLine,
 };
 use silica_formats::config::PropertyTypes;
 use silica_formats::properties::{self as props, PropertiesInDocument};
@@ -899,7 +899,6 @@ impl Editor {
     pub fn set_right_to_left(&mut self, on: bool) {
         self.right_to_left = on;
     }
-
 
     /// Switches between Live Preview and Source mode. Widgets are only
     /// built for Live Preview, so switching to it parses again.
@@ -2955,7 +2954,12 @@ impl Editor {
         match state.save_attachment(&target, &img.bytes) {
             Ok(changes) => {
                 let resolver = state.vault().link_resolver();
-                let written = silica_cache::links::link_path(&resolver, &target, &self.name, self.link_options.format);
+                let written = silica_cache::links::link_path(
+                    &resolver,
+                    &target,
+                    &self.name,
+                    self.link_options.format,
+                );
                 let embed = if self.link_options.markdown_links {
                     format!("![]({})", written.replace(' ', "%20"))
                 } else {
@@ -3011,7 +3015,9 @@ impl Editor {
                 let bytes = match std::fs::read(path) {
                     Ok(b) => b,
                     Err(e) => {
-                        cx.emit(EditorEvent::Reported(format!("Could not read file {}: {e}", path.display()).into()));
+                        cx.emit(EditorEvent::Reported(
+                            format!("Could not read file {}: {e}", path.display()).into(),
+                        ));
                         continue;
                     }
                 };
@@ -3028,7 +3034,12 @@ impl Editor {
             };
 
             let resolver = state.vault().link_resolver();
-            let written = silica_cache::links::link_path(&resolver, &target, &self.name, self.link_options.format);
+            let written = silica_cache::links::link_path(
+                &resolver,
+                &target,
+                &self.name,
+                self.link_options.format,
+            );
             let embed = if self.link_options.markdown_links {
                 format!("![]({})", written.replace(' ', "%20"))
             } else {
@@ -5560,10 +5571,7 @@ impl Element for EditorElement {
                                     content_x + x0
                                 };
                                 selection_quads.push(fill(
-                                    Bounds::new(
-                                        point(sel_x, y + rh * r as f32),
-                                        size(x1 - x0, rh),
-                                    ),
+                                    Bounds::new(point(sel_x, y + rh * r as f32), size(x1 - x0, rh)),
                                     palette.selection,
                                 ));
                             }
@@ -5577,10 +5585,7 @@ impl Element for EditorElement {
                             content_x + x
                         };
                         cursor_quads.push(fill(
-                            Bounds::new(
-                                point(cursor_x, y + rh * row as f32),
-                                size(px(2.), rh),
-                            ),
+                            Bounds::new(point(cursor_x, y + rh * row as f32), size(px(2.), rh)),
                             palette.text,
                         ));
                         if sel.head == head {
@@ -5704,7 +5709,11 @@ impl Element for EditorElement {
                         let unwrapped = &shaped.line.unwrapped_layout;
                         let start_x = unwrapped.x_for_index(start);
                         let end_x = unwrapped.x_for_index(end);
-                        words.push((start_x, visible.top + visible.row_height - px(2.), end_x - start_x));
+                        words.push((
+                            start_x,
+                            visible.top + visible.row_height - px(2.),
+                            end_x - start_x,
+                        ));
                     }
                 }
                 words
@@ -5946,7 +5955,11 @@ impl Element for EditorElement {
                 let _ = shaped.line.paint_background(
                     origin,
                     visible.row_height,
-                    if right_to_left { TextAlign::Right } else { TextAlign::Left },
+                    if right_to_left {
+                        TextAlign::Right
+                    } else {
+                        TextAlign::Left
+                    },
                     None,
                     window,
                     cx,
@@ -5954,7 +5967,11 @@ impl Element for EditorElement {
                 let _ = shaped.line.paint(
                     origin,
                     visible.row_height,
-                    if right_to_left { TextAlign::Right } else { TextAlign::Left },
+                    if right_to_left {
+                        TextAlign::Right
+                    } else {
+                        TextAlign::Left
+                    },
                     None,
                     window,
                     cx,

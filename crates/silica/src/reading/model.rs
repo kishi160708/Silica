@@ -6,9 +6,7 @@
 //! text with clickable ranges, embeds are resolved and inlined recursively,
 //! and footnote definitions are gathered at the end.
 
-use silica_formats::{
-    properties::Property, FileKind, AUDIO_EXTENSIONS, VIDEO_EXTENSIONS,
-};
+use silica_formats::{properties::Property, FileKind, AUDIO_EXTENSIONS, VIDEO_EXTENSIONS};
 use silica_markdown::{
     canonical_callout_type, html::has_scheme, html::percent_decode, parse, plain_text, Alignment,
     Block, BlockKind, Document, Fold, HighlightColor, Inline, InlineKind, LinkKind, ListItem,
@@ -642,9 +640,7 @@ impl<'v> Builder<'v> {
             },
             BlockKind::ThematicBreak => RBlock::ThematicBreak,
             BlockKind::CodeBlock { info, content, .. } => {
-                let lang = info
-                    .as_deref()
-                    .and_then(|i| i.split_whitespace().next());
+                let lang = info.as_deref().and_then(|i| i.split_whitespace().next());
                 if lang == Some("mermaid") {
                     return Some(RBlock::Mermaid {
                         id: self.id(),
@@ -691,7 +687,13 @@ impl<'v> Builder<'v> {
                         None => RBlock::Html(RichText {
                             id: self.id(),
                             text: src.to_string(),
-                            runs: vec![(0..src.len(), InlineStyle { html: true, ..Default::default() })],
+                            runs: vec![(
+                                0..src.len(),
+                                InlineStyle {
+                                    html: true,
+                                    ..Default::default()
+                                },
+                            )],
                             links: Vec::new(),
                         }),
                     }
@@ -835,7 +837,9 @@ impl<'v> Builder<'v> {
                                 width = Some(w);
                                 height = h;
                             }
-                            None if alt.is_none() && !part.is_empty() => alt = Some(part.to_string()),
+                            None if alt.is_none() && !part.is_empty() => {
+                                alt = Some(part.to_string())
+                            }
                             None => {}
                         }
                     }
@@ -865,7 +869,9 @@ impl<'v> Builder<'v> {
                                 width = Some(w);
                                 height = h;
                             }
-                            None if alt.is_none() && !part.is_empty() => alt = Some(part.to_string()),
+                            None if alt.is_none() && !part.is_empty() => {
+                                alt = Some(part.to_string())
+                            }
                             None => {}
                         }
                     }
@@ -2216,22 +2222,43 @@ mod tests {
         let m = build("test.md", text, &stub);
         assert_eq!(m.blocks.len(), 3);
 
-        let RBlock::Paragraph(segs0) = &m.blocks[0] else { panic!() };
-        let Segment::Embed(embed0) = &segs0[0] else { panic!() };
-        assert_eq!(embed0.kind, EmbedKind::RemoteImage("https://example.com/cat.png".into()));
+        let RBlock::Paragraph(segs0) = &m.blocks[0] else {
+            panic!()
+        };
+        let Segment::Embed(embed0) = &segs0[0] else {
+            panic!()
+        };
+        assert_eq!(
+            embed0.kind,
+            EmbedKind::RemoteImage("https://example.com/cat.png".into())
+        );
         assert_eq!(embed0.alt, "Photo");
         assert_eq!(embed0.width, None);
         assert_eq!(embed0.height, None);
 
-        let RBlock::Paragraph(segs1) = &m.blocks[1] else { panic!() };
-        let Segment::Embed(embed1) = &segs1[0] else { panic!() };
-        assert_eq!(embed1.kind, EmbedKind::RemoteImage("https://example.com/dog.jpg".into()));
+        let RBlock::Paragraph(segs1) = &m.blocks[1] else {
+            panic!()
+        };
+        let Segment::Embed(embed1) = &segs1[0] else {
+            panic!()
+        };
+        assert_eq!(
+            embed1.kind,
+            EmbedKind::RemoteImage("https://example.com/dog.jpg".into())
+        );
         assert_eq!(embed1.width, Some(300.0));
         assert_eq!(embed1.height, Some(200.0));
 
-        let RBlock::Paragraph(segs2) = &m.blocks[2] else { panic!() };
-        let Segment::Embed(embed2) = &segs2[0] else { panic!() };
-        assert_eq!(embed2.kind, EmbedKind::RemoteImage("https://example.com/bird.png".into()));
+        let RBlock::Paragraph(segs2) = &m.blocks[2] else {
+            panic!()
+        };
+        let Segment::Embed(embed2) = &segs2[0] else {
+            panic!()
+        };
+        assert_eq!(
+            embed2.kind,
+            EmbedKind::RemoteImage("https://example.com/bird.png".into())
+        );
     }
 
     #[test]
@@ -2244,17 +2271,38 @@ mod tests {
         let m = build("test.md", text, &stub);
         assert_eq!(m.blocks.len(), 3);
 
-        let RBlock::Paragraph(segs0) = &m.blocks[0] else { panic!() };
-        let Segment::Embed(embed0) = &segs0[0] else { panic!() };
-        assert_eq!(embed0.kind, EmbedKind::RemoteAudio("https://example.com/track.mp3".into()));
+        let RBlock::Paragraph(segs0) = &m.blocks[0] else {
+            panic!()
+        };
+        let Segment::Embed(embed0) = &segs0[0] else {
+            panic!()
+        };
+        assert_eq!(
+            embed0.kind,
+            EmbedKind::RemoteAudio("https://example.com/track.mp3".into())
+        );
 
-        let RBlock::Paragraph(segs1) = &m.blocks[1] else { panic!() };
-        let Segment::Embed(embed1) = &segs1[0] else { panic!() };
-        assert_eq!(embed1.kind, EmbedKind::RemoteVideo("https://example.com/movie.mp4".into()));
+        let RBlock::Paragraph(segs1) = &m.blocks[1] else {
+            panic!()
+        };
+        let Segment::Embed(embed1) = &segs1[0] else {
+            panic!()
+        };
+        assert_eq!(
+            embed1.kind,
+            EmbedKind::RemoteVideo("https://example.com/movie.mp4".into())
+        );
 
-        let RBlock::Paragraph(segs2) = &m.blocks[2] else { panic!() };
-        let Segment::Embed(embed2) = &segs2[0] else { panic!() };
-        assert_eq!(embed2.kind, EmbedKind::RemoteAudio("https://example.com/podcast.ogg".into()));
+        let RBlock::Paragraph(segs2) = &m.blocks[2] else {
+            panic!()
+        };
+        let Segment::Embed(embed2) = &segs2[0] else {
+            panic!()
+        };
+        assert_eq!(
+            embed2.kind,
+            EmbedKind::RemoteAudio("https://example.com/podcast.ogg".into())
+        );
     }
 
     #[test]
@@ -2267,12 +2315,26 @@ mod tests {
         let m = build("test.md", text, &stub);
         assert_eq!(m.blocks.len(), 2);
 
-        let RBlock::Paragraph(segs0) = &m.blocks[0] else { panic!() };
-        let Segment::Embed(embed0) = &segs0[0] else { panic!() };
-        assert_eq!(embed0.kind, EmbedKind::Audio(PathBuf::from("/vault/song.mp3")));
+        let RBlock::Paragraph(segs0) = &m.blocks[0] else {
+            panic!()
+        };
+        let Segment::Embed(embed0) = &segs0[0] else {
+            panic!()
+        };
+        assert_eq!(
+            embed0.kind,
+            EmbedKind::Audio(PathBuf::from("/vault/song.mp3"))
+        );
 
-        let RBlock::Paragraph(segs1) = &m.blocks[1] else { panic!() };
-        let Segment::Embed(embed1) = &segs1[0] else { panic!() };
-        assert_eq!(embed1.kind, EmbedKind::Video(PathBuf::from("/vault/video.mp4")));
+        let RBlock::Paragraph(segs1) = &m.blocks[1] else {
+            panic!()
+        };
+        let Segment::Embed(embed1) = &segs1[0] else {
+            panic!()
+        };
+        assert_eq!(
+            embed1.kind,
+            EmbedKind::Video(PathBuf::from("/vault/video.mp4"))
+        );
     }
 }

@@ -1231,3 +1231,142 @@ mod path_tests {
             .starts_with("/etc"));
     }
 }
+
+/// The QuickJS environment a plugin actually gets.
+///
+/// These run in a real `Runtime` rather than reading `shim.js` as text: what
+/// matters is what the engine exposes, and a global that looks absent in the
+/// source can still be reached through a prototype or a built-in.
+#[cfg(test)]
+mod capability_tests {
+    use super::*;
+
+    /// Evaluate `script` in a fresh runtime with the shim installed.
+    fn run(script: &str) -> Result<String, String> {
+        let runtime = Runtime::new().map_err(|e| e.to_string())?;
+        runtime.set_memory_limit(HEAP_BYTES);
+        let deadline = Rc::new(Cell::new(Instant::now() + LOAD_DEADLINE));
+        {
+            let deadline = Rc::clone(&deadline);
+            runtime.set_interrupt_handler(Some(Box::new(move || Instant::now() > deadline.get())));
+        }
+        let context = Context::full(&runtime).map_err(|e| e.to_string())?;
+        let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let root = dir.path().canonicalize().map_err(|e| e.to_string())?;
+        let shared = Rc::new(RefCell::new(Shared {
+            id: "cap".into(),
+            root: root.clone(),
+            data_path: root.join("data.json"),
+            files: Vec::new(),
+            files_stale: false,
+            notices: Vec::new(),
+            active_file: None,
+            open_note: None,
+            post_processors: Vec::new(),
+        }));
+        context.with(|ctx| {
+            ctx.eval::<(), _>(SHIM.as_bytes())
+                .map_err(|e| format!("shim: {e}"))?;
+            ctx.eval::<String, _>(script.as_bytes())
+                .map_err(|e| format!("{e}"))
+        })
+    }
+
+    #[test]
+    fn the_engine_exposes_no_process_global() {
+        let out = run("typeof process");
+        assert_eq!(out.as_deref(), Ok("undefined"));
+    }
+
+    #[test]
+    fn require_throws_rather_than_loading_a_module() {
+        let out = run("
+            try { require('fs'); 'loaded' } catch (e) { 'refused' }
+        ");
+        assert_eq!(out.as_deref(), Ok("refused"));
+    }
+
+    /// `require('obsidian')` is the module a plugin imports — the shim's own
+    /// `require` returns it for that one name and refuses everything else.
+    #[test]
+    fn the_obsidian_module_is_what_require_returns() {
+        let out = run("
+            const mod = require('obsidian');
+            (mod && typeof mod.Plugin === 'function') ? 'ok' : 'missing'
+        ");
+        assert_eq!(out.as_deref(), Ok("ok"), "the shim module must be reachable");
+    }
+
+    /// The supported APIs still work, so the checks above are not passing
+    /// because the whole environment is empty.
+    #[test]
+    fn the_supported_api_still_works() {
+        let out = run("
+            const mod = require('obsidian');
+            ['Plugin', 'PluginSettingTab', 'Setting', 'Notice', 'moment', 'Platform']
+              .every((n) => mod[n] !== undefined) ? 'ok' : 'missing'
+        ");
+        assert_eq!(out.as_deref(), Ok("ok"));
+    }
+}
+
+/// The limits a plugin runs under: memory, and a wall-clock deadline per call.
+///
+/// These are checked by making the runtime do the forbidden thing and watching
+/// it stop, not by reading the configuration back.
+#[cfg(test)]
+mod limit_tests {
+    use super::*;
+
+    /// Evaluate `script` under the same limits a plugin gets, returning the
+    /// error message when it is stopped.
+    fn run(script: &str) -> Result<String, String> {
+        let runtime = Runtime::new().map_err(|e| format!("runtime: {e}"))?;
+        runtime.set_memory_limit(HEAP_BYTES);
+        let deadline = Rc::new(Cell::new(Instant::now() + Duration::from_millis(150)));
+        {
+            let deadline = Rc::clone(&deadline);
+            runtime.set_interrupt_handler(Some(Box::new(move || Instant::now() > deadline.get())));
+        }
+        let context = Context::full(&runtime).map_err(|e| format!("context: {e}"))?;
+        context.with(|ctx| {
+            ctx.eval::<String, _>(script.as_bytes())
+                .map_err(|e| format!("{e}"))
+        })
+    }
+
+    /// An infinite loop is stopped by the deadline rather than hanging the
+    /// test process.
+    #[test]
+    fn a_loop_is_stopped_by_the_deadline() {
+        let started = Instant::now();
+        let out = run("while (true) {}");
+        let elapsed = started.elapsed();
+
+        assert!(out.is_err(), "an endless loop must not return a value");
+        // * It has to stop near the deadline, not merely eventually.
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "the loop ran for {elapsed:?}; the deadline did not fire"
+        );
+    }
+
+    /// Allocating past the heap limit fails instead of taking the host down.
+    #[test]
+    fn allocating_past_the_heap_limit_fails() {
+        let out = run("
+            var hold = [];
+            for (var i = 0; i < 100000; i++) { hold.push(new Array(100000).join('x')); }
+            'allocated'
+        ");
+        assert!(out.is_err(), "the heap limit must stop the allocation");
+    }
+
+    /// A fresh runtime still works, which is how the host recovers after a
+    /// plugin is stopped: the failed call did not poison anything.
+    #[test]
+    fn a_valid_call_still_works_after_a_timeout() {
+        assert!(run("while (true) {}").is_err());
+        assert_eq!(run("'fine'").as_deref(), Ok("fine"));
+    }
+}
