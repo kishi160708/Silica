@@ -886,7 +886,11 @@ fn install<'js>(
                 ));
             }
         }
-        std::fs::rename(&resolved, &target).map_err(|error| {
+        // ! Cross-directory rename fails on Windows; copy then delete instead.
+        std::fs::copy(&resolved, &target).map_err(|error| {
+            Exception::throw_message(&ctx, &format!("'{path}' could not be deleted: {error}"))
+        })?;
+        std::fs::remove_file(&resolved).map_err(|error| {
             Exception::throw_message(&ctx, &format!("'{path}' could not be deleted: {error}"))
         })
     });
