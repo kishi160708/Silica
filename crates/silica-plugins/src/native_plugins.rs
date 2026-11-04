@@ -476,6 +476,39 @@ impl Plugin for WebViewer {
     }
 }
 
+/// Every `.md` path under a folder, found by asking `list_dir` one folder at a
+/// time.
+///
+/// `list_dir` answers for a single folder, so a folder is recognised by
+/// answering with a listing of its own. The depth cap is a runaway guard: a
+/// vault is not nested 64 deep, and a symlink loop is.
+fn collect_notes(
+    ctx: &PluginContext<'_>,
+    folder: &str,
+    out: &mut Vec<String>,
+    depth: u32,
+) -> Result<(), String> {
+    if depth > 64 {
+        return Err("the vault is nested too deeply to publish".to_string());
+    }
+    let entries = match (ctx.list_dir)(folder) {
+        Ok(entries) => entries,
+        // * A file is not a folder; that is not an error here.
+        Err(_) => return Ok(()),
+    };
+    for entry in entries {
+        if entry.ends_with(".md") {
+            out.push(entry);
+            continue;
+        }
+        // * A file answers with an error from `list_dir`; a folder answers
+        // * with its own listing, so recurse either way. The depth cap bounds
+        // * it even if a symlink loop sneaks in.
+        collect_notes(ctx, &entry, out, depth + 1)?;
+    }
+    Ok(())
+}
+
 /// Publish: export vault notes to HTML for publishing.
 pub struct Publish;
 
@@ -485,7 +518,7 @@ impl Plugin for Publish {
     }
 
     fn name(&self) -> &'static str {
-        "Publish"
+        "Publish vault"
     }
 
     fn commands(&self) -> Vec<NativeCommand> {
@@ -497,41 +530,75 @@ impl Plugin for Publish {
 
     fn run_command(
         &self,
-        id: &str,
+        _id: &str,
         _value: Option<&Value>,
         ctx: &PluginContext<'_>,
     ) -> Result<(), String> {
-        match id {
+        match _id {
             "publish:publish" => {
                 let root = ctx.vault_root;
                 let publish_dir = root.join("publish");
                 std::fs::create_dir_all(&publish_dir)
                     .map_err(|e| format!("Failed to create publish dir: {e}"))?;
 
-                let all_files = (ctx.list_dir)("")?;
-                let mut index = String::from("# Published Notes\n\n");
+                // * Every note, nested ones included. `list_dir` answers for one
+                // * folder, so a folder is walked by asking again — an entry
+                // * that answers with a listing is a folder.
+                let mut notes = Vec::new();
+                collect_notes(ctx, "", &mut notes, 0)?;
 
-                for file in &all_files {
-                    if file.as_str().ends_with(".md") {
-                        let content = (ctx.read_file)(file)?;
-                        let html = format!(
-                            "<!DOCTYPE html>\n<html>\n<head><meta charset='utf-8'><title>{}</title></head>\n<body><pre>{}</pre></body>\n</html>",
-                            file,
-                            escape_html(&content)
-                        );
-                        let html_path = format!("{}.html", file);
-                        std::fs::write(publish_dir.join(&html_path), html)
-                            .map_err(|e| format!("Failed to write {html_path}: {e}"))?;
-                        index.push_str(&format!("- [{file}]({html_path})\n"));
+                let mut index = String::from("# Published Notes\n\n");
+                let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+                for file in &notes {
+                    if !file.as_str().ends_with(".md") {
+                        continue;
                     }
+                    let content = (ctx.read_file)(file)?;
+                    // ! Both the title and the body are user text. A note named
+                    // ! `<script>alert(1)</script>.md` would otherwise put that
+                    // ! script in a page the vault then serves.
+                    let title = escape_html(file);
+                    let html = format!(
+                        "<!DOCTYPE html>\n<html>\n<head><meta charset='utf-8'><title>{title}</title></head>\n<body><pre>{}</pre></body>\n</html>",
+                        escape_html(&content)
+                    );
+
+                    // ! The output name is built from the note's path, so it
+                    // ! must not keep the separators: `a/b.md` joined onto the
+                    // ! publish folder writes into `a/`, which does not exist —
+                    // ! and a crafted path would climb out of it entirely.
+                    let stem = file
+                        .trim_end_matches(".md")
+                        .replace(['/', '\\'], "-");
+                    let mut html_path = format!("{stem}.html");
+                    // ! Two notes can flatten alike (`a/b.md`, `a-b.md`).
+                    let mut n = 1u32;
+                    while !used.insert(html_path.clone()) {
+                        html_path = format!("{stem}-{n}.html");
+                        n += 1;
+                        if n > 10_000 {
+                            return Err(format!("too many notes collide on {stem}"));
+                        }
+                    }
+
+                    std::fs::write(publish_dir.join(&html_path), html)
+                        .map_err(|e| format!("Failed to write {html_path}: {e}"))?;
+                    // * A link target with a space or bracket would break the
+                    // * list; the name is escaped the way the page is.
+                    index.push_str(&format!("- [{}]({html_path})\n", escape_html(file)));
                 }
 
                 std::fs::write(publish_dir.join("index.md"), index)
                     .map_err(|e| format!("Failed to write index: {e}"))?;
 
+                // * Publishing is a filesystem action the user asked for; say
+                // * how many notes it covered.
+                (ctx.notify)(&format!("Published {} notes", used.len()));
+
                 Ok(())
             }
-            _ => Err(format!("'{id}' is not a command this plugin registered")),
+            _ => Err("'publish:publish' is not a command this plugin registered".to_string()),
         }
     }
 }
