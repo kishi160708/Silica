@@ -26,6 +26,7 @@ use std::cell::Cell;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -41,6 +42,17 @@ const MAX_WAIT_MS: usize = 600_000;
 /// The most frames a `wait_idle` may chain. Each one dirties the window, so
 /// a caller's number is also a number of forced repaints.
 const MAX_FRAMES: usize = 240;
+
+/// The most concurrent control connections the socket accepts. Each one is a
+/// thread, so an unbounded number is a denial-of-service vector.
+const MAX_CONNECTIONS: usize = 16;
+
+/// The largest request line the socket reads. A client that sends more is
+/// refused rather than letting `BufRead::lines()` allocate without bound.
+const MAX_MESSAGE_BYTES: usize = 64 * 1024;
+
+/// The count of connections now open, so `start` can refuse past the limit.
+static ACTIVE_CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
 
 /// The bound socket path, so both the `quit` method and the `Quit` action can
 /// take the file away again.
@@ -95,8 +107,19 @@ pub fn start(path: PathBuf, window: WindowHandle<Workspace>, cx: &mut App) {
             let Ok(stream) = stream else {
                 continue;
             };
+            // * Refuse connections past the limit instead of spawning a
+            // * thread per connection without bound.
+            let active = ACTIVE_CONNECTIONS.load(Ordering::Acquire);
+            if active >= MAX_CONNECTIONS {
+                let _ = stream.shutdown(std::net::Shutdown::Both);
+                continue;
+            }
+            ACTIVE_CONNECTIONS.fetch_add(1, Ordering::Release);
             let requests = requests.clone();
-            std::thread::spawn(move || serve(stream, requests));
+            std::thread::spawn(move || {
+                serve(stream, requests);
+                ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::Release);
+            });
         }
     });
 
@@ -142,14 +165,31 @@ fn serve(stream: UnixStream, requests: async_channel::Sender<Pending>) {
         return;
     };
     let mut writer = stream;
-    for line in BufReader::new(reader).lines() {
-        let Ok(line) = line else {
+    // * `split` on `\n` returns each line as a `Vec<u8>`, so a line longer than
+    // * `MAX_MESSAGE_BYTES` can be refused before anything is allocated for it.
+    for chunk in BufReader::new(reader).split(b'\n') {
+        let Ok(line_bytes) = chunk else {
             return;
         };
-        if line.trim().is_empty() {
+        if line_bytes.len() > MAX_MESSAGE_BYTES {
+            let _ = write_line(
+                &mut writer,
+                &Response::err(0, "request line is too large").line(),
+            );
             continue;
         }
-        let request = match serde_json::from_str::<Request>(&line) {
+        let Ok(line) = std::str::from_utf8(&line_bytes) else {
+            let _ = write_line(
+                &mut writer,
+                &Response::err(0, "request line is not UTF-8").line(),
+            );
+            continue;
+        };
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let request = match serde_json::from_str::<Request>(line) {
             Ok(request) => request,
             Err(error) => {
                 // * A line that is not a request is still answered, under id 0,

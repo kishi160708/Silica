@@ -715,7 +715,14 @@ impl Plugin for FileRecovery {
                     if let Some(name) = entry.file_name().to_str() {
                         let src = entry.path();
                         let dst = root.join(name);
-                        let _ = std::fs::copy(&src, &dst);
+                        // ! Never restore over a note that already exists: the
+                        // * snapshot is the user's older copy, not theirs now.
+                        if dst.exists() {
+                            return Err(format!("{name} already exists; refusing to overwrite"));
+                        }
+                        std::fs::copy(&src, &dst).map_err(|e| {
+                            format!("failed to restore {name}: {e}")
+                        })?;
                     }
                 }
 
@@ -749,17 +756,13 @@ impl Plugin for AudioRecorder {
         &self,
         id: &str,
         _value: Option<&Value>,
-        ctx: &PluginContext<'_>,
+        _ctx: &PluginContext<'_>,
     ) -> Result<(), String> {
         match id {
             "audio-recorder:record" => {
-                let now = today_local();
-
-                let path = format!("{now}-audio.md");
-                let content = format!("# Audio recording - {now}\n\n*Recording not yet implemented.*\n\nTo record audio, use your system's recording software and attach the audio file here.\n");
-                (ctx.create_file)(&path, &content)?;
-                (ctx.open_note)(&path)?;
-                Ok(())
+                // * Silica has no audio capture: do not fabricate a note that
+                // * pretends a recording happened. The plugin is told plainly.
+                Err("audio recording is not supported by Silica".to_string())
             }
             _ => Err(format!("'{id}' is not a command this plugin registered")),
         }
@@ -941,10 +944,16 @@ impl Plugin for Workspaces {
     }
 
     fn commands(&self) -> Vec<NativeCommand> {
-        vec![NativeCommand {
-            id: "workspaces:save".into(),
-            name: "Save workspace".into(),
-        }]
+        vec![
+            NativeCommand {
+                id: "workspaces:save".into(),
+                name: "Save workspace".into(),
+            },
+            NativeCommand {
+                id: "workspaces:load".into(),
+                name: "Load workspace".into(),
+            },
+        ]
     }
 
     fn run_command(
@@ -967,6 +976,24 @@ impl Plugin for Workspaces {
                         .unwrap_or(0)
                 });
                 (ctx.create_file)(&workspace_path, &serde_json::to_string_pretty(&workspace).map_err(|e| e.to_string())?)?;
+                Ok(())
+            }
+            "workspaces:load" => {
+                let name = value.and_then(|v| v.as_str()).unwrap_or("default");
+                let workspace_path = format!(".silica/workspaces/{name}.json");
+                if !(ctx.file_exists)(&workspace_path)? {
+                    return Err(format!("no workspace named {name}"));
+                }
+                let content = (ctx.read_file)(&workspace_path)?;
+                let workspace: Value = serde_json::from_str(&content)
+                    .map_err(|e| format!("workspace {name} is not valid JSON: {e}"))?;
+                let note = workspace
+                    .get("current_note")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if !note.is_empty() {
+                    (ctx.open_note)(note)?;
+                }
                 Ok(())
             }
             _ => Err(format!("'{id}' is not a command this plugin registered")),
