@@ -212,6 +212,14 @@ mod tests {
         assert!(r["error"].is_null(), "{r}");
         assert_eq!(r["result"]["isError"], json!(true));
         let text = r["result"]["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("cannot reach"), "{text}");
+        // * What matters is that an unreachable server is reported as a tool
+        // * error with a reason, not as a JSON-RPC fault. The wording differs
+        // * by platform — a refused connection, a timeout during DNS, a
+        // * handshake failure — so the assertion is on it being an explanation
+        // * rather than on one phrasing of it.
+        assert!(
+            text.contains("cannot reach") || text.contains("cannot resolve"),
+            "{text}"
+        );
     }
 }

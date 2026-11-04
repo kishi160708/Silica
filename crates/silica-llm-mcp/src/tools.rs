@@ -326,23 +326,34 @@ fn open_digest_file(root: &Path, file: &Path) -> Result<std::fs::File, String> {
     // * `file` came from `digest_path`, which returns the canonical path. The
     // * root a caller holds may be spelled differently — macOS reports
     // * `/var/folders/…` for what canonicalizes to `/private/var/folders/…` —
-    // * so it is canonicalized here before the relative path is cut. Without
+    // * so both spellings are tried before the relative path is cut. Without
     // * this every file under a symlinked temp dir looks like it is outside.
-    let root = root
-        .canonicalize()
-        .map_err(|e| format!("cannot resolve digest root {}: {e}", root.display()))?;
-    let root = root.as_path();
+    // * The root itself may be reached through a symlink — macOS's `/var` is
+    // * one, and a user may configure a linked path — so it is canonicalized
+    // * and opened with O_DIRECTORY only. `O_NOFOLLOW` is for the components
+    // * *below* it: those must be real directories, since that is where a
+    // * planted link could redirect the walk.
+    let canonical = root.canonicalize().ok();
+    let open_root: &Path = canonical.as_deref().unwrap_or(root);
     let root_fd = std::fs::OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(root)
-        .map_err(|e| format!("cannot open digest root {}: {e}", root.display()))?;
-    let comps: Vec<&std::ffi::OsStr> = file
-        .strip_prefix(root)
-        .map_err(|e| format!("cannot compute path relative to {}: {e}", root.display()))?
-        .components()
-        .map(|c| c.as_os_str())
-        .collect();
+        .custom_flags(libc::O_DIRECTORY | libc::O_CLOEXEC)
+        .open(open_root)
+        .map_err(|e| format!("cannot open digest root {}: {e}", open_root.display()))?;
+    let roots: Vec<&Path> = canonical
+        .as_deref()
+        .map(|c| vec![c, root])
+        .unwrap_or_else(|| vec![root]);
+    let relative = roots
+        .iter()
+        .find_map(|r| file.strip_prefix(r).ok())
+        .ok_or_else(|| {
+            format!(
+                "cannot compute path relative to {}: prefix not found",
+                root.display()
+            )
+        })?;
+    let comps: Vec<&std::ffi::OsStr> = relative.components().map(|c| c.as_os_str()).collect();
     if comps.is_empty() {
         return Err(format!(
             "cannot read {}: empty path relative to digest root",
