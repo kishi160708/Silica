@@ -277,26 +277,26 @@ pub fn write_at(root: &Path, relative: &Path, bytes: &[u8]) -> io::Result<()> {
         return Err(error);
     }
 
-    // * `FILE_RENAME_INFO.FileName` is a **NUL-terminated** name and, when
-    // * `RootDirectory` is set, must start with a backslash — it is a name
-    // * *within* that directory, not a bare leaf. `FileNameLength` counts the
-    // * bytes including that leading backslash but not the terminator; giving
-    // * an unprefixed name is what produces ERROR_INVALID_PARAMETER (87).
-    let mut name_wide: Vec<u16> = std::iter::once(u16::from(b'\\' as u8))
-        .chain(name.encode_wide())
-        .collect();
-    name_wide.push(0);
-    let header = std::mem::size_of::<FILE_RENAME_INFO>() - std::mem::size_of::<u16>();
-    let mut buf = vec![0u8; header + name_wide.len() * 2];
+    // * The struct ends in a flexible array, so its `size_of` carries trailing
+    // * padding and is larger than the offset of `FileName`. Subtracting one
+    // * `u16` from the total — which is what an earlier version did — puts the
+    // * name two bytes late and the call fails with ERROR_INVALID_PARAMETER
+    // * (87). `offset_of!` is the number that actually describes the layout.
+    // *
+    // * `FileName` is a counted buffer, not a C string: `FileNameLength` is the
+    // * byte count of the name alone, and with `RootDirectory` set the name is
+    // * relative to that directory, so a bare leaf is what goes here.
+    let name_wide: Vec<u16> = name.encode_wide().collect();
+    let head = std::mem::offset_of!(FILE_RENAME_INFO, FileName);
+    let mut buf = vec![0u8; head + name_wide.len() * 2];
     unsafe {
         let info = buf.as_mut_ptr() as *mut FILE_RENAME_INFO;
-        // * `ReplaceIfExists` is the field the `FILE_RENAME_INFO` layout
-        // * documents for `FileRenameInfo`; the `Flags` union member belongs to
-        // * the `Ex` variant, which takes a different class.
+        // * `ReplaceIfExists` is what `FileRenameInfo` documents; the `Flags`
+        // * union member belongs to the `Ex` class, which this call is not
+        // * using.
         (*info).Anonymous.ReplaceIfExists = 1;
         (*info).RootDirectory = parent_handle.as_raw_handle() as HANDLE;
-        // * Every unit but the NUL: the leading backslash is counted.
-        (*info).FileNameLength = ((name_wide.len() - 1) * 2) as u32;
+        (*info).FileNameLength = (name_wide.len() * 2) as u32;
         std::ptr::copy_nonoverlapping(
             name_wide.as_ptr(),
             std::ptr::addr_of_mut!((*info).FileName) as *mut u16,
