@@ -861,7 +861,7 @@ fn install<'js>(
             .strip_prefix(&shared_root)
             .unwrap_or(&resolved)
             .to_string_lossy()
-            .replace('/', "-");
+            .replace(['/', '\\'], "-");
         std::fs::create_dir_all(&trash)
             .map_err(|error| Exception::throw_message(&ctx, &error.to_string()))?;
         // ! `.trash` itself must be a real directory inside the vault: a link
