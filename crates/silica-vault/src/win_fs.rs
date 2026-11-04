@@ -277,18 +277,26 @@ pub fn write_at(root: &Path, relative: &Path, bytes: &[u8]) -> io::Result<()> {
         return Err(error);
     }
 
-    let name_wide: Vec<u16> = name.encode_wide().collect();
-    // * `FILE_RENAME_INFO` ends in a one-element array, so the buffer is the
-    // * header plus the name, with the name written over that trailing slot.
+    // * `FILE_RENAME_INFO.FileName` is a **NUL-terminated** name and, when
+    // * `RootDirectory` is set, must start with a backslash — it is a name
+    // * *within* that directory, not a bare leaf. `FileNameLength` counts the
+    // * bytes including that leading backslash but not the terminator; giving
+    // * an unprefixed name is what produces ERROR_INVALID_PARAMETER (87).
+    let mut name_wide: Vec<u16> = std::iter::once(u16::from(b'\\' as u8))
+        .chain(name.encode_wide())
+        .collect();
+    name_wide.push(0);
     let header = std::mem::size_of::<FILE_RENAME_INFO>() - std::mem::size_of::<u16>();
     let mut buf = vec![0u8; header + name_wide.len() * 2];
     unsafe {
         let info = buf.as_mut_ptr() as *mut FILE_RENAME_INFO;
-        // * `Flags` — not the legacy `ReplaceIfExists` — carries the
-        // * replace flag on current Windows.
-        (*info).Anonymous.Flags = FILE_RENAME_REPLACE_IF_EXISTS;
+        // * `ReplaceIfExists` is the field the `FILE_RENAME_INFO` layout
+        // * documents for `FileRenameInfo`; the `Flags` union member belongs to
+        // * the `Ex` variant, which takes a different class.
+        (*info).Anonymous.ReplaceIfExists = 1;
         (*info).RootDirectory = parent_handle.as_raw_handle() as HANDLE;
-        (*info).FileNameLength = (name_wide.len() * 2) as u32;
+        // * Every unit but the NUL: the leading backslash is counted.
+        (*info).FileNameLength = ((name_wide.len() - 1) * 2) as u32;
         std::ptr::copy_nonoverlapping(
             name_wide.as_ptr(),
             std::ptr::addr_of_mut!((*info).FileName) as *mut u16,
@@ -313,9 +321,6 @@ pub fn write_at(root: &Path, relative: &Path, bytes: &[u8]) -> io::Result<()> {
     drop(temp);
     Ok(())
 }
-
-/// `FILE_RENAME_FLAG_REPLACE_IF_EXISTS`.
-pub const FILE_RENAME_REPLACE_IF_EXISTS: u32 = 0x0000_0001;
 
 /// The Unix path snapshots before replacing; here the companion-and-rename in
 /// [`write_at`] already means the old bytes are never truncated in place.
