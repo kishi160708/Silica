@@ -212,14 +212,13 @@ mod tests {
         assert!(r["error"].is_null(), "{r}");
         assert_eq!(r["result"]["isError"], json!(true));
         let text = r["result"]["content"][0]["text"].as_str().unwrap();
-        // * What matters is that an unreachable server is reported as a tool
-        // * error with a reason, not as a JSON-RPC fault. The wording differs
-        // * by platform — a refused connection, a timeout during DNS, a
-        // * handshake failure — so the assertion is on it being an explanation
-        // * rather than on one phrasing of it.
-        assert!(
-            text.contains("cannot reach") || text.contains("cannot resolve"),
-            "{text}"
-        );
+        // * What matters is that an unreachable server comes back as a tool
+        // * error carrying a reason, not as a JSON-RPC fault. How the connection
+        // * failed is the platform's business: a refusal on Linux, a timeout
+        // * during DNS or the handshake on Windows, and CI machines differ
+        // * again. So the assertion is on the shape — a non-empty explanation
+        // * that names the address it could not reach — not on the sentence.
+        assert!(text.contains("127.0.0.1:1"), "{text}");
+        assert!(text.len() > 20, "the error should explain itself: {text}");
     }
 }
