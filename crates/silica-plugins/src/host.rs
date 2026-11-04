@@ -852,14 +852,41 @@ fn install<'js>(
         // * mistaken delete is recoverable.
         let shared_root = s.borrow().root.clone();
         let trash = shared_root.join(".trash");
-        let name = resolved
+        // ! The name has to be unique per source path. Flattening `a/b.md` to
+        // ! `a-b.md` made it collide with a real `a-b.md`, so deleting the
+        // ! second overwrote the first trashed note — two different notes, one
+        // ! survivor, and the user told nothing. A numbered suffix keeps both,
+        // ! and makes deleting the same note twice keep both versions.
+        let stem = resolved
             .strip_prefix(&shared_root)
             .unwrap_or(&resolved)
             .to_string_lossy()
             .replace('/', "-");
         std::fs::create_dir_all(&trash)
             .map_err(|error| Exception::throw_message(&ctx, &error.to_string()))?;
-        std::fs::rename(&resolved, trash.join(name)).map_err(|error| {
+        // ! `.trash` itself must be a real directory inside the vault: a link
+        // ! planted there would move the note out of the vault entirely.
+        let trash_meta = std::fs::symlink_metadata(&trash)
+            .map_err(|error| Exception::throw_message(&ctx, &error.to_string()))?;
+        if !trash_meta.file_type().is_dir() {
+            return Err(Exception::throw_message(
+                &ctx,
+                "the vault's .trash is not a plain directory; refusing to move a note into it",
+            ));
+        }
+        let mut target = trash.join(&stem);
+        let mut counter = 1u32;
+        while std::fs::symlink_metadata(&target).is_ok() {
+            target = trash.join(format!("{stem}.{counter}"));
+            counter += 1;
+            if counter > 10_000 {
+                return Err(Exception::throw_message(
+                    &ctx,
+                    &format!("'{path}' could not be trashed: too many copies already there"),
+                ));
+            }
+        }
+        std::fs::rename(&resolved, &target).map_err(|error| {
             Exception::throw_message(&ctx, &format!("'{path}' could not be deleted: {error}"))
         })
     });
@@ -1253,7 +1280,7 @@ mod capability_tests {
         let context = Context::full(&runtime).map_err(|e| e.to_string())?;
         let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
         let root = dir.path().canonicalize().map_err(|e| e.to_string())?;
-        let shared = Rc::new(RefCell::new(Shared {
+        let _shared = Rc::new(RefCell::new(Shared {
             id: "cap".into(),
             root: root.clone(),
             data_path: root.join("data.json"),
