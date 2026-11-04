@@ -277,26 +277,31 @@ pub fn write_at(root: &Path, relative: &Path, bytes: &[u8]) -> io::Result<()> {
         return Err(error);
     }
 
-    // * The struct ends in a flexible array, so its `size_of` carries trailing
-    // * padding and is larger than the offset of `FileName`. Subtracting one
-    // * `u16` from the total — which is what an earlier version did — puts the
-    // * name two bytes late and the call fails with ERROR_INVALID_PARAMETER
-    // * (87). `offset_of!` is the number that actually describes the layout.
-    // *
-    // * `FileName` is a counted buffer, not a C string: `FileNameLength` is the
-    // * byte count of the name alone, and with `RootDirectory` set the name is
-    // * relative to that directory, so a bare leaf is what goes here.
-    let name_wide: Vec<u16> = name.encode_wide().collect();
+    // * `FileRenameInfo` is fussy about a name made relative to
+    // * `RootDirectory`: the leaf form draws ERROR_INVALID_PARAMETER (87) and
+    // * the counted form is not what the Win32 wrapper expects. The documented
+    // * shape is a *full* path with `RootDirectory` null, so the destination is
+    // * built from the parent handle's own resolved path — the same handle that
+    // * `open_verified` checked is inside the vault — rather than from the
+    // * string the caller passed in.
+    let parent_real = final_path(parent_handle.as_raw_handle() as HANDLE)?;
+    let target_real = parent_real.join(name);
+    let name_wide: Vec<u16> = target_real
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
     let head = std::mem::offset_of!(FILE_RENAME_INFO, FileName);
-    let mut buf = vec![0u8; head + name_wide.len() * 2];
+    // * The call wants at least a whole `FILE_RENAME_INFO`, plus room for the
+    // * name; a shorter buffer is another way to draw 87.
+    let len = (head + name_wide.len() * 2).max(std::mem::size_of::<FILE_RENAME_INFO>());
+    let mut buf = vec![0u8; len];
     unsafe {
         let info = buf.as_mut_ptr() as *mut FILE_RENAME_INFO;
-        // * `ReplaceIfExists` is what `FileRenameInfo` documents; the `Flags`
-        // * union member belongs to the `Ex` class, which this call is not
-        // * using.
         (*info).Anonymous.ReplaceIfExists = 1;
-        (*info).RootDirectory = parent_handle.as_raw_handle() as HANDLE;
-        (*info).FileNameLength = (name_wide.len() * 2) as u32;
+        (*info).RootDirectory = std::ptr::null_mut();
+        // * Byte count of the name, terminator excluded.
+        (*info).FileNameLength = ((name_wide.len() - 1) * 2) as u32;
         std::ptr::copy_nonoverlapping(
             name_wide.as_ptr(),
             std::ptr::addr_of_mut!((*info).FileName) as *mut u16,
