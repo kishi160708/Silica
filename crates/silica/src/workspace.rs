@@ -2871,6 +2871,25 @@ fn view_subscriptions(
         cx.subscribe(reading, |this, _, event: &ReadingEvent, cx| {
             if let ReadingEvent::PropertyChanged { path, changes } = event {
                 this.change_property(path, changes, cx)
+            } else if let ReadingEvent::RenameFile { path, new_name } = event {
+                let Some(state) = this.state.clone() else {
+                    return;
+                };
+                let to = match this.renamed_path(path, new_name) {
+                    Ok(to) => to,
+                    Err(_) => return,
+                };
+                if *path == to {
+                    return;
+                }
+                let update_links = state.update_links_automatically();
+                match state.rename(path, &to, update_links) {
+                    Ok(outcome) => {
+                        this.apply_rename(outcome, cx);
+                        this.refresh_vault_views(cx);
+                    }
+                    Err(err) => this.report(format!("could not rename: {err}"), cx),
+                }
             }
         }),
         cx.subscribe(editor, |this, _, event: &EditorEvent, cx| match event {
@@ -3028,7 +3047,7 @@ impl Workspace {
                         } else {
                             format!("{dest_folder}/{name}")
                         };
-                        this.rename_with_links(src, &to, window, cx);
+                        this.rename_with_links(src, &to, Some(window), cx);
                     }
                     ExplorerEvent::Duplicate(path) => this.duplicate(path, cx),
                     ExplorerEvent::Delete(path) => this.start_delete(path, window, cx),
@@ -7521,7 +7540,7 @@ impl Workspace {
                         return;
                     }
                 };
-                self.rename_with_links(&from, &to, window, cx);
+                self.rename_with_links(&from, &to, Some(window), cx);
             }
             PendingOp::Move(from) => {
                 let folder = value.trim_matches('/');
@@ -7531,7 +7550,7 @@ impl Workspace {
                 } else {
                     format!("{folder}/{name}")
                 };
-                self.rename_with_links(&from, &to, window, cx);
+                self.rename_with_links(&from, &to, Some(window), cx);
             }
             PendingOp::Delete(path) => {
                 self.pending = None;
@@ -7560,7 +7579,7 @@ impl Workspace {
                     Err(err) => self.prompt.update(cx, |p, cx| p.set_error(err, cx)),
                 }
             }
-            PendingOp::UpdateLinks { from, to } => self.finish_rename(&from, &to, true, window, cx),
+            PendingOp::UpdateLinks { from, to } => self.finish_rename(&from, &to, true, Some(window), cx),
             PendingOp::AddBookmark(draft) => {
                 self.pending = None;
                 self.close_modal(window, cx);
@@ -7578,7 +7597,7 @@ impl Workspace {
     fn prompt_secondary(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.pending.clone() {
             Some(PendingOp::UpdateLinks { from, to }) => {
-                self.finish_rename(&from, &to, false, window, cx);
+                self.finish_rename(&from, &to, false, Some(window), cx);
             }
             Some(PendingOp::EditBookmark(path)) => {
                 self.pending = None;
@@ -7760,7 +7779,7 @@ impl Workspace {
         &mut self,
         from: &str,
         to: &str,
-        window: &mut Window,
+        window: Option<&mut Window>,
         cx: &mut Context<Self>,
     ) {
         let Some(state) = self.state.clone() else {
@@ -7768,7 +7787,9 @@ impl Workspace {
         };
         if from == to {
             self.pending = None;
-            self.close_modal(window, cx);
+            if let Some(w) = window {
+                self.close_modal(w, cx);
+            }
             return;
         }
         if state.update_links_automatically() {
@@ -7781,29 +7802,34 @@ impl Workspace {
             return;
         }
         let name = from.rsplit('/').next().unwrap_or(from);
-        self.open_prompt(
-            PendingOp::UpdateLinks {
-                from: from.to_string(),
-                to: to.to_string(),
-            },
-            PromptSpec {
-                title: "Update links?".into(),
-                detail: Some(
-                    format!(
-                        "{links} link{} in {files} file{} point to {name}. Update them to the new name?",
-                        if links == 1 { "" } else { "s" },
-                        if files == 1 { "" } else { "s" }
-                    )
-                    .into(),
-                ),
-                input: None,
-                confirm: "Update links".into(),
-                secondary: Some("Don't update".into()),
-                ..PromptSpec::default()
-            },
-            window,
-            cx,
-        );
+        if let Some(w) = window {
+            self.open_prompt(
+                PendingOp::UpdateLinks {
+                    from: from.to_string(),
+                    to: to.to_string(),
+                },
+                PromptSpec {
+                    title: "Update links?".into(),
+                    detail: Some(
+                        format!(
+                            "{links} link{} in {files} file{} point to {name}. Update them to the new name?",
+                            if links == 1 { "" } else { "s" },
+                            if files == 1 { "" } else { "s" }
+                        )
+                        .into(),
+                    ),
+                    input: None,
+                    confirm: "Update links".into(),
+                    secondary: Some("Don't update".into()),
+                    ..PromptSpec::default()
+                },
+                w,
+                cx,
+            );
+        } else {
+            // * No window available (inline title rename): auto-update links.
+            self.finish_rename(from, to, true, None, cx);
+        }
     }
 
     fn finish_rename(
@@ -7811,7 +7837,7 @@ impl Workspace {
         from: &str,
         to: &str,
         update_links: bool,
-        window: &mut Window,
+        window: Option<&mut Window>,
         cx: &mut Context<Self>,
     ) {
         let Some(state) = self.state.clone() else {
@@ -7823,7 +7849,9 @@ impl Workspace {
         match state.rename(from, to, update_links) {
             Ok(outcome) => {
                 self.pending = None;
-                self.close_modal(window, cx);
+                if let Some(w) = window {
+                    self.close_modal(w, cx);
+                }
                 self.apply_rename(outcome, cx);
             }
             Err(err) => self.prompt.update(cx, |p, cx| p.set_error(err, cx)),
@@ -7934,7 +7962,7 @@ impl Workspace {
         } else {
             format!("{folder}/{new_name}.{ext}")
         };
-        self.finish_rename(&from, &to, true, window, cx);
+        self.finish_rename(&from, &to, true, Some(window), cx);
     }
 
     /// Opens one of the file prompts for the open note (`--prompt` on the
@@ -8673,7 +8701,7 @@ impl Workspace {
         // * The keyboard goes back to the view before the rename, which may
         //   put the "Update links?" prompt up and want it for itself.
         self.focus_main(window, cx);
-        self.rename_with_links(&edit.path, &to, window, cx);
+        self.rename_with_links(&edit.path, &to, Some(window), cx);
         cx.notify();
     }
 

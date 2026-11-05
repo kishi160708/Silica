@@ -251,6 +251,9 @@ pub enum ReadingEvent {
         path: String,
         changes: Vec<silica_formats::properties::Change>,
     },
+    /// The reader committed an inline title edit: rename the file to the new
+    /// stem. The workspace renames the file and rewrites its links.
+    RenameFile { path: String, new_name: String },
 }
 
 /// A reader clicked a task checkbox. The reading view does not write the
@@ -285,6 +288,9 @@ pub struct ReadingView {
     /// title. It sits above the scroller rather than scrolling with the
     /// text, which is the one visible difference from Obsidian's.
     inline_title: bool,
+    /// The inline title is being edited: the text the user has typed. `None`
+    /// when the title is just a static label.
+    inline_title_edit: Option<String>,
     properties_in_document: PropertiesInDocument,
     /// The vault's `types.json`, for the type each property row shows.
     property_types: PropertyTypes,
@@ -400,6 +406,7 @@ impl ReadingView {
             hidden: Vec::new(),
             readable_line_length: true,
             inline_title: true,
+            inline_title_edit: None,
             properties_in_document: PropertiesInDocument::default(),
             property_types: PropertyTypes::default(),
             copied: None,
@@ -1564,6 +1571,97 @@ impl ReadingView {
             )
             .into_any_element()
     }
+
+    fn render_inline_title(&mut self, base: f32, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.global::<Theme>().clone();
+        let name = self
+            .path
+            .as_deref()
+            .and_then(|p| p.rsplit('/').next())
+            .unwrap_or_default()
+            .trim_end_matches(".md")
+            .to_string();
+        if self.inline_title_edit.is_some() {
+            // * Editing: a focused text field. Key events are handled by
+            //   inline_title_key_down on the root div.
+            div()
+                .id("inline-title")
+                .px(px(base * 2.))
+                .pt(px(base * 1.6))
+                .pb(px(base * 0.4))
+                .text_size(px(base * 1.6))
+                .text_color(theme.text)
+                .font_weight(gpui::FontWeight::BOLD)
+                .cursor_pointer()
+                .bg(theme.bg_active)
+                .rounded_sm()
+                .px_1()
+                .child(SharedString::from(
+                    self.inline_title_edit.as_deref().unwrap_or(&name),
+                ))
+                .into_any_element()
+        } else {
+            // * Static label: a single click starts editing.
+            let view = cx.entity();
+            div()
+                .id("inline-title")
+                .px(px(base * 2.))
+                .pt(px(base * 1.6))
+                .pb(px(base * 0.4))
+                .text_size(px(base * 1.6))
+                .text_color(theme.text)
+                .font_weight(gpui::FontWeight::BOLD)
+                .cursor_pointer()
+                .child(SharedString::from(name.clone()))
+                .on_mouse_down(gpui::MouseButton::Left, move |_, _, cx| {
+                    view.update(cx, |v, cx| {
+                        v.inline_title_edit = Some(name.clone());
+                        cx.notify();
+                    });
+                })
+                .into_any_element()
+        }
+    }
+
+    /// Handles key events while the inline title is being edited. Enter
+    /// commits the rename, Escape abandons, everything else edits the text.
+    fn inline_title_key_down(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.inline_title_edit.is_none() {
+            return;
+        }
+        cx.stop_propagation();
+        let key = event.keystroke.key.clone();
+        match key.as_str() {
+            "Enter" => {
+                let new_name = self.inline_title_edit.take().unwrap_or_default();
+                let path = self.path.clone().unwrap_or_default();
+                cx.emit(ReadingEvent::RenameFile {
+                    path,
+                    new_name: new_name.trim().to_string(),
+                });
+            }
+            "Escape" => {
+                self.inline_title_edit = None;
+            }
+            "Backspace" => {
+                if let Some(text) = &mut self.inline_title_edit {
+                    text.pop();
+                }
+            }
+            s if s.len() == 1 => {
+                if let Some(text) = &mut self.inline_title_edit {
+                    text.push_str(s);
+                }
+            }
+            _ => {}
+        }
+        cx.notify();
+    }
 }
 
 impl Render for ReadingView {
@@ -1575,6 +1673,7 @@ impl Render for ReadingView {
             .key_context("ReadingView")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::field_key_down))
+            .on_key_down(cx.listener(Self::inline_title_key_down))
             .on_action(cx.listener(Self::scroll_page_down))
             .on_action(cx.listener(Self::scroll_page_up))
             .on_action(cx.listener(Self::scroll_line_down))
@@ -1591,24 +1690,7 @@ impl Render for ReadingView {
             .line_height(px(base * LINE_HEIGHT))
             .text_color(theme.text)
             .relative()
-            .children(self.inline_title.then(|| {
-                let name = self
-                    .path
-                    .as_deref()
-                    .and_then(|p| p.rsplit('/').next())
-                    .unwrap_or_default()
-                    .trim_end_matches(".md")
-                    .to_string();
-                div()
-                    .id("inline-title")
-                    .px(px(base * 2.))
-                    .pt(px(base * 1.6))
-                    .pb(px(base * 0.4))
-                    .text_size(px(base * 1.6))
-                    .text_color(theme.text)
-                    .font_weight(gpui::FontWeight::BOLD)
-                    .child(SharedString::from(name))
-            }))
+            .children(self.inline_title.then(|| self.render_inline_title(base, cx)))
             .child(
                 div().flex_1().min_h_0().child(
                     list(self.list.clone(), move |ix, window, cx| {
