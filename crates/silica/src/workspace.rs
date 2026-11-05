@@ -3062,6 +3062,10 @@ impl Workspace {
                     }
                     ExplorerEvent::CopyPath(path) => this.copy_path(path, cx),
                     ExplorerEvent::OpenInDefaultApp(path) => this.open_in_default_app(path, cx),
+                    ExplorerEvent::OpenInPopout(path) => this.open_popout(path, window, cx),
+                    ExplorerEvent::ShowInSystemExplorer(path) => {
+                        this.show_in_system_explorer(path, cx)
+                    }
                     ExplorerEvent::SearchInFolder(folder) => {
                         this.search_in_folder(folder, window, cx)
                     }
@@ -6840,6 +6844,43 @@ impl Workspace {
         let outcome = silica_plugins::launch::open_path(&absolute);
         if let Err(err) = outcome {
             self.report(format!("Could not open {path}: {err}"), cx);
+        }
+    }
+
+    /// "Show in system explorer": select the file in the desktop's file
+    /// manager via D-Bus `FileManager1.ShowItems`, with opening the
+    /// containing folder as fallback.
+    fn show_in_system_explorer(&mut self, path: &str, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let absolute = state.vault().absolute(path);
+        let url = format!("file://{}", absolute.display());
+        // * D-Bus first: org.freedesktop.FileManager1.ShowItems selects the
+        //   file(s) in the file manager. Fire and forget; the session bus
+        //   may not have a file manager answering, so fall back to opening
+        //   the containing folder.
+        let dbus = std::process::Command::new("dbus-send")
+            .args([
+                "--session",
+                "--dest=org.freedesktop.FileManager1",
+                "--type=method_call",
+                "/org/freedesktop/FileManager1",
+                "org.freedesktop.FileManager1.ShowItems",
+                &format!("array:string:\"{url}\""),
+                "string:\"\"",
+            ])
+            .spawn();
+        if dbus.is_err() {
+            // * Fallback: open the containing folder in the file manager.
+            let folder = absolute.parent().map(|p| p.to_string_lossy().to_string());
+            if let Some(folder) = folder {
+                if let Err(err) = silica_plugins::launch::open_path(std::path::Path::new(&folder)) {
+                    self.report(format!("Could not show {path} in system explorer: {err}"), cx);
+                }
+            } else {
+                self.report(format!("Could not show {path}: no parent folder"), cx);
+            }
         }
     }
 

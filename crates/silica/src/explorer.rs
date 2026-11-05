@@ -540,6 +540,13 @@ pub enum ExplorerEvent {
     CopyPath(String),
     /// "Open in default app": hand the file to the desktop.
     OpenInDefaultApp(String),
+    /// "Open in new window": the file's reading view in a secondary window
+    /// (popout).
+    OpenInPopout(String),
+    /// "Show in system explorer": select the file in the desktop's file
+    /// manager via D-Bus `FileManager1.ShowItems`, with opening the
+    /// containing folder as fallback.
+    ShowInSystemExplorer(String),
     /// "Search in folder": the Search pane scoped to this folder.
     SearchInFolder(String),
     /// Escape in the tree: the keyboard goes back to the main area.
@@ -589,13 +596,14 @@ enum Target {
 
 /// The menu for a target, in Obsidian's order.
 ///
-/// Four of the captured items are left out rather than drawn dead, because
-/// Silica has no command behind them: **Open in new window** (no second
-/// window), **Merge entire file with...** (no merge), **Open version history**
-/// (no file history) and **Show in system explorer** (selecting a file in the
-/// desktop's file manager wants the D-Bus `FileManager1.ShowItems` call). A
-/// folder's **Make a copy** is out for the same reason: `Vault::duplicate`
-/// copies one file, and a folder needs a recursive copy with link rewriting.
+/// Two of the captured items are left out rather than drawn dead, because
+/// Silica has no command behind them: **Merge entire file with...** (no
+/// merge) and **Open version history** (no file history). **Open in new
+/// window** (popout) and **Show in system explorer** (D-Bus
+/// `FileManager1.ShowItems`, with opening the containing folder as fallback)
+/// are implemented. A folder's **Make a copy** is out for the same reason:
+/// `Vault::duplicate` copies one file, and a folder needs a recursive copy
+/// with link rewriting.
 /// Listing a row that cannot run is what the command palette refuses to do,
 /// and the menu refuses it too; the gaps are entries in
 /// `docs/silica/UI parity backlog.md`. Dropping the only item of a section
@@ -657,6 +665,18 @@ fn menu_items(target: &Target) -> Vec<MenuItem> {
                 "arrow-up-right",
                 S::System,
                 E::OpenInDefaultApp(path.clone()),
+            ),
+            item(
+                "Open in new window",
+                "square",
+                S::System,
+                E::OpenInPopout(path.clone()),
+            ),
+            item(
+                "Show in system explorer",
+                "folder-open",
+                S::System,
+                E::ShowInSystemExplorer(path.clone()),
             ),
             item("Rename...", "pen-line", S::Danger, E::Rename(path.clone())),
             item("Delete", "trash-2", S::Danger, E::Delete(path.clone())),
@@ -720,6 +740,12 @@ fn menu_items(target: &Target) -> Vec<MenuItem> {
                 "clipboard",
                 S::Unsectioned,
                 E::CopyPath(folder.clone()),
+            ),
+            item(
+                "Show in system explorer",
+                "folder-open",
+                S::System,
+                E::ShowInSystemExplorer(folder.clone()),
             ),
             item(
                 "Rename...",
@@ -1928,6 +1954,8 @@ mod menu_tests {
             | ExplorerEvent::OpenToRight(p)
             | ExplorerEvent::CopyPath(p)
             | ExplorerEvent::OpenInDefaultApp(p)
+            | ExplorerEvent::OpenInPopout(p)
+            | ExplorerEvent::ShowInSystemExplorer(p)
             | ExplorerEvent::SearchInFolder(p)
             | ExplorerEvent::MoveToFolder { src: p, .. } => Some(p),
             ExplorerEvent::NewNote { folder }
@@ -1954,12 +1982,11 @@ mod menu_tests {
     }
 
     /// [[Specification#The file explorer's context menus]], the file-row
-    /// table, minus the four items Silica has no command for -- Open in new
-    /// window, Merge entire file with..., Open version history and Show in
-    /// system explorer. Dropping Open version history empties the `view`
-    /// section, so the separator the capture has around it is gone too; every
-    /// other separator is where Obsidian put it, including the pair above
-    /// Rename.
+    /// table, minus "Merge entire file with..." and "Open version history"
+    /// (Silica has no merge or file history). "Open in new window" and
+    /// "Show in system explorer" are implemented; the `view` section's
+    /// separator stays because "Open version history" used to sit between
+    /// them and Rename.
     #[test]
     fn the_file_rows_menu_is_obsidians_order_without_the_rows_it_cannot_run() {
         assert_eq!(
@@ -1975,6 +2002,8 @@ mod menu_tests {
                 "Copy path",
                 "---",
                 "Open in default app",
+                "Open in new window",
+                "Show in system explorer",
                 "---",
                 "---",
                 "Rename...",
@@ -1983,9 +2012,10 @@ mod menu_tests {
         );
     }
 
-    /// The folder-row table, minus "Make a copy" (no recursive folder copy)
-    /// and "Show in system explorer". A folder gets no "Open in default app":
-    /// the capture has that item on the file row only.
+    /// The folder-row table, minus "Make a copy" (no recursive folder
+    /// copy). "Show in system explorer" is implemented. A folder gets no
+    /// "Open in default app": the capture has that item on the file row
+    /// only.
     #[test]
     fn the_folder_rows_menu_is_obsidians_order() {
         assert_eq!(
@@ -2001,6 +2031,8 @@ mod menu_tests {
                 "Bookmark...",
                 "---",
                 "Copy path",
+                "---",
+                "Show in system explorer",
                 "---",
                 "---",
                 "Rename...",
