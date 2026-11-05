@@ -605,6 +605,7 @@ impl Cards {
             on_toggle,
             String::new(),
             WeakEntity::<ReadingView>::new_invalid(),
+            None,
         )
         .with_reading_host(&host);
         let blocks: Vec<AnyElement> = model

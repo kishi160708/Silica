@@ -5305,6 +5305,7 @@ impl Element for EditorElement {
                 on_toggle,
                 String::new(),
                 WeakEntity::<ReadingView>::new_invalid(),
+                None,
             );
             let mut lines: Vec<(VisibleLine, Shaped)> = Vec::new();
             let mut widgets: Vec<WidgetPaint> = Vec::new();

@@ -45,6 +45,8 @@ actions!(
         ScrollLineUp,
         ScrollToTop,
         ScrollToBottom,
+        Copy,
+        SelectAll,
     ]
 );
 
@@ -67,6 +69,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-home", ScrollToTop, ctx),
         KeyBinding::new("end", ScrollToBottom, ctx),
         KeyBinding::new("ctrl-end", ScrollToBottom, ctx),
+        KeyBinding::new("ctrl-c", Copy, ctx),
+        KeyBinding::new("ctrl-a", SelectAll, ctx),
     ]);
 }
 
@@ -316,6 +320,14 @@ pub struct ReadingView {
     /// pill remove or retype can look up the row it acts on. Set from
     /// `render_block` whenever a properties block is painted.
     pub property_entries: Option<Vec<silica_formats::properties::Property>>,
+    /// The reader's text selection: one entry per selected RichText run,
+    /// holding the block index, the run's id, and the byte range within it.
+    /// `None` when nothing is selected.
+    pub selection: Option<Vec<(usize, usize, usize, usize)>>,
+    /// The block index where the current drag selection started, and the
+    /// byte offset within its first RichText run. `None` when no drag is in
+    /// progress.
+    pub drag_start: Option<(usize, usize)>,
 }
 
 /// One video in the player.
@@ -399,6 +411,8 @@ impl ReadingView {
             selected_pill: None,
             property_menu: None,
             property_entries: None,
+            selection: None,
+            drag_start: None,
         }
     }
 
@@ -664,6 +678,239 @@ impl ReadingView {
             }
             _ => {}
         }
+    }
+
+    /// Copies the current selection to the clipboard. With no selection,
+    /// copies the entire note's plain text, as Obsidian's reading view does.
+    fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
+        let text = if let Some(ranges) = &self.selection {
+            self.selection_text(ranges)
+        } else {
+            self.all_text()
+        };
+        if !text.is_empty() {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+        }
+    }
+
+    /// Selects every RichText run in the note.
+    fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
+        let mut ranges: Vec<(usize, usize, usize, usize)> = Vec::new();
+        for (ix, block) in self.model.blocks.iter().enumerate() {
+            self.collect_runs(block, ix, &mut ranges);
+        }
+        self.selection = if ranges.is_empty() { None } else { Some(ranges) };
+        self.drag_start = None;
+        cx.notify();
+    }
+
+    /// Plain text of every RichText run in the note, in document order,
+    /// with a newline between blocks.
+    fn all_text(&self) -> String {
+        let mut out = String::new();
+        for block in &self.model.blocks {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(&self.block_text(block));
+        }
+        out
+    }
+
+    /// The text of the selected ranges, joined with newlines between
+    /// different blocks.
+    fn selection_text(&self, ranges: &[(usize, usize, usize, usize)]) -> String {
+        let mut out = String::new();
+        let mut last_block: Option<usize> = None;
+        for (ix, _rich_id, start, end) in ranges {
+            let Some(block) = self.model.blocks.get(*ix) else { continue };
+            if last_block != Some(*ix) {
+                if !out.is_empty() {
+                    out.push('\n');
+                }
+                last_block = Some(*ix);
+            }
+            if let Some(text) = self.rich_text_in_block(block, *start, *end) {
+                out.push_str(&text);
+            }
+        }
+        out
+    }
+
+    /// Collects every (block_ix, rich_id, 0, len) in `block`'s subtree.
+    fn collect_runs(&self, block: &RBlock, ix: usize, out: &mut Vec<(usize, usize, usize, usize)>) {
+        match block {
+            RBlock::Properties(_) => {}
+            RBlock::Paragraph(segments) => {
+                for seg in segments {
+                    if let Segment::Text(rt) = seg {
+                        out.push((ix, rt.id, 0, rt.text.len()));
+                    }
+                }
+            }
+            RBlock::Heading { text, .. } => {
+                out.push((ix, text.id, 0, text.text.len()));
+            }
+            RBlock::ThematicBreak => {}
+            RBlock::Code { .. } => {}
+            RBlock::Html(rt) => {
+                out.push((ix, rt.id, 0, rt.text.len()));
+            }
+            RBlock::Quote(children) => {
+                for child in children {
+                    self.collect_runs(child, ix, out);
+                }
+            }
+            RBlock::Callout { title, children, .. } => {
+                out.push((ix, title.id, 0, title.text.len()));
+                for child in children {
+                    self.collect_runs(child, ix, out);
+                }
+            }
+            RBlock::List { items, .. } => {
+                for item in items {
+                    self.collect_item(item, ix, out);
+                }
+            }
+            RBlock::Table { header, rows, .. } => {
+                for rt in header {
+                    out.push((ix, rt.id, 0, rt.text.len()));
+                }
+                for row in rows {
+                    for rt in row {
+                        out.push((ix, rt.id, 0, rt.text.len()));
+                    }
+                }
+            }
+            RBlock::Math(_) => {}
+            RBlock::Mermaid { .. } => {}
+            RBlock::Footnotes(notes) => {
+                for (_, blocks) in notes {
+                    for block in blocks {
+                        self.collect_runs(block, ix, out);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Collects runs from a list item: its children blocks hold the text.
+    fn collect_item(&self, item: &crate::reading::model::RItem, ix: usize, out: &mut Vec<(usize, usize, usize, usize)>) {
+        for child in &item.children {
+            self.collect_runs(child, ix, out);
+        }
+    }
+
+    /// Plain text of everything inside `block`, for "copy all".
+    fn block_text(&self, block: &RBlock) -> String {
+        let mut out = String::new();
+        match block {
+            RBlock::Properties(entries) => {
+                for p in entries {
+                    match &p.value {
+                        silica_formats::properties::Value::Text(s) => out.push_str(s),
+                        silica_formats::properties::Value::List(items) => {
+                            for item in items {
+                                out.push_str(item);
+                                out.push('\n');
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            RBlock::Paragraph(segments) => {
+                for seg in segments {
+                    if let Segment::Text(rt) = seg {
+                        out.push_str(&rt.text);
+                    }
+                }
+            }
+            RBlock::Heading { text, .. } => out.push_str(&text.text),
+            RBlock::ThematicBreak => out.push_str("---"),
+            RBlock::Code { text, .. } => out.push_str(text),
+            RBlock::Html(rt) => out.push_str(&rt.text),
+            RBlock::Quote(children) => {
+                for child in children {
+                    out.push_str("> ");
+                    out.push_str(&self.block_text(child));
+                    out.push('\n');
+                }
+            }
+            RBlock::Callout { title, children, .. } => {
+                out.push_str(&title.text);
+                out.push('\n');
+                for child in children {
+                    out.push_str(&self.block_text(child));
+                }
+            }
+            RBlock::List { items, .. } => {
+                for item in items {
+                    let marker = match item.task {
+                        Some(' ') => "[ ] ",
+                        Some('x') => "[x] ",
+                        _ => "",
+                    };
+                    out.push_str(marker);
+                    for child in &item.children {
+                        out.push_str(&self.block_text(child));
+                    }
+                    out.push('\n');
+                }
+            }
+            RBlock::Table { header, rows, .. } => {
+                for rt in header {
+                    out.push_str(&rt.text);
+                    out.push_str(" | ");
+                }
+                out.push('\n');
+                for row in rows {
+                    for rt in row {
+                        out.push_str(&rt.text);
+                        out.push_str(" | ");
+                    }
+                    out.push('\n');
+                }
+            }
+            RBlock::Math(_) => {}
+            RBlock::Mermaid { .. } => {}
+            RBlock::Footnotes(notes) => {
+                for (_, blocks) in notes {
+                    for block in blocks {
+                        out.push_str(&self.block_text(block));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// The byte range `[start, end)` of text inside `block`, looking only at
+    /// RichText runs (approximate at block level: returns whole runs that
+    /// intersect the range).
+    fn rich_text_in_block(&self, block: &RBlock, start: usize, end: usize) -> Option<String> {
+        let mut out = String::new();
+        match block {
+            RBlock::Paragraph(segments) => {
+                for seg in segments {
+                    if let Segment::Text(rt) = seg {
+                        if rt.text.get(start..end).is_some() {
+                            out.push_str(&rt.text[start..end]);
+                        } else if start < rt.text.len() {
+                            out.push_str(&rt.text[start..]);
+                        }
+                    }
+                }
+            }
+            RBlock::Heading { text, .. } => {
+                return text.text.get(start..end).map(|s| s.to_string());
+            }
+            RBlock::Html(rt) => {
+                return rt.text.get(start..end).map(|s| s.to_string());
+            }
+            _ => {}
+        }
+        if out.is_empty() { None } else { Some(out) }
     }
 
     /// Plays (or pauses, or seeks) a video embed clicked in the note.
@@ -1192,6 +1439,7 @@ impl ReadingView {
             on_toggle,
             self.path.clone().unwrap_or_default(),
             view.downgrade(),
+            self.selection.as_deref(),
         )
         .with_reading_host(&host);
         // * Remember the entries of the properties block so a pill remove,
@@ -1271,6 +1519,9 @@ impl ReadingView {
             }
         }
         let last = ix + 1 == model.blocks.len();
+        let view_down = view.clone();
+        let view_move = view.clone();
+        let view_up = view.clone();
         div()
             .w_full()
             .flex()
@@ -1279,6 +1530,32 @@ impl ReadingView {
             .px(px(32.))
             .when(ix == 0, |d| d.pt(px(24.)))
             .when(last, |d| d.pb(px(120.)))
+            .on_mouse_down(gpui::MouseButton::Left, move |_, _, cx| {
+                view_down.update(cx, |v, cx| {
+                    v.drag_start = Some((ix, 0));
+                    v.selection = Some(vec![(ix, 0, 0, 0)]);
+                    cx.notify();
+                });
+            })
+            .on_mouse_move(move |_, _, cx| {
+                view_move.update(cx, |v, cx| {
+                    if v.drag_start.is_some() {
+                        if let Some(ranges) = v.selection.as_mut() {
+                            let already = ranges.iter().any(|(b, _, _, _)| *b == ix);
+                            if !already {
+                                ranges.push((ix, 0, 0, 0));
+                            }
+                        }
+                        cx.notify();
+                    }
+                });
+            })
+            .on_mouse_up(gpui::MouseButton::Left, move |_, _, cx| {
+                view_up.update(cx, |v, cx| {
+                    v.drag_start = None;
+                    cx.notify();
+                });
+            })
             .child(
                 div()
                     .w_full()
@@ -1304,6 +1581,8 @@ impl Render for ReadingView {
             .on_action(cx.listener(Self::scroll_line_up))
             .on_action(cx.listener(Self::scroll_to_top))
             .on_action(cx.listener(Self::scroll_to_bottom))
+            .on_action(cx.listener(Self::copy))
+            .on_action(cx.listener(Self::select_all))
             .size_full()
             .flex()
             .flex_col()
@@ -1395,6 +1674,8 @@ pub(crate) struct Renderer<'a> {
     text_system: Arc<WindowTextSystem>,
     /// Inner width of a top-level block, in pixels.
     available: f32,
+    /// The reading view's current selection, for highlighting selected text.
+    selection: Option<&'a [(usize, usize, usize, usize)]>,
 }
 
 impl<'a> Renderer<'a> {
@@ -1411,6 +1692,7 @@ impl<'a> Renderer<'a> {
         on_toggle: ToggleHandler,
         path: String,
         view: WeakEntity<ReadingView>,
+        selection: Option<&'a [(usize, usize, usize, usize)]>,
     ) -> Renderer<'a> {
         Renderer {
             theme,
@@ -1428,6 +1710,7 @@ impl<'a> Renderer<'a> {
             available: available.max(100.),
             path,
             view,
+            selection,
         }
     }
 
@@ -3195,10 +3478,17 @@ impl<'a> Renderer<'a> {
         links: &[(Range<usize>, LinkTarget)],
     ) -> (InteractiveText, gpui::TextLayout) {
         let t = self.theme;
-        let highlights: Vec<_> = runs
+        let mut highlights: Vec<_> = runs
             .iter()
             .map(|(range, style)| (range.clone(), self.highlight(*style)))
             .collect();
+        // * Selection highlight: this RichText's id is unique in the model, so
+        //   matching it against the selection finds the selected byte range.
+        if let Some((start, end)) = self.selection.and_then(|ranges| {
+            ranges.iter().find(|(_, rid, _, _)| *rid == text.id).map(|(_, _, s, e)| (*s, *e))
+        }) {
+            highlights.push((start..end, self.selection_highlight()));
+        }
         let mono: Vec<_> = runs
             .iter()
             .filter(|(_, s)| s.code || s.html)
@@ -3289,6 +3579,16 @@ impl<'a> Renderer<'a> {
             });
         }
         h
+    }
+
+    /// Selection background color, drawn behind a selected byte range.
+    fn selection_highlight(&self) -> HighlightStyle {
+        let t = self.theme;
+        HighlightStyle {
+            background_color: Some(t.accent),
+            color: Some(t.bg),
+            ..Default::default()
+        }
     }
 }
 
