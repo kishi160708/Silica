@@ -6907,32 +6907,27 @@ impl Workspace {
             return;
         };
         let absolute = state.vault().absolute(path);
-        let url = format!("file://{}", absolute.display());
-        // * D-Bus first: org.freedesktop.FileManager1.ShowItems selects the
-        //   file(s) in the file manager. Fire and forget; the session bus
-        //   may not have a file manager answering, so fall back to opening
-        //   the containing folder.
-        let dbus = std::process::Command::new("dbus-send")
-            .args([
-                "--session",
-                "--dest=org.freedesktop.FileManager1",
-                "--type=method_call",
-                "/org/freedesktop/FileManager1",
-                "org.freedesktop.FileManager1.ShowItems",
-                &format!("array:string:\"{url}\""),
-                "string:\"\"",
-            ])
-            .spawn();
-        if dbus.is_err() {
-            // * Fallback: open the containing folder in the file manager.
-            let folder = absolute.parent().map(|p| p.to_string_lossy().to_string());
-            if let Some(folder) = folder {
-                if let Err(err) = silica_plugins::launch::open_path(std::path::Path::new(&folder)) {
+        // * D-Bus first: `org.freedesktop.FileManager1.ShowItems` selects
+        //   the file(s) in the file manager. It has to *finish*, not just
+        //   spawn: a session bus with nothing answering the name exits
+        //   dbus-send non-zero a moment later, and `spawn()` alone would
+        //   report success and never run the fallback.
+        let selected = show_items(&absolute);
+        if selected {
+            return;
+        }
+        // * Fallback: open the containing folder in the file manager.
+        let folder = absolute.parent().map(std::path::Path::to_path_buf);
+        match folder {
+            Some(folder) => {
+                if let Err(err) = silica_plugins::launch::open_path(&folder) {
                     self.report(format!("Could not show {path} in system explorer: {err}"), cx);
                 }
-            } else {
-                self.report(format!("Could not show {path}: no parent folder"), cx);
             }
+            None => self.report(
+                format!("Could not show {path} in system explorer: no parent folder"),
+                cx,
+            ),
         }
     }
 
@@ -14400,6 +14395,82 @@ fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()
     Ok(())
 }
 
+/// Asks the desktop's file manager to select `path`, through
+/// `org.freedesktop.FileManager1.ShowItems`. Returns whether a file manager
+/// was there to take it.
+///
+/// The destination is checked first. `dbus-send` reports success whether or
+/// not anybody owns the name it was given -- a call to a name with no owner
+/// exits 0 and prints nothing -- so its exit status says nothing about
+/// whether the file manager saw the call. `NameHasOwner` is the question
+/// that actually has an answer.
+fn show_items(path: &std::path::Path) -> bool {
+    // * `ShowItems` takes an array of URIs. dbus-send spells an array as the
+    //   type prefix followed by every element quoted inside one argument,
+    //   and a path is only a URI once its spaces and `#`/`?` are escaped;
+    //   unescaped, a note called `a b.md` arrives as two URIs.
+    let uri = format!("file://{}", percent_encode_path(&path.to_string_lossy()));
+    // * Nobody owning the name is not the same as no file manager: every
+    //   desktop ships a `.service` file for it, and the bus starts one on
+    //   the first call. So the owner is asked before the call only to
+    //   decide *how* to call -- a name that is activatable still gets the
+    //   call, and it is the call's reply that says whether anything took it.
+    let activatable = || {
+        let asked = std::process::Command::new("dbus-send")
+            .args([
+                "--session",
+                "--dest=org.freedesktop.DBus",
+                "--type=method_call",
+                "--print-reply",
+                "/org/freedesktop/DBus",
+                "org.freedesktop.DBus.ListActivatableNames",
+            ])
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output();
+        match asked {
+            Ok(out) => String::from_utf8_lossy(&out.stdout).contains("\"org.freedesktop.FileManager1\""),
+            Err(_) => false,
+        }
+    };
+    if !activatable() {
+        return false;
+    }
+    // * Somebody owns or can start the name; hand it the URI and let the
+    //   bus bring a file manager up. Fire and forget: waiting on the reply
+    //   would stall the frame for a window appearing.
+    std::process::Command::new("dbus-send")
+        .args([
+            "--session",
+            "--dest=org.freedesktop.FileManager1",
+            "--type=method_call",
+            "/org/freedesktop/FileManager1",
+            "org.freedesktop.FileManager1.ShowItems",
+            &format!("array:string:{uri}"),
+            "string:",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .is_ok()
+}
+
+/// Escapes a filesystem path for use in a `file://` URI: everything outside
+/// the URI-unreserved set becomes `%XX`.
+fn percent_encode_path(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for byte in path.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+                out.push(*byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
 fn mention_sections(
     state: &VaultState,
     path: &str,
@@ -17257,6 +17328,25 @@ mod tests {
     fn file_kinds_are_named_in_lower_case() {
         assert_eq!(kind_name(FileKind::Markdown), "markdown");
         assert_eq!(kind_name(FileKind::Other), "other");
+    }
+
+    #[test]
+    fn show_items_escapes_a_path_into_one_uri() {
+        // * A space left bare splits the array's single element in two, and
+        //   `on error resume next` in dbus-send turns that into a silent
+        //   no-op: the file manager would open nothing and nothing would
+        //   say why.
+        assert_eq!(
+            percent_encode_path("/home/lwx/Silica Vault/a b.md"),
+            "/home/lwx/Silica%20Vault/a%20b.md"
+        );
+        // * `#` and `?` would end the path and start a fragment or query.
+        assert_eq!(percent_encode_path("/v/a#b?c.md"), "/v/a%23b%3Fc.md");
+        // * Unreserved bytes and separators stay readable.
+        assert_eq!(
+            percent_encode_path("/v/Notes-1_x~y.md"),
+            "/v/Notes-1_x~y.md"
+        );
     }
 
     #[test]
