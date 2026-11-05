@@ -10,7 +10,7 @@
   <img alt="Rust" src="https://img.shields.io/badge/100%25-Rust-E8590C?style=flat-square&logo=rust&logoColor=white">
   <img alt="Linux, Windows, macOS" src="https://img.shields.io/badge/Linux%20%7C%20Windows%20%7C%20macOS-2b2b2b?style=flat-square">
   <img alt="MIT" src="https://img.shields.io/badge/license-MIT-2b2b2b?style=flat-square">
-  <img alt="v0.5.7" src="https://img.shields.io/badge/status-early%20alpha%20v0.5.7-f2545b?style=flat-square">
+  <img alt="v0.5.9" src="https://img.shields.io/badge/status-early%20alpha%20v0.5.9-f2545b?style=flat-square">
 </p>
 
 Silica is a native desktop knowledge base written in Rust on GPUI. It opens an Obsidian vault exactly as it sits on disk: the same folder, the same `.obsidian` configuration, the same Markdown dialect, the same `.canvas` and `.base` files. There is no import step, no conversion, and no second copy of anything. The vault folder is the only source of truth. Silica is an independent, clean-room implementation and is not affiliated with Obsidian.
@@ -24,6 +24,10 @@ The app opens a real vault in a three-pane shell: Files, reading view, and side 
 A `.canvas` opens in a canvas view; a `.pdf` opens in a viewer with toolbar, sidebar, and find bar; Mermaid diagrams render through a pure-Rust engine; audio and video embeds play in the reading view; remote images load over HTTP; Ctrl+hovering a link previews the target inline; and file and folder rows drag between folders to move them. `$x$` and `$$x$$` typeset inline in reading view and Live Preview. The main area splits into tab groups, and `workspace.json` records the layout the way Obsidian does. Everything is bound through Obsidian's command ids, so a vault's `hotkeys.json` applies unchanged.
 
 Installed plugins in `.obsidian/plugins/` are classified as native, compatibility, or refused-with-reason. Compatibility plugins run in a per-plugin QuickJS host with a shimmed `app`; their commands appear in the palette and their settings tabs in Settings > Community plugins. A `silica.json` marker flags a native plugin targeting Silica itself.
+
+Every item in Obsidian's file explorer context menu now runs. **Merge entire file with...** is a three-way merge against the note on disk, with conflicts written as standard `<<<<<<<`/`=======`/`>>>>>>>` blocks rather than guessed away. **Open version history** lists the snapshots Silica records on every save — the last 30 per note, under `.obsidian/.silica-versions/` — and a restore lands in the buffer unsaved. **Open in new window** opens a popout, re-activating an existing one instead of duplicating it. **Show in system explorer** selects the file through D-Bus `FileManager1.ShowItems`, falling back to opening the containing folder. **Make a copy** on a folder copies the whole tree.
+
+Reading view took the same pass: the properties block is editable there, text selects and copies, the inline title renames its file with link rewriting, and image embeds render inline mid-sentence instead of breaking the line.
 
 > Keep a backup of any vault you open with it. Reading is well covered; editing is newer code against files you cannot get back. Until the round-trip gate is met, let Silica read a vault that matters and let Obsidian write it.
 
@@ -88,10 +92,10 @@ Two Model Context Protocol servers ship with the workspace:
 Factual gaps versus Obsidian, tracked rather than hidden:
 
 - Math uses a KaTeX-compatible engine rather than MathJax; genuinely unsupported TeX still shows source in red.
-- HTML is drawn where it can be drawn faithfully and left as source where it cannot.
+- HTML is drawn where it can be drawn faithfully and left as source where it cannot. `<sup>` and `<sub>` are among the tags drawn without a baseline shift, because the text layer carries no vertical-offset attribute.
 - Local video plays without sound or seeking; remote media opens in the system player.
 - The graph is a full view, not a side pane.
-- No file recovery; Obsidian's snapshots live outside the vault.
+- Version history is Silica's own store — snapshots taken on save — not Obsidian Sync's. A vault written only by Obsidian has no history until Silica saves it once.
 - Two of 1,009 corpus notes do not match Obsidian's output (degenerate delimiter runs, a wikilink inside link text).
 
 Obsidian Sync, Publish, and the commercial services are Obsidian's products, not file formats; Silica has nothing to do with them. Any file-level sync (git, Syncthing, Dropbox) works because files are all Silica needs.
@@ -101,6 +105,8 @@ Obsidian Sync, Publish, and the commercial services are Obsidian's products, not
 - Frontmatter links are rewritten in place: Silica replaces only the link text instead of re-serializing the whole block.
 - The command palette lists only runnable commands. The Hotkeys tab still lists all 244 ids so your bindings remain visible.
 - Default font is Liberation Sans; `appearance.json` fonts override it.
+- Copying a folder leaves links inside the copies pointing at their originals. Rewriting `[[Plan]]` to `[[Plan 1]]` inside `Notes 1/` would make the copy describe files it does not own, so the copy is a snapshot rather than a second vault.
+- Merges and version restores land in the buffer unsaved, so either is reviewed before it overwrites anything.
 
 ## License
 
