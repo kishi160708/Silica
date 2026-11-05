@@ -749,6 +749,20 @@ impl VaultState {
                     .write()
                     .unwrap_or_else(|e| e.into_inner()) = config.clone();
             }
+            SettingChange::Templates(config) => {
+                self.write_config("templates.json", config)?;
+                *self
+                    .templates
+                    .write()
+                    .unwrap_or_else(|e| e.into_inner()) = config.clone();
+            }
+            SettingChange::DailyNotes(config) => {
+                self.write_config("daily-notes.json", config)?;
+                *self
+                    .daily_notes
+                    .write()
+                    .unwrap_or_else(|e| e.into_inner()) = config.clone();
+            }
             SettingChange::Hotkeys(overrides) => {
                 // * Whole, not merged: an entry taken out is a command back
                 //   on its defaults, and a merge would keep it.
