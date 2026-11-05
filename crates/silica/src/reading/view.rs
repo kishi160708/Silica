@@ -301,6 +301,21 @@ pub struct ReadingView {
     /// is driven from a click inside them; the read loop is a task that
     /// holds the decoder, so the entry disappearing is what stops `ffmpeg`.
     pub video: Rc<RefCell<Option<VideoState>>>,
+    /// The property field the reader is typing into, if any: its key or
+    /// value, or one item of a list-shaped value. The field's text lives
+    /// here while the caret is in it, and a commit writes it back to the
+    /// vault through `ReadingEvent::PropertyChanged`.
+    pub property_field: Option<Field>,
+    /// The pill a Backspace selected in an open list field: the first of
+    /// the two presses that remove it, drawn focused until the second takes
+    /// it.
+    pub selected_pill: Option<usize>,
+    /// The key whose type menu is open, if any.
+    pub property_menu: Option<String>,
+    /// The property entries of the last-rendered properties block, so a
+    /// pill remove or retype can look up the row it acts on. Set from
+    /// `render_block` whenever a properties block is painted.
+    pub property_entries: Option<Vec<silica_formats::properties::Property>>,
 }
 
 /// One video in the player.
@@ -380,6 +395,10 @@ impl ReadingView {
             width: px(900.),
             preview_resolver: None,
             video: Rc::new(RefCell::new(None)),
+            property_field: None,
+            selected_pill: None,
+            property_menu: None,
+            property_entries: None,
         }
     }
 
@@ -417,6 +436,234 @@ impl ReadingView {
 
     pub fn set_property_types(&mut self, types: PropertyTypes) {
         self.property_types = types;
+    }
+
+    /// Handles a property action from the reading view's properties block.
+    /// Writes the change to the vault through `ReadingEvent::PropertyChanged`,
+    /// which the workspace turns into the same byte-level edit Live Preview
+    /// makes. Field-opening actions (`Edit`, `EditItem`, `AddRow`) only
+    /// update local state; the workspace writes the file when the field is
+    /// committed.
+    fn handle_property_action(
+        &mut self,
+        action: PropertyAction,
+        cx: &mut Context<Self>,
+    ) {
+        // * A click is not a Backspace: whatever pill one selected loses
+        //   the selection.
+        self.selected_pill = None;
+        let Some(path) = self.path.as_deref() else {
+            return;
+        };
+        let Some(entries) = self.property_entries.as_ref() else {
+            return;
+        };
+        let mut next_id = crate::properties::PROPERTY_ID_BASE;
+        let rows = crate::properties::rows(
+            entries,
+            |key| silica_formats::properties::type_of(key, entries, &self.property_types),
+            &mut next_id,
+        );
+        match action {
+            PropertyAction::RemoveItem { key, index } => {
+                if let Some(row) = rows.iter().find(|r| r.key == key) {
+                    if let Some(change) = crate::properties::remove_item(row, index) {
+                        cx.emit(ReadingEvent::PropertyChanged {
+                            path: path.to_string(),
+                            changes: vec![change],
+                        });
+                    }
+                }
+            }
+            PropertyAction::Retype { key, ty } => {
+                if let Some(row) = rows.iter().find(|r| r.key == key) {
+                    let change = crate::properties::retype(row, ty);
+                    cx.emit(ReadingEvent::PropertyChanged {
+                        path: path.to_string(),
+                        changes: vec![change],
+                    });
+                    // * Update the in-memory type table so the row's glyph
+                    //   and UI stay consistent with the new type.
+                    self.property_types.types.insert(key.clone(), ty.as_str().to_string());
+                    self.property_menu = None;
+                }
+            }
+            PropertyAction::AddRow => {
+                self.property_field = Some(Field::new(Target::New, Part::Key, ""));
+            }
+            PropertyAction::Edit { target, part } => {
+                self.property_menu = None;
+                let row = match (&target, part) {
+                    (Target::Existing(key), Part::Value) => {
+                        rows.iter().find(|r| &r.key == key).cloned()
+                    }
+                    _ => None,
+                };
+                self.property_field = Some(match row {
+                    Some(row) => Field::new(
+                        Target::Existing(row.key.clone()),
+                        Part::Value,
+                        row.edit_text.clone(),
+                    ),
+                    None => Field::new(target, part, String::new()),
+                });
+            }
+            PropertyAction::EditItem { key, index } => {
+                self.property_menu = None;
+                if let Some(row) = rows.iter().find(|r| r.key == key) {
+                    self.property_field =
+                        Some(row.item_field(index.min(row.items.len())));
+                }
+            }
+            PropertyAction::OpenTypeMenu { key } => {
+                self.property_menu = if self.property_menu.as_deref() == Some(key.as_str()) {
+                    None
+                } else {
+                    Some(key)
+                };
+            }
+            PropertyAction::Remove { key } => {
+                cx.emit(ReadingEvent::PropertyChanged {
+                    path: path.to_string(),
+                    changes: vec![Change::Remove { key }],
+                });
+            }
+        }
+    }
+
+    /// Commits the open property field: turns its text into a `Change` and
+    /// emits `ReadingEvent::PropertyChanged` so the workspace writes it to
+    /// the vault. Clears the field afterwards.
+    fn commit_property_field(&mut self, cx: &mut Context<Self>) {
+        let Some(field) = self.property_field.take() else {
+            return;
+        };
+        let Some(path) = self.path.as_deref() else {
+            return;
+        };
+        let Some(entries) = self.property_entries.as_ref() else {
+            return;
+        };
+        // * Look up the row's type so `commit` reads the value correctly.
+        let ty = field.key().and_then(|k| {
+            entries.iter().find(|p| p.key == k).map(|p| {
+                silica_formats::properties::type_of(&p.key, entries, &self.property_types)
+            })
+        }).unwrap_or(PropertyType::Text);
+        let Some(change) = crate::properties::commit(&field, ty) else {
+            return;
+        };
+        cx.emit(ReadingEvent::PropertyChanged {
+            path: path.to_string(),
+            changes: vec![change],
+        });
+    }
+
+    /// Handles key events while a property field is open. Enter commits,
+    /// Escape abandons, everything else edits the text. When no field is
+    /// open, the event falls through to the view's own bindings (scrolling,
+    /// etc.).
+    fn field_key_down(
+        &mut self,
+        _event: &gpui::KeyDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // * This handler only runs when the root div has focus. If a field
+        //   is open, every key belongs to it; otherwise the view's scrolling
+        //   bindings handle the key via `on_action`.
+        if self.property_field.is_none() {
+            return;
+        }
+        cx.stop_propagation();
+        let key = _event.keystroke.key.clone();
+        match key.as_str() {
+            "Enter" => {
+                Self::commit_property_field(self, cx);
+            }
+            "Escape" => {
+                self.property_field = None;
+            }
+            "Backspace" => {
+                if let Some(field) = self.property_field.as_mut() {
+                    match field.backspace(self.selected_pill) {
+                        crate::properties::PillStep::Remove(ix) => {
+                            if let Some(key) = field.key() {
+                                if let Some(entries) = self.property_entries.as_ref() {
+                                    let mut next_id =
+                                        crate::properties::PROPERTY_ID_BASE;
+                                    let rows = crate::properties::rows(
+                                        entries,
+                                        |k| {
+                                            silica_formats::properties::type_of(
+                                                k,
+                                                entries,
+                                                &self.property_types,
+                                            )
+                                        },
+                                        &mut next_id,
+                                    );
+                                    if let Some(row) =
+                                        rows.iter().find(|r| r.key == key)
+                                    {
+                                        if let Some(change) =
+                                            crate::properties::remove_item(row, ix)
+                                        {
+                                            cx.emit(
+                                                ReadingEvent::PropertyChanged {
+                                                    path: self
+                                                        .path
+                                                        .clone()
+                                                        .unwrap_or_default(),
+                                                    changes: vec![change],
+                                                },
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            self.selected_pill = None;
+                            self.property_field = None;
+                        }
+                        crate::properties::PillStep::Select(ix) => {
+                            self.selected_pill = Some(ix);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            "Delete" => {
+                if let Some(field) = self.property_field.as_mut() {
+                    field.delete();
+                }
+            }
+            "ArrowLeft" => {
+                if let Some(field) = self.property_field.as_mut() {
+                    field.left();
+                }
+            }
+            "ArrowRight" => {
+                if let Some(field) = self.property_field.as_mut() {
+                    field.right();
+                }
+            }
+            "Home" => {
+                if let Some(field) = self.property_field.as_mut() {
+                    field.cursor = 0;
+                }
+            }
+            "End" => {
+                if let Some(field) = self.property_field.as_mut() {
+                    field.cursor = field.text.len();
+                }
+            }
+            s if s.len() == 1 => {
+                if let Some(field) = self.property_field.as_mut() {
+                    field.insert(s);
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Plays (or pauses, or seeks) a video embed clicked in the note.
@@ -922,23 +1169,15 @@ impl ReadingView {
         // * The reading view's properties block is now editable: clicks on
         //   rows come back as PropertyChanged events that the workspace
         //   writes to the vault file.
-        let path_for_prop = self.path.clone().unwrap_or_default();
         let view_for_prop = view.clone();
         let on_property_action: PropertyHandler = Rc::new(move |action, _window, cx| {
-            if let PropertyAction::Remove { key } = action {
-                view_for_prop.update(cx, |_, cx| {
-                    cx.emit(ReadingEvent::PropertyChanged {
-                        path: path_for_prop.clone(),
-                        changes: vec![Change::Remove { key }],
-                    });
-                });
-            }
+            view_for_prop.update(cx, |this, cx| this.handle_property_action(action, cx));
         });
         let properties_host = PropertiesHost {
-            field: None,
-            selected_pill: None,
+            field: self.property_field.clone(),
+            selected_pill: self.selected_pill,
             mode: self.properties_in_document,
-            menu: None,
+            menu: self.property_menu.clone(),
             on_action: on_property_action,
         };
         let r = Renderer::new(
@@ -955,6 +1194,11 @@ impl ReadingView {
             view.downgrade(),
         )
         .with_reading_host(&host);
+        // * Remember the entries of the properties block so a pill remove,
+        //   retype or item edit can look up the row it acts on.
+        if let RBlock::Properties(entries) = block {
+            self.property_entries = Some(entries.clone());
+        }
         let mut inner = r.block(block, false);
         // * A heading carries Obsidian's `heading-collapse-indicator`: a
         //   chevron in the margin to its left, shown on hover or while
@@ -1053,6 +1297,7 @@ impl Render for ReadingView {
         div()
             .key_context("ReadingView")
             .track_focus(&self.focus_handle)
+            .on_key_down(cx.listener(Self::field_key_down))
             .on_action(cx.listener(Self::scroll_page_down))
             .on_action(cx.listener(Self::scroll_page_up))
             .on_action(cx.listener(Self::scroll_line_down))
