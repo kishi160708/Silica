@@ -967,6 +967,9 @@ impl VaultState {
 
     /// Copies a file next to itself as `Name 1.ext` and indexes the copy.
     pub fn duplicate(&self, path: &str) -> Result<(String, Changes), String> {
+        if self.vault().absolute(path).is_dir() {
+            return self.duplicate_folder(path);
+        }
         let (target, from, to) = {
             let vault = self.vault();
             let (folder, name) = match path.rsplit_once('/') {
@@ -988,6 +991,36 @@ impl VaultState {
             .unwrap_or_else(|e| e.into_inner())
             .refresh_path(&to);
         Ok((target, self.absorb(files)))
+    }
+
+    /// Copies a whole folder tree to a free sibling name (`Notes` ->
+    /// `Notes 1`). Returns the new folder's path and the index changes.
+    ///
+    /// Links inside the copies are left pointing at their originals: a copy
+    /// is a snapshot, and rewriting `[[Plan]]` to `[[Plan 1]]` inside
+    /// `Notes 1/` would make the copy describe files it does not own.
+    fn duplicate_folder(&self, path: &str) -> Result<(String, Changes), String> {
+        let path = path.trim_matches('/');
+        let (target, from, to) = {
+            let vault = self.vault();
+            let (parent, name) = match path.rsplit_once('/') {
+                Some((d, n)) => (d, n),
+                None => ("", path),
+            };
+            let target = vault.available_path(parent, name, "");
+            let from = vault.absolute(path);
+            let to = vault
+                .write_path(&target)
+                .map_err(|e| format!("Could not copy {path}: {e}"))?;
+            (target, from, to)
+        };
+        copy_tree(&from, &to).map_err(|e| format!("Could not copy {path}: {e}"))?;
+        let files = self
+            .vault
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .refresh_path(&to);
+        Ok((target.clone(), self.absorb(files)))
     }
 
     /// The rewrites a rename would need, without doing anything:
@@ -7557,10 +7590,16 @@ impl Workspace {
         };
         match state.duplicate(path) {
             // * Nothing is reported for a copy that worked either; the new
-            //   file opening is the feedback.
+            //   file opening is the feedback. A copied folder is reported
+            //   instead, since there is nothing to open.
             Ok((copy, changes)) => {
+                let is_folder = state.vault().absolute(&copy).is_dir();
                 self.after_changes(changes, cx);
-                self.open_file(copy, None, cx);
+                if is_folder {
+                    self.report(format!("Copied to {copy}"), cx);
+                } else {
+                    self.open_file(copy, None, cx);
+                }
             }
             Err(err) => self.report(err, cx),
         }
@@ -14140,6 +14179,24 @@ fn plural(n: usize) -> &'static str {
     } else {
         "s"
     }
+}
+
+/// Copies a directory tree, creating `to` and every folder under it. Files
+/// are copied byte for byte; a symlink is followed, not copied as a link,
+/// so the copy does not depend on where it lands.
+fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let src = entry.path();
+        let dst = to.join(entry.file_name());
+        if src.is_dir() {
+            copy_tree(&src, &dst)?;
+        } else {
+            std::fs::copy(&src, &dst)?;
+        }
+    }
+    Ok(())
 }
 
 fn mention_sections(

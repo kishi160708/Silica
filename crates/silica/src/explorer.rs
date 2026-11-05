@@ -724,6 +724,12 @@ fn menu_items(target: &Target) -> Vec<MenuItem> {
                 E::Move(folder.clone()),
             ),
             item(
+                "Make a copy",
+                "files",
+                S::Action,
+                E::Duplicate(folder.clone()),
+            ),
+            item(
                 "Search in folder",
                 "folder-search",
                 S::Action,
@@ -2012,9 +2018,9 @@ mod menu_tests {
         );
     }
 
-    /// The folder-row table, minus "Make a copy" (no recursive folder
-    /// copy). "Show in system explorer" is implemented. A folder gets no
-    /// "Open in default app": the capture has that item on the file row
+    /// The folder-row table. "Show in system explorer" and "Make a copy"
+    /// are implemented (the copy is a recursive tree copy). A folder gets
+    /// no "Open in default app": the capture has that item on the file row
     /// only.
     #[test]
     fn the_folder_rows_menu_is_obsidians_order() {
@@ -2027,6 +2033,7 @@ mod menu_tests {
                 "New base",
                 "---",
                 "Move folder to...",
+                "Make a copy",
                 "Search in folder",
                 "Bookmark...",
                 "---",
