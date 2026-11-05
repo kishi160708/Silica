@@ -2357,7 +2357,15 @@ impl<'a> Renderer<'a> {
     fn segment(&self, segment: &Segment) -> AnyElement {
         match segment {
             Segment::Text(text) => self.rich(text),
-            Segment::Embed(embed) => self.embed(embed),
+            Segment::Embed(embed) => match &embed.kind {
+                // * Inline images (local or remote) render as an inline img
+                //   so `![[img]]` and `![url]` work mid-sentence, in lists,
+                //   blockquotes and callout titles without breaking the line.
+                EmbedKind::Image(_) | EmbedKind::RemoteImage(_) => {
+                    self.inline_embed(embed)
+                }
+                _ => self.embed(embed),
+            },
             // * Display math inside a paragraph is a block of its own; the
             //   paragraph's own gap follows the paragraph, not this.
             Segment::Math(tex) => self.math_block(tex, px(0.)),
@@ -2608,6 +2616,46 @@ impl<'a> Renderer<'a> {
             .child(SharedString::from("▶ "))
             .child(SharedString::from(label.to_string()))
             .into_any_element()
+    }
+
+    /// Renders an image embed inline (mid-sentence, in lists, blockquotes,
+    /// callout titles) without a block wrapper, so text flows around it.
+    fn inline_embed(&self, embed: &Embed) -> AnyElement {
+        let t = self.theme;
+        let base = t.base_font_size;
+        let image = match &embed.kind {
+            EmbedKind::Image(path) => img(path.clone())
+                .max_w_full()
+                .object_fit(ObjectFit::Contain),
+            EmbedKind::RemoteImage(url) => {
+                let err_url = url.clone();
+                let bg_sec = t.bg_secondary;
+                let fg_muted = t.text_muted;
+                img(url.clone())
+                    .max_w_full()
+                    .object_fit(ObjectFit::Contain)
+                    .with_fallback(move || {
+                        div()
+                            .px_3()
+                            .py_2()
+                            .rounded_md()
+                            .bg(bg_sec)
+                            .text_color(fg_muted)
+                            .text_size(px(base * 0.85))
+                            .child(format!("Image failed to load: {}", err_url))
+                            .into_any_element()
+                    })
+            }
+            _ => unreachable!("inline_embed only called for image kinds"),
+        };
+        let mut image = image;
+        if let Some(w) = embed.width {
+            image = image.w(px(w));
+        }
+        if let Some(h) = embed.height {
+            image = image.h(px(h));
+        }
+        image.into_any_element()
     }
 
     fn embed(&self, embed: &Embed) -> AnyElement {
