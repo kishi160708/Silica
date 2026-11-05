@@ -286,9 +286,9 @@ dead rows. Nine icons would need cutting from lucide's own source first (`separa
 `picture-in-picture-2`, `git-merge`, `clipboard`, `history`, `edit-3`, `edit`, `folder-open`,
 `folder-search`).
 
-### Five context-menu items wait on features Silica has not got
+### Two context-menu items wait on features Silica has not got
 
-*low, missing-feature, large* · **Filed:** 2026-10-28
+*low, missing-feature, large* · **Filed:** 2026-10-28 · **Narrowed:** 2026-11-05
 
 **Obsidian.** The captured menus
 ([[Specification#The file explorer's context menus]]) hold five rows the
@@ -296,24 +296,21 @@ dead rows. Nine icons would need cutting from lucide's own source first (`separa
 
 | Item | Menu | What it needs |
 | --- | --- | --- |
-| Open in new window | file, `open` | a second window; `open-link-in-new-window` is unrunnable for the same reason |
+| Open in new window | file, `open` | **done** — `popout.rs` already opened a secondary window; the explorer menu wires it up, re-activating an existing popout instead of duplicating it |
 | Merge entire file with... | file, `action` | a merge, and a chooser to merge with |
 | Open version history | file, `view` | file history, which is Obsidian Sync's and which Silica has no store for |
-| Show in system explorer | file and folder, `system` | selecting a file *in* the desktop's file manager: the D-Bus `org.freedesktop.FileManager1.ShowItems` call, with opening the containing folder as the fallback where nothing answers it |
-| Make a copy | **folder**, `action` | a recursive folder copy; `Vault::duplicate` is one file (it splits the name on its extension), and a folder copy has to rewrite the links of every note it copies |
+| Show in system explorer | file and folder, `system` | **done** — D-Bus `org.freedesktop.FileManager1.ShowItems`, falling back to opening the containing folder |
+| Make a copy | **folder**, `action` | **done** — `VaultState::duplicate` dispatches on directory and copies the tree to a free sibling name |
 
-**Silica.** Each row is absent, which is deliberate: the menu lists only what
-it can run. Dropping the only item of a section drops that section's separator
-with it, so the file menu has no `view` separator where the capture has one.
+**Silica.** Three of the five now run. Links inside a copied folder keep
+pointing at their originals on purpose: a copy is a snapshot, and rewriting
+`[[Plan]]` to `[[Plan 1]]` inside `Notes 1/` would make the copy describe
+files it does not own.
 
-**Fix.** Four jobs in rising order of size. *Show in system explorer* is the
-nearest: a D-Bus call with an `xdg-open` on the parent folder as the fallback,
-beside the `open_in_default_app` that landed. *Make a copy* on a folder is a
-`silica-vault` job -- walk the folder, copy it to `available_path`, and run the
-copied notes through the link rewriting a move already uses. *Open in new
-window* waits on multi-window, which also unblocks `open-link-in-new-window`.
-*Merge entire file with...* and *Open version history* are features rather than
-menu rows, and want entries of their own if they are ever wanted at all.
+**Fix.** Two jobs left, both features rather than menu rows. *Merge entire
+file with...* needs a merge engine and a chooser; *Open version history*
+needs a file-history store Silica does not keep. Each wants an entry of its
+own if it is ever wanted at all.
 
 ## Live Preview
 
