@@ -2876,6 +2876,24 @@ fn view_subscriptions(
             EditorEvent::FilesChanged(changes) => {
                 this.after_changes(changes.clone(), cx);
             }
+            EditorEvent::Cut
+            | EditorEvent::Copy
+            | EditorEvent::Paste
+            | EditorEvent::SelectAll
+            | EditorEvent::ToggleBold
+            | EditorEvent::ToggleItalic
+            | EditorEvent::ToggleHighlight
+            | EditorEvent::InsertWikilink
+            | EditorEvent::InsertLink
+            | EditorEvent::InsertEmbed
+            | EditorEvent::ToggleCheckbox
+            | EditorEvent::SetHeading1
+            | EditorEvent::SetHeading2
+            | EditorEvent::ToggleBullet
+            | EditorEvent::ToggleNumbered
+            | EditorEvent::ToggleBlockquote => {
+                // * Handled directly in the editor's context menu handler.
+            }
         }),
     ]
 }
@@ -4712,7 +4730,7 @@ impl Workspace {
                         _ => "%%",
                     };
                     self.editor
-                        .update(cx, |e, cx| e.toggle_wrap(marker, window, cx));
+                        .update(cx, |e, cx| e.toggle_wrap(marker, Some(window), cx));
                 }
             }
             "editor:toggle-bullet-list"
@@ -4731,7 +4749,7 @@ impl Workspace {
             "editor:toggle-checklist-status" => {
                 if self.editing_or_report(id, window, cx) {
                     self.editor
-                        .update(cx, |e, cx| e.toggle_checklist(window, cx));
+                        .update(cx, |e, cx| e.toggle_checklist(Some(window), cx));
                 }
             }
             "editor:cycle-list-checklist" => {
@@ -4798,7 +4816,7 @@ impl Workspace {
                         .and_then(|n| n.parse::<u8>().ok())
                         .unwrap_or(0);
                     self.editor
-                        .update(cx, |e, cx| e.set_heading(level, window, cx));
+                        .update(cx, |e, cx| e.set_heading(level, Some(window), cx));
                 }
             }
             "editor:indent-list" | "editor:unindent-list" => {
