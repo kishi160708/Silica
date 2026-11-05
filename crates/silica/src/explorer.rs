@@ -549,6 +549,8 @@ pub enum ExplorerEvent {
     ShowInSystemExplorer(String),
     /// "Merge entire file with...": the note takes another note's changes.
     Merge(String),
+    /// "Open version history": the snapshots this note was saved through.
+    VersionHistory(String),
     /// "Search in folder": the Search pane scoped to this folder.
     SearchInFolder(String),
     /// Escape in the tree: the keyboard goes back to the main area.
@@ -670,6 +672,12 @@ fn menu_items(target: &Target) -> Vec<MenuItem> {
                 "git-fork",
                 S::View,
                 E::Merge(path.clone()),
+            ),
+            item(
+                "Open version history",
+                "clock",
+                S::View,
+                E::VersionHistory(path.clone()),
             ),
             item(
                 "Open in default app",
@@ -1974,6 +1982,7 @@ mod menu_tests {
             | ExplorerEvent::OpenInPopout(p)
             | ExplorerEvent::ShowInSystemExplorer(p)
             | ExplorerEvent::Merge(p)
+            | ExplorerEvent::VersionHistory(p)
             | ExplorerEvent::SearchInFolder(p)
             | ExplorerEvent::MoveToFolder { src: p, .. } => Some(p),
             ExplorerEvent::NewNote { folder }
@@ -2020,6 +2029,7 @@ mod menu_tests {
                 "Copy path",
                 "---",
                 "Merge entire file with...",
+                "Open version history",
                 "---",
                 "Open in default app",
                 "Open in new window",

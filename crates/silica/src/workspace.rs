@@ -1579,6 +1579,10 @@ enum PendingOp {
         file: String,
         other: String,
     },
+    /// "Open version history": the snapshot stamp to restore `file` to.
+    RestoreVersion {
+        file: String,
+    },
 }
 
 /// One tab of the main area: what it shows and where it has been. The
@@ -3105,6 +3109,9 @@ impl Workspace {
                         this.show_in_system_explorer(path, cx)
                     }
                     ExplorerEvent::Merge(path) => this.start_merge(path, window, cx),
+                    ExplorerEvent::VersionHistory(path) => {
+                        this.start_version_history(path, window, cx)
+                    }
                     ExplorerEvent::SearchInFolder(folder) => {
                         this.search_in_folder(folder, window, cx)
                     }
@@ -6813,6 +6820,12 @@ impl Workspace {
         match silica_vault::write_no_follow(&absolute, contents.as_bytes()) {
             Ok(()) => {
                 self.editor.update(cx, |e, _| e.mark_saved(&contents));
+                // * A snapshot of what was just written, so "Open version
+                //   history" has something to show. The store keeps the
+                //   last [`crate::history::KEEP`] per note and swallows its
+                //   own errors: the note saved, which is what matters.
+                crate::history::History::new(&state.root, state.vault().config_dir())
+                    .record(&name, &contents);
                 self.report(format!("{name} saved"), cx);
             }
             Err(err) => {
@@ -7653,6 +7666,87 @@ impl Workspace {
         cx.notify();
     }
 
+    /// The explorer menu's "Open version history": the snapshots this note
+    /// was saved through, newest first. Picking one loads those bytes into
+    /// the buffer, unsaved, so the restore is reviewed before it lands --
+    /// the same rule the merge follows.
+    fn start_version_history(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let history = crate::history::History::new(&state.root, state.vault().config_dir());
+        let versions = history.list(path);
+        if versions.is_empty() {
+            self.report(format!("{path} has no saved versions yet"), cx);
+            return;
+        }
+        // * The stamp is the suggestion's text, so what the picker matches
+        //   on is what gets looked up again on submit.
+        let suggestions: Vec<String> = versions.iter().map(|v| v.label()).collect();
+        let name = path.rsplit('/').next().unwrap_or(path);
+        self.open_prompt(
+            PendingOp::RestoreVersion {
+                file: path.to_string(),
+            },
+            PromptSpec {
+                title: format!("Version history for {name}").into(),
+                detail: Some(
+                    format!(
+                        "{} saved version{}; the newest is first.",
+                        versions.len(),
+                        plural(versions.len())
+                    )
+                    .into(),
+                ),
+                input: Some(String::new()),
+                placeholder: "Pick a version".into(),
+                suggestions,
+                confirm: "Restore".into(),
+                secondary: None,
+            },
+            window,
+            cx,
+        );
+    }
+
+    /// Loads the picked snapshot's bytes into the buffer, leaving the note
+    /// dirty rather than saving over the current contents.
+    fn finish_restore_version(
+        &mut self,
+        file: &str,
+        label: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let history = crate::history::History::new(&state.root, state.vault().config_dir());
+        let Some(version) = history.list(file).into_iter().find(|v| v.label() == label) else {
+            self.prompt
+                .update(cx, |p, cx| p.set_error(format!("No version {label} any more."), cx));
+            return;
+        };
+        let Some(contents) = history.read(file, version.at) else {
+            self.prompt.update(cx, |p, cx| {
+                p.set_error("That version could not be read.", cx)
+            });
+            return;
+        };
+        self.pending = None;
+        self.close_modal(window, cx);
+        if self.current.as_deref() != Some(file) {
+            self.open_file(file.to_string(), None, cx);
+        }
+        self.editor
+            .update(cx, |e, cx| e.set_text(file.to_string(), contents, cx));
+        self.report(
+            format!("{file} restored from {label}; not saved yet"),
+            cx,
+        );
+        cx.notify();
+    }
+
     fn delete_now(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Some(state) = self.state.clone() else {
             return;
@@ -7772,6 +7866,9 @@ impl Workspace {
                 self.close_modal(window, cx);
             }
             PendingOp::Merge { file, .. } => self.finish_merge(&file, value, window, cx),
+            PendingOp::RestoreVersion { file } => {
+                self.finish_restore_version(&file, value, window, cx)
+            }
         }
     }
 
@@ -11953,6 +12050,9 @@ impl Workspace {
                 }
                 Some(PendingOp::Merge { file, .. }) => {
                     json!({"op": "merge", "path": file})
+                }
+                Some(PendingOp::RestoreVersion { file }) => {
+                    json!({"op": "restore-version", "path": file})
                 }
             },
         );

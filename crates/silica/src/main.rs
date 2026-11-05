@@ -23,6 +23,7 @@ mod explorer;
 mod fold;
 mod graph;
 mod help;
+mod history;
 mod html_to_markdown;
 mod http_client;
 mod i18n;
