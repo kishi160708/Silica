@@ -2744,6 +2744,9 @@ pub struct Workspace {
     title_focus: FocusHandle,
     /// The header title being renamed in place, if any.
     title_edit: Option<TitleEdit>,
+    /// The right-dock context menu: the file path it was opened on, for
+    /// backlinks/outgoing links/tags/outline rows.
+    right_dock_context_menu: Option<String>,
     /// Where each group's header title was painted and how it was shaped,
     /// left by the last frame: what a click on a title is measured against.
     title_layout: HashMap<u64, TitleLayout>,
@@ -3327,6 +3330,7 @@ impl Workspace {
             tab_bounds: HashMap::new(),
             title_focus: cx.focus_handle(),
             title_edit: None,
+            right_dock_context_menu: None,
             title_layout: HashMap::new(),
             layout: None,
             layout_restored: false,
@@ -12818,6 +12822,8 @@ impl Workspace {
         });
         let mut hover = theme.accent;
         hover.a = 0.33;
+        let path_for_right_click = path.clone();
+        let entity = cx.entity();
         div()
             .id(("pane-match", ix))
             .group("pane-match")
@@ -12839,6 +12845,14 @@ impl Workspace {
                     }
                 }
             }))
+            .on_mouse_down(gpui::MouseButton::Right, move |_, _, cx| {
+                if let Some(path) = path_for_right_click.clone() {
+                    entity.update(cx, |ws, cx| {
+                        ws.right_dock_context_menu = Some(path);
+                        cx.notify();
+                    });
+                }
+            })
             .child(
                 div()
                     .text_size(px(FONT_UI_SMALLER))
@@ -13985,10 +13999,88 @@ impl Workspace {
             .child(div().flex_1().overflow_hidden().child(body))
             .children(self.render_side_menu(theme, cx))
             .child(self.dock_handle(false, theme))
+            .children(self.render_right_dock_context_menu(theme, cx))
+    }
+
+    /// Renders the right-dock context menu over backlinks/outgoing links/tags/outline rows.
+    fn render_right_dock_context_menu(
+        &mut self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        let Some(path) = &self.right_dock_context_menu else {
+            return None;
+        };
+        let entity = cx.entity();
+        let path_clone = path.clone();
+        let mut list = div()
+            .id("right-dock-menu")
+            .absolute()
+            .left(px(10.))
+            .top(px(40.))
+            .flex()
+            .flex_col()
+            .min_w(px(180.))
+            .py_1()
+            .bg(theme.bg_secondary)
+            .border_1()
+            .border_color(theme.border)
+            .rounded_md()
+            .shadow_lg()
+            .text_size(px(13.))
+            .text_color(theme.text)
+            .occlude();
+        let items: Vec<(&'static str, &'static str)> = vec![
+            ("Open in new tab", "file-plus"),
+            ("Open to the right", "separator-vertical"),
+            ("Copy path", "clipboard"),
+        ];
+        for (label, icon) in items {
+            let path_for_item = path_clone.clone();
+            let entity_for_item = entity.clone();
+            list = list.child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .px_2()
+                    .py_0p5()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme.bg_active))
+                    .child(
+                        div()
+                            .w(px(16.))
+                            .flex_shrink_0()
+                            .text_color(theme.text_muted)
+                            .child(crate::assets::icon(icon, 14., theme.text_muted)),
+                    )
+                    .child(label)
+                    .on_mouse_down(gpui::MouseButton::Left, move |_, _, cx| {
+                        let path_for_item = path_for_item.clone();
+                        entity_for_item.update(cx, |ws, cx| {
+                            ws.right_dock_context_menu = None;
+                            match label {
+                                "Open in new tab" => {
+                                    ws.open_file(path_for_item.clone(), None, cx);
+                                }
+                                "Open to the right" => {
+                                    ws.open_file(path_for_item.clone(), None, cx);
+                                }
+                                "Copy path" => {
+                                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                        path_for_item,
+                                    ));
+                                }
+                                _ => {}
+                            }
+                        });
+                    }),
+            );
+        }
+        Some(list.into_any_element())
     }
 }
-
-/// Unlinked mentions for `path`: other notes mentioning its names (incoming)
 /// and names of other notes mentioned in it (outgoing).
 /// Whether the status bar carries the parse, span and shape numbers.
 ///
