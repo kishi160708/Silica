@@ -28,6 +28,7 @@ mod http_client;
 mod i18n;
 mod math;
 mod mentions;
+mod merge;
 mod mermaid;
 mod native_menus;
 mod page_preview;

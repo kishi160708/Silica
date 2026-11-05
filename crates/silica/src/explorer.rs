@@ -547,6 +547,8 @@ pub enum ExplorerEvent {
     /// manager via D-Bus `FileManager1.ShowItems`, with opening the
     /// containing folder as fallback.
     ShowInSystemExplorer(String),
+    /// "Merge entire file with...": the note takes another note's changes.
+    Merge(String),
     /// "Search in folder": the Search pane scoped to this folder.
     SearchInFolder(String),
     /// Escape in the tree: the keyboard goes back to the main area.
@@ -569,6 +571,9 @@ enum Section {
     Action,
     /// Obsidian leaves "Copy path" with no section at all.
     Unsectioned,
+    /// "Open version history" sits here in the capture, between the copy
+    /// items and the system ones.
+    View,
     System,
     Danger,
 }
@@ -659,6 +664,12 @@ fn menu_items(target: &Target) -> Vec<MenuItem> {
                 "clipboard",
                 S::Unsectioned,
                 E::CopyPath(path.clone()),
+            ),
+            item(
+                "Merge entire file with...",
+                "git-fork",
+                S::View,
+                E::Merge(path.clone()),
             ),
             item(
                 "Open in default app",
@@ -1962,6 +1973,7 @@ mod menu_tests {
             | ExplorerEvent::OpenInDefaultApp(p)
             | ExplorerEvent::OpenInPopout(p)
             | ExplorerEvent::ShowInSystemExplorer(p)
+            | ExplorerEvent::Merge(p)
             | ExplorerEvent::SearchInFolder(p)
             | ExplorerEvent::MoveToFolder { src: p, .. } => Some(p),
             ExplorerEvent::NewNote { folder }
@@ -2006,6 +2018,8 @@ mod menu_tests {
                 "Bookmark...",
                 "---",
                 "Copy path",
+                "---",
+                "Merge entire file with...",
                 "---",
                 "Open in default app",
                 "Open in new window",

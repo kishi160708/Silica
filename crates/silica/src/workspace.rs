@@ -1574,6 +1574,11 @@ enum PendingOp {
     /// "Edit bookmark" on a note that already has one: Save keeps it,
     /// Remove takes it out.
     EditBookmark(String),
+    /// "Merge entire file with...": the open note takes `other` in.
+    Merge {
+        file: String,
+        other: String,
+    },
 }
 
 /// One tab of the main area: what it shows and where it has been. The
@@ -3099,6 +3104,7 @@ impl Workspace {
                     ExplorerEvent::ShowInSystemExplorer(path) => {
                         this.show_in_system_explorer(path, cx)
                     }
+                    ExplorerEvent::Merge(path) => this.start_merge(path, window, cx),
                     ExplorerEvent::SearchInFolder(folder) => {
                         this.search_in_folder(folder, window, cx)
                     }
@@ -7556,6 +7562,97 @@ impl Workspace {
         );
     }
 
+    /// The explorer menu's "Merge entire file with...": the open note takes
+    /// another note in. The chooser lists the vault's other notes; the merge
+    /// itself is [`merge::merge`] against the two files on disk, and the
+    /// result lands in the open note's buffer to be saved -- nothing is
+    /// written until it is.
+    fn start_merge(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        if self.current.as_deref() != Some(path) {
+            // * The merge lands in the open buffer, so the file being merged
+            //   into has to be the one on screen.
+            self.open_file(path.to_string(), None, cx);
+        }
+        let mut candidates: Vec<String> = state
+            .vault()
+            .files()
+            .iter()
+            .map(|f| f.path.clone())
+            .filter(|p| p != path && p.ends_with(".md"))
+            .collect();
+        candidates.sort();
+        let name = path.rsplit('/').next().unwrap_or(path);
+        self.open_prompt(
+            PendingOp::Merge {
+                file: path.to_string(),
+                other: String::new(),
+            },
+            PromptSpec {
+                title: "Merge entire file with...".into(),
+                detail: Some(format!("{name} takes in another note's changes.").into()),
+                input: Some(String::new()),
+                placeholder: "Note to merge in".into(),
+                suggestions: candidates,
+                confirm: "Merge".into(),
+                secondary: None,
+            },
+            window,
+            cx,
+        );
+    }
+
+    /// Runs the merge once the chooser names its note: three-way against
+    /// the two files on disk, with the shared base taken as what the open
+    /// note held when it was loaded. The buffer is replaced with the result
+    /// and left dirty, so the merge is reviewed before it is saved.
+    fn finish_merge(&mut self, file: &str, other: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        if other.trim().is_empty() {
+            return;
+        }
+        let other = if other.ends_with(".md") {
+            other.to_string()
+        } else {
+            format!("{other}.md")
+        };
+        if other == file {
+            self.prompt
+                .update(cx, |p, cx| p.set_error("A note cannot be merged with itself.", cx));
+            return;
+        }
+        let theirs = match std::fs::read_to_string(state.vault().absolute(&other)) {
+            Ok(text) => text,
+            Err(err) => {
+                let message = format!("Could not read {other}: {err}");
+                self.prompt
+                    .update(cx, |p, cx| p.set_error(message, cx));
+                return;
+            }
+        };
+        // * The base is what was last saved: the disk copy, read before the
+        //   buffer's own edits are folded in.
+        let ours = self.editor.read(cx).file_contents();
+        let base = std::fs::read_to_string(state.vault().absolute(file)).unwrap_or_default();
+        let (merged, conflicts) = crate::merge::merge(&base, &ours, &theirs);
+        self.pending = None;
+        self.close_modal(window, cx);
+        self.editor
+            .update(cx, |e, cx| e.set_text(file.to_string(), merged, cx));
+        match conflicts {
+            0 => self.report(format!("Merged {other} into {file}; not saved yet"), cx),
+            n => self.report(
+                format!("Merged {other} into {file} with {n} conflict{}; not saved yet", plural(n)),
+                cx,
+            ),
+        }
+        cx.notify();
+    }
+
     fn delete_now(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Some(state) = self.state.clone() else {
             return;
@@ -7674,6 +7771,7 @@ impl Workspace {
                 self.pending = None;
                 self.close_modal(window, cx);
             }
+            PendingOp::Merge { file, .. } => self.finish_merge(&file, value, window, cx),
         }
     }
 
@@ -11852,6 +11950,9 @@ impl Workspace {
                 }
                 Some(PendingOp::EditBookmark(path)) => {
                     json!({"op": "edit-bookmark", "path": path})
+                }
+                Some(PendingOp::Merge { file, .. }) => {
+                    json!({"op": "merge", "path": file})
                 }
             },
         );
