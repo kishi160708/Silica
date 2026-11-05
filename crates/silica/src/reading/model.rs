@@ -967,23 +967,6 @@ impl<'v> Builder<'v> {
                     }
                 }
             }
-            InlineKind::Image {
-                destination,
-                children,
-                ..
-            } => {
-                // * External or reference-style images: shown as a link until
-                //   remote images load.
-                let start = acc.len();
-                let alt = plain_text(children);
-                let shown = if alt.is_empty() {
-                    destination.to_string()
-                } else {
-                    alt
-                };
-                acc.styled(|s| s.link = true, |a| a.push(&shown));
-                acc.link(start, LinkTarget::External(destination.to_string()));
-            }
             InlineKind::Wikilink { body, embed: _ } => {
                 let link = silica_markdown::parse_linktext(body);
                 let target = silica_markdown::link_target(body).to_string();
@@ -1036,6 +1019,23 @@ impl<'v> Builder<'v> {
                 self.footnotes.inline.push((label.clone(), body));
                 let n = self.footnote_number(&label);
                 self.footnote_ref(acc, n);
+            }
+            // * Images whose destination has a scheme other than http/https
+            //   (e.g. ftp://) fall through from `rich()` and render as links.
+            InlineKind::Image {
+                destination,
+                children,
+                ..
+            } => {
+                let start = acc.len();
+                let alt = plain_text(children);
+                let shown = if alt.is_empty() {
+                    destination.to_string()
+                } else {
+                    alt
+                };
+                acc.styled(|s| s.link = true, |a| a.push(&shown));
+                acc.link(start, LinkTarget::External(destination.to_string()));
             }
         }
     }
