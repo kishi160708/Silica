@@ -503,6 +503,7 @@ module.exports = W;
         let write_root = root.clone();
         let ctx = PluginContext {
             vault_root: &root,
+            notify: Box::new(|_: &str| {}),
             read_file: Box::new(move |p| {
                 fs::read_to_string(read_root.join(p)).map_err(|e| e.to_string())
             }),
