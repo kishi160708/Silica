@@ -116,7 +116,7 @@ impl Client {
         };
         let mut line = serde_json::to_string(&request)
             .map_err(|e| format!("control socket: cannot encode {method}: {e}"))?;
-        line.push('\n');
+        line.push('\u{000a}');
         if let Err(e) = self
             .stream
             .write_all(line.as_bytes())
@@ -222,12 +222,12 @@ mod tests {
                 //   a line of it, newline included, well over the cap.
                 "flood" => {
                     let mut line = String::new();
-                    line.push_str(&r#"{"id":"#);
+                    line.push_str(r#"{"id":"#);
                     line.push_str(&request.id.to_string());
-                    line.push_str(&r#","result":{"pad":""#);
+                    line.push_str(r#","result":{"pad":""#);
                     line.push_str(&"x".repeat(9 * 1024 * 1024));
-                    line.push_str(&r#""}}"#);
-                    line.push('\n');
+                    line.push_str(r#"}}"#);
+                    line.push('\u{000a}');
                     // * Write it raw: the typed reply would never carry it.
                     let _ = writer.write_all(line.as_bytes());
                     let _ = writer.flush();
