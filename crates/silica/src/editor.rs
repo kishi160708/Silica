@@ -2269,8 +2269,18 @@ impl Editor {
         }
         self.parse_queued = false;
         let generation = self.generation;
-        let text = self.buf.text().to_string();
         let requested_at = Instant::now();
+        // * A big note costs tens of ms per parse (measured: 55 ms for
+        //   3.4 MB), which approaches the typing cadence: parsing on every
+        //   keystroke then saturates the background executor and drags
+        //   decorations seconds behind when the machine is also loaded.
+        //   A small note parses in ~1 ms and gains nothing from waiting,
+        //   so only the big ones pay the debounce.
+        let debounce_ms = if self.buf.text().len() > 100_000 {
+            150
+        } else {
+            0
+        };
         let widget_source = self
             .live_preview
             .then(|| self.embed_source.clone())
@@ -2280,85 +2290,107 @@ impl Editor {
         let path = self.name.to_string();
         let fold_options = self.fold_options();
         self.pending_parse = Some(cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move {
-                    let started = Instant::now();
-                    let doc = silica_markdown::parse(&text);
-                    let lines = highlight_lines(&doc);
-                    let foldables = fold::foldables(&doc, &text, fold_options);
-                    let widgets = match &widget_source {
-                        Some(source) => {
-                            let built = build_widgets(&path, &doc, source.as_ref(), build_options);
-                            widget_lines(&text, built)
-                        }
-                        None => Vec::new(),
-                    };
-                    let flairs = match live {
-                        true => code_flairs(&text, &doc),
-                        false => Vec::new(),
-                    };
-                    let elapsed = started.elapsed();
-                    let spans = lines.iter().map(Vec::len).sum();
-                    let words = text.split_whitespace().count();
-                    let chars = text.chars().count();
-                    (
-                        lines,
-                        elapsed,
-                        spans,
-                        text.len(),
-                        words,
-                        chars,
-                        widgets,
-                        flairs,
-                        foldables,
-                    )
+            // * A burst of keystrokes owes one parse, not one per keystroke:
+            //   on a big note the parse cost reaches the typing cadence, and
+            //   the executor ends up running parse after parse with no pause.
+            //   Wait for typing to pause, then drop the run if a newer edit
+            //   landed while it waited, mirroring refresh_outline_from_buffer.
+            if debounce_ms > 0 {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(debounce_ms))
+                    .await;
+            }
+            let result = match this
+                .update(cx, |editor, _| {
+                    (editor.generation == generation).then(|| editor.buf.text().to_string())
                 })
-                .await;
+                .unwrap_or(None)
+            {
+                Some(text) => Some(
+                    cx.background_executor()
+                        .spawn(async move {
+                            let started = Instant::now();
+                            let doc = silica_markdown::parse(&text);
+                            let lines = highlight_lines(&doc);
+                            let foldables = fold::foldables(&doc, &text, fold_options);
+                            let widgets = match &widget_source {
+                                Some(source) => {
+                                    let built =
+                                        build_widgets(&path, &doc, source.as_ref(), build_options);
+                                    widget_lines(&text, built)
+                                }
+                                None => Vec::new(),
+                            };
+                            let flairs = match live {
+                                true => code_flairs(&text, &doc),
+                                false => Vec::new(),
+                            };
+                            let elapsed = started.elapsed();
+                            let spans = lines.iter().map(Vec::len).sum();
+                            let words = text.split_whitespace().count();
+                            let chars = text.chars().count();
+                            (
+                                lines,
+                                elapsed,
+                                spans,
+                                text.len(),
+                                words,
+                                chars,
+                                widgets,
+                                flairs,
+                                foldables,
+                            )
+                        })
+                        .await,
+                ),
+                None => None,
+            };
             this.update(cx, |editor, cx| {
-                let parse_ms = result.1.as_secs_f64() * 1000.0;
-                // * A slightly stale decoration set is better than none while typing.
-                editor.highlights = Arc::new(result.0);
-                let widgets = result.6;
-                editor
-                    .widget_heights
-                    .retain(|first, _| widgets.iter().any(|(l, _)| l.start == *first));
-                // * Widgets change the heights above the cursor: keep it on screen.
-                let same_widgets = editor.widgets.len() == widgets.len()
-                    && editor
-                        .widgets
-                        .iter()
-                        .zip(&widgets)
-                        .all(|((a, _), (b, _))| a == b);
-                if !same_widgets {
-                    editor.pending_reveal = true;
-                }
-                editor.widgets = Arc::new(widgets);
-                editor.flairs = Arc::new(result.7);
-                // * Unlike the decorations, a stale set of foldables is worse
-                //   than none: resolving the folds against another text's
-                //   lines would drop them. Only the parse of the current text
-                //   settles them, and a record waiting for the first parse
-                //   waits for that one.
-                if editor.generation == generation {
-                    editor.foldables = Arc::new(result.8);
-                    if let Some(froms) = editor.pending_folds.take() {
-                        editor.folds = fold::Folds::from_record(&editor.foldables, froms);
-                    }
-                    editor.refresh_folds();
-                }
-                editor.stats = ParseStats {
-                    parse_ms,
-                    spans: result.2,
-                    bytes: result.3,
-                    words: result.4,
-                    chars: result.5,
-                };
-                editor.parse_samples.add(parse_ms);
-                if editor.generation == generation {
+                if let Some(result) = result {
+                    let parse_ms = result.1.as_secs_f64() * 1000.0;
+                    // * A slightly stale decoration set is better than none while typing.
+                    editor.highlights = Arc::new(result.0);
+                    let widgets = result.6;
                     editor
-                        .parse_latency
-                        .add(requested_at.elapsed().as_secs_f64() * 1000.0);
+                        .widget_heights
+                        .retain(|first, _| widgets.iter().any(|(l, _)| l.start == *first));
+                    // * Widgets change the heights above the cursor: keep it on screen.
+                    let same_widgets = editor.widgets.len() == widgets.len()
+                        && editor
+                            .widgets
+                            .iter()
+                            .zip(&widgets)
+                            .all(|((a, _), (b, _))| a == b);
+                    if !same_widgets {
+                        editor.pending_reveal = true;
+                    }
+                    editor.widgets = Arc::new(widgets);
+                    editor.flairs = Arc::new(result.7);
+                    // * Unlike the decorations, a stale set of foldables is worse
+                    //   than none: resolving the folds against another text's
+                    //   lines would drop them. Only the parse of the current text
+                    //   settles them, and a record waiting for the first parse
+                    //   waits for that one.
+                    if editor.generation == generation {
+                        editor.foldables = Arc::new(result.8);
+                        if let Some(froms) = editor.pending_folds.take() {
+                            editor.folds = fold::Folds::from_record(&editor.foldables, froms);
+                        }
+                        editor.refresh_folds();
+                    }
+                    editor.stats = ParseStats {
+                        parse_ms,
+                        spans: result.2,
+                        bytes: result.3,
+                        words: result.4,
+                        chars: result.5,
+                    };
+                    editor.parse_samples.add(parse_ms);
+                    if editor.generation == generation {
+                        editor
+                            .parse_latency
+                            .add(requested_at.elapsed().as_secs_f64() * 1000.0);
+                    }
                 }
                 editor.pending_parse = None;
                 if editor.parse_queued {
