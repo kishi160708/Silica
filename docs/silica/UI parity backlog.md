@@ -1031,16 +1031,16 @@ outline rows before building theirs.
 
 *low, parity-gap, small*
 
-**Silica.** "Expand all" folds every tag on its first click and opens them on the second, and the
-outline's search matches are drawn in the accent colour.
+**Landed 2026-11-07.** `"Expand all"` starts in the expand state so the first click is a no-op
+(everything is already expanded), the second folds every tag, and the third opens them — matching
+Obsidian, whose label never changes. `toggle_tag_folds` now flips a `tag_fold_next` flag instead of
+keying off whether anything is folded, which had the first click fold everything instead of doing
+nothing. The outline's search-highlight style is drawn in the accent colour as probed.
 
 **Obsidian.** [[Specification#Observed tags pane behavior, Obsidian 1.14.4 (installer build 1.13.7)]]:
 the first click did nothing, the second folded every row, the third opened them, and the label
 and icon never changed; the outline wraps a match in `span.suggestion-highlight`, whose computed
 colour and weight the probe did not read.
-
-**Fix.** Probe why the first click is inert (an internal flag that starts out of step with the
-rows, most likely) and read `suggestion-highlight`'s computed style, then match both.
 
 ## Search, switcher, palette and autocompletion
 

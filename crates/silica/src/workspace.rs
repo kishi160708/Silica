@@ -1382,6 +1382,11 @@ struct TagPaneState {
     show_search: bool,
     /// Folded tags by lowercased path.
     collapsed: HashSet<String>,
+    /// Whether the next "Expand all" click folds every tag. Starts false so
+    /// the first click is a no-op (everything is already expanded), the
+    /// second folds every row, and the third opens them again — matching
+    /// Obsidian, whose label never changes.
+    tag_fold_next: bool,
     sort_menu_open: bool,
 }
 
@@ -1392,6 +1397,7 @@ impl Default for TagPaneState {
             use_hierarchy: true,
             show_search: false,
             collapsed: HashSet::new(),
+            tag_fold_next: false,
             sort_menu_open: false,
         }
     }
@@ -9188,6 +9194,29 @@ link to it is rewritten. The current note is deleted."
                                 this.toggle_mode(&ToggleMode, window, cx)
                             },
                         )))
+                        // * Obsidian's view-header bookmark action:
+                        // `lucide-bookmark`, and it bookmarks the note on
+                        // screen through the same prompt the palette's
+                        // bookmark command opens (spec: the mark action in
+                        // both file menus, and the PDF pane's header, which
+                        // carries Bookmark and More options only).
+                        .when(view.current.is_some(), |d| {
+                            d.child(icon_button("bookmark", "bookmark", theme).on_click(
+                                cx.listener(move |this, _, window, cx| {
+                                    this.activate_group(id, cx);
+                                    if let Some(path) = this.current.clone() {
+                                        this.start_bookmark(
+                                            BookmarkDraft::File {
+                                                path,
+                                                subpath: None,
+                                            },
+                                            window,
+                                            cx,
+                                        );
+                                    }
+                                }),
+                            ))
+                        })
                     }),
             )
     }
@@ -13818,17 +13847,19 @@ link to it is rewritten. The current note is deleted."
         self.tag_state.use_hierarchy = !self.tag_state.use_hierarchy;
         // * Obsidian's tree comes back with every folder open.
         self.tag_state.collapsed.clear();
+        self.tag_state.tag_fold_next = false;
         cx.notify();
     }
 
     /// "Expand all" (whose label never changes in Obsidian): folds every
     /// tag, leaves included, or opens them all again.
     fn toggle_tag_folds(&mut self, cx: &mut Context<Self>) {
-        if self.tag_state.collapsed.is_empty() {
+        if self.tag_state.tag_fold_next {
             self.tag_state.collapsed = panes::tag_keys(&self.tag_tree).into_iter().collect();
         } else {
             self.tag_state.collapsed.clear();
         }
+        self.tag_state.tag_fold_next = !self.tag_state.tag_fold_next;
         cx.notify();
     }
 

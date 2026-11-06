@@ -365,3 +365,49 @@ fn the_reading_model_is_built_on_the_way_into_reading_view() {
     app.settle();
     assert!(blocks(&mut app) > 0, "Reading view shows no blocks");
 }
+
+#[test]
+fn the_view_header_bookmark_action_prompts_for_a_title() {
+    if !e2e_enabled() {
+        eprintln!("skipped: no display available for the graphical end-to-end tests");
+        return;
+    }
+    let vault = Vault::new();
+    let mut app = match App::launch(&vault.root) {
+        Some(a) => a,
+        None => {
+            eprintln!("skipped: no graphical session to launch silica in");
+            return;
+        }
+    };
+    app.settle();
+    app.call("open_path", json!({"path": "Note.md"}));
+    app.settle();
+    app.call("window", json!({"action": "activate"}));
+    app.settle();
+    // Type a heading into the open note, then bookmark the current heading
+    // through the command palette path — the same start_bookmark the view
+    // header's bookmark button calls.
+    app.call("focus", json!({"set": "editor"}));
+    app.settle();
+    app.call("type", json!({"text": "# My Heading\\n"}));
+    app.settle();
+    app.call("command", json!({"id": "bookmarks:bookmark-current-heading"}));
+    app.settle();
+    let modal = app.call("state", json!({})).get("modal").cloned().unwrap_or(json!(null));
+    assert_eq!(
+        modal.get("kind").and_then(|k| k.as_str()),
+        Some("prompt"),
+        "the bookmark command opened no prompt: {modal:?}"
+    );
+    assert_eq!(
+        modal.get("pending_op").and_then(|p| p.get("op")).and_then(|o| o.as_str()),
+        Some("add-bookmark"),
+        "{modal:?}"
+    );
+    let placeholder = modal.get("pending_op").and_then(|p| p.get("placeholder")).and_then(|p| p.as_str()).unwrap_or("");
+    assert!(
+        placeholder.contains("My Heading"),
+        "the prompt bookmarks the current heading: {modal:?}"
+    );
+}
