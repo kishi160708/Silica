@@ -82,28 +82,53 @@ fn output_is_safe(out: &Path, root: &Path) -> Result<(), String> {
 /// The raw HTML a note's body must not carry into a published site: active
 /// content survives the renderer untouched, and an export turns one vault
 /// into a site every reader of it visits.
+///
+/// This is a trust boundary — a note's raw HTML reaches here verbatim — so
+/// the match is case-insensitive (a browser runs `<SCRIPT>` like `<script>`)
+/// and the pass repeats until no opener survives: one pass leaves stitched
+/// pieces behind (`<scr<script>x</script>ipt>` emits `<scr` + `ipt>`, a
+/// whole live `<script>` in the output).
 fn strip_active(html: &str) -> String {
+    let mut out = html.to_string();
+    loop {
+        let stripped = strip_active_once(&out);
+        let done = stripped == out;
+        out = stripped;
+        if done {
+            return out;
+        }
+    }
+}
+
+/// One sweep: every `<script`/`<iframe` element found in `html`, dropped
+/// case-insensitively. `to_ascii_lowercase` maps only A-Z, so the copy has
+/// the same byte length and indices still slice the original.
+fn strip_active_once(html: &str) -> String {
     let mut out = String::with_capacity(html.len());
     let mut rest = html;
     loop {
+        let lower = rest.to_ascii_lowercase();
         let open = ["<script", "<iframe"]
             .iter()
-            .filter_map(|tag| rest.find(tag).map(|at| (at, tag)))
+            .filter_map(|tag| lower.find(tag).map(|at| (at, *tag)))
             .min_by_key(|(at, _)| *at);
         let Some((at, tag)) = open else {
             out.push_str(rest);
             return out;
         };
         out.push_str(&rest[..at]);
-        let close = format!("</{tag}");
+        // * The needle drops the leading `<` of the tag: `</<script`
+        //   matches nothing, so the element's content would survive as
+        //   visible (and patchable) text instead of disappearing.
+        let close = format!("</{}", &tag[1..]);
         // ! An unterminated element drops the tag, not the rest of the
         //   page: a truncated render must not swallow the note. Skipping
         //   past the opening tag guarantees the walk makes progress.
-        let after = rest[at..]
+        let after = lower[at..]
             .find(&close)
             .map(|i| at + i + close.len())
-            .and_then(|i| rest[i..].find('>').map(|j| i + j + 1))
-            .or_else(|| rest[at..].find('>').map(|i| at + i + 1))
+            .and_then(|i| lower[i..].find('>').map(|j| i + j + 1))
+            .or_else(|| lower[at..].find('>').map(|i| at + i + 1))
             .unwrap_or(rest.len());
         rest = &rest[after..];
     }
@@ -621,6 +646,37 @@ mod tests {
         assert_eq!(unescape_attr("A &amp; B"), "A & B");
         assert_eq!(unescape_attr("A & B"), "A & B");
         assert_eq!(unescape_attr("&#39;q&#39;"), "'q'");
+    }
+
+    #[test]
+    fn a_script_elements_content_goes_with_it() {
+        // Dropping only the opening tag leaves the payload as patchable
+        // text on the published page.
+        let html = strip_active("<p>a</p><script>alert(1)</script><p>b</p>");
+        assert!(!html.contains("alert(1)"), "{html}");
+        assert!(html.contains("<p>a</p><p>b</p>"), "{html}");
+        // An embed that closes nowhere still drops only itself.
+        let cut = strip_active("<p>a</p><iframe src=\"x\"><p>b</p>");
+        assert!(!cut.contains("<iframe"), "{cut}");
+        assert!(cut.contains("<p>b</p>"), "{cut}");
+    }
+
+    #[test]
+    fn an_uppercased_script_tag_is_dropped_too() {
+        // The renderer passes the note's raw HTML through, and a browser
+        // runs <SCRIPT> exactly like <script>.
+        let html = strip_active("<p>keep</p><SCRIPT>alert(1)</SCRIPT><p>tail</p>");
+        assert!(!html.to_lowercase().contains("<script"), "{html}");
+        assert!(html.contains("keep"), "{html}");
+    }
+
+    #[test]
+    fn a_split_script_tag_cannot_reassemble_into_a_live_one() {
+        // <scr<script>x</script>ipt> leaves <scr + ipt> = a whole <script>
+        // in the output when the pass runs only once.
+        let html = strip_active("<scr<script>x</script>ipt>alert(1)</script>");
+        assert!(!html.to_lowercase().contains("<script"), "{html}");
+        assert!(!html.contains("alert(1)"), "{html}");
     }
 
     #[test]
