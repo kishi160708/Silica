@@ -52,6 +52,15 @@ pub enum VaultError {
     RefusedName(PathBuf),
 }
 
+/// Whether two paths name one file on disk, which on a case-insensitive
+/// filesystem is what `Note.md` and `note.md` do. Canonicalization is
+/// asked only of a pair that already differs by case, so the common path
+/// costs one string comparison and a distinct file on a case-sensitive
+/// filesystem is never merged.
+fn same_file(a: &Path, b: &Path) -> bool {
+    std::fs::canonicalize(a).ok() == std::fs::canonicalize(b).ok()
+}
+
 /// One file in the vault. `path` is vault-relative with `/` separators.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VaultFile {
@@ -729,9 +738,27 @@ impl Vault {
     }
 
     fn add_folder(&mut self, rel: &str) {
-        if let Err(ix) = self.folders.binary_search_by(|f| f.as_str().cmp(rel)) {
-            self.folders.insert(ix, rel.to_string());
+        if self
+            .folders
+            .binary_search_by(|f| f.as_str().cmp(rel))
+            .is_ok()
+        {
+            return;
         }
+        // * One directory, several spellings: a case-insensitive filesystem
+        // * would otherwise get a second row for the same folder, the way
+        // * `refresh_path` refuses a second row for the same file.
+        let already = self.folders.iter().any(|f| {
+            f.eq_ignore_ascii_case(rel) && same_file(&self.root.join(f), &self.root.join(rel))
+        });
+        if already {
+            return;
+        }
+        let ix = self
+            .folders
+            .binary_search_by(|f| f.as_str().cmp(rel))
+            .unwrap_err();
+        self.folders.insert(ix, rel.to_string());
     }
 
     /// Registers every folder above `rel` (a file or folder path).
@@ -927,7 +954,7 @@ impl Vault {
         match std::fs::metadata(path) {
             Ok(meta) if meta.is_file() => {
                 self.add_ancestors(&rel);
-                let file = VaultFile {
+                let mut file = VaultFile {
                     kind: FileKind::from_path(&rel),
                     path: rel.clone(),
                     size: meta.len(),
@@ -940,8 +967,31 @@ impl Vault {
                         changes.push(FileChange::Modified(rel));
                     }
                     Err(ix) => {
-                        self.files.insert(ix, file);
-                        changes.push(FileChange::Added(rel));
+                        // * A path that differs from a listed one only by
+                        // * capitalisation and names the same file on disk is
+                        // * not a second note: on a case-insensitive
+                        // * filesystem the list would hold two rows for one
+                        // * file and the index two keys for one note. Keep
+                        // * the spelling the list already holds so nothing
+                        // * downstream has to move, and report the file as
+                        // * changed rather than as a new one.
+                        let same = self
+                            .files
+                            .iter()
+                            .position(|f| f.path.eq_ignore_ascii_case(&rel))
+                            .filter(|&j| same_file(&self.root.join(&self.files[j].path), path));
+                        match same {
+                            Some(j) => {
+                                let kept = self.files[j].path.clone();
+                                file.path = kept.clone();
+                                self.files[j] = file;
+                                changes.push(FileChange::Modified(kept));
+                            }
+                            None => {
+                                self.files.insert(ix, file);
+                                changes.push(FileChange::Added(rel));
+                            }
+                        }
                     }
                 }
             }
@@ -1440,6 +1490,49 @@ mod tests {
         assert_eq!(manifests[0].version, "1.2.3");
         let r = vault.link_resolver();
         assert_eq!(r.resolve("plan", "Note.md"), Some("Projects/Plan.md"));
+    }
+
+    /// A path spelled with different capitalisation that names the same file
+    /// on disk is not a new note: on a case-insensitive filesystem the file
+    /// list would otherwise hold two rows for one file, the explorer would
+    /// show a note twice, and removing one would report a file that is still
+    /// there. Sync clients and macOS-to-Windows moves hand the watcher
+    /// exactly these spellings.
+    #[cfg(windows)]
+    #[test]
+    fn a_path_spelled_with_other_capitalisation_is_the_same_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        fs::create_dir_all(root.join("Notes")).unwrap();
+        fs::write(root.join("Notes/Plan.md"), "plan\n").unwrap();
+        fs::write(root.join("Note.md"), "one file\n").unwrap();
+        let mut vault = Vault::open(&root).unwrap();
+        assert_eq!(vault.files().len(), 2);
+        assert!(vault.folders().contains(&"Notes".to_string()));
+
+        // * The same file, spelled the way the other side wrote it.
+        vault.refresh_path(&root.join("note.md"));
+        // * And the same folder, spelled the other way too.
+        vault.refresh_path(&root.join("notes"));
+
+        let listed: Vec<&str> = vault.files().iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(
+            listed,
+            vec!["Note.md", "Notes/Plan.md"],
+            "one file, two rows in the explorer: {listed:?}"
+        );
+        assert_eq!(
+            vault.folders(),
+            ["Notes"],
+            "one folder, two rows: {:?}",
+            vault.folders()
+        );
+        // * And the event says the file changed, not that a second appeared.
+        let changes = vault.refresh_path(&root.join("NOTE.md"));
+        assert!(
+            matches!(changes.as_slice(), [FileChange::Modified(p)] if p == "Note.md"),
+            "a re-spelling reported a new file: {changes:?}"
+        );
     }
 
     /// A plugin folder whose manifest is corrupt (or absent) is skipped
