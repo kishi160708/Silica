@@ -333,7 +333,7 @@ impl Vault {
         let to_abs = self.entry_path(to)?;
         // * A case-only rename of the same entry is allowed; anything else
         // * already at the destination is not.
-        let same_entry = from.eq_ignore_ascii_case(to)
+        let same_entry = from.to_lowercase() == to.to_lowercase()
             && std::fs::canonicalize(&from_abs).ok() == std::fs::canonicalize(&to_abs).ok();
         if to_abs.exists() && !same_entry {
             return Err(OpError::DestinationExists);
