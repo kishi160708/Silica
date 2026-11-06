@@ -93,7 +93,6 @@ use silica_vault::{FileChange, TrashOption, Vault, VaultError, VaultFile, VaultR
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 use std::time::{Duration, Instant};
 
@@ -150,30 +149,30 @@ fn side_menu_items(target: &SidePaneTarget) -> Vec<SidePaneMenuItem> {
     match target {
         SidePaneTarget::Tag(tag) => vec![
             item("Search for \"#tag\"", "search", A::SearchTag(tag.clone())),
-            item(crate::i18n::t("Rename tag..."), "pen-line", A::RenameTag(tag.clone())),
-            item(crate::i18n::t("Copy tag"), "clipboard", A::CopyTag(tag.clone())),
+            item("Rename tag...", "pen-line", A::RenameTag(tag.clone())),
+            item("Copy tag", "clipboard", A::CopyTag(tag.clone())),
         ],
         SidePaneTarget::Property(key) => vec![
             item(
-                crate::i18n::t("Search for property"),
+                "Search for property",
                 "search",
                 A::SearchProperty(key.clone()),
             ),
-            item(crate::i18n::t("Copy property"), "clipboard", A::CopyProperty(key.clone())),
+            item("Copy property", "clipboard", A::CopyProperty(key.clone())),
         ],
         SidePaneTarget::Heading { path, offset } => vec![
             item(
-                crate::i18n::t("Open heading"),
+                "Open heading",
                 "file-text",
                 A::OpenHeading(path.clone(), *offset),
             ),
             item(
-                crate::i18n::t("Open note in new tab"),
+                "Open note in new tab",
                 "file-plus",
                 A::OpenHeadingInNewTab(path.clone()),
             ),
             item(
-                crate::i18n::t("Open note to the right"),
+                "Open note to the right",
                 "separator-vertical",
                 A::OpenHeadingToRight(path.clone()),
             ),
@@ -364,24 +363,14 @@ pub const RUNNABLE: &[&str] = &[
     "editor:insert-embed",
     "editor:follow-link",
     "editor:open-link-in-new-leaf",
-    "editor:copy",
-    "editor:cut",
-    "editor:paste",
-    "editor:redo",
-    "editor:undo",
     "switcher:open",
     "global-search:open",
     "graph:open",
     "graph:open-local",
-    "graph:animate",
     // * Silica's own extension, not an Obsidian id: the `silica:` prefix is
     //   what the repo marks its native additions with.
     "silica:export-site",
-    "silica:export-site-watch",
-    "silica:open-exported-site",
-    "silica:toggle-graph-pane",
     "canvas:new-file",
-    "canvas:export-as-image",
     "canvas:jump-to-group",
     "canvas:convert-to-file",
     "bases:new-file",
@@ -418,11 +407,6 @@ pub const RUNNABLE: &[&str] = &[
     "editor:table-col-align-right",
     "app:go-back",
     "app:go-forward",
-    "app:reload",
-    "audio-recorder:start",
-    "audio-recorder:stop",
-    "quick-capture:open",
-    "task-dashboard:open",
     "app:open-settings",
     "app:open-help",
     "app:open-vault",
@@ -1391,9 +1375,6 @@ enum RightTab {
     /// All properties: every key in the vault with its type and count.
     Properties,
     Outline,
-    /// The graph, in the right dock: the same view the ribbon opens full
-    /// screen, kept beside the note — Obsidian's graph side pane.
-    Graph,
 }
 
 /// The Outline pane's headings for one note's metadata, whether that
@@ -1630,7 +1611,6 @@ enum PendingOp {
     /// `silica:export-site`: the folder the site is written to. An empty
     /// box takes the vault's sibling default.
     ExportSite,
-    ExportSiteWatch,
     /// "Merge entire file with...": the open note takes `other` in.
     Merge {
         file: String,
@@ -1643,8 +1623,6 @@ enum PendingOp {
     /// Note composer's merge: the value names the note the current one
     /// is absorbed into.
     MergeCurrent(String),
-    /// "Rename tag...": the value names the tag the old one becomes.
-    RenameTag { from: String },
 }
 
 /// One tab of the main area: what it shows and where it has been. The
@@ -2443,46 +2421,6 @@ fn renamed_path(from: &str, value: &str, is_folder: bool) -> Result<String, Stri
     })
 }
 
-/// Replaces every occurrence of `#old_tag` with `#new_tag` in `content`,
-/// but only when the tag is a standalone construct: the character before
-/// `#` is not alphanumeric or underscore, and the character after the tag
-/// name is not alphanumeric, underscore, or slash (so `#tag` in
-/// `#tagged` or `#tag/subtag` is left alone). Frontmatter tags like
-/// `tag: old_tag` or `- old_tag` are matched the same way on the `#`-less
-/// form because the caller strips the leading `#` before calling this.
-fn rename_tag_in_content(content: &str, old_tag: &str, new_tag: &str) -> String {
-    let tag_marker = format!("#{}", old_tag);
-    let mut result = String::with_capacity(content.len());
-    let mut start = 0;
-    while let Some(found) = content[start..].find(&tag_marker) {
-        let abs_start = start + found;
-        let abs_end = abs_start + tag_marker.len();
-        // * Character before # must not be alphanumeric or underscore.
-        let before_ok = abs_start == 0 || {
-            let prev = content.as_bytes()[abs_start - 1];
-            !prev.is_ascii_alphanumeric() && prev != b'_'
-        };
-        // * Character after tag name must not be alphanumeric, underscore,
-        //   or slash (so nested tags like #tag/subtag are not renamed when
-        //   renaming #tag).
-        let after_ok = abs_end == content.len() || {
-            let next = content.as_bytes()[abs_end];
-            !next.is_ascii_alphanumeric() && next != b'_' && next != b'/'
-        };
-        if before_ok && after_ok {
-            result.push_str(&content[start..abs_start]);
-            result.push('#');
-            result.push_str(new_tag);
-            start = abs_end;
-        } else {
-            result.push_str(&content[start..abs_end]);
-            start = abs_end;
-        }
-    }
-    result.push_str(&content[start..]);
-    result
-}
-
 /// Whether the view header carries the mode switch. An empty tab's header
 /// holds the two navigation buttons and nothing else -- no mode switch,
 /// since there is nothing to read or edit (see
@@ -2948,7 +2886,6 @@ pub struct Workspace {
     /// Matcher over every note name and alias, rebuilt when files change.
     name_finder: Option<Arc<Finder>>,
     mention_generation: u64,
-    outline_generation: u64,
     /// What the status bar says about the vault and the open file: it is
     /// true until something makes it untrue, so nothing expires it.
     status: SharedString,
@@ -2956,12 +2893,6 @@ pub struct Workspace {
     words: usize,
     chars: usize,
     _watcher: Option<watch::Watcher>,
-    /// The site-export watch, while one runs: the flag its thread checks,
-    /// so a second "export (watching)" run stops it. `None` = not watching.
-    site_watch: Option<Arc<AtomicBool>>,
-    /// The folder of the last site export, so "open exported site" has a
-    /// target without re-exporting. `None` until the first export lands.
-    last_site_export: Option<PathBuf>,
     /// Pending autosave, two seconds after the last edit.
     save_task: Option<Task<()>>,
     /// Whether the startup flags have been applied. A client driving the
@@ -3383,11 +3314,6 @@ impl Workspace {
                     SettingsEvent::Changed(change) => {
                         this.change_setting(change.as_ref().clone(), window, cx)
                     }
-                    SettingsEvent::ButtonClicked(label) => {
-                        if label == "Check for updates" {
-                            this.check_for_updates(window, cx);
-                        }
-                    }
                 },
             ),
             cx.subscribe_in(
@@ -3549,14 +3475,11 @@ impl Workspace {
             property_filter,
             name_finder: None,
             mention_generation: 0,
-            outline_generation: 0,
             status: "Pass a vault folder as the first argument".into(),
             notices: Notices::default(),
             words: 0,
             chars: 0,
             _watcher: None,
-            site_watch: None,
-            last_site_export: None,
             save_task: None,
             started: false,
             _subscriptions: subscriptions,
@@ -3779,50 +3702,6 @@ impl Workspace {
         self.apply_app_config(&state, cx);
         self.refresh_vault_views(cx);
         cx.notify();
-    }
-
-    /// `Check for updates` in Settings > General: queries the GitHub API for
-    /// the latest release and tells the user whether this build is current.
-    /// Uses curl (already on every supported OS) so no new dependency is
-    /// needed, and only reads the public releases endpoint — no auth, no
-    /// private data is sent.
-    fn check_for_updates(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        let current = env!("CARGO_PKG_VERSION");
-        let output = std::process::Command::new("curl")
-            .arg("-s")
-            .arg("--max-time")
-            .arg("15")
-            .arg("https://api.github.com/repos/lw-xiong/Silica/releases/latest")
-            .output();
-
-        let result = match output {
-            Ok(output) if output.status.success() => {
-                let body = String::from_utf8_lossy(&output.stdout);
-                let latest: Option<String> = serde_json::from_str::<serde_json::Value>(&body)
-                    .ok()
-                    .and_then(|v| v.get("tag_name").and_then(|tag| tag.as_str().map(str::to_string)))
-                    .map(|s| s.trim_start_matches('v').to_string());
-                match latest {
-                    Some(latest) if !latest.is_empty() => {
-                        if latest == current {
-                            format!("Silica {current} is up to date.")
-                        } else {
-                            format!(
-                                "Silica {latest} is available — you have {current}. Get it at github.com/lw-xiong/Silica/releases"
-                            )
-                        }
-                    }
-                    _ => "Check for updates: could not read the release version.".to_string(),
-                }
-            }
-            Ok(output) => format!(
-                "Check for updates: GitHub replied with status {}.",
-                output.status
-            ),
-            Err(err) => format!("Check for updates: could not reach GitHub: {err}"),
-        };
-
-        self.report(result, cx);
     }
 
     /// Rebuild the global [`Theme`] from the vault's current appearance and
@@ -4216,85 +4095,6 @@ impl Workspace {
         }
     }
 
-    /// `canvas:export-as-image`: render the open canvas to a PNG and save it
-    /// in the vault next to the canvas file.
-    fn export_canvas_as_image(&mut self, cx: &mut Context<Self>) {
-        if self.main_view(cx) != MainView::Canvas {
-            self.report("Canvas: Export as image needs a canvas open", cx);
-            return;
-        }
-        let view = self.canvas.read(cx);
-        let canvas = &view.scene.canvas;
-        if canvas.nodes.is_empty() {
-            self.report("Canvas: Nothing to export", cx);
-            return;
-        }
-
-        // Compute bounds and place nodes with a 50-unit margin.
-        let mut min_x = f64::INFINITY;
-        let mut min_y = f64::INFINITY;
-        let mut max_x = 0.0f64;
-        let mut max_y = 0.0f64;
-        for n in &canvas.nodes {
-            min_x = min_x.min(n.x);
-            min_y = min_y.min(n.y);
-            max_x = max_x.max(n.x + n.width);
-            max_y = max_y.max(n.y + n.height);
-        }
-        let pad = 50.0;
-        let width = (max_x - min_x + 2.0 * pad) as u32;
-        let height = (max_y - min_y + 2.0 * pad) as u32;
-
-        let placed: Vec<silica_canvas::image::Placed> = canvas
-            .nodes
-            .iter()
-            .map(|n| silica_canvas::image::Placed {
-                node_id: n.id.clone(),
-                x: n.x - min_x + pad,
-                y: n.y - min_y + pad,
-                width: n.width,
-                height: n.height,
-            })
-            .collect();
-
-        let palette = silica_canvas::image::Palette {
-            background: "#1e1e1e".into(),
-            node_fill: "#2d2d2d".into(),
-            node_stroke: "#5a5a5a".into(),
-            node_text: "#e0e0e0".into(),
-            edge: "#888888".into(),
-        };
-        let svg_doc =
-            silica_canvas::image::svg(width, height, &placed, &canvas.edges, &palette);
-        let png_bytes = match silica_canvas::image::png(&svg_doc, width, height) {
-            Ok(b) => b,
-            Err(err) => {
-                self.report(format!("Canvas: PNG rasterise failed: {err}"), cx);
-                return;
-            }
-        };
-
-        // Save to vault: canvas-export-<timestamp>.png
-        let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S");
-        let rel = format!("canvas-export-{ts}.png");
-        let abs = match self.vault_path(&rel) {
-            Ok(p) => p,
-            Err(err) => {
-                self.report(format!("Canvas: {err}"), cx);
-                return;
-            }
-        };
-        if let Some(dir) = abs.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        match std::fs::File::create(&abs)
-            .and_then(|mut f| std::io::Write::write_all(&mut f, &png_bytes))
-        {
-            Ok(()) => self.report(format!("Canvas: Exported {rel}"), cx),
-            Err(err) => self.report(format!("Canvas: Write failed: {err}"), cx),
-        }
-    }
-
     /// Opens the chooser and picks `query` out of it, for `--template`.
     pub fn pick_template(&mut self, query: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.open_template_chooser(window, cx);
@@ -4622,7 +4422,6 @@ impl Workspace {
             "outline" => RightTab::Outline,
             "tags" => RightTab::Tags,
             "properties" => RightTab::Properties,
-            "graph" => RightTab::Graph,
             _ => RightTab::Backlinks,
         };
         self.select_right_tab(which, cx);
@@ -4634,20 +4433,6 @@ impl Workspace {
         self.right_tab = which;
         self.refresh_outline_from_buffer(cx);
         cx.notify();
-    }
-
-    /// `silica:toggle-graph-pane`: the graph in the right dock, beside the
-    /// note — Obsidian's graph side pane. Asked for with the pane already
-    /// showing it, the dock closes instead. The dock comes back first: a
-    /// pane that is not painted is outside the dispatch tree.
-    fn toggle_graph_pane(&mut self, cx: &mut Context<Self>) {
-        if self.right_tab == RightTab::Graph && self.right_visible {
-            self.right_visible = false;
-            cx.notify();
-        } else {
-            self.right_visible = true;
-            self.select_right_tab(RightTab::Graph, cx);
-        }
     }
 
     pub fn editor(&self) -> &Entity<Editor> {
@@ -4863,10 +4648,10 @@ impl Workspace {
                     let state = state.clone();
                     let root = state.as_ref().map(|s| s.root.clone()).unwrap_or_default();
                     let full_path = root.join(path);
-                    // A file that cannot be read must not be treated as empty:
-                    // the write below would drop everything in it.
-                    let mut existing = std::fs::read_to_string(&full_path)
-                        .map_err(|e| format!("Could not read {path}: {e}"))?;
+                    let mut existing = std::fs::read_to_string(&full_path).map_err(|e| {
+                        eprintln!("Could not read {}: {e}", full_path.display());
+                        String::new()
+                    })?;
                     existing.push_str(text);
                     std::fs::write(&full_path, existing).map_err(|e| e.to_string())
                 }
@@ -4877,24 +4662,13 @@ impl Workspace {
                     let state = state.clone();
                     let root = state.as_ref().map(|s| s.root.clone()).unwrap_or_default();
                     let full_path = root.join(path);
+                    if full_path.exists() {
+                        return Err(format!("'{path}' already exists"));
+                    }
                     if let Some(parent) = full_path.parent() {
                         let _ = std::fs::create_dir_all(parent);
                     }
-                    // create_new rather than exists()+write: between a check
-                    // and a write another writer can appear, and plain write
-                    // would truncate whatever it put there.
-                    match std::fs::OpenOptions::new()
-                        .create_new(true)
-                        .write(true)
-                        .open(&full_path)
-                    {
-                        Ok(mut file) => std::io::Write::write_all(&mut file, text.as_bytes())
-                            .map_err(|e| format!("Could not write {path}: {e}")),
-                        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                            Err(format!("'{path}' already exists"))
-                        }
-                        Err(e) => Err(format!("Could not create {path}: {e}")),
-                    }
+                    std::fs::write(&full_path, text).map_err(|e| e.to_string())
                 }
             }),
             create_folder: Box::new({
@@ -5003,8 +4777,7 @@ impl Workspace {
         }
         match id {
             // * `theme:switch` cycles system → moonstone (light) → obsidian
-            //   (dark) → monochrome (grayscale, whichever base) → system,
-            //   mirroring Obsidian's theme switcher with a Silica extra.
+            //   (dark) → system, mirroring Obsidian's theme switcher.
             //   `theme:toggle-light-dark` toggles light/dark; system starts
             //   at light. Both write `appearance.json` and recompute the
             //   global theme live via `change_setting` → `recompute_theme`,
@@ -5021,8 +4794,6 @@ impl Workspace {
                 let next_theme = match config.theme.as_deref() {
                     Some("system") => "moonstone",
                     Some("moonstone") => "obsidian",
-                    Some("obsidian") => "monochrome",
-                    Some("monochrome") => "system",
                     _ => "system",
                 };
                 let mut config = config;
@@ -5138,10 +4909,7 @@ impl Workspace {
             "switcher:open" => self.open_switcher("", window, cx),
             "global-search:open" => self.open_search_action(&OpenSearch, window, cx),
             "graph:open" => self.open_graph_action(&OpenGraph, window, cx),
-            "silica:toggle-graph-pane" => self.toggle_graph_pane(cx),
-            "silica:export-site" => self.start_export_site(window, cx, false),
-            "silica:export-site-watch" => self.start_export_site(window, cx, true),
-            "silica:open-exported-site" => self.open_exported_site(cx),
+            "silica:export-site" => self.start_export_site(window, cx),
             // * Asked for by id with no file open -- the palette does not offer
             //   it, and `can_run` says so -- this opens nothing, which is what
             //   Obsidian's `checkCallback` does rather than falling back to the
@@ -5157,7 +4925,6 @@ impl Workspace {
             "bases:add-item" => self.add_base_item(cx),
             "canvas:jump-to-group" => self.jump_to_group(window, cx),
             "canvas:convert-to-file" => self.convert_card_to_file(cx),
-            "canvas:export-as-image" => self.export_canvas_as_image(cx),
             "markdown:toggle-preview" => self.toggle_mode(&ToggleMode, window, cx),
             // * The properties block is the same editable widget in reading
             //   view, and `editor:toggle-fold-properties` was observed running
@@ -5397,44 +5164,7 @@ impl Workspace {
             }
             "app:go-back" => self.go_back(&GoBack, window, cx),
             "app:go-forward" => self.go_forward(&GoForward, window, cx),
-            "app:reload" => {
-                self.close_modal(window, cx);
-                let Ok(exe) = std::env::current_exe() else {
-                    self.report("Reload failed: cannot find executable", cx);
-                    return;
-                };
-                let args: Vec<String> = std::env::args().collect();
-                if std::process::Command::new(exe)
-                    .args(&args[1..])
-                    .spawn()
-                    .is_ok()
-                {
-                    std::process::exit(0);
-                } else {
-                    self.report("Reload failed: cannot restart", cx);
-                }
-            }
             "app:open-settings" => self.open_settings(None, window, cx),
-            "quick-capture:open" => {
-                let Some(state) = self.state.clone() else {
-                    self.report("Quick Capture: No vault open", cx);
-                    return;
-                };
-                match crate::quick_capture::open(state, window.window_handle(), cx) {
-                    Ok(_) => {}
-                    Err(err) => self.report(format!("Quick Capture: {err}"), cx),
-                }
-            }
-            "task-dashboard:open" => {
-                let Some(state) = self.state.clone() else {
-                    self.report("Task Dashboard: No vault open", cx);
-                    return;
-                };
-                match crate::task_dashboard::open(state, window.window_handle(), cx) {
-                    Ok(_) => {}
-                    Err(err) => self.report(format!("Task Dashboard: {err}"), cx),
-                }
-            }
             "app:toggle-left-sidebar" => {
                 self.left_visible = !self.left_visible;
                 if !self.left_visible {
@@ -6085,45 +5815,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The watching export: a first run starts a background pass over the
-    /// vault, a second stops it. The thread owns its watcher, so the flag
-    /// is all a stop needs; taking the `Arc` out of `site_watch` is what
-    /// makes the command a toggle.
-    fn toggle_site_watch(&mut self, root: PathBuf, out: PathBuf, cx: &mut Context<Self>) {
-        if let Some(stop) = self.site_watch.take() {
-            stop.store(true, Ordering::Relaxed);
-            self.report("Stopped watching the site export.", cx);
-            return;
-        }
-        let stop = Arc::new(AtomicBool::new(false));
-        self.site_watch = Some(stop.clone());
-        std::thread::spawn(move || crate::site::watch_loop(root, out, stop));
-        self.report("Watching the vault — the site re-exports on change.", cx);
-    }
-
-    /// `silica:open-exported-site`: the last export's index.html in the
-    /// default browser — the "preview" half of the site export, with no
-    /// re-export and no temp server to leave running.
-    fn open_exported_site(&mut self, cx: &mut Context<Self>) {
-        let Some(out) = self.last_site_export.clone() else {
-            self.report(
-                "No export to open yet — run Export vault as site first.",
-                cx,
-            );
-            return;
-        };
-        let index = out.join("index.html");
-        if !index.exists() {
-            self.report(
-                format!("No index.html in {} — export it again.", out.display()),
-                cx,
-            );
-            return;
-        }
-        cx.open_url(&crate::site::index_url(&out));
-        self.report(format!("Opening {} in the browser.", index.display()), cx);
-    }
-
     /// Whether the keyboard is somewhere nothing can use it: on the
     /// workspace root, which is where a click in a dock leaves it, on no
     /// element at all, or on a main view the main area is not painting.
@@ -6597,7 +6288,7 @@ impl Workspace {
             self.editor.read(cx).file_contents()
         } else {
             std::fs::read_to_string(state.vault().absolute(&current)).unwrap_or_else(|e| {
-                self.report(format!("Could not read {current}: {e}"), cx);
+                eprintln!("Could not read {}: {e}", current);
                 String::new()
             })
         };
@@ -6990,53 +6681,17 @@ impl Workspace {
         let Some(path) = self.current.clone() else {
             return;
         };
-        // Snapshot the dirty buffer text on the UI thread, then parse off the
-        // UI thread so a full `index_markdown` never blocks typing. Stale
-        // results from an older keystroke are dropped via outline_generation,
-        // mirroring compute_mentions.
-        let text = {
+        let rows = {
             let editor = self.editor.read(cx);
             // * A clean buffer is the file the index read, and a buffer
             //   holding another note says nothing about this one.
             if editor.name.as_ref() != path.as_str() || !editor.is_dirty() {
                 return;
             }
-            editor.text().to_owned()
+            outline_headings(&index_markdown(editor.text()))
         };
-        self.outline_generation += 1;
-        let generation = self.outline_generation;
-        cx.spawn(async move |this, cx| {
-            // * A burst of keystrokes owes the pane one parse, not one per
-            //   keystroke: a 3 MB note costs ~100 ms to parse, so parsing on
-            //   every edit saturates the background executor and leaves the
-            //   outline several keystrokes behind (measured: 13 parses for
-            //   20 steps, edit-to-decoration 330 ms). Wait for typing to
-            //   pause, and drop the run if a newer keystroke landed.
-            cx.background_executor()
-                .timer(std::time::Duration::from_millis(150))
-                .await;
-            let stale = this
-                .update(cx, |ws, _| {
-                    ws.outline_generation != generation || ws.current.as_deref() != Some(&path)
-                })
-                .unwrap_or(true);
-            if stale {
-                return;
-            }
-            let rows = cx
-                .background_executor()
-                .spawn(async move { outline_headings(&index_markdown(&text)) })
-                .await;
-            this.update(cx, |ws, cx| {
-                if ws.outline_generation != generation || ws.current.as_deref() != Some(&path) {
-                    return;
-                }
-                ws.outline = rows;
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
+        self.outline = rows;
+        cx.notify();
     }
 
     /// Finds unlinked mentions in both directions on the background executor.
@@ -8111,7 +7766,7 @@ impl Workspace {
 
     /// `silica:export-site`: asks where the site goes, with the vault's
     /// sibling folder as the pre-filled answer.
-    fn start_export_site(&mut self, window: &mut Window, cx: &mut Context<Self>, watch: bool) {
+    fn start_export_site(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // * The default folder is read through the state's borrow, which
         //   ends before `open_prompt` takes `self` back.
         let default = match self.state.as_ref() {
@@ -8133,24 +7788,11 @@ impl Workspace {
             None => return,
         };
         self.open_prompt(
-            if watch {
-                PendingOp::ExportSiteWatch
-            } else {
-                PendingOp::ExportSite
-            },
+            PendingOp::ExportSite,
             PromptSpec {
-                title: if watch {
-                    "Export vault as site (watching)".into()
-                } else {
-                    "Export vault as site".into()
-                },
+                title: "Export vault as site".into(),
                 detail: Some(
-                    if watch {
-                        "Every note renders to HTML; links and attachments come along. The folder refreshes as the vault changes — run this again to stop."
-                    } else {
-                        "Every note renders to HTML; links and attachments come along."
-                    }
-                    .into(),
+                    "Every note renders to HTML; links and attachments come along.".into(),
                 ),
                 input: Some(default),
                 placeholder: "Folder".into(),
@@ -8664,7 +8306,6 @@ link to it is rewritten. The current note is deleted."
             return;
         };
         let value = value.trim();
-        let watch = matches!(op, PendingOp::ExportSiteWatch);
         match op {
             PendingOp::Rename(from) => {
                 // * The box holds the stem, which is what `renamed_path`
@@ -8694,7 +8335,7 @@ link to it is rewritten. The current note is deleted."
                 self.close_modal(window, cx);
                 self.delete_now(&path, window, cx);
             }
-            PendingOp::ExportSite | PendingOp::ExportSiteWatch => {
+            PendingOp::ExportSite => {
                 self.pending = None;
                 self.close_modal(window, cx);
                 // * The export reads the vault through its own borrow, so
@@ -8727,23 +8368,17 @@ link to it is rewritten. The current note is deleted."
                     return;
                 };
                 match crate::site::export(&vault_root, &files, &out) {
-                    Ok(done) => {
-                        self.last_site_export = Some(done.output.clone());
-                        self.report(
-                            format!(
-                                "Exported {} note{}, {} link{} to {}",
-                                done.notes,
-                                if done.notes == 1 { "" } else { "s" },
-                                done.links,
-                                if done.links == 1 { "" } else { "s" },
-                                done.output.display()
-                            ),
-                            cx,
-                        );
-                        if watch {
-                            self.toggle_site_watch(vault_root, out, cx);
-                        }
-                    }
+                    Ok(done) => self.report(
+                        format!(
+                            "Exported {} note{}, {} link{} to {}",
+                            done.notes,
+                            if done.notes == 1 { "" } else { "s" },
+                            done.links,
+                            if done.links == 1 { "" } else { "s" },
+                            done.output.display()
+                        ),
+                        cx,
+                    ),
                     Err(err) => self.report(err, cx),
                 }
             }
@@ -8800,77 +8435,6 @@ link to it is rewritten. The current note is deleted."
                         }
                     }
                     Err(err) => self.report(err, cx),
-                }
-            }
-            PendingOp::RenameTag { from } => {
-                self.pending = None;
-                self.close_modal(window, cx);
-                let Some(state) = self.state.clone() else {
-                    return;
-                };
-                let new_tag = value.trim();
-                if new_tag.is_empty() {
-                    self.report("Tag name cannot be empty", cx);
-                    return;
-                }
-                if !new_tag.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '/') {
-                    self.report("Tag name contains invalid characters", cx);
-                    return;
-                }
-                if new_tag == from {
-                    return;
-                }
-                // * Find every file containing the old tag, rewrite it in
-                //   place, and let the watcher re-index. The rename rewrites
-                //   inline #tags and frontmatter tags alike.
-                let tag_lower = from.to_lowercase();
-                let files = state
-                    .cache()
-                    .tags()
-                    .get(&tag_lower)
-                    .map(|e| e.files.clone())
-                    .unwrap_or_default();
-                let vault_root = state.vault().root().to_path_buf();
-                let mut changed = Vec::new();
-                for path in &files {
-                    let absolute = vault_root.join(path);
-                    let Ok(content) = std::fs::read_to_string(&absolute) else {
-                        continue;
-                    };
-                    let next = rename_tag_in_content(&content, &from, new_tag);
-                    if next != content {
-                        if let Err(err) =
-                            silica_vault::write_no_follow(&absolute, next.as_bytes())
-                        {
-                            self.report(format!("Could not write {path}: {err}"), cx);
-                            return;
-                        }
-                        changed.push(path.clone());
-                    }
-                }
-                if !changed.is_empty() {
-                    let count = changed.len();
-                    self.after_changes(
-                        Changes {
-                            files: changed
-                                .into_iter()
-                                .map(FileChange::Modified)
-                                .collect(),
-                            notes: Vec::new(),
-                            removed_notes: Vec::new(),
-                        },
-                        cx,
-                    );
-                    self.report(
-                        format!(
-                            "Renamed \"#{from}\" to \"#{new_tag}\" in {} file{}",
-                            count,
-                            if count == 1 { "" } else { "s" }
-                        ),
-                        cx,
-                    );
-                } else {
-                    self.report("No files to rename", cx);
                 }
             }
         }
@@ -12400,7 +11964,6 @@ link to it is rewritten. The current note is deleted."
             Some("outline") => self.right_tab = RightTab::Outline,
             Some("tag") => self.right_tab = RightTab::Tags,
             Some("all-properties") => self.right_tab = RightTab::Properties,
-            Some("graph") => self.right_tab = RightTab::Graph,
             _ => {}
         }
         self.layout = Some(layout);
@@ -12918,7 +12481,6 @@ link to it is rewritten. The current note is deleted."
                 RightTab::Outline => "outline",
                 RightTab::Tags => "tags",
                 RightTab::Properties => "properties",
-                RightTab::Graph => "graph",
             }),
         );
         put_capped(
@@ -13128,11 +12690,7 @@ link to it is rewritten. The current note is deleted."
                 Some(PendingOp::MergeCurrent(source)) => {
                     json!({"op": "merge-current", "source": source})
                 }
-                Some(PendingOp::RenameTag { from }) => {
-                    json!({"op": "rename-tag", "from": from})
-                }
                 Some(PendingOp::ExportSite) => json!({"op": "export-site"}),
-                Some(PendingOp::ExportSiteWatch) => json!({"op": "export-site-watch"}),
             },
         );
         Value::Object(modal)
@@ -14406,36 +13964,11 @@ link to it is rewritten. The current note is deleted."
         cx.notify();
     }
 
-    /// Applies an outline parse that is still inside its debounce window.
-    fn flush_outline_if_pending(&mut self, cx: &mut Context<Self>) {
-        let Some(path) = self.current.clone() else {
-            return;
-        };
-        let text = {
-            let editor = self.editor.read(cx);
-            // * A clean buffer already matches what the index says.
-            if editor.name.as_ref() != path.as_str() || !editor.is_dirty() {
-                return;
-            }
-            editor.text().to_owned()
-        };
-        // * Bumping the generation retires the debounced task still waiting,
-        //   so only this synchronous result can land.
-        self.outline_generation += 1;
-        self.outline = outline_headings(&index_markdown(&text));
-        cx.notify();
-    }
-
     /// An Outline row's click: in an editing mode the cursor goes to the
     /// heading's line, column 0, scrolled to the vertical centre, and the
     /// editor takes the keyboard; in reading mode the heading scrolls to
     /// the top edge.
     fn reveal_heading(&mut self, offset: usize, cx: &mut Context<Self>) {
-        // * A click lands the caret by byte offset, so the rows it came from
-        //   must describe the buffer as it is now: a parse still waiting out
-        //   its debounce is applied synchronously here — one hitch on a
-        //   click, never on a keystroke.
-        self.flush_outline_if_pending(cx);
         self.reading
             .update(cx, |r, cx| r.scroll_to_offset(offset, cx));
         if self.mode.is_editing() {
@@ -14704,9 +14237,9 @@ link to it is rewritten. The current note is deleted."
                     .py_1()
                     .cursor_pointer()
                     .hover(|s| s.bg(theme.bg_alt))
-                    .on_click(cx.listener(move |this, _, window, cx| {
+                    .on_click(cx.listener(move |this, _, _, cx| {
                         this.close_side_menu(cx);
-                        this.handle_side_menu_action(&item.action, window, cx);
+                        this.handle_side_menu_action(&item.action, cx);
                         cx.notify();
                     }))
                     .child(crate::assets::icon(item.icon, 16., theme.text_muted))
@@ -14728,39 +14261,15 @@ link to it is rewritten. The current note is deleted."
 
     /// Handles a side-pane context menu action: searches for tags/properties,
     /// copies paths, or opens outline headings.
-    fn handle_side_menu_action(&mut self, action: &SidePaneAction, window: &mut Window, cx: &mut Context<Self>) {
+    fn handle_side_menu_action(&mut self, action: &SidePaneAction, cx: &mut Context<Self>) {
         match action {
             SidePaneAction::SearchTag(tag) => {
                 self.show_search(&format!("tag:#{tag}"), None, cx);
             }
-            SidePaneAction::RenameTag(tag) => {
-                // * The prompt asks for the new tag name; the rename itself
-                //   rewrites every occurrence across the vault on submit.
-                let Some(state) = self.state.clone() else {
-                    return;
-                };
-                let tag_lower = tag.to_lowercase();
-                let count = state
-                    .cache()
-                    .tags()
-                    .get(&tag_lower)
-                    .map(|e| e.count)
-                    .unwrap_or(0);
-                self.open_prompt(
-                    PendingOp::RenameTag { from: tag.clone() },
-                    PromptSpec {
-                        title: "Rename tag".into(),
-                        detail: Some(
-                            format!("Rename \"#{tag}\" to what? ({count} occurrence{} across the vault)", if count == 1 { "" } else { "s" }).into(),
-                        ),
-                        input: None,
-                        placeholder: "Tag name".into(),
-                        confirm: "Rename".into(),
-                        ..PromptSpec::default()
-                    },
-                    window,
-                    cx,
-                );
+            SidePaneAction::RenameTag(_tag) => {
+                // * Tag renaming is not yet implemented: Obsidian's rename
+                //   rewrites every occurrence across the vault, which requires
+                //   a vault-wide scan and link repair that is not yet built.
             }
             SidePaneAction::CopyTag(tag) => {
                 self.copy_path(tag, cx);
@@ -15319,7 +14828,6 @@ link to it is rewritten. The current note is deleted."
             RightTab::Tags => "tag-pane",
             RightTab::Properties => "properties",
             RightTab::Outline => "outline",
-            RightTab::Graph => "graph",
         };
         self.state
             .as_ref()
@@ -15337,7 +14845,6 @@ link to it is rewritten. The current note is deleted."
                 RightTab::Tags,
                 RightTab::Properties,
                 RightTab::Outline,
-                RightTab::Graph,
             ]
             .into_iter()
             .find(|t| self.pane_enabled(*t))
@@ -15352,24 +14859,6 @@ link to it is rewritten. The current note is deleted."
             RightTab::Outline => self.render_outline_pane(theme, cx),
             RightTab::Tags => self.render_tags_pane(theme, cx),
             RightTab::Properties => self.render_properties_pane(theme, cx),
-            // * The graph side pane: the GraphView entity the ribbon opens
-            // full screen, kept in the dock. While a group's area already
-            // paints it, the dock says so rather than painting it twice.
-            RightTab::Graph if self.graph_group().is_some() => div()
-                .flex()
-                .items_center()
-                .justify_center()
-                .size_full()
-                .min_h_0()
-                .px(px(12.))
-                .py(px(12.))
-                .child("The graph is already open in the main area")
-                .into_any_element(),
-            RightTab::Graph => div()
-                .size_full()
-                .min_h_0()
-                .child(self.graph.clone())
-                .into_any_element(),
         };
         // * A pane whose core plugin is off is not offered: Obsidian takes
         //   the view away with the plugin.
@@ -15440,7 +14929,6 @@ link to it is rewritten. The current note is deleted."
                         cx,
                     ))
                     .children(tab_button(self, "Outline", "list", RightTab::Outline, cx))
-                    .children(tab_button(self, "Graph", "git-fork", RightTab::Graph, cx))
                     .child(window_handle(
                         div().id("right-dock-space").flex_1().h_full(),
                         frameless,
@@ -17126,32 +16614,6 @@ mod tests {
         (dir, state)
     }
 
-    /// A config file nothing can parse must not keep the vault from opening.
-    /// `VaultState::load` promises it: the defaults stand in, the broken file
-    /// is named for the window's notice, and the notes still open. Nothing
-    /// covered the promise — a crash that truncated `app.json` mid-string was
-    /// the exact case, and the whole boot hangs off this load.
-    #[test]
-    fn a_config_that_will_not_parse_does_not_stop_the_vault_opening() {
-        let dir = tempfile::tempdir().unwrap();
-        let r = dir.path();
-        fs::create_dir_all(r.join(".obsidian")).unwrap();
-        // * What a crash leaves: the file is there, cut off mid-string.
-        fs::write(r.join(".obsidian/app.json"), "{\"trashOption\": \"lo").unwrap();
-        fs::write(r.join("Note.md"), "# Note\n").unwrap();
-
-        let state = VaultState::load(&r.to_path_buf())
-            .expect("a config that will not parse must not stop the vault opening");
-        assert_eq!(
-            state.unreadable_configs,
-            vec!["app.json".to_string()],
-            "the broken file must be named for the window's notice"
-        );
-        // * The defaults stand in: the unreadable setting does not take
-        // * effect, so nothing silently runs on half a config.
-        assert_eq!(state.trash_option(), TrashOption::System);
-    }
-
     /// A link written in a property is an outgoing link like any other,
     /// listed first the way the file writes it; a body link is labelled as
     /// it reads in the note and carries the link it was written with.
@@ -18526,415 +17988,6 @@ mod tests {
             return;
         }
         assert!(vault_path_in(&root, "dangling.md").is_err());
-    }
-
-    /// What the rename dialog's typed name actually lands on. The extension
-    /// is carried over and the folder is kept, so a note can never be renamed
-    /// into a different file than the one the explorer shows — and a name the
-    /// OS would rewrite (trailing dot or space, which Windows silently drops)
-    /// is refused rather than allowed to clobber its neighbour.
-    #[test]
-    fn a_renamed_keeps_its_extension_and_its_folder() {
-        // * The extension comes back; only the stem is the typed part.
-        assert_eq!(renamed_path("Note.md", "Fresh", false).unwrap(), "Fresh.md");
-        // * A folder keeps its place, and gets no extension of its own.
-        assert_eq!(
-            renamed_path("Notes/Plan.md", "Roadmap", false).unwrap(),
-            "Notes/Roadmap.md"
-        );
-        // * A folder's typed name is its new whole path: the entry at the
-        // * vault root keeps its level, and a nested one keeps its parent.
-        assert_eq!(renamed_path("Notes", "Archive", true).unwrap(), "Archive");
-        assert_eq!(
-            renamed_path("Notes/Sub", "Moved", true).unwrap(),
-            "Notes/Moved"
-        );
-        // * A note with no extension stays without one: appending ".md" to
-        // * a file the user made deliberately extension-less changes its kind.
-        assert_eq!(renamed_path("Scratch", "Bin", false).unwrap(), "Bin");
-        // * Only the last extension is carried: Obsidian's rule, so a double
-        // * extension note is not silently given a different one.
-        assert_eq!(
-            renamed_path("archive.tar.gz", "backup", false).unwrap(),
-            "backup.gz"
-        );
-
-        // * A name the OS would rewrite is refused by the same validator the
-        // * vault uses, not renamed into something else.
-        for bad in ["Trailing.", "Trailing ", "  "] {
-            assert!(
-                renamed_path("Note.md", bad, false).is_err(),
-                "{bad:?} must be refused"
-            );
-        }
-    }
-
-    /// The other half of the watcher's `apply`: a file that appears from
-    /// outside — a sync client dropping a note, a restore, a copy in — has to
-    /// reach the index, the file list and the link resolver. A note that
-    /// stays invisible until restart is data the app cannot see, and the
-    /// search that misses it is worse than one that lists a ghost.
-    #[test]
-    fn a_note_that_appears_from_outside_reaches_the_index() {
-        let (dir, state) = vault();
-        let added = dir.path().join("Fresh.md");
-        fs::write(&added, "# Fresh\n\nPoints at [[B]] and [[Sub/S]].\n").unwrap();
-
-        let changes = state.apply(std::slice::from_ref(&added));
-
-        assert_eq!(
-            changes.files,
-            vec![FileChange::Added("Fresh.md".into())],
-            "the arrival has to reach the caller"
-        );
-        assert!(state.cache().file("Fresh.md").is_some(), "not indexed");
-        assert!(state.texts().get("Fresh.md").is_some(), "not cached");
-        assert!(
-            state.vault().files().iter().any(|f| f.path == "Fresh.md"),
-            "not in the file list"
-        );
-        // * Its links resolve, and the notes it points at count it: A and
-        //   Sub/S already link to B, so the third is this one.
-        assert!(state.cache().unresolved_links("Fresh.md").is_none());
-        assert_eq!(state.cache().backlinks("B.md").len(), 3);
-
-        // * A note whose bytes changed underneath is re-indexed the same way:
-        //   the old links leave the resolver and the new ones arrive, or the
-        //   graph keeps pointing where the text no longer does. B used to
-        //   carry three links to A; it now carries none.
-        let b = dir.path().join("B.md");
-        fs::write(&b, "\u{feff}# B\n\nNow only [[Sub/S]].\n").unwrap();
-        state.apply(std::slice::from_ref(&b));
-        assert_eq!(
-            state.cache().backlinks("A.md").len(),
-            1,
-            "only Sub/S links to A now"
-        );
-        assert!(state.cache().unresolved_links("B.md").is_none());
-        assert_eq!(
-            state.texts()["B.md"].as_str(),
-            "\u{feff}# B\n\nNow only [[Sub/S]].\n",
-            "the changed text was not re-read"
-        );
-    }
-
-    /// A note whose name carries spaces, non-ASCII letters and a symbol is
-    /// indexed and linked like any other: the vault lists it, a wikilink to
-    /// its display name resolves, and the notes it points at count it. A name
-    /// the walk or the resolver mishandled would leave the note in the file
-    /// list but silently unlinked — the graph just missing edges with nothing
-    /// to say so.
-    #[test]
-    fn a_note_with_a_name_no_url_would_like_is_indexed_and_linked() {
-        let (dir, state) = vault();
-        let weird = dir.path().join("Ω notes ✓.md");
-        fs::write(&weird, "# Weird\n\nTalks of [[B]] and [[Sub/S]].\n").unwrap();
-        // * A note that links to it by its display name.
-        let linker = dir.path().join("Linker.md");
-        fs::write(&linker, "See [[Ω notes ✓]] for the details.\n").unwrap();
-
-        state.apply(&[weird, linker]);
-
-        assert!(
-            state
-                .vault()
-                .files()
-                .iter()
-                .any(|f| f.path == "Ω notes ✓.md"),
-            "not in the file list: {:?}",
-            state.vault().files()
-        );
-        assert!(state.cache().file("Ω notes ✓.md").is_some(), "not indexed");
-        assert!(state.texts().get("Ω notes ✓.md").is_some(), "not cached");
-        // * The link to it resolves, so the resolver carried the whole name.
-        assert_eq!(
-            state.cache().backlinks("Ω notes ✓.md").len(),
-            1,
-            "the wikilink to the odd name dangled"
-        );
-        assert!(
-            state.cache().unresolved_links("Linker.md").is_none(),
-            "Linker's link is unresolved: {:?}",
-            state.cache().unresolved_links("Linker.md")
-        );
-        // * Its own links resolve the other way, and are counted.
-        assert!(state.cache().unresolved_links("Ω notes ✓.md").is_none());
-        assert_eq!(
-            state.cache().backlinks("B.md").len(),
-            3,
-            "A, Sub/S and this one"
-        );
-        assert_eq!(
-            state.cache().backlinks("Sub/S.md").len(),
-            2,
-            "A and this one"
-        );
-    }
-
-    /// A note with no bytes in it is a note like any other: the vault lists
-    /// it, the index holds it with nothing in it, and a link to it resolves
-    /// to the file rather than dangling. The second half is the outside
-    /// change: a note another app empties is re-indexed to nothing rather
-    /// than keeping the frontmatter it used to carry — stale rows would
-    /// describe a file that no longer says so.
-    #[test]
-    fn a_note_with_no_bytes_is_listed_indexed_and_linked() {
-        let (dir, state) = vault();
-        // * A note that starts empty, from outside.
-        let empty = dir.path().join("Untitled.md");
-        fs::write(&empty, "").unwrap();
-        state.apply(std::slice::from_ref(&empty));
-
-        assert!(state
-            .vault()
-            .files()
-            .iter()
-            .any(|f| f.path == "Untitled.md"));
-        assert!(state.cache().file("Untitled.md").is_some(), "not indexed");
-        assert_eq!(
-            state.texts()["Untitled.md"].as_str(),
-            "",
-            "its text is the empty string, not missing"
-        );
-        // * A link to it resolves to the file rather than dangling.
-        fs::write(
-            dir.path().join("Linker.md"),
-            "Start from [[Untitled]] and fill it in.\n",
-        )
-        .unwrap();
-        state.apply(&[dir.path().join("Linker.md")]);
-        assert_eq!(
-            state.cache().backlinks("Untitled.md").len(),
-            1,
-            "a link to an empty note dangled"
-        );
-
-        // * Another app empties a note that had frontmatter properties.
-        let b = dir.path().join("B.md");
-        assert!(
-            state.cache().file("B.md").unwrap().frontmatter.is_some(),
-            "the fixture note has frontmatter"
-        );
-        fs::write(&b, "").unwrap();
-        state.apply(std::slice::from_ref(&b));
-        assert!(
-            state.cache().file("B.md").unwrap().frontmatter.is_none(),
-            "frontmatter of a note that no longer has any stayed: {:?}",
-            state.cache().file("B.md").unwrap().frontmatter
-        );
-        assert_eq!(
-            state.texts()["B.md"].as_str(),
-            "",
-            "the emptied text was not re-read"
-        );
-        assert!(
-            state.cache().file("B.md").is_some(),
-            "the note vanished from the index"
-        );
-    }
-
-    /// The vault-side fold of a differently-spelled path reports the
-    /// modification under the spelling the file list already holds, so the
-    /// index never has to rename a key: `texts` and the metadata cache keep
-    /// the one spelling, and the note is not listed twice. A second spelling
-    /// arriving here would leave the index holding one spelling while the
-    /// explorer holds another, and a link would resolve to one while search
-    /// finds the other.
-    #[cfg(windows)]
-    #[test]
-    fn a_respelled_path_keeps_one_index_key_and_one_listing() {
-        let (dir, state) = vault();
-        assert!(state.cache().file("A.md").is_some());
-        assert!(state.texts().get("A.md").is_some());
-        let listed = || {
-            state
-                .vault()
-                .files()
-                .iter()
-                .filter(|f| f.path.eq_ignore_ascii_case("a.md"))
-                .count()
-        };
-        assert_eq!(listed(), 1);
-
-        // * The other side spells the same file differently; the watcher
-        // * hands that spelling to the state.
-        let respelled = dir.path().join("a.md");
-        let changes = state.apply(std::slice::from_ref(&respelled));
-
-        assert!(
-            changes
-                .files
-                .iter()
-                .all(|c| matches!(c, FileChange::Modified(p) if p == "A.md")),
-            "the fold did not report the stored spelling: {:?}",
-            changes.files
-        );
-        assert_eq!(listed(), 1, "the explorer holds two rows for one note");
-        assert!(
-            state.cache().file("A.md").is_some(),
-            "the index dropped the note"
-        );
-        assert!(state.texts().get("A.md").is_some(), "the text was dropped");
-        // * No second key appeared for the same file.
-        assert!(
-            state
-                .cache()
-                .files()
-                .all(|(p, _)| !p.eq_ignore_ascii_case("a.md") || p == "A.md"),
-            "the index holds a second key for one note: {:?}",
-            state.cache().files().map(|(p, _)| p).collect::<Vec<_>>()
-        );
-    }
-
-    /// And the mirror: a folder that appears from outside — a restore, a
-    /// sync client unpacking a tree — is walked and every note in it is
-    /// indexed, with the folder itself in the file list. A restored tree the
-    /// app cannot see until restart is data on disk the user cannot reach.
-    #[test]
-    fn a_folder_that_appears_from_outside_is_walked_and_indexed() {
-        let (dir, state) = vault();
-        assert!(!state.vault().folders().contains(&"Restored".to_string()));
-
-        let restored = dir.path().join("Restored");
-        fs::create_dir_all(restored.join("Deep")).unwrap();
-        fs::write(
-            restored.join("Deep/Note.md"),
-            "# Restored\n\nTalks of [[B]].\n",
-        )
-        .unwrap();
-
-        // * The watcher reports the folder that appeared.
-        let changes = state.apply(std::slice::from_ref(&restored));
-
-        assert!(changes
-            .files
-            .iter()
-            .any(|c| matches!(c, FileChange::Added(p) if p == "Restored/Deep/Note.md")));
-        assert_eq!(changes.removed_notes, Vec::<String>::new(), "nothing went");
-        assert!(
-            state.vault().folders().contains(&"Restored".to_string()),
-            "the folder itself is not listed"
-        );
-        assert!(
-            state
-                .vault()
-                .folders()
-                .contains(&"Restored/Deep".to_string()),
-            "a nested folder is not listed: {:?}",
-            state.vault().folders()
-        );
-        assert!(
-            state.cache().file("Restored/Deep/Note.md").is_some(),
-            "not indexed"
-        );
-        assert!(
-            state.texts().get("Restored/Deep/Note.md").is_some(),
-            "not cached"
-        );
-        assert_eq!(
-            state.cache().backlinks("B.md").len(),
-            3,
-            "A, Sub/S and the restored note"
-        );
-    }
-
-    /// A whole folder disappearing from outside is the same contract as one
-    /// note, one level up: every note under it leaves the index in one batch,
-    /// the folder leaves the file list, and the links that pointed into it
-    /// stop resolving. A folder left behind would keep its notes in search
-    /// and in the explorer long after the disk stopped having them.
-    #[test]
-    fn a_folder_deleted_behind_the_apps_back_takes_every_note_in_it() {
-        let (dir, state) = vault();
-        let sub = dir.path().join("Sub");
-        assert_eq!(
-            state.cache().backlinks("Sub/S.md").len(),
-            1,
-            "A links into it"
-        );
-        assert!(state.vault().folders().contains(&"Sub".to_string()));
-
-        // * The other app removes the folder; the watcher reports its path.
-        fs::remove_dir_all(&sub).unwrap();
-        let changes = state.apply(std::slice::from_ref(&sub));
-
-        assert!(
-            changes
-                .files
-                .iter()
-                .all(|c| matches!(c, FileChange::Removed(_))),
-            "everything that went has to be reported as removed: {:?}",
-            changes.files
-        );
-        assert!(changes.files.iter().any(|c| c.path() == "Sub/S.md"));
-        assert_eq!(changes.removed_notes, vec!["Sub/S.md".to_string()]);
-        assert!(
-            state.cache().file("Sub/S.md").is_none(),
-            "a note that is gone stayed indexed"
-        );
-        assert!(
-            state.texts().get("Sub/S.md").is_none(),
-            "and its text stayed cached"
-        );
-        assert!(
-            state.vault().folders().iter().all(|f| f != "Sub"),
-            "the folder stayed in the file list"
-        );
-        assert!(
-            state
-                .vault()
-                .files()
-                .iter()
-                .all(|f| !f.path.starts_with("Sub/")),
-            "files under a removed folder stayed listed"
-        );
-        assert!(
-            state.cache().backlinks("Sub/S.md").is_empty(),
-            "links still point into a folder that is gone"
-        );
-    }
-
-    /// A note deleted behind the app's back — another app, a sync client, a
-    /// shell — reaches the index through the watcher's `apply`. The file list,
-    /// the metadata cache and the cached text all have to drop it: a ghost
-    /// entry would keep the note in search and in the explorer, its links
-    /// would keep resolving, and opening it would fail on a file that is not
-    /// there. Trash covers the app's own deletion; this is the outside one.
-    #[test]
-    fn a_note_deleted_behind_the_apps_back_leaves_the_index() {
-        let (dir, state) = vault();
-        let gone = dir.path().join("A.md");
-        assert!(state.cache().file("A.md").is_some(), "the fixture holds A");
-        assert!(
-            !state.cache().backlinks("A.md").is_empty(),
-            "B and Sub/S.md link to A in the fixture"
-        );
-
-        // * The other app deletes it; the watcher reports the path.
-        fs::remove_file(&gone).unwrap();
-        let changes = state.apply(std::slice::from_ref(&gone));
-
-        assert_eq!(
-            changes.removed_notes,
-            vec!["A.md".to_string()],
-            "the removal has to reach the caller"
-        );
-        assert!(
-            state.cache().file("A.md").is_none(),
-            "the index kept a ghost note"
-        );
-        assert!(
-            state.texts().get("A.md").is_none(),
-            "the text of a note that is gone stayed cached"
-        );
-        assert!(
-            state.vault().files().iter().all(|f| f.path != "A.md"),
-            "the file list still lists it"
-        );
-        assert!(
-            state.cache().backlinks("A.md").is_empty(),
-            "links still point at a file that does not exist"
-        );
     }
 
     /// A file kind reaches the state dump in lower case.
