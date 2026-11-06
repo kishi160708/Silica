@@ -32,16 +32,91 @@ pub struct SiteReport {
 /// Directories of the vault that are never published.
 const SKIPPED_DIRS: [&str; 3] = [".obsidian", ".trash", ".git"];
 
+/// Whether a vault path lives in a directory that is never published, at
+/// any depth.
+fn skipped_rel(rel: &str) -> bool {
+    rel.replace('\\', "/")
+        .to_lowercase()
+        .split('/')
+        .any(|seg| SKIPPED_DIRS.contains(&seg))
+}
+
+/// The notes to publish: markdown, minus the directories a vault keeps its
+/// own house in — Obsidian files, trashed notes and git metadata.
+fn publishable_notes(files: &[VaultFile]) -> Vec<&VaultFile> {
+    files
+        .iter()
+        .filter(|f| f.kind == FileKind::Markdown && !skipped_rel(&f.path))
+        .collect()
+}
+
+/// Whether `out` is a safe place to write a site: outside the vault (a
+/// folder inside it would be indexed and copied on every pass), and either
+/// new or holding nothing but what an earlier pass wrote.
+fn output_is_safe(out: &Path, root: &Path) -> Result<(), String> {
+    if out == root || out.starts_with(root) {
+        return Err(format!(
+            "{} is inside the vault — pick a folder outside it",
+            out.display()
+        ));
+    }
+    if !out.exists() {
+        return Ok(());
+    }
+    let foreign: Vec<String> = std::fs::read_dir(out)
+        .map_err(|e| format!("Cannot read {}: {e}", out.display()))?
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|name| !(name == "index.html" || name == "style.css" || name.ends_with(".html")))
+        .collect();
+    if !foreign.is_empty() {
+        return Err(format!(
+            "{} holds files that are not site output ({}); pick an empty folder or a previous export",
+            out.display(),
+            foreign[0]
+        ));
+    }
+    Ok(())
+}
+
+/// The raw HTML a note's body must not carry into a published site: active
+/// content survives the renderer untouched, and an export turns one vault
+/// into a site every reader of it visits.
+fn strip_active(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut rest = html;
+    loop {
+        let open = ["<script", "<iframe"]
+            .iter()
+            .filter_map(|tag| rest.find(tag).map(|at| (at, tag)))
+            .min_by_key(|(at, _)| *at);
+        let Some((at, tag)) = open else {
+            out.push_str(rest);
+            return out;
+        };
+        out.push_str(&rest[..at]);
+        let close = format!("</{tag}");
+        // ! An unterminated element drops the tag, not the rest of the
+        //   page: a truncated render must not swallow the note. Skipping
+        //   past the opening tag guarantees the walk makes progress.
+        let after = rest[at..]
+            .find(&close)
+            .map(|i| at + i + close.len())
+            .and_then(|i| rest[i..].find('>').map(|j| i + j + 1))
+            .or_else(|| rest[at..].find('>').map(|i| at + i + 1))
+            .unwrap_or(rest.len());
+        rest = &rest[after..];
+    }
+}
+
 /// Exports the vault at `root` (whose files are `files`) into `out`,
 /// replacing whatever an earlier pass wrote there.
 pub fn export(root: &Path, files: &[VaultFile], out: &Path) -> Result<SiteReport, String> {
-    let notes: Vec<&VaultFile> = files
-        .iter()
-        .filter(|f| f.kind == FileKind::Markdown)
-        .collect();
+    let notes: Vec<&VaultFile> = publishable_notes(files);
     if notes.is_empty() {
         return Err("The vault has no notes to export.".into());
     }
+    output_is_safe(out, root)?;
     let map = link_map(&notes);
     let assets = asset_paths(files);
     std::fs::create_dir_all(out).map_err(|e| format!("Cannot create {}: {e}", out.display()))?;
@@ -84,10 +159,11 @@ pub fn export(root: &Path, files: &[VaultFile], out: &Path) -> Result<SiteReport
     Ok(report)
 }
 
-/// Parses and renders one note the way the reading view would.
+/// Parses and renders one note the way the reading view would, minus the
+/// active content a published site must never carry.
 fn render(text: &str) -> String {
     let doc = silica_markdown::parse(text);
-    silica_markdown::html::render_html(&doc)
+    strip_active(&silica_markdown::html::render_html(&doc))
 }
 
 /// A page's `<title>`: its name without the extension.
@@ -545,5 +621,66 @@ mod tests {
         assert_eq!(unescape_attr("A &amp; B"), "A & B");
         assert_eq!(unescape_attr("A & B"), "A & B");
         assert_eq!(unescape_attr("&#39;q&#39;"), "'q'");
+    }
+
+    #[test]
+    fn a_render_drops_active_content_but_keeps_the_note_around_it() {
+        let html = strip_active(
+            "<p>before<script>alert(1)</script>after<iframe src=\"x\"></iframe>end</p>",
+        );
+        assert!(!html.contains("<script"), "{html}");
+        assert!(!html.contains("<iframe"), "{html}");
+        assert!(html.contains("before"), "{html}");
+        assert!(html.contains("after"), "{html}");
+        assert!(html.contains("end"), "{html}");
+        // A truncated tag drops itself, not the rest of the page.
+        let cut = strip_active("<p>keep</p><script>never closed");
+        assert!(cut.contains("<p>keep</p>"), "{cut}");
+        assert!(!cut.contains("<script"), "{cut}");
+    }
+
+    #[test]
+    fn the_export_skips_notes_in_the_vaults_own_directories() {
+        let files = [
+            note("Note.md"),
+            note(".trash/Old.md"),
+            note(".obsidian/config.md"),
+            note("Sub/.git/x.md"),
+            note("Sub/Deep/Plan.md"),
+        ];
+        let kept: Vec<&str> = publishable_notes(&files)
+            .iter()
+            .map(|f| f.path.as_str())
+            .collect();
+        assert_eq!(kept, ["Note.md", "Sub/Deep/Plan.md"]);
+    }
+
+    #[test]
+    fn the_output_folder_may_neither_live_in_the_vault_nor_hold_other_files() {
+        let root = std::env::temp_dir().join("silica-site-test-root");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("a root");
+        let inside = root.join("_site");
+        std::fs::create_dir_all(&inside).expect("a folder in the vault");
+        assert!(output_is_safe(&inside, &root).is_err());
+        assert!(output_is_safe(&root, &root).is_err());
+
+        let fresh = std::env::temp_dir().join("silica-site-test-fresh");
+        let _ = std::fs::remove_dir_all(&fresh);
+        assert!(output_is_safe(&fresh, &root).is_ok());
+
+        let foreign = std::env::temp_dir().join("silica-site-test-mixed");
+        let _ = std::fs::remove_dir_all(&foreign);
+        std::fs::create_dir_all(&foreign).expect("a folder");
+        std::fs::write(foreign.join("thesis.docx"), "x").expect("a foreign file");
+        assert!(output_is_safe(&foreign, &root).is_err());
+
+        // A previous pass's own output is accepted.
+        std::fs::remove_file(foreign.join("thesis.docx")).expect("clean it");
+        std::fs::write(foreign.join("index.html"), "x").expect("a page");
+        assert!(output_is_safe(&foreign, &root).is_ok());
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&fresh);
+        let _ = std::fs::remove_dir_all(&foreign);
     }
 }
