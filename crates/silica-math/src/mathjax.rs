@@ -138,6 +138,14 @@ fn skip_ws(src: &[u8], mut i: usize) -> usize {
 /// Pulls `\newcommand`-family declarations out of `tex`, recording them in
 /// `macros`, and returns the remaining text.
 fn collect(tex: &str, macros: &mut HashMap<String, Macro>) -> String {
+    collect_at(tex, macros, 0)
+}
+
+/// Same as [`collect`], at group nesting `depth`. Past [`DEPTH_CAP`] the
+/// declaration-carrying group is emitted as-is: the text still reaches the
+/// parser, but a pathological brace nesting cannot turn into unbounded
+/// recursion and a stack overflow.
+fn collect_at(tex: &str, macros: &mut HashMap<String, Macro>, depth: usize) -> String {
     let src = tex.as_bytes();
     let mut out = String::with_capacity(tex.len());
     let mut i = 0usize;
@@ -154,18 +162,16 @@ fn collect(tex: &str, macros: &mut HashMap<String, Macro>) -> String {
             continue;
         };
         match name.as_str() {
-            "newcommand" | "renewcommand" | "providecommand" => {
-                match define(src, j) {
-                    Some((end, def, mname)) => {
-                        macros.insert(mname, def);
-                        i = end;
-                    }
-                    None => {
-                        out.push_str(&tex[i..j]);
-                        i = j;
-                    }
+            "newcommand" | "renewcommand" | "providecommand" => match define(src, j) {
+                Some((end, def, mname)) => {
+                    macros.insert(mname, def);
+                    i = end;
                 }
-            }
+                None => {
+                    out.push_str(&tex[i..j]);
+                    i = j;
+                }
+            },
             "DeclareMathOperator" => match declare_operator(src, j) {
                 Some((end, def, mname)) => {
                     macros.insert(mname, def);
@@ -185,9 +191,15 @@ fn collect(tex: &str, macros: &mut HashMap<String, Macro>) -> String {
                         || body.contains("\\def")
                         || body.contains("\\require")
                     {
-                        out.push_str(&tex[i..inner]);
-                        out.push_str(&collect(body, macros));
-                        out.push('}');
+                        if depth < DEPTH_CAP {
+                            out.push_str(&tex[i..inner]);
+                            out.push_str(&collect_at(body, macros, depth + 1));
+                            out.push('}');
+                            i = end + 1;
+                            continue;
+                        }
+                        // At the cap: emit the whole group unchanged.
+                        out.push_str(&tex[i..end + 1]);
                         i = end + 1;
                         continue;
                     }
@@ -224,7 +236,10 @@ fn define(src: &[u8], i: usize) -> Option<(usize, Macro, String)> {
     let mut optional_arg = None;
     // * `\newcommand{\n}[2][default]{body}`: brackets, not braces.
     if let Some((a, b)) = optional(src, i) {
-        params = String::from_utf8_lossy(&src[a..b]).trim().parse().unwrap_or(0);
+        params = String::from_utf8_lossy(&src[a..b])
+            .trim()
+            .parse()
+            .unwrap_or(0);
         i = skip_ws(src, b + 1);
         if let Some((a, b)) = optional(src, i) {
             optional_arg = Some(String::from_utf8_lossy(&src[a..b]).into_owned());
@@ -483,7 +498,8 @@ fn code_point(arg: &str) -> Option<char> {
         u32::from_str_radix(hex, 16).ok()?
     } else if let Some(hex) = s.strip_prefix('x').or_else(|| s.strip_prefix('X')) {
         u32::from_str_radix(hex, 16).ok()?
-    } else if s.chars().all(|c| c.is_ascii_hexdigit()) && s.chars().any(|c| c.is_ascii_alphabetic()) {
+    } else if s.chars().all(|c| c.is_ascii_hexdigit()) && s.chars().any(|c| c.is_ascii_alphabetic())
+    {
         u32::from_str_radix(s, 16).ok()?
     } else {
         s.parse().ok()?
@@ -540,7 +556,10 @@ mod tests {
         assert_eq!(normalize("\\newcommand{\\t}[2]{#2+#1}\\t{a}{b}"), "b+a");
         // * `##` is a literal `#`; `#3` with only two args is left alone.
         assert_eq!(normalize("\\newcommand{\\h}{\\#}"), "");
-        assert_eq!(normalize("\\DeclareMathOperator{\\Tr}{Tr}\\Tr"), "\\operatorname{Tr}");
+        assert_eq!(
+            normalize("\\DeclareMathOperator{\\Tr}{Tr}\\Tr"),
+            "\\operatorname{Tr}"
+        );
     }
 
     /// A reference prints `?`, as MathJax does when it cannot resolve one.
@@ -554,7 +573,11 @@ mod tests {
     /// engine's own error still names the real culprit.
     #[test]
     fn unknown_source_is_untouched() {
-        for tex in ["x^2 + \\frac{1}{2}", "\\begin{matrix}a&b\\end{matrix}", "\\alpha\\beta"] {
+        for tex in [
+            "x^2 + \\frac{1}{2}",
+            "\\begin{matrix}a&b\\end{matrix}",
+            "\\alpha\\beta",
+        ] {
             assert_eq!(normalize(tex), tex);
         }
     }
@@ -565,5 +588,25 @@ mod tests {
         assert_eq!(code_point("960"), Some('π'));
         assert_eq!(code_point("0x3C0"), Some('π'));
         assert_eq!(code_point("nope"), None);
+    }
+
+    /// Group nesting deeper than `DEPTH_CAP` is emitted as-is instead of being
+    /// walked into, so a crafted note cannot recurse without bound.
+    #[test]
+    fn collect_stops_recursing_past_the_depth_cap() {
+        let mut deep = "\\newcommand\\z{q}".to_string();
+        for _ in 0..(super::DEPTH_CAP + 8) {
+            deep = format!("\\frac{{{deep}}}");
+        }
+        // Shallow nesting still collects the declaration away.
+        let shallow = format!("\\frac{{{} }}", "\\newcommand\\z{q}");
+        assert!(
+            !super::collect(&shallow, &mut std::collections::HashMap::new())
+                .contains("\\newcommand")
+        );
+        // Past the cap the text survives: proof the walk stopped.
+        assert!(
+            super::collect(&deep, &mut std::collections::HashMap::new()).contains("\\newcommand")
+        );
     }
 }

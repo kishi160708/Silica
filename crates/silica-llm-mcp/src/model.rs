@@ -59,7 +59,7 @@ impl Config {
                         .join("digest")
                 }),
         })
-}
+    }
 }
 
 fn env_text(name: &str) -> Option<String> {
@@ -83,7 +83,8 @@ pub fn digest_path(root: &Path, path: &str) -> Result<PathBuf, String> {
         Ok(r) => r,
         Err(_) => {
             let _ = std::fs::create_dir_all(root);
-            root.canonicalize().map_err(|e| format!("digest root is not usable: {e}"))?
+            root.canonicalize()
+                .map_err(|e| format!("digest root is not usable: {e}"))?
         }
     };
     let inside = canonical == root || canonical.starts_with(root.join(""));
@@ -360,10 +361,7 @@ mod tests {
     fn digest_path_stays_inside_root() {
         use std::env::temp_dir;
         use std::fs;
-        let base = temp_dir().join(format!(
-            "silica-digest-test-{}",
-            std::process::id()
-        ));
+        let base = temp_dir().join(format!("silica-digest-test-{}", std::process::id()));
         fs::create_dir_all(base.join("root/inside")).unwrap();
         fs::create_dir_all(base.join("outside")).unwrap();
         fs::write(base.join("root/inside/note.md"), "x").unwrap();
@@ -386,7 +384,11 @@ mod tests {
         #[cfg(unix)]
         assert!(digest_path(&root, "root/inside/link.md").is_err());
         // A path under the default root (cwd/digest) passes with no env var.
-        assert!(digest_path(&std::env::current_dir().unwrap().join("digest"), outside.to_str().unwrap()).is_err());
+        assert!(digest_path(
+            &std::env::current_dir().unwrap().join("digest"),
+            outside.to_str().unwrap()
+        )
+        .is_err());
         fs::remove_dir_all(&base).ok();
     }
 }

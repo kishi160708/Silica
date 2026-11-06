@@ -575,8 +575,14 @@ impl Base {
             let v = match name.as_str() {
                 // * `summaries` is in the preserved map as well, but what is
                 // * written is always the re-serialized statements, not the
-                // * bytes the file had.
-                "summaries" => string_map_value(self.summaries.as_ref().unwrap()),
+                // * bytes the file had. `key_order` only asks for this arm when
+                // * the field is Some, but a hand-built value could disagree:
+                // * emitting Null keeps the save path panic-free.
+                "summaries" => self
+                    .summaries
+                    .as_ref()
+                    .map(string_map_value)
+                    .unwrap_or(Value::Null),
                 "filters" => self
                     .filters
                     .as_ref()
@@ -652,36 +658,41 @@ fn is_plain(s: &str) -> bool {
     )
 }
 
-/// A scalar as Obsidian writes it: plain where YAML allows, otherwise quoted —
-/// double quotes, except that a value holding a `"` and no `'` takes single
-/// ones, which is how four of the fixture's statements came back.
+/// A string scalar the way YAML round-trips it: plain text passes through,
+/// anything the grammar would misread gets quoted (single quotes preferred)
+/// and escaped. Shared by `scalar` and the mapping-key path so a key is not
+/// cloned into a throwaway `Value` just to be rendered.
+fn quote_key(s: &str) -> String {
+    if is_plain(s) {
+        return s.to_string();
+    }
+    if s.contains('"') && !s.contains('\\') {
+        return format!("'{s}'");
+    }
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// A rendered scalar: `null`/bool/number pass through typed, strings quote
+/// as YAML round-trips them, anything else defers to serde.
 fn scalar(v: &Value) -> String {
     match v {
         Value::Null => "null".to_string(),
         Value::Bool(b) => b.to_string(),
         Value::Number(n) => number(n),
-        Value::String(s) => {
-            if is_plain(s) {
-                return s.clone();
-            }
-            if s.contains('"') && !s.contains('\'') {
-                return format!("'{s}'");
-            }
-            let mut out = String::with_capacity(s.len() + 2);
-            out.push('"');
-            for c in s.chars() {
-                match c {
-                    '"' => out.push_str("\\\""),
-                    '\\' => out.push_str("\\\\"),
-                    '\n' => out.push_str("\\n"),
-                    '\t' => out.push_str("\\t"),
-                    '\r' => out.push_str("\\r"),
-                    c => out.push(c),
-                }
-            }
-            out.push('"');
-            out
-        }
+        Value::String(s) => quote_key(s),
         // ! A mapping or sequence never reaches here: emit handles them.
         other => serde_yaml::to_string(other)
             .unwrap_or_default()
@@ -717,10 +728,10 @@ fn is_empty_collection(v: &Value) -> Option<&'static str> {
 fn emit_mapping(m: &serde_yaml::Mapping, indent: usize, out: &mut String) {
     for (k, v) in m {
         let name = match k {
-            Value::String(s) => scalar(&Value::String(s.clone())),
+            Value::String(s) => quote_key(s),
             other => scalar(other),
         };
-        out.push_str(&" ".repeat(indent));
+        out.extend(std::iter::repeat_n(' ', indent));
         out.push_str(&name);
         out.push(':');
         emit_value(v, indent, out);
@@ -757,13 +768,17 @@ fn emit_value(v: &Value, indent: usize, out: &mut String) {
 /// has its items at 4.
 fn emit_sequence(items: &[Value], indent: usize, out: &mut String) {
     for item in items {
-        out.push_str(&" ".repeat(indent));
+        let empty = is_empty_collection(item);
+        out.extend(std::iter::repeat_n(' ', indent));
         out.push_str("- ");
+        // * An empty collection renders as `[]`/`{}` on the dash line rather
+        //   than opening a nested block for nothing.
+        if let Some(empty) = empty {
+            out.push_str(empty);
+            out.push('\n');
+            continue;
+        }
         match item {
-            _ if is_empty_collection(item).is_some() => {
-                out.push_str(is_empty_collection(item).unwrap());
-                out.push('\n');
-            }
             // * A mapping in a sequence item puts its first key on the dash's
             // * own line and the rest at the item's text column.
             Value::Mapping(m) => {
@@ -975,5 +990,21 @@ newItemFolder: Notes
                 .unwrap();
         assert_eq!(b.views[0].group_order.len(), 2);
         assert!(b.views[0].group_order[1].is_null());
+    }
+
+    /// Regression check: `to_value` used to unwrap `summaries`, trusting
+    /// `key_order` to only ask for it when Some. A value whose field was
+    /// dropped after parsing (hand-built or future refactor) now serializes
+    /// with a Null arm instead of panicking in the save path.
+    #[test]
+    fn to_value_survives_a_dropped_summaries() {
+        let mut b = Base::from_yaml("summaries:\n  a: count()\nviews: []\n").unwrap();
+        assert_eq!(b.summaries.as_ref().unwrap().len(), 1);
+        b.summaries = None;
+        let root = b.to_value();
+        let summaries = root
+            .as_mapping()
+            .and_then(|m| m.get(Value::String("summaries".into())));
+        assert!(summaries.is_none_or(|v| v.is_null()));
     }
 }

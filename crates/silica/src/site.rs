@@ -63,13 +63,7 @@ pub fn export(root: &Path, files: &[VaultFile], out: &Path) -> Result<SiteReport
         let body = rewrite(&render(&text), &map, &assets, depth);
         report.links += body.links;
         report.unresolved += body.unresolved;
-        write_page(
-            out,
-            &page_path(&rel),
-            &title_of(&rel),
-            depth,
-            &body.html,
-        )?;
+        write_page(out, &page_path(&rel), &title_of(&rel), depth, &body.html)?;
         report.notes += 1;
     }
 
@@ -108,16 +102,18 @@ fn title_of(rel: &str) -> String {
 
 /// Wraps a rendered body in the one document shape every page shares.
 fn write_page(out: &Path, name: &str, title: &str, depth: usize, body: &str) -> Result<(), String> {
+    let escaped_title = escape_title(title);
     let page = format!(
         "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
-         <title>{title}</title>\n<link rel=\"stylesheet\" href=\"{}style.css\">\n\
+         <title>{escaped_title}</title>\n<link rel=\"stylesheet\" href=\"{}style.css\">\n\
          </head>\n<body>\n{body}\n</body>\n</html>\n",
         "../".repeat(depth),
     );
     let path = out.join(name);
     if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| format!("Cannot create {}: {e}", dir.display()))?;
+        std::fs::create_dir_all(dir)
+            .map_err(|e| format!("Cannot create {}: {e}", dir.display()))?;
     }
     std::fs::write(&path, page).map_err(|e| format!("Cannot write {}: {e}", path.display()))
 }
@@ -133,9 +129,19 @@ fn link_map(notes: &[&VaultFile]) -> HashMap<String, String> {
     for path in sorted {
         let lower = path.to_lowercase();
         let without_ext = lower.strip_suffix(".md").unwrap_or(&lower).to_string();
-        let stem = without_ext.rsplit('/').next().unwrap_or(&without_ext).to_string();
-        for key in [&lower, without_ext.as_str(), stem.as_str(), &format!("{stem}.md")] {
-            map.entry(key.to_string()).or_insert_with(|| path.to_string());
+        let stem = without_ext
+            .rsplit('/')
+            .next()
+            .unwrap_or(&without_ext)
+            .to_string();
+        for key in [
+            &lower,
+            without_ext.as_str(),
+            stem.as_str(),
+            &format!("{stem}.md"),
+        ] {
+            map.entry(key.to_string())
+                .or_insert_with(|| path.to_string());
         }
     }
     map
@@ -147,7 +153,12 @@ fn asset_paths(files: &[VaultFile]) -> HashMap<String, String> {
     files
         .iter()
         .filter(|f| f.kind != FileKind::Markdown)
-        .map(|f| (f.path.replace('\\', "/").to_lowercase(), f.path.replace('\\', "/")))
+        .map(|f| {
+            (
+                f.path.replace('\\', "/").to_lowercase(),
+                f.path.replace('\\', "/"),
+            )
+        })
         .collect()
 }
 
@@ -167,6 +178,59 @@ fn resolve<'m>(link: &str, map: &'m HashMap<String, String>) -> Option<&'m str> 
     }
     let lower = name.trim_end_matches(".md").to_lowercase();
     map.get(&lower).map(|p| p.as_str())
+}
+
+/// The three characters that end a title element or start an entity.
+/// `escape_html` in the renderer is crate-private, and a title never
+/// needs more than these three.
+fn escape_title(title: &str) -> String {
+    let mut out = String::with_capacity(title.len());
+    for ch in title.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// The linker's attribute values arrive HTML-escaped (the renderer escapes
+/// the link text), so `A & B.md` reaches here as `A &amp; B.md`. Undoing
+/// the five named references is enough for the vault's legal file-name
+/// characters; anything else is left as written.
+fn unescape_attr(value: &str) -> String {
+    if !value.contains('&') {
+        return value.to_string();
+    }
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(at) = rest.find('&') {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + 1..];
+        let entity = [
+            ("amp;", "&"),
+            ("lt;", "<"),
+            ("gt;", ">"),
+            ("quot;", "\""),
+            ("#39;", "'"),
+        ]
+        .iter()
+        .find(|(name, _)| after.starts_with(name));
+        match entity {
+            Some((name, ch)) => {
+                out.push_str(ch);
+                rest = &after[name.len()..];
+            }
+            None => {
+                out.push('&');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// The URL one exported page or asset is reached by from another: the
@@ -229,6 +293,9 @@ fn rewrite(
                     .unwrap_or(tag_end - 1);
                 rest[tag_start + at..end].to_string()
             });
+        let raw = value.as_deref().unwrap_or_default();
+        let unescaped = unescape_attr(raw);
+        let value = Some(unescaped);
         let hit = value.as_deref().and_then(|v| match which {
             "internal-link" => resolve(v, map).map(page_path),
             _ => assets.get(&v.to_lowercase()).cloned(),
@@ -237,7 +304,15 @@ fn rewrite(
             (Some(_), Some(target)) => {
                 links += if which == "internal-link" { 1 } else { 0 };
                 let tag = &rest[tag_start..tag_end];
-                let tag = replace_attr(tag, if which == "internal-link" { "href" } else { "src" }, &rel_url(depth, &target));
+                let tag = replace_attr(
+                    tag,
+                    if which == "internal-link" {
+                        "href"
+                    } else {
+                        "src"
+                    },
+                    &rel_url(depth, &target),
+                );
                 if which == "internal-link" {
                     tag.replace(" target=\"_blank\" rel=\"noopener nofollow\"", "")
                 } else {
@@ -260,7 +335,11 @@ fn rewrite(
         rest = &rest[tag_end..];
     }
     out.push_str(rest);
-    Rewritten { html: out, links, unresolved }
+    Rewritten {
+        html: out,
+        links,
+        unresolved,
+    }
 }
 
 /// Where the next rewritable tag — an `internal-link` anchor or an
@@ -276,12 +355,17 @@ fn next_tag(rest: &str) -> Option<usize> {
 }
 
 /// Replaces one attribute's value inside a tag, keeping the quotes.
+/// The needle is space-prefixed: a bare `href="` also matches inside
+/// `data-href="`, which would rewrite the wrong attribute.
 fn replace_attr(tag: &str, name: &str, value: &str) -> String {
-    let needle = format!("{name}=\"");
+    let needle = format!(" {name}=\"");
     match tag.find(&needle) {
         Some(at) => {
             let value_at = at + needle.len();
-            let end = tag[value_at..].find('"').map(|i| value_at + i).unwrap_or(value_at);
+            let end = tag[value_at..]
+                .find('"')
+                .map(|i| value_at + i)
+                .unwrap_or(value_at);
             format!("{}{}{}", &tag[..value_at], value, &tag[end..])
         }
         None => tag.to_string(),
@@ -294,7 +378,10 @@ fn remove_attr(tag: &str, name: &str) -> String {
     match tag.find(&needle) {
         Some(at) => {
             let value_at = at + needle.len();
-            let end = tag[value_at..].find('"').map(|i| value_at + i + 1).unwrap_or(value_at);
+            let end = tag[value_at..]
+                .find('"')
+                .map(|i| value_at + i + 1)
+                .unwrap_or(value_at);
             format!("{}{}", &tag[..at], &tag[end..])
         }
         None => tag.to_string(),
@@ -309,13 +396,17 @@ fn copy_assets(root: &Path, files: &[VaultFile], out: &Path) -> Result<(), Strin
             continue;
         }
         let rel = file.path.replace('\\', "/");
-        if SKIPPED_DIRS.iter().any(|d| rel.starts_with(&format!("{d}/"))) {
+        if SKIPPED_DIRS
+            .iter()
+            .any(|d| rel.starts_with(&format!("{d}/")))
+        {
             continue;
         }
         let from = root.join(&rel);
         let to = out.join(&rel);
         if let Some(dir) = to.parent() {
-            std::fs::create_dir_all(dir).map_err(|e| format!("Cannot create {}: {e}", dir.display()))?;
+            std::fs::create_dir_all(dir)
+                .map_err(|e| format!("Cannot create {}: {e}", dir.display()))?;
         }
         std::fs::copy(&from, &to).map_err(|e| format!("Cannot copy {rel}: {e}"))?;
     }
@@ -355,6 +446,17 @@ mod tests {
 
     fn anchor(link: &str) -> String {
         ANCHOR.replace("{link}", link)
+    }
+
+    #[test]
+    fn a_link_rewrite_replaces_href_and_never_its_data_href() {
+        let map = link_map(&[&note("Target.md")]);
+        let empty = HashMap::new();
+        let r = rewrite(&anchor("Target"), &map, &empty, 0);
+        // The real href carries the URL; data-href keeps the link text.
+        assert!(r.html.contains(" href=\"Target.html\""), "{}", r.html);
+        assert!(r.html.contains("data-href=\"Target\""), "{}", r.html);
+        assert!(!r.html.contains("data-href=\"Target.html\""), "{}", r.html);
     }
 
     #[test]
@@ -421,5 +523,27 @@ mod tests {
         assert!(r.html.contains("src=\"../pic.png\""), "{}", r.html);
         // The note embed resolves to nothing publishable and stays as it was.
         assert!(r.html.contains("src=\"Note\""), "{}", r.html);
+    }
+
+    #[test]
+    fn a_link_named_with_an_ampersand_resolves_through_the_escaped_attr() {
+        let map = link_map(&[&note("A & B.md"), &note("Target.md")]);
+        let empty = HashMap::new();
+        // The renderer escapes the href, so the tag carries the entity.
+        let src = anchor("A &amp; B");
+        let r = rewrite(&src, &map, &empty, 0);
+        assert_eq!((r.links, r.unresolved), (1, 0), "{}", r.html);
+        assert!(r.html.contains("href=\"A & B.html\""), "{}", r.html);
+        assert!(!r.html.contains("_blank"), "{}", r.html);
+    }
+
+    #[test]
+    fn the_page_title_escapes_the_three_hostile_characters() {
+        assert_eq!(escape_title("A & B"), "A &amp; B");
+        assert_eq!(escape_title("<script>"), "&lt;script&gt;");
+        assert_eq!(escape_title("plain"), "plain");
+        assert_eq!(unescape_attr("A &amp; B"), "A & B");
+        assert_eq!(unescape_attr("A & B"), "A & B");
+        assert_eq!(unescape_attr("&#39;q&#39;"), "'q'");
     }
 }

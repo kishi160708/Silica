@@ -23,7 +23,6 @@ fn today_local() -> String {
     chrono::Local::now().format("%Y-%m-%d").to_string()
 }
 
-
 /// Daily notes: create or open today's dated note (YYYY-MM-DD.md).
 pub struct DailyNotes;
 
@@ -115,10 +114,8 @@ impl Plugin for Backlink {
                             .cloned()
                             .unwrap_or_default();
                         for link in file_links {
-                            let link_target = link
-                                .get("link")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("");
+                            let link_target =
+                                link.get("link").and_then(|v| v.as_str()).unwrap_or("");
                             if link_target == current {
                                 backlinks.push(file.clone());
                             }
@@ -283,10 +280,8 @@ impl Plugin for RandomNote {
         match id {
             "random-note:open" => {
                 let files = (ctx.list_dir)("")?;
-                let md_files: Vec<String> = files
-                    .into_iter()
-                    .filter(|f| f.ends_with(".md"))
-                    .collect();
+                let md_files: Vec<String> =
+                    files.into_iter().filter(|f| f.ends_with(".md")).collect();
                 if md_files.is_empty() {
                     return Err("No notes in vault".to_string());
                 }
@@ -568,9 +563,7 @@ impl Plugin for Publish {
                     // ! must not keep the separators: `a/b.md` joined onto the
                     // ! publish folder writes into `a/`, which does not exist —
                     // ! and a crafted path would climb out of it entirely.
-                    let stem = file
-                        .trim_end_matches(".md")
-                        .replace(['/', '\\'], "-");
+                    let stem = file.trim_end_matches(".md").replace(['/', '\\'], "-");
                     let mut html_path = format!("{stem}.html");
                     // ! Two notes can flatten alike (`a/b.md`, `a-b.md`).
                     let mut n = 1u32;
@@ -701,10 +694,12 @@ impl Plugin for FileRecovery {
                     .collect();
 
                 files.sort_by(|a, b| {
-                    let a_time = a.metadata()
+                    let a_time = a
+                        .metadata()
                         .and_then(|m| m.modified())
                         .unwrap_or(SystemTime::UNIX_EPOCH);
-                    let b_time = b.metadata()
+                    let b_time = b
+                        .metadata()
                         .and_then(|m| m.modified())
                         .unwrap_or(SystemTime::UNIX_EPOCH);
                     b_time.cmp(&a_time)
@@ -720,9 +715,8 @@ impl Plugin for FileRecovery {
                         if dst.exists() {
                             return Err(format!("{name} already exists; refusing to overwrite"));
                         }
-                        std::fs::copy(&src, &dst).map_err(|e| {
-                            format!("failed to restore {name}: {e}")
-                        })?;
+                        std::fs::copy(&src, &dst)
+                            .map_err(|e| format!("failed to restore {name}: {e}"))?;
                     }
                 }
 
@@ -893,7 +887,8 @@ impl Plugin for TagPane {
         match id {
             "tag-pane:show" => {
                 let all_files = (ctx.list_dir)("")?;
-                let mut tags: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+                let mut tags: std::collections::BTreeSet<String> =
+                    std::collections::BTreeSet::new();
 
                 for file in &all_files {
                     if file.as_str().ends_with(".md") {
@@ -901,7 +896,10 @@ impl Plugin for TagPane {
                         for line in content.lines() {
                             for word in line.split_whitespace() {
                                 if word.starts_with('#') && word.len() > 1 {
-                                    let tag = word.trim_start_matches('#').trim_matches(|c: char| c.is_ascii_punctuation() && c != '_');
+                                    let tag =
+                                        word.trim_start_matches('#').trim_matches(|c: char| {
+                                            c.is_ascii_punctuation() && c != '_'
+                                        });
                                     if !tag.is_empty() {
                                         tags.insert(tag.to_string());
                                     }
@@ -975,7 +973,10 @@ impl Plugin for Workspaces {
                         .map(|d| d.as_secs())
                         .unwrap_or(0)
                 });
-                (ctx.create_file)(&workspace_path, &serde_json::to_string_pretty(&workspace).map_err(|e| e.to_string())?)?;
+                (ctx.create_file)(
+                    &workspace_path,
+                    &serde_json::to_string_pretty(&workspace).map_err(|e| e.to_string())?,
+                )?;
                 Ok(())
             }
             "workspaces:load" => {
@@ -1075,6 +1076,7 @@ pub fn register_all() {
     register_native(Box::new(TagPane));
     register_native(Box::new(Workspaces));
     register_native(Box::new(SlashCommand));
+    register_native(Box::new(crate::vault_doctor::VaultDoctor));
 }
 
 #[cfg(test)]
@@ -1161,7 +1163,11 @@ mod report_tests {
     }
 
     impl Harness {
-        fn new(notes: &[(&str, &str)], meta: HashMap<String, String>, open: &str) -> (Self, PluginContext<'static>) {
+        fn new(
+            notes: &[(&str, &str)],
+            meta: HashMap<String, String>,
+            open: &str,
+        ) -> (Self, PluginContext<'static>) {
             let notices = Rc::new(RefCell::new(Vec::new()));
             let shown = Rc::clone(&notices);
             let files: Vec<String> = notes.iter().map(|(p, _)| p.to_string()).collect();
@@ -1206,10 +1212,7 @@ mod report_tests {
             "A.md".to_string(),
             r#"{"links":[{"link":"B.md"}]}"#.to_string(),
         );
-        meta.insert(
-            "B.md".to_string(),
-            r#"{"links":[]}"#.to_string(),
-        );
+        meta.insert("B.md".to_string(), r#"{"links":[]}"#.to_string());
         let (h, ctx) = Harness::new(&[("A.md", ""), ("B.md", "")], meta, "B.md");
         Backlink.run_command("backlink:show", None, &ctx).unwrap();
 
@@ -1248,7 +1251,11 @@ mod report_tests {
 
     #[test]
     fn the_word_count_is_shown() {
-        let (h, ctx) = Harness::new(&[("A.md", "one two three four five")], HashMap::new(), "A.md");
+        let (h, ctx) = Harness::new(
+            &[("A.md", "one two three four five")],
+            HashMap::new(),
+            "A.md",
+        );
         WordCount
             .run_command("word-count:show", None, &ctx)
             .unwrap();
@@ -1265,9 +1272,7 @@ mod report_tests {
             HashMap::new(),
             "A.md",
         );
-        TagPane
-            .run_command("tag-pane:show", None, &ctx)
-            .unwrap();
+        TagPane.run_command("tag-pane:show", None, &ctx).unwrap();
 
         let shown = h.notices.borrow();
         assert_eq!(shown.len(), 1);

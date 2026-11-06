@@ -78,7 +78,8 @@ use silica_commands::{hotkey_label, keystroke, CommandRegistry};
 use silica_formats::bookmarks::{Bookmark, Bookmarks};
 use silica_formats::config::{
     self as config, AppConfig, AppearanceConfig, CommandPaletteConfig, CorePlugins,
-    DailyNotesConfig, Hotkeys, PropertyTypes, SwitcherConfig, TemplatesConfig, CORE_PLUGINS,
+    DailyNotesConfig, Hotkeys, PropertyTypes, SwitcherConfig, TemplatesConfig, ZkPrefixerConfig,
+    CORE_PLUGINS, ZK_PREFIXER_DEFAULT_FORMAT,
 };
 use silica_formats::properties::{Change, PropertiesInDocument};
 use silica_formats::{validate_renamed_file, FileKind};
@@ -315,6 +316,7 @@ pub const RUNNABLE: &[&str] = &[
     "editor:toggle-bold",
     "editor:toggle-italics",
     "editor:toggle-strikethrough",
+    "note-composer:merge-file",
     "editor:toggle-highlight",
     "editor:toggle-code",
     "editor:toggle-inline-math",
@@ -418,6 +420,11 @@ pub const RUNNABLE: &[&str] = &[
     "file-explorer:new-file-in-current-tab",
     "file-explorer:new-file-in-new-pane",
     "file-explorer:new-folder",
+    "theme:switch",
+    "theme:toggle-light-dark",
+    "zk-prefixer",
+    "insert-unique-link",
+    "random-note",
     "file-explorer:move-file",
     "file-explorer:duplicate-file",
     "workspace:edit-file-title",
@@ -754,17 +761,11 @@ impl VaultState {
             }
             SettingChange::Templates(config) => {
                 self.write_config("templates.json", config)?;
-                *self
-                    .templates
-                    .write()
-                    .unwrap_or_else(|e| e.into_inner()) = config.clone();
+                *self.templates.write().unwrap_or_else(|e| e.into_inner()) = config.clone();
             }
             SettingChange::DailyNotes(config) => {
                 self.write_config("daily-notes.json", config)?;
-                *self
-                    .daily_notes
-                    .write()
-                    .unwrap_or_else(|e| e.into_inner()) = config.clone();
+                *self.daily_notes.write().unwrap_or_else(|e| e.into_inner()) = config.clone();
             }
             SettingChange::Hotkeys(overrides) => {
                 // * Whole, not merged: an entry taken out is a command back
@@ -1589,6 +1590,9 @@ enum PendingOp {
     RestoreVersion {
         file: String,
     },
+    /// Note composer's merge: the value names the note the current one
+    /// is absorbed into.
+    MergeCurrent(String),
 }
 
 /// One tab of the main area: what it shows and where it has been. The
@@ -2671,6 +2675,10 @@ pub struct Workspace {
     /// has to follow it; [`Workspace::render`] is where it is honoured.
     refocus_main: bool,
     state: Option<Arc<VaultState>>,
+    /// The root of the vault being loaded: the index is filled on a
+    /// background thread, so a real file can exist on disk before the
+    /// index has heard of it.
+    opening_root: Option<PathBuf>,
     vault_name: SharedString,
     /// Whether the vault being loaded goes on the switcher's list: a
     /// sandbox does not.
@@ -3342,6 +3350,7 @@ impl Workspace {
             focus_handle: cx.focus_handle(),
             refocus_main: false,
             state: None,
+            opening_root: None,
             vault_name: "No vault".into(),
             record_vault: true,
             vault_menu_open: false,
@@ -3473,6 +3482,7 @@ impl Workspace {
             .into();
         self.loading = Some(format!("Indexing {}…", root.display()).into());
         self.status = "Indexing vault".into();
+        self.opening_root = Some(root.clone());
         // * Restoring the layout may have to make tab groups, and a group's
         //   editor is made with the window, so the vault comes back in it.
         cx.spawn_in(window, async move |this, cx| {
@@ -3484,6 +3494,7 @@ impl Workspace {
                 Ok(state) => ws.set_state(state, window, cx),
                 Err(err) => {
                     ws.loading = None;
+                    ws.opening_root = None;
                     ws.status = format!("Vault failed to open: {err}").into();
                     cx.notify();
                 }
@@ -3688,6 +3699,7 @@ impl Workspace {
 
     fn set_state(&mut self, state: VaultState, window: &mut Window, cx: &mut Context<Self>) {
         self.loading = None;
+        self.opening_root = None;
         self.status = format!(
             "{} files, {} notes indexed in {:.0} ms",
             state.vault().files().len(),
@@ -4698,7 +4710,7 @@ impl Workspace {
             }),
         };
 
-        if let Some((outcome, _notices)) = silica_plugins::live::run(id, &ctx) {
+        if let Some((outcome, _notices)) = silica_plugins::live::run(id, None, &ctx) {
             if let Err(reason) = outcome {
                 self.report(reason, cx);
             }
@@ -4726,6 +4738,118 @@ impl Workspace {
             self.recent_commands.truncate(20);
         }
         match id {
+            // * `theme:switch` cycles system → moonstone (light) → obsidian
+            //   (dark) → system, mirroring Obsidian's theme switcher.
+            //   `theme:toggle-light-dark` toggles light/dark; system starts
+            //   at light. Both write `appearance.json` and recompute the
+            //   global theme live via `change_setting` → `recompute_theme`,
+            //   no restart required (Specification.md, "Appearance").
+            "theme:switch" => {
+                let Some(state) = self.state.as_ref() else {
+                    self.report("no vault loaded", cx);
+                    return;
+                };
+                let config = {
+                    let appearance = state.appearance();
+                    appearance.clone()
+                };
+                let next_theme = match config.theme.as_deref() {
+                    Some("system") => "moonstone",
+                    Some("moonstone") => "obsidian",
+                    _ => "system",
+                };
+                let mut config = config;
+                config.theme = Some(next_theme.to_string());
+                self.change_setting(SettingChange::Appearance(config), window, cx);
+            }
+            "theme:toggle-light-dark" => {
+                let Some(state) = self.state.as_ref() else {
+                    self.report("no vault loaded", cx);
+                    return;
+                };
+                let config = {
+                    let appearance = state.appearance();
+                    appearance.clone()
+                };
+                let next_theme = match config.theme.as_deref() {
+                    Some("obsidian") => "moonstone",
+                    _ => "obsidian",
+                };
+                let mut config = config;
+                config.theme = Some(next_theme.to_string());
+                self.change_setting(SettingChange::Appearance(config), window, cx);
+            }
+            // * `zk-prefixer`: nyalakan/matikan awalan timestamp otomatis pada
+            //   nama note baru (`file-explorer:new-file`). Tersimpan di
+            //   `zk-prefixer.json` (`enabled`, `format` moment.js, default
+            //   `YYYYMMDDHHmm`), tidak perlu restart.
+            "zk-prefixer" => {
+                let Some(state) = self.state.as_ref() else {
+                    self.report("no vault loaded", cx);
+                    return;
+                };
+                let result = {
+                    let vault = state.vault();
+                    let config: ZkPrefixerConfig = vault
+                        .read_config("zk-prefixer.json")
+                        .unwrap_or_default()
+                        .unwrap_or_default();
+                    let next_enabled = !config.enabled.unwrap_or(false);
+                    let mut new_config = config;
+                    new_config.enabled = Some(next_enabled);
+                    vault
+                        .write_config("zk-prefixer.json", &new_config)
+                        .map(|()| next_enabled)
+                };
+                match result {
+                    Ok(next_enabled) => self.report(
+                        format!("zk-prefixer {}", if next_enabled { "on" } else { "off" }),
+                        cx,
+                    ),
+                    Err(err) => self.report(format!("zk-prefixer could not be written: {err}"), cx),
+                }
+            }
+            // * `insert-unique-link`: sisipkan wikilink ke note aktif di kursor.
+            //   Teks link adalah nama note (tanpa `.md`); cursor di tempatkan
+            //   setelah kurung tutup seperti perilaku Obsidian.
+            "insert-unique-link" => {
+                let Some(state) = self.state.as_ref() else {
+                    self.report("no vault loaded", cx);
+                    return;
+                };
+                let _ = state;
+                let Some(current) = self.current.as_deref() else {
+                    self.report("no note open", cx);
+                    return;
+                };
+                let link_text = current.trim_end_matches(".md");
+                self.editor.update(cx, |e, cx| {
+                    e.insert_at_cursors(&format!("[[{link_text}]]"), window, cx);
+                });
+            }
+            // * `random-note`: buka note acak dari vault. Indeks dihasilkan
+            //   dari waktu sistem saat ini (tanpa dependensi `rand`).
+            "random-note" => {
+                let Some(state) = self.state.as_ref() else {
+                    self.report("no vault loaded", cx);
+                    return;
+                };
+                let notes: Vec<String> = state
+                    .vault()
+                    .markdown_files()
+                    .map(|f| f.path.clone())
+                    .collect();
+                if notes.is_empty() {
+                    self.report("no notes in vault", cx);
+                    return;
+                };
+                let nanos = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos();
+                let ix = (nanos % notes.len() as u128) as usize;
+                self.open_file(notes[ix].clone(), None, cx);
+            }
             "command-palette:open" => self.open_palette("", window, cx),
             "editor:save-file" => self.flush_save(cx),
             "editor:open-search" => self.open_find("", false, window, cx),
@@ -5243,6 +5367,14 @@ impl Workspace {
             "app:switch-vault" => self.toggle_vault_menu(cx),
             "app:open-another-vault" => self.open_another_vault(window, cx),
             "app:open-sandbox-vault" => self.open_sandbox_vault(window, cx),
+            // * Note composer's merge: the current note is absorbed into the
+            //   note the prompt names. Obsidian rewrites the links to the
+            //   absorbed note, and so does the plan this runs.
+            "note-composer:merge-file" => {
+                if self.editing_or_report(id, window, cx) {
+                    self.start_merge_current(window, cx);
+                }
+            }
             _ => {
                 let name = self.command_name(id, cx);
                 self.report(format!("{name}: not available in Silica yet"), cx);
@@ -6946,7 +7078,10 @@ impl Workspace {
         match folder {
             Some(folder) => {
                 if let Err(err) = silica_plugins::launch::open_path(&folder) {
-                    self.report(format!("Could not show {path} in system explorer: {err}"), cx);
+                    self.report(
+                        format!("Could not show {path} in system explorer: {err}"),
+                        cx,
+                    );
                 }
             }
             None => self.report(
@@ -6989,7 +7124,37 @@ impl Workspace {
         let Some(state) = self.state.clone() else {
             return;
         };
-        let path = state.vault().available_path(folder, "Untitled", "md");
+        let vault = state.vault();
+        let name = if vault
+            .read_config::<ZkPrefixerConfig>("zk-prefixer.json")
+            .unwrap_or_default()
+            .unwrap_or_default()
+            .enabled
+            .unwrap_or(false)
+        {
+            let config = vault
+                .read_config::<ZkPrefixerConfig>("zk-prefixer.json")
+                .unwrap_or_default()
+                .unwrap_or_default();
+            let format = config
+                .format
+                .as_deref()
+                .unwrap_or(ZK_PREFIXER_DEFAULT_FORMAT);
+            let local = chrono::Local::now();
+            let naive = local.naive_local();
+            let stamp = templates::Stamp {
+                year: chrono::Datelike::year(&naive) as i64,
+                month: chrono::Datelike::month(&naive),
+                day: chrono::Datelike::day(&naive),
+                hour: chrono::Timelike::hour(&naive),
+                minute: chrono::Timelike::minute(&naive),
+                second: chrono::Timelike::second(&naive),
+            };
+            format!("{} Untitled", templates::moment::format(format, &stamp))
+        } else {
+            "Untitled".to_string()
+        };
+        let path = vault.available_path(folder, &name, "md");
         match state.create_note(&path, "") {
             Ok(changes) => {
                 self.after_changes(changes, cx);
@@ -7682,7 +7847,13 @@ impl Workspace {
     /// the two files on disk, with the shared base taken as what the open
     /// note held when it was loaded. The buffer is replaced with the result
     /// and left dirty, so the merge is reviewed before it is saved.
-    fn finish_merge(&mut self, file: &str, other: &str, window: &mut Window, cx: &mut Context<Self>) {
+    fn finish_merge(
+        &mut self,
+        file: &str,
+        other: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(state) = self.state.clone() else {
             return;
         };
@@ -7695,16 +7866,16 @@ impl Workspace {
             format!("{other}.md")
         };
         if other == file {
-            self.prompt
-                .update(cx, |p, cx| p.set_error("A note cannot be merged with itself.", cx));
+            self.prompt.update(cx, |p, cx| {
+                p.set_error("A note cannot be merged with itself.", cx)
+            });
             return;
         }
         let theirs = match std::fs::read_to_string(state.vault().absolute(&other)) {
             Ok(text) => text,
             Err(err) => {
                 let message = format!("Could not read {other}: {err}");
-                self.prompt
-                    .update(cx, |p, cx| p.set_error(message, cx));
+                self.prompt.update(cx, |p, cx| p.set_error(message, cx));
                 return;
             }
         };
@@ -7720,7 +7891,10 @@ impl Workspace {
         match conflicts {
             0 => self.report(format!("Merged {other} into {file}; not saved yet"), cx),
             n => self.report(
-                format!("Merged {other} into {file} with {n} conflict{}; not saved yet", plural(n)),
+                format!(
+                    "Merged {other} into {file} with {n} conflict{}; not saved yet",
+                    plural(n)
+                ),
                 cx,
             ),
         }
@@ -7785,8 +7959,9 @@ impl Workspace {
         };
         let history = crate::history::History::new(&state.root, state.vault().config_dir());
         let Some(version) = history.list(file).into_iter().find(|v| v.label() == label) else {
-            self.prompt
-                .update(cx, |p, cx| p.set_error(format!("No version {label} any more."), cx));
+            self.prompt.update(cx, |p, cx| {
+                p.set_error(format!("No version {label} any more."), cx)
+            });
             return;
         };
         let Some(contents) = history.read(file, version.at) else {
@@ -7802,10 +7977,7 @@ impl Workspace {
         }
         self.editor
             .update(cx, |e, cx| e.set_text(file.to_string(), contents, cx));
-        self.report(
-            format!("{file} restored from {label}; not saved yet"),
-            cx,
-        );
+        self.report(format!("{file} restored from {label}; not saved yet"), cx);
         cx.notify();
     }
 
@@ -7856,6 +8028,176 @@ impl Workspace {
             }
             Err(err) => self.report(err, cx),
         }
+    }
+
+    /// Note composer's "Merge current file with another file": a prompt for
+    /// the note that absorbs the current one. The prompt validates nothing
+    /// by itself — the target may be a note to create, which is what
+    /// Obsidian's command palette flow offers too.
+    fn start_merge_current(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(source) = self.current.clone() else {
+            return;
+        };
+        self.open_prompt(
+            PendingOp::MergeCurrent(source.clone()),
+            PromptSpec {
+                title: format!("Merge \"{}\" with...", basename(&source)).into(),
+                detail: Some(
+                    "The current note's content is appended to the target and every \
+link to it is rewritten. The current note is deleted."
+                        .into(),
+                ),
+                input: Some(String::new()),
+                placeholder: "Target note name".into(),
+                confirm: "Merge".into(),
+                ..PromptSpec::default()
+            },
+            window,
+            cx,
+        );
+    }
+
+    /// The merge itself: append the source note's text under the target's,
+    /// rewrite every link that resolved to the source to point at the
+    /// target, then delete the source. Obsidian's own order is the same
+    /// (write, rewrite links, remove), and the notice is its wording.
+    fn merge_current(
+        &mut self,
+        source: &str,
+        target_value: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<Option<String>, String> {
+        let Some(state) = self.state.clone() else {
+            return Ok(None);
+        };
+        // * The target is a note name or path as written; `new_note_path`
+        //   turns a bare name into a path under the vault's new-file folder,
+        //   the same place an untitled note from a wikilink would go.
+        let target = if target_value.contains('/') {
+            let path = format!("{target_value}.md");
+            if !state.vault().absolute(&path).exists() {
+                return Err(format!("{target_value} does not exist"));
+            }
+            path
+        } else {
+            let resolved = state
+                .cache()
+                .resolve(target_value, source)
+                .map(str::to_string);
+            resolved
+                .filter(|p| FileKind::from_path(p).is_markdown())
+                .unwrap_or_else(|| state.new_note_path(target_value, Some(source)))
+        };
+        if target == source {
+            return Err("A note cannot merge into itself".to_string());
+        }
+
+        // * The open note's unsaved edits live in the editor buffer, not
+        //   on disk or in the index: the autosave is two seconds out and
+        //   a merge can land inside that window. Merging either side from
+        //   disk would silently drop those edits, so the buffer wins for
+        //   the note it holds.
+        let open = {
+            let editor = self.editor.read(cx);
+            let name = editor.name.to_string();
+            if name.is_empty() || !editor.is_dirty() {
+                None
+            } else {
+                Some((name, editor.file_contents()))
+            }
+        };
+        let read_note = |path: &str| -> Result<String, String> {
+            if let Some((open_name, text)) = &open {
+                if open_name == path {
+                    return Ok(text.clone());
+                }
+            }
+            state
+                .texts()
+                .get(path)
+                .map(|t| t.to_string())
+                .or_else(|| std::fs::read_to_string(state.vault().absolute(path)).ok())
+                .ok_or_else(|| format!("{path} could not be read"))
+        };
+        let source_text = read_note(source)?;
+        let target_text = read_note(&target)?;
+        // * Obsidian separates the two halves with one blank line; a
+        //   trailing newline on either side would otherwise stack into a
+        //   triple newline that the next save would happily write back.
+        let mut merged = format!(
+            "{}\n\n{}",
+            target_text.trim_end_matches(['\n', '\r']),
+            source_text.trim_end_matches(['\n', '\r'])
+        );
+        if source_text.ends_with('\n') {
+            merged.push('\n');
+        }
+
+        // * The link rewrites are planned against the pre-merge index and
+        //   written before the source disappears, so a failure leaves the
+        //   vault consistent: every note still resolves as it did.
+        let plan = state
+            .cache()
+            .plan_merge_rewrites(source, &target, state.link_format(), &|p| {
+                state.texts().get(p).map(|t| t.to_string())
+            });
+        for rw in &plan {
+            let absolute = state
+                .vault()
+                .write_path(&rw.new_path)
+                .map_err(|e| e.to_string())?;
+            silica_vault::write_no_follow(&absolute, rw.text.as_bytes())
+                .map_err(|e| format!("Could not update links in {}: {e}", rw.new_path))?;
+        }
+
+        // * The target may not exist yet (`create_note` refuses an existing
+        //   path), so an existing one is written through the vault's save
+        //   path and a new one through `create_note`; both index the result.
+        let changes = if state.vault().absolute(&target).exists() {
+            state
+                .vault
+                .write()
+                .unwrap_or_else(|e| e.into_inner())
+                .write_bytes(&target, merged.as_bytes())
+                .map_err(|e| e.to_string())?;
+            self.after_changes(
+                state.absorb(
+                    state
+                        .vault
+                        .write()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .refresh_path(&state.vault().absolute(&target)),
+                ),
+                cx,
+            );
+            None
+        } else {
+            Some(state.create_note(&target, &merged)?)
+        };
+        if let Some(changes) = changes {
+            self.after_changes(changes, cx);
+        }
+
+        let was_current = self.current.as_deref() == Some(source);
+        let changes = state.trash(source)?;
+        if was_current {
+            self.detach_current(false, &state, cx);
+            self.focus_main(window, cx);
+        }
+        self.after_changes(changes, cx);
+        self.open_file(target, None, cx);
+
+        let links: usize = plan.iter().map(|r| r.links).sum();
+        Ok((links > 0).then(|| {
+            format!(
+                "Updated {} link{} in {} file{}.",
+                links,
+                plural(links),
+                plan.len(),
+                plural(plan.len()),
+            )
+        }))
     }
 
     /// Enter in the prompt: finish the pending operation with `value`.
@@ -7963,7 +8305,9 @@ impl Workspace {
                     Err(err) => self.prompt.update(cx, |p, cx| p.set_error(err, cx)),
                 }
             }
-            PendingOp::UpdateLinks { from, to } => self.finish_rename(&from, &to, true, Some(window), cx),
+            PendingOp::UpdateLinks { from, to } => {
+                self.finish_rename(&from, &to, true, Some(window), cx)
+            }
             PendingOp::AddBookmark(draft) => {
                 self.pending = None;
                 self.close_modal(window, cx);
@@ -7977,6 +8321,22 @@ impl Workspace {
             PendingOp::Merge { file, .. } => self.finish_merge(&file, value, window, cx),
             PendingOp::RestoreVersion { file } => {
                 self.finish_restore_version(&file, value, window, cx)
+            }
+            PendingOp::MergeCurrent(source) => {
+                self.pending = None;
+                self.close_modal(window, cx);
+                if value.is_empty() {
+                    self.report("Merge needs a target note", cx);
+                    return;
+                }
+                match self.merge_current(&source, value, window, cx) {
+                    Ok(notice) => {
+                        if let Some(notice) = notice {
+                            self.report(notice, cx);
+                        }
+                    }
+                    Err(err) => self.report(err, cx),
+                }
             }
         }
     }
@@ -12204,6 +12564,9 @@ impl Workspace {
                 Some(PendingOp::RestoreVersion { file }) => {
                     json!({"op": "restore-version", "path": file})
                 }
+                Some(PendingOp::MergeCurrent(source)) => {
+                    json!({"op": "merge-current", "source": source})
+                }
                 Some(PendingOp::ExportSite) => json!({"op": "export-site"}),
             },
         );
@@ -12326,12 +12689,7 @@ impl Workspace {
         }
         // * A tree row being renamed takes typed text through the
         //   explorer's own input handler.
-        if self
-            .explorer
-            .read(cx)
-            .renaming_focus()
-            .is_focused(window)
-        {
+        if self.explorer.read(cx).renaming_focus().is_focused(window) {
             return "explorer-rename";
         }
         if self.switcher.focus_handle(cx).is_focused(window) {
@@ -12558,13 +12916,29 @@ impl Workspace {
     /// carries one: that spelling is the key every pane is looked up by, so
     /// the caller's casing is only a request for it.
     pub fn vault_file_path(&self, path: &str) -> Option<String> {
-        let state = self.state.as_ref()?;
-        state
-            .vault()
-            .files()
-            .iter()
-            .find(|f| f.path.eq_ignore_ascii_case(path))
-            .map(|f| f.path.clone())
+        if let Some(state) = self.state.as_ref() {
+            if let Some(found) = state
+                .vault()
+                .files()
+                .iter()
+                .find(|f| f.path.eq_ignore_ascii_case(path))
+            {
+                return Some(found.path.clone());
+            }
+        }
+        // ! The index fills on a background thread; while it loads, a path
+        //   that exists on disk still opens instead of answering as
+        //   missing. `vault_path_in` keeps the path inside the vault, so
+        //   this reads existence, not trust.
+        let root = self
+            .state
+            .as_ref()
+            .map(|s| s.root.clone())
+            .or_else(|| self.opening_root.clone())?;
+        vault_path_in(&root, path)
+            .ok()
+            .filter(|p| p.is_file())
+            .map(|_| path.to_string())
     }
 
     /// The open vault's files, for the socket's `list_files`: the same list
@@ -14595,7 +14969,9 @@ fn show_items(path: &std::path::Path) -> bool {
             .stderr(std::process::Stdio::null())
             .output();
         match asked {
-            Ok(out) => String::from_utf8_lossy(&out.stdout).contains("\"org.freedesktop.FileManager1\""),
+            Ok(out) => {
+                String::from_utf8_lossy(&out.stdout).contains("\"org.freedesktop.FileManager1\"")
+            }
             Err(_) => false,
         }
     };

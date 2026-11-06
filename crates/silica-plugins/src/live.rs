@@ -13,8 +13,8 @@
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
-use crate::{native::Plugin, PluginHost, Registry, Tier};
 use crate::native::PluginContext;
+use crate::{native::Plugin, PluginHost, Registry, Tier};
 
 thread_local! {
     /// `None` until a vault has been asked about, so the first ask loads.
@@ -113,13 +113,19 @@ pub fn native<R>(f: impl FnOnce(&[Box<dyn Plugin>]) -> R) -> R {
 /// Runs a plugin's own command, with whatever it announced while running.
 /// `None` means no loaded plugin owns that id. Native plugins are checked
 /// first, then the compatibility hosts.
-pub fn run(id: &str, ctx: &PluginContext<'_>) -> Option<(Result<(), String>, Vec<String>)> {
+pub fn run(
+    id: &str,
+    value: Option<&serde_json::Value>,
+    ctx: &PluginContext<'_>,
+) -> Option<(Result<(), String>, Vec<String>)> {
     // * Native plugins are global: check first, running inside the borrow so
     // * we never hold the NATIVE lock across the return.
     let native_hit = NATIVE.with(|native| {
-        native.borrow().iter().find(|p| {
-            p.commands().iter().any(|c| c.id == id)
-        }).map(|plugin| (plugin.run_command(id, None, ctx), Vec::new()))
+        native
+            .borrow()
+            .iter()
+            .find(|p| p.commands().iter().any(|c| c.id == id))
+            .map(|plugin| (plugin.run_command(id, value, ctx), Vec::new()))
     });
     if native_hit.is_some() {
         return native_hit;
@@ -190,7 +196,12 @@ mod tests {
                 name: "Counter: Count notes".into(),
             }]
         }
-        fn run_command(&self, id: &str, _value: Option<&serde_json::Value>, _ctx: &PluginContext<'_>) -> Result<(), String> {
+        fn run_command(
+            &self,
+            id: &str,
+            _value: Option<&serde_json::Value>,
+            _ctx: &PluginContext<'_>,
+        ) -> Result<(), String> {
             match id {
                 "silica:counter:count" => Ok(()),
                 other => Err(format!("'{other}' is not a command this plugin registered")),
@@ -295,8 +306,11 @@ module.exports = Counter;
 "#,
         )
         .expect("the plugin source");
-        fs::write(root.join(".obsidian/community-plugins.json"), r#"["counter"]"#)
-            .expect("the enabled list");
+        fs::write(
+            root.join(".obsidian/community-plugins.json"),
+            r#"["counter"]"#,
+        )
+        .expect("the enabled list");
 
         let vault = silica_vault::Vault::open(&root).expect("the vault opens");
         let registry = Registry::scan(&vault);
@@ -326,7 +340,7 @@ module.exports = Counter;
             current_note: Box::new(|| None),
             notify: Box::new(|_| {}),
         };
-        let (outcome, _) = run("counter:hello", &ctx).expect("the plugin owns this command");
+        let (outcome, _) = run("counter:hello", None, &ctx).expect("the plugin owns this command");
         outcome.expect("the command ran");
         assert_eq!(
             fs::read_to_string(root.join("hi.md")).expect("the note it wrote"),
@@ -350,7 +364,7 @@ module.exports = Counter;
             current_note: Box::new(|| None),
             notify: Box::new(|_| {}),
         };
-        assert!(run("silica:open-settings", &ctx).is_none());
+        assert!(run("silica:open-settings", None, &ctx).is_none());
         // * A second ask for the same vault keeps the same runtime.
         ensure(&root, vault.config_dir(), &registry);
         hosts(|hosts| assert_eq!(hosts.len(), 1));
@@ -381,15 +395,17 @@ module.exports = Counter;
         };
 
         // * Native plugins are global: they run without a vault loaded.
-        let (outcome, _) = run("silica:counter:count", &ctx).expect("native plugin owns this command");
+        let (outcome, _) =
+            run("silica:counter:count", None, &ctx).expect("native plugin owns this command");
         outcome.expect("the command ran");
 
         // * Unknown id is not owned by any plugin -> None.
-        assert!(run("silica:counter:nope", &ctx).is_none());
+        assert!(run("silica:counter:nope", None, &ctx).is_none());
 
         // * `forget` clears compat hosts, not native registrations.
         forget();
-        let (outcome, _) = run("silica:counter:count", &ctx).expect("native plugin still registered");
+        let (outcome, _) =
+            run("silica:counter:count", None, &ctx).expect("native plugin still registered");
         outcome.expect("the command ran again");
 
         forget_native();
@@ -450,7 +466,7 @@ module.exports = W;
             current_note: Box::new(move || Some(open.clone())),
             notify: Box::new(|_| {}),
         };
-        let (outcome, _) = run("w:hit", &ctx).expect("the plugin owns it");
+        let (outcome, _) = run("w:hit", None, &ctx).expect("the plugin owns it");
         assert!(outcome.is_err(), "the write was allowed: {outcome:?}");
         assert_eq!(
             std::fs::read_to_string(root.join("Note.md")).unwrap(),
@@ -459,5 +475,91 @@ module.exports = W;
         );
         forget();
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Vault doctor runs end to end over a real vault through `run`'s native
+    /// dispatch, with the context backed by std::fs: attachments and dot
+    /// folders stay out of the report, a frontmatter-only note counts as
+    /// empty, and the report lands in the vault and opens.
+    #[test]
+    fn vault_doctor_writes_a_report_that_ignores_attachments_and_dot_folders() {
+        register_native(Box::new(crate::vault_doctor::VaultDoctor));
+
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let root = dir.path().join("vault");
+        std::fs::create_dir_all(root.join(".obsidian")).expect("config dir");
+        std::fs::write(
+            root.join("Note.md"),
+            "links to [[Missing]] and ![[pic.png]]\n",
+        )
+        .expect("a note");
+        std::fs::write(root.join("pic.png"), b"png").expect("an attachment");
+        std::fs::write(root.join(".obsidian/config.json"), "{}").expect("a config");
+        std::fs::write(root.join("Empty.md"), "---\ntitle: empty\n---\n  \n")
+            .expect("a frontmatter-only note");
+
+        let read_root = root.clone();
+        let list_root = root.clone();
+        let write_root = root.clone();
+        let ctx = PluginContext {
+            vault_root: &root,
+            notify: Box::new(|_: &str| {}),
+            read_file: Box::new(move |p| {
+                fs::read_to_string(read_root.join(p)).map_err(|e| e.to_string())
+            }),
+            write_file: Box::new(move |p, text| {
+                fs::write(write_root.join(p), text).map_err(|e| e.to_string())
+            }),
+            append_file: Box::new(|_, _| Err("no vault".to_string())),
+            create_file: Box::new(|_, _| Err("no vault".to_string())),
+            create_folder: Box::new(|_| Err("no vault".to_string())),
+            delete_file: Box::new(|_| Err("no vault".to_string())),
+            rename_file: Box::new(|_, _| Err("no vault".to_string())),
+            list_dir: Box::new(move |d| {
+                let base = if d == "." {
+                    list_root.clone()
+                } else {
+                    list_root.join(d)
+                };
+                let mut out: Vec<String> = Vec::new();
+                for entry in fs::read_dir(&base).map_err(|e| e.to_string())? {
+                    let entry = entry.map_err(|e| e.to_string())?;
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    if entry.file_type().map_err(|e| e.to_string())?.is_dir() {
+                        out.push(format!("{name}/"));
+                    } else {
+                        out.push(name);
+                    }
+                }
+                Ok(out)
+            }),
+            file_exists: Box::new(|_| Ok(false)),
+            metadata_cache: Box::new(|_| Err("no vault".to_string())),
+            open_note: Box::new(|_| Ok(())),
+            current_note: Box::new(|| None),
+        };
+
+        let (outcome, _) = run("vault-doctor:run", None, &ctx).expect("the native plugin owns it");
+        outcome.expect("the command ran");
+
+        let report = fs::read_to_string(root.join("Vault doctor.md")).expect("the report");
+        assert!(
+            report.contains("`[[Missing]]`"),
+            "the broken link is listed: {report}"
+        );
+        assert!(
+            !report.contains("pic.png"),
+            "the attachment is not a broken link: {report}"
+        );
+        assert!(
+            !report.contains("config.json"),
+            "dot folders are not scanned: {report}"
+        );
+        assert!(
+            report.contains("[[Empty]]"),
+            "the frontmatter-only note is empty: {report}"
+        );
+
+        forget_native();
     }
 }

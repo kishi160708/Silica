@@ -103,7 +103,12 @@ impl History {
         let mut versions: Vec<Version> = entries
             .filter_map(|e| e.ok())
             .filter_map(|e| {
-                let at: u64 = e.file_name().to_string_lossy().strip_suffix(".md")?.parse().ok()?;
+                let at: u64 = e
+                    .file_name()
+                    .to_string_lossy()
+                    .strip_suffix(".md")?
+                    .parse()
+                    .ok()?;
                 let bytes = e.metadata().ok()?.len();
                 Some(Version { at, bytes })
             })

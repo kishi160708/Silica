@@ -288,8 +288,27 @@ impl Vault {
         Ok(())
     }
 
-    /// Files under `path` when it is a folder, or `path` itself when it is a
-    /// file in the list.
+    /// `from` as the index spells it. Windows paths are case-insensitive,
+    /// so a caller typing `sub` for the stored `Sub` would plan nothing
+    /// and leave every link in the moved folder unrewritten.
+    fn stored_from(&self, from: &str) -> Option<String> {
+        let wanted: Vec<&str> = from.split('/').filter(|s| !s.is_empty()).collect();
+        if wanted.is_empty() {
+            return None;
+        }
+        self.files().iter().find_map(|f| {
+            let got: Vec<&str> = f.path.split('/').filter(|s| !s.is_empty()).collect();
+            let spelled_same = got.len() >= wanted.len()
+                && wanted
+                    .iter()
+                    .zip(got.iter())
+                    .all(|(w, g)| w.to_lowercase() == g.to_lowercase());
+            spelled_same.then(|| got[..wanted.len()].join("/"))
+        })
+    }
+
+    /// Files under `path` when it is a folder, or `path` itself when it is
+    /// a file in the list.
     fn files_under(&self, path: &str) -> Vec<String> {
         let prefix = format!("{path}/");
         self.files()
@@ -304,6 +323,8 @@ impl Vault {
     pub fn rename_plan(&self, from: &str, to: &str) -> Vec<(String, String)> {
         let from = from.trim_matches('/');
         let to = to.trim_matches('/');
+        let stored = self.stored_from(from);
+        let from = stored.as_deref().unwrap_or(from);
         self.files_under(from)
             .into_iter()
             .map(|old| {
@@ -333,7 +354,7 @@ impl Vault {
         let to_abs = self.entry_path(to)?;
         // * A case-only rename of the same entry is allowed; anything else
         // * already at the destination is not.
-        let same_entry = from.eq_ignore_ascii_case(to)
+        let same_entry = from.to_lowercase() == to.to_lowercase()
             && std::fs::canonicalize(&from_abs).ok() == std::fs::canonicalize(&to_abs).ok();
         if to_abs.exists() && !same_entry {
             return Err(OpError::DestinationExists);
@@ -401,6 +422,41 @@ impl Vault {
         let target = self.numbered_path(".trash", stem, ext, 2);
         let target_abs = self.entry_path(&target)?;
         std::fs::rename(&abs, &target_abs).map_err(io("move to .trash", &abs))
+    }
+
+    /// Lists the contents of the vault's own `.trash/` folder, returning
+    /// vault-relative paths of every trashed entry.
+    pub fn list_trash(&self) -> Result<Vec<String>, OpError> {
+        let trash = self.write_path(".trash")?;
+        if !trash.exists() {
+            return Ok(Vec::new());
+        }
+        let mut out: Vec<String> = std::fs::read_dir(&trash)
+            .map_err(io("read trash", &trash))?
+            .filter_map(|e| e.ok())
+            .filter_map(|e| e.file_name().to_str().map(|s| s.to_string()))
+            .collect();
+        out.sort();
+        out.dedup();
+        Ok(out)
+    }
+
+    /// Restores a trashed entry back to its original vault path.
+    /// `name` is the entry's file name as returned by [`list_trash`].
+    pub fn restore_from_trash(&self, name: &str) -> Result<(), OpError> {
+        let trash = self.write_path(".trash")?;
+        let src = trash.join(name);
+        if !src.exists() {
+            return Err(OpError::NotFound(name.to_string()));
+        }
+        let dst = self.entry_path(name)?;
+        if dst.exists() {
+            return Err(OpError::DestinationExists);
+        }
+        if let Some(parent) = dst.parent() {
+            std::fs::create_dir_all(parent).map_err(io("create folder", parent))?;
+        }
+        std::fs::rename(&src, dst).map_err(io("restore from trash", &src))
     }
 }
 
@@ -730,6 +786,25 @@ mod tests {
         v.rename("Renamed A.md", "renamed a.md").unwrap();
         assert!(paths(&v).contains(&"renamed a.md"));
         assert!(v.rename("renamed a.md", "renamed a.md").unwrap().is_empty());
+    }
+
+    /// A folder typed with the wrong case still reports every move, so the
+    /// caller rewrites links instead of silently dropping them (F2).
+    #[test]
+    fn rename_plan_maps_typed_case_onto_the_stored_spelling() {
+        let (_dir, v) = vault();
+        assert_eq!(
+            v.rename_plan("sub", "Other"),
+            vec![
+                ("Sub/Deep/D.md".to_string(), "Other/Deep/D.md".to_string()),
+                ("Sub/S.md".to_string(), "Other/S.md".to_string()),
+                ("Sub/pic.png".to_string(), "Other/pic.png".to_string()),
+            ]
+        );
+        assert_eq!(
+            v.rename_plan("untitled.md", "Renamed.md"),
+            vec![("Untitled.md".to_string(), "Renamed.md".to_string())]
+        );
     }
 
     #[test]

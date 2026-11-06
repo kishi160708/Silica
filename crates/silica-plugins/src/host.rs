@@ -1325,7 +1325,11 @@ mod capability_tests {
             const mod = require('obsidian');
             (mod && typeof mod.Plugin === 'function') ? 'ok' : 'missing'
         ");
-        assert_eq!(out.as_deref(), Ok("ok"), "the shim module must be reachable");
+        assert_eq!(
+            out.as_deref(),
+            Ok("ok"),
+            "the shim module must be reachable"
+        );
     }
 
     /// The supported APIs still work, so the checks above are not passing

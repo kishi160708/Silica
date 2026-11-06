@@ -248,7 +248,11 @@ pub fn marked_text_range(editing: &Editing) -> Option<Range<usize>> {
     )
 }
 
-pub fn replace_text_in_range(editing: &mut Editing, range_utf16: Option<Range<usize>>, new_text: &str) {
+pub fn replace_text_in_range(
+    editing: &mut Editing,
+    range_utf16: Option<Range<usize>>,
+    new_text: &str,
+) {
     let range = editing.input_range(range_utf16);
     editing.field.replace(range, new_text);
     editing.marked = None;
@@ -353,9 +357,11 @@ pub fn bind_keys<T: Host, E: InteractiveElement>(el: E, cx: &mut Context<T>) -> 
         cx.listener(|this, _: &text_input::Backspace, _, cx| apply(this, cx, |f| f.backspace())),
     )
     .on_action(cx.listener(|this, _: &text_input::Delete, _, cx| apply(this, cx, |f| f.delete())))
-    .on_action(cx.listener(|this, _: &text_input::DeleteWordBackward, _, cx| {
-        apply(this, cx, |f| f.delete_word_back())
-    }))
+    .on_action(
+        cx.listener(|this, _: &text_input::DeleteWordBackward, _, cx| {
+            apply(this, cx, |f| f.delete_word_back())
+        }),
+    )
     .on_action(cx.listener(|this, _: &text_input::Clear, _, cx| {
         apply(this, cx, |f| {
             f.select_all();

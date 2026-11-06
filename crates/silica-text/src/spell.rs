@@ -50,9 +50,7 @@ impl SpellChecker {
             }
             // * Find the end of this word run.
             let mut j = i;
-            while j < bytes.len()
-                && (bytes[j].is_ascii_alphabetic() || bytes[j] == b'\'')
-            {
+            while j < bytes.len() && (bytes[j].is_ascii_alphabetic() || bytes[j] == b'\'') {
                 j += 1;
             }
             let word = &text[i..j];

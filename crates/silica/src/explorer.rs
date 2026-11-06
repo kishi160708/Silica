@@ -27,7 +27,7 @@ use gpui::{
     actions, anchored, canvas, deferred, div, point, prelude::*, px, uniform_list, App, Bounds,
     ClickEvent, Context, ElementInputHandler, EntityInputHandler, EventEmitter, FocusHandle,
     Focusable, FontWeight, KeyBinding, MouseButton, MouseDownEvent, Pixels, Point, ScrollStrategy,
-    SharedString, UniformListScrollHandle, UTF16Selection, Window,
+    SharedString, UTF16Selection, UniformListScrollHandle, Window,
 };
 use serde_json::{json, Value};
 use silica_formats::FileKind;
@@ -2008,8 +2008,7 @@ impl Render for FileExplorer {
             .flex_col()
             .when(renaming, |d| {
                 inline_field::bind_keys(
-                    d.key_context("TextInput")
-                        .track_focus(&self.rename_focus),
+                    d.key_context("TextInput").track_focus(&self.rename_focus),
                     cx,
                 )
             })

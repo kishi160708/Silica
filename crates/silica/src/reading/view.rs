@@ -253,7 +253,10 @@ pub enum ReadingEvent {
     },
     /// The reader committed an inline title edit: rename the file to the new
     /// stem. The workspace renames the file and rewrites its links.
-    RenameFile { path: String, new_name: String },
+    RenameFile {
+        path: String,
+        new_name: String,
+    },
 }
 
 /// A reader clicked a task checkbox. The reading view does not write the
@@ -465,11 +468,7 @@ impl ReadingView {
     /// makes. Field-opening actions (`Edit`, `EditItem`, `AddRow`) only
     /// update local state; the workspace writes the file when the field is
     /// committed.
-    fn handle_property_action(
-        &mut self,
-        action: PropertyAction,
-        cx: &mut Context<Self>,
-    ) {
+    fn handle_property_action(&mut self, action: PropertyAction, cx: &mut Context<Self>) {
         // * A click is not a Backspace: whatever pill one selected loses
         //   the selection.
         self.selected_pill = None;
@@ -505,7 +504,9 @@ impl ReadingView {
                     });
                     // * Update the in-memory type table so the row's glyph
                     //   and UI stay consistent with the new type.
-                    self.property_types.types.insert(key.clone(), ty.as_str().to_string());
+                    self.property_types
+                        .types
+                        .insert(key.clone(), ty.as_str().to_string());
                     self.property_menu = None;
                 }
             }
@@ -532,8 +533,7 @@ impl ReadingView {
             PropertyAction::EditItem { key, index } => {
                 self.property_menu = None;
                 if let Some(row) = rows.iter().find(|r| r.key == key) {
-                    self.property_field =
-                        Some(row.item_field(index.min(row.items.len())));
+                    self.property_field = Some(row.item_field(index.min(row.items.len())));
                 }
             }
             PropertyAction::OpenTypeMenu { key } => {
@@ -566,11 +566,14 @@ impl ReadingView {
             return;
         };
         // * Look up the row's type so `commit` reads the value correctly.
-        let ty = field.key().and_then(|k| {
-            entries.iter().find(|p| p.key == k).map(|p| {
-                silica_formats::properties::type_of(&p.key, entries, &self.property_types)
+        let ty = field
+            .key()
+            .and_then(|k| {
+                entries.iter().find(|p| p.key == k).map(|p| {
+                    silica_formats::properties::type_of(&p.key, entries, &self.property_types)
+                })
             })
-        }).unwrap_or(PropertyType::Text);
+            .unwrap_or(PropertyType::Text);
         let Some(change) = crate::properties::commit(&field, ty) else {
             return;
         };
@@ -611,8 +614,7 @@ impl ReadingView {
                         crate::properties::PillStep::Remove(ix) => {
                             if let Some(key) = field.key() {
                                 if let Some(entries) = self.property_entries.as_ref() {
-                                    let mut next_id =
-                                        crate::properties::PROPERTY_ID_BASE;
+                                    let mut next_id = crate::properties::PROPERTY_ID_BASE;
                                     let rows = crate::properties::rows(
                                         entries,
                                         |k| {
@@ -624,21 +626,14 @@ impl ReadingView {
                                         },
                                         &mut next_id,
                                     );
-                                    if let Some(row) =
-                                        rows.iter().find(|r| r.key == key)
-                                    {
+                                    if let Some(row) = rows.iter().find(|r| r.key == key) {
                                         if let Some(change) =
                                             crate::properties::remove_item(row, ix)
                                         {
-                                            cx.emit(
-                                                ReadingEvent::PropertyChanged {
-                                                    path: self
-                                                        .path
-                                                        .clone()
-                                                        .unwrap_or_default(),
-                                                    changes: vec![change],
-                                                },
-                                            );
+                                            cx.emit(ReadingEvent::PropertyChanged {
+                                                path: self.path.clone().unwrap_or_default(),
+                                                changes: vec![change],
+                                            });
                                         }
                                     }
                                 }
@@ -706,7 +701,11 @@ impl ReadingView {
         for (ix, block) in self.model.blocks.iter().enumerate() {
             self.collect_runs(block, ix, &mut ranges);
         }
-        self.selection = if ranges.is_empty() { None } else { Some(ranges) };
+        self.selection = if ranges.is_empty() {
+            None
+        } else {
+            Some(ranges)
+        };
         self.drag_start = None;
         cx.notify();
     }
@@ -730,7 +729,9 @@ impl ReadingView {
         let mut out = String::new();
         let mut last_block: Option<usize> = None;
         for (ix, _rich_id, start, end) in ranges {
-            let Some(block) = self.model.blocks.get(*ix) else { continue };
+            let Some(block) = self.model.blocks.get(*ix) else {
+                continue;
+            };
             if last_block != Some(*ix) {
                 if !out.is_empty() {
                     out.push('\n');
@@ -768,7 +769,9 @@ impl ReadingView {
                     self.collect_runs(child, ix, out);
                 }
             }
-            RBlock::Callout { title, children, .. } => {
+            RBlock::Callout {
+                title, children, ..
+            } => {
                 out.push((ix, title.id, 0, title.text.len()));
                 for child in children {
                     self.collect_runs(child, ix, out);
@@ -802,7 +805,12 @@ impl ReadingView {
     }
 
     /// Collects runs from a list item: its children blocks hold the text.
-    fn collect_item(&self, item: &crate::reading::model::RItem, ix: usize, out: &mut Vec<(usize, usize, usize, usize)>) {
+    fn collect_item(
+        &self,
+        item: &crate::reading::model::RItem,
+        ix: usize,
+        out: &mut Vec<(usize, usize, usize, usize)>,
+    ) {
         for child in &item.children {
             self.collect_runs(child, ix, out);
         }
@@ -844,7 +852,9 @@ impl ReadingView {
                     out.push('\n');
                 }
             }
-            RBlock::Callout { title, children, .. } => {
+            RBlock::Callout {
+                title, children, ..
+            } => {
                 out.push_str(&title.text);
                 out.push('\n');
                 for child in children {
@@ -917,7 +927,11 @@ impl ReadingView {
             }
             _ => {}
         }
-        if out.is_empty() { None } else { Some(out) }
+        if out.is_empty() {
+            None
+        } else {
+            Some(out)
+        }
     }
 
     /// Plays (or pauses, or seeks) a video embed clicked in the note.
@@ -1690,7 +1704,10 @@ impl Render for ReadingView {
             .line_height(px(base * LINE_HEIGHT))
             .text_color(theme.text)
             .relative()
-            .children(self.inline_title.then(|| self.render_inline_title(base, cx)))
+            .children(
+                self.inline_title
+                    .then(|| self.render_inline_title(base, cx)),
+            )
             .child(
                 div().flex_1().min_h_0().child(
                     list(self.list.clone(), move |ix, window, cx| {
@@ -2361,9 +2378,7 @@ impl<'a> Renderer<'a> {
                 // * Inline images (local or remote) render as an inline img
                 //   so `![[img]]` and `![url]` work mid-sentence, in lists,
                 //   blockquotes and callout titles without breaking the line.
-                EmbedKind::Image(_) | EmbedKind::RemoteImage(_) => {
-                    self.inline_embed(embed)
-                }
+                EmbedKind::Image(_) | EmbedKind::RemoteImage(_) => self.inline_embed(embed),
                 _ => self.embed(embed),
             },
             // * Display math inside a paragraph is a block of its own; the
@@ -3615,7 +3630,10 @@ impl<'a> Renderer<'a> {
         // * Selection highlight: this RichText's id is unique in the model, so
         //   matching it against the selection finds the selected byte range.
         if let Some((start, end)) = self.selection.and_then(|ranges| {
-            ranges.iter().find(|(_, rid, _, _)| *rid == text.id).map(|(_, _, s, e)| (*s, *e))
+            ranges
+                .iter()
+                .find(|(_, rid, _, _)| *rid == text.id)
+                .map(|(_, _, s, e)| (*s, *e))
         }) {
             highlights.push((start..end, self.selection_highlight()));
         }

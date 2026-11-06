@@ -35,8 +35,8 @@ use gpui::{
 use serde_json::{json, Value};
 use silica_commands::{hotkey_label, keystroke, Command};
 use silica_formats::config::{
-    AppConfig, AppearanceConfig, CorePlugins, DailyNotesConfig, DAILY_NOTE_DEFAULT_FORMAT,
-    Hotkey, Hotkeys, SwitcherConfig, TemplatesConfig, CORE_PLUGINS,
+    AppConfig, AppearanceConfig, CorePlugins, DailyNotesConfig, Hotkey, Hotkeys, SwitcherConfig,
+    TemplatesConfig, CORE_PLUGINS, DAILY_NOTE_DEFAULT_FORMAT,
 };
 use silica_plugins::Tier;
 use silica_search::fuzzy_match;

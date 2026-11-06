@@ -1074,7 +1074,12 @@ impl Editor {
 
     /// One of Obsidian's formatting toggles: wraps each selection in
     /// `marker`, or takes the marker off when it is already there.
-    pub fn toggle_wrap(&mut self, marker: &str, window: Option<&mut Window>, cx: &mut Context<Self>) {
+    pub fn toggle_wrap(
+        &mut self,
+        marker: &str,
+        window: Option<&mut Window>,
+        cx: &mut Context<Self>,
+    ) {
         if self.buf.toggle_wrap(marker) {
             self.after_edit(window, cx);
         }
@@ -1097,10 +1102,8 @@ impl Editor {
         let ranges = self.buf.copy_ranges();
         if ranges.iter().any(|r| !r.is_empty()) {
             cx.write_to_clipboard(ClipboardItem::new_string(self.buf.clipboard_text(&ranges)));
-            let edits: Vec<(Range<usize>, String)> = ranges
-                .into_iter()
-                .map(|r| (r, String::new()))
-                .collect();
+            let edits: Vec<(Range<usize>, String)> =
+                ranges.into_iter().map(|r| (r, String::new())).collect();
             self.edit_all(edits, EditKind::Other, window, cx);
         }
     }
@@ -5085,36 +5088,39 @@ impl Editor {
                             .child(crate::assets::icon(item.icon, 14., theme.text_muted)),
                     )
                     .child(item.label)
-                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |_this, _, _, cx| {
-                        entity.update(cx, |e, cx| {
-                            e.context_menu = None;
-                            match item.event {
-                                EditorEvent::Cut => e.do_cut(None, cx),
-                                EditorEvent::Copy => e.do_copy(None, cx),
-                                EditorEvent::Paste => e.do_paste(None, cx),
-                                EditorEvent::SelectAll => e.do_select_all(cx),
-                                EditorEvent::ToggleBold => e.toggle_wrap("**", None, cx),
-                                EditorEvent::ToggleItalic => e.toggle_wrap("*", None, cx),
-                                EditorEvent::ToggleHighlight => e.toggle_wrap("==", None, cx),
-                                EditorEvent::InsertWikilink => {
-                                    // * Handled by typing [[ in the editor
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(move |_this, _, _, cx| {
+                            entity.update(cx, |e, cx| {
+                                e.context_menu = None;
+                                match item.event {
+                                    EditorEvent::Cut => e.do_cut(None, cx),
+                                    EditorEvent::Copy => e.do_copy(None, cx),
+                                    EditorEvent::Paste => e.do_paste(None, cx),
+                                    EditorEvent::SelectAll => e.do_select_all(cx),
+                                    EditorEvent::ToggleBold => e.toggle_wrap("**", None, cx),
+                                    EditorEvent::ToggleItalic => e.toggle_wrap("*", None, cx),
+                                    EditorEvent::ToggleHighlight => e.toggle_wrap("==", None, cx),
+                                    EditorEvent::InsertWikilink => {
+                                        // * Handled by typing [[ in the editor
+                                    }
+                                    EditorEvent::InsertLink => {
+                                        // * Handled by typing [](url) in the editor
+                                    }
+                                    EditorEvent::InsertEmbed => {
+                                        // * Handled by typing ![[ in the editor
+                                    }
+                                    EditorEvent::ToggleCheckbox => e.toggle_checklist(None, cx),
+                                    EditorEvent::SetHeading1 => e.set_heading(1, None, cx),
+                                    EditorEvent::SetHeading2 => e.set_heading(2, None, cx),
+                                    EditorEvent::ToggleBullet => e.toggle_list(None, cx),
+                                    EditorEvent::ToggleNumbered => e.toggle_list(None, cx),
+                                    EditorEvent::ToggleBlockquote => e.toggle_blockquote(None, cx),
+                                    _ => {}
                                 }
-                                EditorEvent::InsertLink => {
-                                    // * Handled by typing [](url) in the editor
-                                }
-                                EditorEvent::InsertEmbed => {
-                                    // * Handled by typing ![[ in the editor
-                                }
-                                EditorEvent::ToggleCheckbox => e.toggle_checklist(None, cx),
-                                EditorEvent::SetHeading1 => e.set_heading(1, None, cx),
-                                EditorEvent::SetHeading2 => e.set_heading(2, None, cx),
-                                EditorEvent::ToggleBullet => e.toggle_list(None, cx),
-                                EditorEvent::ToggleNumbered => e.toggle_list(None, cx),
-                                EditorEvent::ToggleBlockquote => e.toggle_blockquote(None, cx),
-                                _ => {}
-                            }
-                        });
-                    })),
+                            });
+                        }),
+                    ),
             );
         }
         Some(list.into_any_element())
@@ -6409,7 +6415,13 @@ impl Element for EditorElement {
                 }
                 // * Task boxes over their placeholders, from the same
                 //   `--checkbox-*` tokens the reading view draws them with.
-                paint_task_boxes(shaped, origin, font_size * shaped.display.scale, &palette, window);
+                paint_task_boxes(
+                    shaped,
+                    origin,
+                    font_size * shaped.display.scale,
+                    &palette,
+                    window,
+                );
             }
             for w in prepaint.widgets.iter_mut() {
                 w.element.paint(window, cx);
@@ -6451,9 +6463,10 @@ impl Element for EditorElement {
                     //   the current selection, which stays intact.
                     if let Some(at) = at {
                         let sels = editor.buf.cursors();
-                        let inside = sels.sels.iter().any(|s| {
-                            !s.is_empty() && s.head >= at && s.head <= at
-                        });
+                        let inside = sels
+                            .sels
+                            .iter()
+                            .any(|s| !s.is_empty() && s.head >= at && s.head <= at);
                         if !inside {
                             editor.buf.head = at;
                             editor.buf.anchor = at;

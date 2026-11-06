@@ -132,7 +132,11 @@ fn load(fixture: &Fixture, open_note: Option<&str>) -> PluginHost {
 fn a_vault_only_plugin_registers_what_it_added() {
     let fixture = fixture(COUNTER);
     let host = load(&fixture, None);
-    assert!(!host.failed(), "load failed: {:?}", host.registrations().failure);
+    assert!(
+        !host.failed(),
+        "load failed: {:?}",
+        host.registrations().failure
+    );
 
     let registered = host.registrations();
     let ids: Vec<&str> = registered.commands.iter().map(|c| c.id.as_str()).collect();
@@ -184,14 +188,16 @@ fn running_a_command_does_the_work() {
     let fixture = fixture(COUNTER);
     let host = load(&fixture, None);
 
-    host.run_command("counter:create-file").expect("the command ran");
+    host.run_command("counter:create-file")
+        .expect("the command ran");
     let created = fixture.vault.join("count-new.md");
     assert_eq!(
         fs::read_to_string(&created).expect("the note"),
         "created by counter"
     );
 
-    host.run_command("counter:count-notes").expect("the command ran");
+    host.run_command("counter:count-notes")
+        .expect("the command ran");
     assert!(host.take_notices().iter().any(|n| n == "3 notes"));
 
     let unregistered = host.run_command("not-a-command").unwrap_err();
@@ -216,8 +222,14 @@ module.exports = NeedsElectron;
     let host = load(&fixture, None);
     assert!(host.failed());
     let reason = host.registrations().failure.clone().unwrap();
-    assert!(reason.contains("cannot require the module 'electron'"), "{reason}");
-    assert!(host.registrations().commands.is_empty(), "nothing half-registered");
+    assert!(
+        reason.contains("cannot require the module 'electron'"),
+        "{reason}"
+    );
+    assert!(
+        host.registrations().commands.is_empty(),
+        "nothing half-registered"
+    );
 }
 
 #[test]
@@ -242,14 +254,18 @@ fn a_write_to_the_note_open_in_the_editor_is_refused() {
     let host = load(&fixture, Some("Note.md"));
     let before = fs::read_to_string(fixture.vault.join("Note.md")).expect("the note");
 
-    host.run_command("counter:overwrite-open").expect("the command ran");
+    host.run_command("counter:overwrite-open")
+        .expect("the command ran");
 
     assert_eq!(
         fs::read_to_string(fixture.vault.join("Note.md")).expect("the note"),
         before
     );
     let notices = host.take_notices();
-    assert!(notices.iter().any(|n| n.contains("open in the editor")), "{notices:?}");
+    assert!(
+        notices.iter().any(|n| n.contains("open in the editor")),
+        "{notices:?}"
+    );
 }
 
 #[test]
@@ -259,7 +275,9 @@ fn a_path_out_of_the_vault_is_refused() {
     host.run_command("counter:escape").expect("the command ran");
     let notices = host.take_notices();
     assert!(
-        notices.iter().any(|n| n.contains("points outside the vault")),
+        notices
+            .iter()
+            .any(|n| n.contains("points outside the vault")),
         "{notices:?}"
     );
 }
@@ -402,7 +420,8 @@ module.exports = Counter;
     fs::write(fixture.vault.join("a-b.md"), "second").expect("the flat note");
 
     let host = load(&fixture, None);
-    host.run_command("counter:delete-two").expect("both deletes ran");
+    host.run_command("counter:delete-two")
+        .expect("both deletes ran");
 
     let trashed: Vec<String> = fs::read_dir(fixture.vault.join(".trash"))
         .expect("a trash folder")
@@ -410,8 +429,14 @@ module.exports = Counter;
         .map(|e| fs::read_to_string(e.path()).unwrap_or_default())
         .collect();
     assert_eq!(trashed.len(), 2, "both notes are in the trash: {trashed:?}");
-    assert!(trashed.contains(&"first".to_string()), "the nested note survived");
-    assert!(trashed.contains(&"second".to_string()), "the flat note survived");
+    assert!(
+        trashed.contains(&"first".to_string()),
+        "the nested note survived"
+    );
+    assert!(
+        trashed.contains(&"second".to_string()),
+        "the flat note survived"
+    );
 }
 
 /// A `.trash` that is a link is refused rather than used.
@@ -453,7 +478,9 @@ module.exports = Counter;
     assert!(fixture.vault.join("Doomed.md").exists());
     // * And nothing landed outside the vault.
     assert_eq!(
-        fs::read_dir(outside.path()).expect("the outside folder").count(),
+        fs::read_dir(outside.path())
+            .expect("the outside folder")
+            .count(),
         0,
         "nothing may be written outside the vault"
     );

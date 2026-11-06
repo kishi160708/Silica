@@ -42,8 +42,28 @@ const CREATE_ALWAYS: u32 = 2;
 const OPEN_EXISTING: u32 = 3;
 
 /// A path as a NUL-terminated wide string.
+///
+/// Absolute paths get the `\\?\` verbatim prefix: without it every Win32 call
+/// here caps at MAX_PATH (260) and a deep vault note fails with "cannot find
+/// the path specified" (os error 3) before any check of ours runs. Verbatim
+/// form does no normalization, so the `.`/`..` and `/` cases it would have
+/// forgiven are handled first: `sane_relative` refuses `..` outright, and an
+/// absolute path's separators are rewritten to backslashes below. UNC paths
+/// take the `\\?\UNC\` form; relative paths pass through untouched, keeping
+/// the process-relative semantics they had.
 fn wide(part: &OsStr) -> io::Result<Vec<u16>> {
-    let mut out: Vec<u16> = part.encode_wide().collect();
+    let path = Path::new(part);
+    let lossy = path.as_os_str().to_string_lossy();
+    let verbatim: std::borrow::Cow<'_, str> = if lossy.starts_with(r"\\?\") {
+        std::borrow::Cow::Borrowed(&lossy)
+    } else if let Some(rest) = lossy.strip_prefix(r"\\") {
+        std::borrow::Cow::Owned(format!(r"\\?\UNC\{rest}"))
+    } else if path.is_absolute() {
+        std::borrow::Cow::Owned(format!(r"\\?\{}", lossy.replace('/', r"\")))
+    } else {
+        std::borrow::Cow::Borrowed(&lossy)
+    };
+    let mut out: Vec<u16> = OsStr::new(verbatim.as_ref()).encode_wide().collect();
     if out.contains(&0) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -291,11 +311,7 @@ pub fn write_at(root: &Path, relative: &Path, bytes: &[u8]) -> io::Result<()> {
     // * string the caller passed in.
     let parent_real = final_path(parent_handle.as_raw_handle() as HANDLE)?;
     let target_real = parent_real.join(name);
-    let name_wide: Vec<u16> = target_real
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
+    let name_wide = wide(target_real.as_os_str())?;
     let head = std::mem::offset_of!(FILE_RENAME_INFO, FileName);
     // * The call wants at least a whole `FILE_RENAME_INFO`, plus room for the
     // * name; a shorter buffer is another way to draw 87.
@@ -339,4 +355,36 @@ pub fn snapshot_before_overwrite(_path: &Path) {}
 /// Whether `error` means a component was simply not there.
 pub fn is_missing(error: &io::Error) -> bool {
     matches!(error.kind(), io::ErrorKind::NotFound)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A note deep enough to pass MAX_PATH (260 chars) still writes and reads
+    /// back intact. `CreateFileW`/`SetFileInformationByHandle` without a
+    /// `\\?\` verbatim prefix cap at MAX_PATH, so a deep vault note fails with
+    /// "cannot find the path specified" (os error 3) unless `wide` adds the
+    /// prefix. Obsidian vaults on synced folders routinely exceed it.
+    #[test]
+    fn a_write_past_max_path_lands_and_reads_back() {
+        let root = tempfile::tempdir().unwrap();
+        // * One 90-char component per level: three nested dirs plus the file
+        // * name carry the path past 260 without ever naming `..`.
+        let long = "l".repeat(90);
+        let relative = Path::new(&long)
+            .join(&long)
+            .join(&long)
+            .join(format!("{long}.md"));
+        let bytes = b"# deep note\n\nbody past MAX_PATH\n".to_vec();
+
+        // * The app makes directories through the same verified path before
+        // * writing a note into a new folder; the test follows that order.
+        create_dir_all_at(root.path(), relative.parent().expect("has a parent"))
+            .expect("create_dir_all_at past MAX_PATH");
+        write_at(root.path(), &relative, &bytes).expect("write_at past MAX_PATH");
+        let read_back = read_inside(root.path(), &relative, bytes.len() as u64 + 1)
+            .expect("read_inside past MAX_PATH");
+        assert_eq!(read_back, bytes);
+    }
 }

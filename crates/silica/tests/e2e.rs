@@ -27,6 +27,18 @@ struct App {
     client: Client,
 }
 
+impl Drop for App {
+    // ! A test that panics unwinds past every `app.call(...)` and would
+    // ! otherwise leak the launched GUI process: on Windows there is no
+    // ! kill-on-drop for `Child`, so four debug builds kept burning CPU for
+    // ! minutes after a failed run (observed 2026-11-06). Killing in Drop
+    // ! runs on panic unwind too, so a failing test leaves no orphan behind.
+    fn drop(&mut self) {
+        let _ = self._child.kill();
+        let _ = self._child.wait();
+    }
+}
+
 impl App {
     fn launch(vault: &Path) -> Option<Self> {
         let bin = silica_bin()?;
@@ -313,5 +325,9 @@ fn renaming_a_tree_row_renames_the_file_in_place() {
         "beta\n",
         "the renamed file keeps its bytes"
     );
-    assert_eq!(app.text(), "beta\n", "the note stays open under its new name");
+    assert_eq!(
+        app.text(),
+        "beta\n",
+        "the note stays open under its new name"
+    );
 }
