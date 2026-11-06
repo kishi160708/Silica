@@ -606,7 +606,7 @@ impl PluginHost {
             .commands
             .iter()
             .find(|c| c.id == id)
-            .ok_or_else(|| format!("'{id}' is not a command this plugin registered"))?;
+            .ok_or_else(|| crate::native::unknown_command(id))?;
         match &command.callback {
             Some(key) => self.run(key, None),
             None => Err(format!(

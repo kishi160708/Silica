@@ -4,7 +4,7 @@
 //! via [`crate::native::register_native`] at startup.
 
 use crate::live::register_native;
-use crate::native::{NativeCommand, Plugin, PluginContext};
+use crate::native::{unknown_command, NativeCommand, Plugin, PluginContext};
 use serde_json::Value;
 use std::time::SystemTime;
 
@@ -62,7 +62,7 @@ impl Plugin for DailyNotes {
                 }
                 Ok(())
             }
-            _ => Err(format!("'{id}' is not a command this plugin registered")),
+            _ => Err(unknown_command(id)),
         }
     }
 }
@@ -138,7 +138,7 @@ impl Plugin for Backlink {
                 }
                 Ok(())
             }
-            _ => Err(format!("'{id}' is not a command this plugin registered")),
+            _ => Err(unknown_command(id)),
         }
     }
 }
@@ -205,7 +205,7 @@ impl Plugin for OutgoingLink {
                 }
                 Ok(())
             }
-            _ => Err(format!("'{id}' is not a command this plugin registered")),
+            _ => Err(unknown_command(id)),
         }
     }
 }
@@ -247,7 +247,7 @@ impl Plugin for Templates {
                 (ctx.append_file)(&current, &content)?;
                 Ok(())
             }
-            _ => Err(format!("'{id}' is not a command this plugin registered")),
+            _ => Err(unknown_command(id)),
         }
     }
 }
@@ -292,7 +292,7 @@ impl Plugin for RandomNote {
                 (ctx.open_note)(&md_files[idx])?;
                 Ok(())
             }
-            _ => Err(format!("'{id}' is not a command this plugin registered")),
+            _ => Err(unknown_command(id)),
         }
     }
 }
@@ -340,7 +340,7 @@ impl Plugin for WordCount {
                 ));
                 Ok(())
             }
-            _ => Err(format!("'{id}' is not a command this plugin registered")),
+            _ => Err(unknown_command(id)),
         }
     }
 }
@@ -386,7 +386,7 @@ impl Plugin for NoteComposer {
                 (ctx.write_file)(&current, &merged)?;
                 Ok(())
             }
-            _ => Err(format!("'{id}' is not a command this plugin registered")),
+            _ => Err(unknown_command(id)),
         }
     }
 }
@@ -426,7 +426,7 @@ impl Plugin for ZkPrefixer {
                 (ctx.open_note)(&path)?;
                 Ok(())
             }
-            _ => Err(format!("'{id}' is not a command this plugin registered")),
+            _ => Err(unknown_command(id)),
         }
     }
 }
@@ -466,7 +466,7 @@ impl Plugin for WebViewer {
                 // ! first: the target arrives from a note, so it is untrusted.
                 crate::launch::open(url).map_err(|error| error.to_string())
             }
-            _ => Err(format!("'{id}' is not a command this plugin registered")),
+            _ => Err(unknown_command(id)),
         }
     }
 }
@@ -525,11 +525,11 @@ impl Plugin for Publish {
 
     fn run_command(
         &self,
-        _id: &str,
+        id: &str,
         _value: Option<&Value>,
         ctx: &PluginContext<'_>,
     ) -> Result<(), String> {
-        match _id {
+        match id {
             "publish:publish" => {
                 let root = ctx.vault_root;
                 let publish_dir = root.join("publish");
@@ -591,7 +591,7 @@ impl Plugin for Publish {
 
                 Ok(())
             }
-            _ => Err("'publish:publish' is not a command this plugin registered".to_string()),
+            _ => Err(unknown_command(id)),
         }
     }
 }
@@ -647,7 +647,7 @@ impl Plugin for Slides {
                 (ctx.open_note)(&slide_path)?;
                 Ok(())
             }
-            _ => Err(format!("'{id}' is not a command this plugin registered")),
+            _ => Err(unknown_command(id)),
         }
     }
 }
@@ -722,7 +722,7 @@ impl Plugin for FileRecovery {
 
                 Ok(())
             }
-            _ => Err(format!("'{id}' is not a command this plugin registered")),
+            _ => Err(unknown_command(id)),
         }
     }
 }
@@ -758,7 +758,7 @@ impl Plugin for AudioRecorder {
                 // * pretends a recording happened. The plugin is told plainly.
                 Err("audio recording is not supported by Silica".to_string())
             }
-            _ => Err(format!("'{id}' is not a command this plugin registered")),
+            _ => Err(unknown_command(id)),
         }
     }
 }
@@ -816,7 +816,7 @@ impl Plugin for Bookmarks {
                 (ctx.write_file)(bookmark_path, &updated)?;
                 Ok(())
             }
-            _ => Err(format!("'{id}' is not a command this plugin registered")),
+            _ => Err(unknown_command(id)),
         }
     }
 }
@@ -854,7 +854,7 @@ impl Plugin for Footnotes {
                 }
                 Ok(())
             }
-            _ => Err(format!("'{id}' is not a command this plugin registered")),
+            _ => Err(unknown_command(id)),
         }
     }
 }
@@ -924,7 +924,7 @@ impl Plugin for TagPane {
                 }
                 Ok(())
             }
-            _ => Err(format!("'{id}' is not a command this plugin registered")),
+            _ => Err(unknown_command(id)),
         }
     }
 }
@@ -997,7 +997,7 @@ impl Plugin for Workspaces {
                 }
                 Ok(())
             }
-            _ => Err(format!("'{id}' is not a command this plugin registered")),
+            _ => Err(unknown_command(id)),
         }
     }
 }
@@ -1051,7 +1051,7 @@ impl Plugin for SlashCommand {
                     _ => Err(format!("Unknown slash command: /{cmd}")),
                 }
             }
-            _ => Err(format!("'{id}' is not a command this plugin registered")),
+            _ => Err(unknown_command(id)),
         }
     }
 }
