@@ -851,7 +851,7 @@ mod tests {
 
     #[test]
     fn list_trash_returns_every_trashed_entry_sorted() {
-        let (dir, mut v) = vault();
+        let (dir, v) = vault();
         fs::create_dir_all(dir.path().join(".trash")).unwrap();
         fs::write(dir.path().join(".trash/Z.md"), "z").unwrap();
         fs::write(dir.path().join(".trash/A.md"), "a").unwrap();
@@ -881,7 +881,7 @@ mod tests {
 
     #[test]
     fn restore_from_trash_errors_when_entry_is_missing_or_target_exists() {
-        let (_dir, mut v) = vault();
+        let (dir, v) = vault();
         fs::create_dir_all(dir.path().join(".trash")).unwrap();
         assert!(matches!(
             v.restore_from_trash("Gone.md"),

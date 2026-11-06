@@ -323,14 +323,18 @@ fn write_snapshot(snapshots: &Path, stem: &str, ext: &str, bytes: &[u8]) -> std:
             });
         #[cfg(windows)]
         let written = {
-            let relative = target
-                .strip_prefix(snapshots)
-                .unwrap_or_else(|| Path::new(target.file_name().ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "snapshot path has no file name",
-                    )
-                })?));
+            let relative = match target.strip_prefix(snapshots) {
+                Ok(rel) => rel,
+                Err(_) => match target.file_name() {
+                    Some(name) => Path::new(name),
+                    None => {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            "snapshot path has no file name",
+                        ))
+                    }
+                },
+            };
             win_fs::write_at(snapshots, relative, bytes)
         };
         #[cfg(not(any(unix, windows)))]
