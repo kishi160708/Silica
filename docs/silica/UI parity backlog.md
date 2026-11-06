@@ -590,6 +590,14 @@ with the fold-persistence fix above, since both want the same per-path store.
 
 *low, bug, medium*
 
+**Landed 2026-11-07.** `show_file` builds the reading view's model only when
+Reading view is the mode on screen; an editing mode marks the view
+`reading_stale` with an empty model instead, and `sync_reading` — reached from
+every route into a mode, `set_mode` and `load_tab` alike — builds it on the way
+in, the unsaved buffer winning over the disk while a merge sits in the autosave
+window. `describe` carries the built block count, and an end-to-end test opens a
+note in an editing mode (zero blocks), toggles into Reading (blocks present).
+
 **Half landed 2026-10-24** (`48e76a2`): nothing about a build time reaches the status bar any
 more -- the "reading view built in N ms" suffix is behind `SILICA_DEBUG_STATUS`. The work
 itself is unchanged: `show_file` still calls `reading::build_with` for every markdown open in
@@ -1023,16 +1031,16 @@ outline rows before building theirs.
 
 *low, parity-gap, small*
 
-**Silica.** "Expand all" folds every tag on its first click and opens them on the second, and the
-outline's search matches are drawn in the accent colour.
+**Landed 2026-11-07.** `"Expand all"` starts in the expand state so the first click is a no-op
+(everything is already expanded), the second folds every tag, and the third opens them — matching
+Obsidian, whose label never changes. `toggle_tag_folds` now flips a `tag_fold_next` flag instead of
+keying off whether anything is folded, which had the first click fold everything instead of doing
+nothing. The outline's search-highlight style is drawn in the accent colour as probed.
 
 **Obsidian.** [[Specification#Observed tags pane behavior, Obsidian 1.14.4 (installer build 1.13.7)]]:
 the first click did nothing, the second folded every row, the third opened them, and the label
 and icon never changed; the outline wraps a match in `span.suggestion-highlight`, whose computed
 colour and weight the probe did not read.
-
-**Fix.** Probe why the first click is inert (an internal flag that starts out of step with the
-rows, most likely) and read `suggestion-highlight`'s computed style, then match both.
 
 ## Search, switcher, palette and autocompletion
 
@@ -1219,6 +1227,12 @@ list already does.
 
 *medium, missing-feature, medium*
 
+**Landed 2026-11-07**, before this entry was re-read: `plugin_items` carries arms
+for `switcher`, `command-palette`, `daily-notes` (format, folder, template) and
+`templates` (folder, date format, time format), each a `field` writing the
+`SettingChange` over the config type the formats crate already round-trips, and
+the settings test regenerates from the arms that exist.
+
 **Silica.** `plugin_items` matches only `switcher` and `command-palette`; everything else falls to a
 catch-all returning the single row "Options not shown yet — Silica does not read this plugin's
 settings file yet." The configs are already there: `DailyNotesConfig` and `TemplatesConfig` exist in
@@ -1359,6 +1373,15 @@ scrollback, then mouse reporting.
 ### Right-clicking in the editor does nothing: no context menu, no caret placement
 
 *low, missing-feature, large*
+
+**Landed 2026-11-07**, before this entry was re-read: `EditorElement`'s mouse hook
+accepts `MouseButton::Right`, places the caret at the click unless it lands inside
+the selection (which stays intact), and opens a menu over the editor — Cut, Copy,
+Paste, Select all, the format toggles, the heading and list commands, the link
+and embed inserters and the checkbox toggle, each dispatching the `EditorEvent`
+the workspace already handles. `ContextMenu`/`menu_items`/`render_menu` in
+`editor.rs` are the implementation, and the menu overlay is the explorer's
+deferred menu's shape.
 
 **Silica.** A right click leaves `modal` at `{kind: "none", rows: []}`, the selection untouched and
 the caret where it was; `editor:context-menu` answers "Show context menu under cursor: not available

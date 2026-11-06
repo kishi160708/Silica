@@ -10,7 +10,7 @@
   <img alt="Rust" src="https://img.shields.io/badge/100%25-Rust-E8590C?style=flat-square&logo=rust&logoColor=white">
   <img alt="Linux, Windows, macOS" src="https://img.shields.io/badge/Linux%20%7C%20Windows%20%7C%20macOS-2b2b2b?style=flat-square">
   <img alt="MIT" src="https://img.shields.io/badge/license-MIT-2b2b2b?style=flat-square">
-  <img alt="v0.5.15" src="https://img.shields.io/badge/status-early%20alpha%20v0.5.15-f2545b?style=flat-square">
+  <img alt="v0.5.16" src="https://img.shields.io/badge/status-early%20alpha%20v0.5.16-f2545b?style=flat-square">
 </p>
 
 Silica is a native desktop knowledge base written in Rust on GPUI. It opens an Obsidian vault exactly as it sits on disk: the same folder, the same `.obsidian` configuration, the same Markdown dialect, the same `.canvas` and `.base` files. There is no import step, no conversion, and no second copy of anything. The vault folder is the only source of truth. Silica is an independent, clean-room implementation and is not affiliated with Obsidian.
@@ -27,7 +27,7 @@ Installed plugins in `.obsidian/plugins/` are classified as native, compatibilit
 
 Every item in Obsidian's file explorer context menu now runs. **Merge entire file with...** is a three-way merge against the note on disk, with conflicts written as standard `<<<<<<<`/`=======`/`>>>>>>>` blocks rather than guessed away. **Open version history** lists the snapshots Silica records on every save — the last 30 per note, under `.obsidian/.silica-versions/` — and a restore lands in the buffer unsaved. **Open in new window** opens a popout, re-activating an existing one instead of duplicating it. **Show in system explorer** selects the file through D-Bus `FileManager1.ShowItems`, falling back to opening the containing folder. **Make a copy** on a folder copies the whole tree.
 
-Reading view took the same pass: the properties block is editable there, text selects and copies, the inline title renames its file with link rewriting, and image embeds render inline mid-sentence instead of breaking the line. The file tree renames the same way: F2 or the row menu's **Rename...** turns the row's own label into the field — basename selected, click lands the caret, Enter rewrites links, and a name the filesystem refuses leaves the field open and says nothing.
+Reading view took the same pass: the properties block is editable there, text selects and copies, the inline title renames its file with link rewriting, and image embeds render inline mid-sentence instead of breaking the line. The view header's bookmark button bookmarks the open note through the same prompt as the palette. The file tree renames the same way: F2 or the row menu's **Rename...** turns the row's own label into the field — basename selected, click lands the caret, Enter rewrites links, and a name the filesystem refuses leaves the field open and says nothing.
 
 `silica:export-site` publishes the vault as a static site in one command: every note renders to HTML through the same parser, links become relative URLs that work from disk with no server, attachments come along, and `index.html` is the note called README, index or Home.
 

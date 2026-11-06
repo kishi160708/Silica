@@ -331,3 +331,83 @@ fn renaming_a_tree_row_renames_the_file_in_place() {
         "the note stays open under its new name"
     );
 }
+
+/// A note opened while an editing mode is on screen builds no reading-view
+/// model; the model is built on the way into Reading view, so a reader who
+/// switches there meets the note fully rendered, not a blank pane.
+#[test]
+fn the_reading_model_is_built_on_the_way_into_reading_view() {
+    if !e2e_enabled() {
+        eprintln!("skipped: no display available for the graphical end-to-end tests");
+        return;
+    }
+    let vault = Vault::new();
+    let mut app = match App::launch(&vault.root) {
+        Some(a) => a,
+        None => {
+            eprintln!("skipped: no graphical session to launch silica in");
+            return;
+        }
+    };
+    app.settle();
+    app.call("open_path", json!({"path": "Note.md"}));
+    app.settle();
+    let blocks = |app: &mut App| {
+        app.call("state", json!({}))
+            .get("reading")
+            .and_then(|r| r.get("blocks"))
+            .and_then(|b| b.as_u64())
+            .unwrap_or(0)
+    };
+    // * Opened in the default editing mode: no model was built.
+    assert_eq!(blocks(&mut app), 0, "an editing mode built a reading model");
+    app.run_command("markdown:toggle-preview");
+    app.settle();
+    assert!(blocks(&mut app) > 0, "Reading view shows no blocks");
+}
+
+#[test]
+fn the_view_header_bookmark_action_prompts_for_a_title() {
+    if !e2e_enabled() {
+        eprintln!("skipped: no display available for the graphical end-to-end tests");
+        return;
+    }
+    let vault = Vault::new();
+    let mut app = match App::launch(&vault.root) {
+        Some(a) => a,
+        None => {
+            eprintln!("skipped: no graphical session to launch silica in");
+            return;
+        }
+    };
+    app.settle();
+    app.call("open_path", json!({"path": "Note.md"}));
+    app.settle();
+    app.call("window", json!({"action": "activate"}));
+    app.settle();
+    // Type a heading into the open note, then bookmark the current heading
+    // through the command palette path — the same start_bookmark the view
+    // header's bookmark button calls.
+    app.call("focus", json!({"set": "editor"}));
+    app.settle();
+    app.call("type", json!({"text": "# My Heading\\n"}));
+    app.settle();
+    app.call("command", json!({"id": "bookmarks:bookmark-current-heading"}));
+    app.settle();
+    let modal = app.call("state", json!({})).get("modal").cloned().unwrap_or(json!(null));
+    assert_eq!(
+        modal.get("kind").and_then(|k| k.as_str()),
+        Some("prompt"),
+        "the bookmark command opened no prompt: {modal:?}"
+    );
+    assert_eq!(
+        modal.get("pending_op").and_then(|p| p.get("op")).and_then(|o| o.as_str()),
+        Some("add-bookmark"),
+        "{modal:?}"
+    );
+    let placeholder = modal.get("pending_op").and_then(|p| p.get("placeholder")).and_then(|p| p.as_str()).unwrap_or("");
+    assert!(
+        placeholder.contains("My Heading"),
+        "the prompt bookmarks the current heading: {modal:?}"
+    );
+}

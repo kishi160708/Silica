@@ -1382,6 +1382,11 @@ struct TagPaneState {
     show_search: bool,
     /// Folded tags by lowercased path.
     collapsed: HashSet<String>,
+    /// Whether the next "Expand all" click folds every tag. Starts false so
+    /// the first click is a no-op (everything is already expanded), the
+    /// second folds every row, and the third opens them again — matching
+    /// Obsidian, whose label never changes.
+    tag_fold_next: bool,
     sort_menu_open: bool,
 }
 
@@ -1392,6 +1397,7 @@ impl Default for TagPaneState {
             use_hierarchy: true,
             show_search: false,
             collapsed: HashSet::new(),
+            tag_fold_next: false,
             sort_menu_open: false,
         }
     }
@@ -2757,6 +2763,10 @@ pub struct Workspace {
     /// The mode to return to when the graph closes.
     mode_before_graph: ViewMode,
     mode: ViewMode,
+    /// The reading view holds no model for the note on screen, because the
+    /// last mode that opened it was an editing one: the model is built on
+    /// the way into Reading rather than paid for on every open.
+    reading_stale: bool,
     current: Option<String>,
     /// The note whose file went away while its buffer was still on screen.
     /// The text stays — it may hold edits that exist nowhere else — but it
@@ -3394,6 +3404,7 @@ impl Workspace {
             )),
             mode_before_graph: ViewMode::Reading,
             mode: ViewMode::Reading,
+            reading_stale: false,
             current: None,
             detached: None,
             history: Vec::new(),
@@ -5661,6 +5672,7 @@ impl Workspace {
             });
         }
         self.focus_main(window, cx);
+        self.sync_reading(cx);
         cx.notify();
     }
 
@@ -6096,15 +6108,31 @@ impl Workspace {
             },
             FileKind::Markdown => match std::fs::read_to_string(state.vault().absolute(path)) {
                 Ok(text) => {
-                    let started = Instant::now();
-                    let model =
-                        reading::build_with(path, &text, state.as_ref(), state.build_options());
-                    let build_ms = started.elapsed().as_secs_f64() * 1000.0;
                     self.words = text.split_whitespace().count();
                     self.chars = text.chars().count();
-                    self.prepare_embeds(&model, cx);
-                    self.reading
-                        .update(cx, |r, cx| r.set_note(Some(path.to_string()), model, cx));
+                    // * The reading view's model is built for the mode
+                    //   that shows it: an editing session pays for a view
+                    //   it is not showing, so `reading_stale` marks the
+                    //   view empty and `sync_reading` builds it on the way
+                    //   into Reading, which every route through a mode
+                    //   change reaches.
+                    if self.mode == ViewMode::Reading {
+                        self.build_reading_model(path, &text, state, cx);
+                    } else {
+                        self.reading_stale = true;
+                        self.reading.update(cx, |r, cx| {
+                            r.set_note(
+                                Some(path.to_string()),
+                                reading::build_with(
+                                    "",
+                                    "",
+                                    state.as_ref(),
+                                    state.build_options(),
+                                ),
+                                cx,
+                            )
+                        });
+                    }
                     self.install_canvas_host(cx);
                     // * The editor keeps its buffer when the file on disk is
                     //   what it last saved (or still holds unsaved edits), and
@@ -6129,12 +6157,9 @@ impl Workspace {
                     }
                     // * Nothing about a build time reaches Obsidian's status
                     //   bar; the number is still there to be read with
-                    //   `SILICA_DEBUG_STATUS` set.
-                    self.status = if debug_status() {
-                        format!("{path}  ·  reading view built in {build_ms:.1} ms").into()
-                    } else {
-                        path.to_string().into()
-                    };
+                    //   `SILICA_DEBUG_STATUS` set, and only the mode that
+                    //   built the model says it.
+                    self.status = path.to_string().into();
                 }
                 Err(err) => self.unreadable(path, previous, &err, state, cx),
             },
@@ -6194,6 +6219,55 @@ impl Workspace {
         }
         self.refresh_panes(state, cx);
         cx.notify();
+    }
+
+    /// Builds the reading view's model for `text` and hands it to the view,
+    /// preloading its embeds on the way. This is what every mode that is
+    /// not reading view skips, and what `sync_reading` calls on the way in.
+    fn build_reading_model(
+        &mut self,
+        path: &str,
+        text: &str,
+        state: &Arc<VaultState>,
+        cx: &mut Context<Self>,
+    ) {
+        let started = Instant::now();
+        let model = reading::build_with(path, text, state.as_ref(), state.build_options());
+        let build_ms = started.elapsed().as_secs_f64() * 1000.0;
+        self.reading_stale = false;
+        self.prepare_embeds(&model, cx);
+        self.reading
+            .update(cx, |r, cx| r.set_note(Some(path.to_string()), model, cx));
+        // * Nothing about a build time reaches Obsidian's status bar; the
+        //   number is still there to be read with `SILICA_DEBUG_STATUS`.
+        if debug_status() {
+            self.status = format!("{path}  ·  reading view built in {build_ms:.1} ms").into();
+        }
+    }
+
+    /// Builds the reading view's model when the mode now on screen is one
+    /// that shows it and the view is still empty from the last open. Every
+    /// route into a mode reaches this — `set_mode` and `load_tab` — so a
+    /// reader never meets a blank note.
+    fn sync_reading(&mut self, cx: &mut Context<Self>) {
+        if self.mode.is_editing() || self.mode == ViewMode::Graph || !self.reading_stale {
+            return;
+        }
+        let (Some(state), Some(current)) = (self.state.clone(), self.current.clone()) else {
+            return;
+        };
+        if FileKind::from_path(&current) != FileKind::Markdown {
+            return;
+        }
+        // * The buffer wins over the disk: an unsaved edit exists there
+        //   and nowhere else, and the autosave is two seconds out.
+        let dirty = self.editor.read(cx).is_dirty();
+        let text = if dirty {
+            self.editor.read(cx).file_contents()
+        } else {
+            std::fs::read_to_string(state.vault().absolute(&current)).unwrap_or_default()
+        };
+        self.build_reading_model(&current, &text, &state, cx);
     }
 
     /// A file `show_file` could not read. `current` may not name a file
@@ -9120,6 +9194,29 @@ link to it is rewritten. The current note is deleted."
                                 this.toggle_mode(&ToggleMode, window, cx)
                             },
                         )))
+                        // * Obsidian's view-header bookmark action:
+                        // `lucide-bookmark`, and it bookmarks the note on
+                        // screen through the same prompt the palette's
+                        // bookmark command opens (spec: the mark action in
+                        // both file menus, and the PDF pane's header, which
+                        // carries Bookmark and More options only).
+                        .when(view.current.is_some(), |d| {
+                            d.child(icon_button("bookmark", "bookmark", theme).on_click(
+                                cx.listener(move |this, _, window, cx| {
+                                    this.activate_group(id, cx);
+                                    if let Some(path) = this.current.clone() {
+                                        this.start_bookmark(
+                                            BookmarkDraft::File {
+                                                path,
+                                                subpath: None,
+                                            },
+                                            window,
+                                            cx,
+                                        );
+                                    }
+                                }),
+                            ))
+                        })
                     }),
             )
     }
@@ -9753,6 +9850,7 @@ link to it is rewritten. The current note is deleted."
             (path, None) => self.current = path,
         }
         self.request_focus_main(cx);
+        self.sync_reading(cx);
         cx.notify();
     }
 
@@ -13749,17 +13847,19 @@ link to it is rewritten. The current note is deleted."
         self.tag_state.use_hierarchy = !self.tag_state.use_hierarchy;
         // * Obsidian's tree comes back with every folder open.
         self.tag_state.collapsed.clear();
+        self.tag_state.tag_fold_next = false;
         cx.notify();
     }
 
     /// "Expand all" (whose label never changes in Obsidian): folds every
     /// tag, leaves included, or opens them all again.
     fn toggle_tag_folds(&mut self, cx: &mut Context<Self>) {
-        if self.tag_state.collapsed.is_empty() {
+        if self.tag_state.tag_fold_next {
             self.tag_state.collapsed = panes::tag_keys(&self.tag_tree).into_iter().collect();
         } else {
             self.tag_state.collapsed.clear();
         }
+        self.tag_state.tag_fold_next = !self.tag_state.tag_fold_next;
         cx.notify();
     }
 
