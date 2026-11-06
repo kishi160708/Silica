@@ -7,6 +7,10 @@
 //! note, the local graph the current note and its neighbors.
 
 use super::layout::{Forces, Layout};
+/// Shaped node label lines, keyed by (label, colour, font family). The
+/// graph paints at one fixed font size, so those three are the whole
+/// shaping input and a shaped line outlives any single paint.
+type LabelCache = Arc<Mutex<HashMap<(String, [u32; 4], SharedString), ShapedLine>>>;
 use crate::search::inputs;
 use crate::text_input::{InputEvent, TextInput};
 use crate::theme::Theme;
@@ -15,7 +19,7 @@ use gpui::{
     actions, canvas, div, fill, point, prelude::*, px, size, App, Bounds, Context, DispatchPhase,
     Entity, EventEmitter, FocusHandle, Focusable, HitboxBehavior, Hsla, KeyBinding, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Point, ScrollWheelEvent,
-    SharedString, Subscription, Task, TextAlign, Window,
+    SharedString, ShapedLine, Subscription, Task, TextAlign, Window,
 };
 use serde_json::{json, Value};
 use silica_formats::config::{GraphColor, GraphColorGroup, GraphConfig};
@@ -340,6 +344,12 @@ pub struct GraphView {
     neighbors: Arc<Vec<Vec<usize>>>,
     index: HashMap<String, usize>,
     layout: Arc<Mutex<Layout>>,
+    /// Shaped node labels, keyed by (label, colour, font family). The
+    /// graph paints at one fixed font size, so those three are the whole
+    /// shaping input: without this, every paint re-shaped up to 400 labels
+    /// — 811-node graphs shaped hundreds of glyph runs per frame — and a
+    /// drag or a hover sweep was one text-rasterization per node.
+    labels: LabelCache,
     running: bool,
     scale: f32,
     /// Pan in screen pixels from the element center.
@@ -423,6 +433,7 @@ impl GraphView {
             neighbors: Arc::new(Vec::new()),
             index: HashMap::new(),
             layout: Arc::new(Mutex::new(Layout::new(0, Vec::new(), Forces::default()))),
+            labels: Arc::new(Mutex::new(HashMap::new())),
             running: false,
             scale: 1.0,
             offset: point(0.0, 0.0),
@@ -648,6 +659,10 @@ impl GraphView {
         self.nodes = Arc::new(built.nodes);
         self.edges = Arc::new(built.edges);
         self.neighbors = Arc::new(built.neighbors);
+        // * The node set changed, so a label painted for the old one is a
+        //   stale cache entry: drop the shaped lines and let the next paint
+        //   shape the new names once.
+        self.labels = Arc::new(Mutex::new(HashMap::new()));
         self.hovered = None;
         self.layout = Arc::new(Mutex::new(layout));
         // * The loop over the old layout breaks on its next tick, when it sees
@@ -2209,8 +2224,10 @@ impl Render for GraphView {
                             line_mult,
                             label_from,
                             arrows,
+                            label_cache,
                         ) = {
                             let view = paint_entity.read(cx);
+                            let label_cache = view.labels.clone();
                             let layout = view.layout.lock().unwrap_or_else(|e| e.into_inner());
                             let positions: Vec<Point<Pixels>> = layout
                                 .bodies
@@ -2248,9 +2265,10 @@ impl Render for GraphView {
                                 current_ix,
                                 highlight,
                                 view.scale,
-                                view.config.line_size_multiplier.unwrap_or(1.0),
+                                view.config.line_size_multiplier.unwrap_or(1.),
                                 view.label_threshold(),
                                 view.config.show_arrow.unwrap_or(false),
+                                label_cache,
                             )
                         };
                         window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
@@ -2317,6 +2335,7 @@ impl Render for GraphView {
                             }
                             // * Nodes.
                             let style = window.text_style();
+                            let family = style.font().family.clone();
                             let font_size = px(11.);
                             let mut labels = 0;
                             for (i, node) in nodes.iter().enumerate() {
@@ -2358,14 +2377,35 @@ impl Render for GraphView {
                                     || (scale >= label_from && labels < 400 && !dim);
                                 if show_label {
                                     labels += 1;
-                                    let mut run = style.to_run(node.label.len());
-                                    run.color = if dim { theme.text_faint } else { theme.text };
-                                    let line = window.text_system().shape_line(
-                                        node.label.clone(),
-                                        font_size,
-                                        &[run],
-                                        None,
+                                    // * The shaped line is cached: every
+                                    //   paint after the first is a lookup,
+                                    //   which is what keeps a large graph
+                                    //   off the text rasterizer.
+                                    let run_color =
+                                        if dim { theme.text_faint } else { theme.text };
+                                    let key = (
+                                        node.label.to_string(),
+                                        [
+                                            run_color.h.to_bits(),
+                                            run_color.s.to_bits(),
+                                            run_color.l.to_bits(),
+                                            run_color.a.to_bits(),
+                                        ],
+                                        family.clone(),
                                     );
+                                    let mut cache = label_cache.lock().unwrap_or_else(|e| e.into_inner());
+                                    let line = cache.entry(key).or_insert_with(|| {
+                                        let mut run = style.to_run(node.label.len());
+                                        run.color = run_color;
+                                        window.text_system().shape_line(
+                                            node.label.clone(),
+                                            font_size,
+                                            &[run],
+                                            None,
+                                        )
+                                    });
+                                    let line = line.clone();
+                                    drop(cache);
                                     let origin = point(p.x - line.width / 2., p.y + r + px(3.));
                                     let _ = line.paint(
                                         origin,
