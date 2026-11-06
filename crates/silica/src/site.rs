@@ -298,8 +298,10 @@ fn next_tag(rest: &str) -> Option<usize> {
 }
 
 /// Replaces one attribute's value inside a tag, keeping the quotes.
+/// The needle is space-prefixed: a bare `href="` also matches inside
+/// `data-href="`, which would rewrite the wrong attribute.
 fn replace_attr(tag: &str, name: &str, value: &str) -> String {
-    let needle = format!("{name}=\"");
+    let needle = format!(" {name}=\"");
     match tag.find(&needle) {
         Some(at) => {
             let value_at = at + needle.len();
@@ -387,6 +389,17 @@ mod tests {
 
     fn anchor(link: &str) -> String {
         ANCHOR.replace("{link}", link)
+    }
+
+    #[test]
+    fn a_link_rewrite_replaces_href_and_never_its_data_href() {
+        let map = link_map(&[&note("Target.md")]);
+        let empty = HashMap::new();
+        let r = rewrite(&anchor("Target"), &map, &empty, 0);
+        // The real href carries the URL; data-href keeps the link text.
+        assert!(r.html.contains(" href=\"Target.html\""), "{}", r.html);
+        assert!(r.html.contains("data-href=\"Target\""), "{}", r.html);
+        assert!(!r.html.contains("data-href=\"Target.html\""), "{}", r.html);
     }
 
     #[test]
