@@ -1062,7 +1062,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&out);
         assert!(seen, "writing a note inside the vault refreshes the export");
->>>>>>> theirs
     }
 
     #[test]
