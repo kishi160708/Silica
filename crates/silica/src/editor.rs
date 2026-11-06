@@ -6718,4 +6718,136 @@ mod tests {
         assert_eq!(source_index(&d, 4), 4);
         assert_eq!(source_index(&d, d.text.len()), 10);
     }
+
+    /// Regression guard, not a gate on speed: reparse of a huge note must
+    /// stay inside a generous budget, so a quadratic pass sneaking into the
+    /// parser (or the highlight stage) fails here instead of in the app.
+    /// Measured (release, this repo, 2026-11-06): parse 226-250 ms of a
+    /// 50k-line / 4.2 MB note; highlight 42-55 ms; ~2.2 us/line, linear.
+    /// Run: `cargo test -p silica --release perf_stage -- --nocapture`.
+    #[test]
+    fn perf_stage_timings_on_a_50k_line_note() {
+        fn synthetic_note(lines: usize) -> String {
+            use std::fmt::Write as _;
+            const WORDS: &[&str] = &[
+                "vault", "note", "link", "graph", "heading", "callout", "tag", "cursor", "scroll",
+                "render", "parser", "cache", "index", "editor", "canvas", "search", "theme",
+                "plugin",
+            ];
+            let mut out = String::with_capacity(lines * 48);
+            let mut seed: u64 = 7;
+            let mut pick = move || {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                WORDS[(seed % WORDS.len() as u64) as usize]
+            };
+            out.push_str("---\ntitle: Synthetic\ntags: [spike]\n---\n");
+            let mut n = 4;
+            while n < lines {
+                match n % 40 {
+                    0 => {
+                        let _ = writeln!(out, "\n## Section {} {}", n / 40, pick());
+                        n += 2;
+                    }
+                    7 => {
+                        let _ = writeln!(
+                            out,
+                            "> [!tip] {} {}\n> {} {} [[Note {}]]",
+                            pick(),
+                            pick(),
+                            pick(),
+                            pick(),
+                            n
+                        );
+                        n += 2;
+                    }
+                    12..=15 => {
+                        let _ = writeln!(
+                            out,
+                            "- [ ] {} {} #{} [[Note {}|{}]]",
+                            pick(),
+                            pick(),
+                            pick(),
+                            n % 97,
+                            pick()
+                        );
+                        n += 1;
+                    }
+                    20 => {
+                        let _ =
+                            writeln!(out, "```rust\nfn {}() {{ // [[not a link]] }}\n```", pick());
+                        n += 3;
+                    }
+                    _ => {
+                        let _ = writeln!(
+                            out,
+                            "{} {} **{}** {} [[Note {}#{}]] {} `{}` #{}/{} {} *{}* =={}== {}.",
+                            pick(),
+                            pick(),
+                            pick(),
+                            pick(),
+                            n % 211,
+                            pick(),
+                            pick(),
+                            pick(),
+                            pick(),
+                            pick(),
+                            pick(),
+                            pick(),
+                            pick(),
+                            pick()
+                        );
+                        n += 1;
+                    }
+                }
+            }
+            out
+        }
+
+        let text = synthetic_note(50_000);
+        let t = std::time::Instant::now();
+        let doc = silica_markdown::parse(&text);
+        let parse_ms = t.elapsed().as_secs_f64() * 1000.0;
+        let t = std::time::Instant::now();
+        let lines = highlight_lines(&doc);
+        let hl_ms = t.elapsed().as_secs_f64() * 1000.0;
+        let t = std::time::Instant::now();
+        let folds = crate::fold::foldables(&doc, &text, crate::fold::FoldOptions::default());
+        let fold_ms = t.elapsed().as_secs_f64() * 1000.0;
+        let spans: usize = lines.iter().map(Vec::len).sum();
+        println!(
+            "perf stage probe (50k lines, {} KB): parse {parse_ms:.0} ms | highlight_lines {hl_ms:.0} ms | foldables {fold_ms:.0} ms ({} folds) | {spans} spans | total {:.0} ms",
+            text.len() / 1024,
+            folds.len(),
+            parse_ms + hl_ms + fold_ms
+        );
+        // * Debug test runs are an order of magnitude slower; the budget
+        // * guards release perf, where the number is meaningful.
+        if !cfg!(debug_assertions) {
+            assert!(
+                parse_ms < 2_000.0,
+                "parse of a 50k-line note took {parse_ms:.0} ms; budget 2000 ms (was 226-250 ms)"
+            );
+        }
+
+        // * Scaling curve: linear growth means the per-edit cost is the
+        // * document's size and nothing pathological; superlinear means a
+        // * quadratic pass inside the parser worth hunting.
+        for lines_target in [10_000usize, 12_000, 15_000, 20_000, 30_000] {
+            let text = synthetic_note(lines_target);
+            let t = std::time::Instant::now();
+            let doc = silica_markdown::parse(&text);
+            let p = t.elapsed().as_secs_f64() * 1000.0;
+            let t = std::time::Instant::now();
+            let hl = highlight_lines(&doc);
+            let h = t.elapsed().as_secs_f64() * 1000.0;
+            println!(
+                "scaling {lines_target} lines ({} KB): parse {p:.1} ms | highlight {h:.1} ms | per-line {:.3} ms",
+                text.len() / 1024,
+                p / lines_target as f64
+            );
+            std::hint::black_box(hl.len());
+        }
+    }
 }
