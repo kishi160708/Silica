@@ -16584,6 +16584,32 @@ mod tests {
         (dir, state)
     }
 
+    /// A config file nothing can parse must not keep the vault from opening.
+    /// `VaultState::load` promises it: the defaults stand in, the broken file
+    /// is named for the window's notice, and the notes still open. Nothing
+    /// covered the promise — a crash that truncated `app.json` mid-string was
+    /// the exact case, and the whole boot hangs off this load.
+    #[test]
+    fn a_config_that_will_not_parse_does_not_stop_the_vault_opening() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = dir.path();
+        fs::create_dir_all(r.join(".obsidian")).unwrap();
+        // * What a crash leaves: the file is there, cut off mid-string.
+        fs::write(r.join(".obsidian/app.json"), "{\"trashOption\": \"lo").unwrap();
+        fs::write(r.join("Note.md"), "# Note\n").unwrap();
+
+        let state = VaultState::load(&r.to_path_buf())
+            .expect("a config that will not parse must not stop the vault opening");
+        assert_eq!(
+            state.unreadable_configs,
+            vec!["app.json".to_string()],
+            "the broken file must be named for the window's notice"
+        );
+        // * The defaults stand in: the unreadable setting does not take
+        // * effect, so nothing silently runs on half a config.
+        assert_eq!(state.trash_option(), TrashOption::System);
+    }
+
     /// A link written in a property is an outgoing link like any other,
     /// listed first the way the file writes it; a body link is labelled as
     /// it reads in the note and carries the link it was written with.
