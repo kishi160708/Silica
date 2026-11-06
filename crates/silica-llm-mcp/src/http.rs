@@ -411,6 +411,30 @@ mod tests {
         assert!(Url::parse("http://").unwrap_err().contains("no host"));
     }
 
+    /// A `Content-Length: 0` is a whole answer, not a body still to come:
+    /// the reply is complete the moment the header ends, and the body is
+    /// empty. A first line with no status code is an error naming it,
+    /// because a response without one is not a message to parse.
+    #[test]
+    fn a_zero_length_body_and_a_response_with_no_status_are_both_settled() {
+        // * Empty answer, complete at once.
+        let wire = b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".to_vec();
+        let got = read_response(&mut std::io::Cursor::new(wire), "test").unwrap();
+        assert_eq!(got.status, 200);
+        assert_eq!(got.body, "");
+
+        // * The same with a body that follows anyway: the length rules.
+        let wire = b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\nnothing".to_vec();
+        let got = read_response(&mut std::io::Cursor::new(wire), "test").unwrap();
+        assert_eq!(got.body, "");
+
+        // * A first line with no status code never becomes a message.
+        let wire = b"HELLO THERE\r\nContent-Length: 2\r\n\r\nhi".to_vec();
+        let err = read_response(&mut std::io::Cursor::new(wire), "test")
+            .expect_err("a response with no status must not answer Ok");
+        assert!(err.contains("no status"), "{err}");
+    }
+
     #[test]
     fn decodes_a_plain_body() {
         assert_eq!(decode(b"hello", false, Some(5)), "hello");
