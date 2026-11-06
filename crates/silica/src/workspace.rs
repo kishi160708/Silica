@@ -18129,6 +18129,57 @@ mod tests {
         );
     }
 
+    /// A note with no bytes in it is a note like any other: the vault lists
+    /// it, the index holds it with nothing in it, and a link to it resolves
+    /// to the file rather than dangling. The second half is the outside
+    /// change: a note another app empties is re-indexed to nothing rather
+    /// than keeping the frontmatter it used to carry — stale rows would
+    /// describe a file that no longer says so.
+    #[test]
+    fn a_note_with_no_bytes_is_listed_indexed_and_linked() {
+        let (dir, state) = vault();
+        // * A note that starts empty, from outside.
+        let empty = dir.path().join("Untitled.md");
+        fs::write(&empty, "").unwrap();
+        state.apply(std::slice::from_ref(&empty));
+
+        assert!(state.vault().files().iter().any(|f| f.path == "Untitled.md"));
+        assert!(state.cache().file("Untitled.md").is_some(), "not indexed");
+        assert_eq!(
+            state.texts()["Untitled.md"].as_str(),
+            "",
+            "its text is the empty string, not missing"
+        );
+        // * A link to it resolves to the file rather than dangling.
+        fs::write(
+            dir.path().join("Linker.md"),
+            "Start from [[Untitled]] and fill it in.\n",
+        )
+        .unwrap();
+        state.apply(&[dir.path().join("Linker.md")]);
+        assert_eq!(
+            state.cache().backlinks("Untitled.md").len(),
+            1,
+            "a link to an empty note dangled"
+        );
+
+        // * Another app empties a note that had frontmatter properties.
+        let b = dir.path().join("B.md");
+        assert!(
+            state.cache().file("B.md").unwrap().frontmatter.is_some(),
+            "the fixture note has frontmatter"
+        );
+        fs::write(&b, "").unwrap();
+        state.apply(std::slice::from_ref(&b));
+        assert!(
+            state.cache().file("B.md").unwrap().frontmatter.is_none(),
+            "frontmatter of a note that no longer has any stayed: {:?}",
+            state.cache().file("B.md").unwrap().frontmatter
+        );
+        assert_eq!(state.texts()["B.md"].as_str(), "", "the emptied text was not re-read");
+        assert!(state.cache().file("B.md").is_some(), "the note vanished from the index");
+    }
+
     /// And the mirror: a folder that appears from outside — a restore, a
     /// sync client unpacking a tree — is walked and every note in it is
     /// indexed, with the folder itself in the file list. A restored tree the
