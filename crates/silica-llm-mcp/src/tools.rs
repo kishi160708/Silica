@@ -968,4 +968,26 @@ mod tests {
         );
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    /// A note whose name holds spaces, non-ASCII letters and the characters
+    /// a URL or a shell would want quoted is read like any other: the digest
+    /// root is a configured path and the name is data, so neither may be
+    /// able to refuse the file. Windows is the case that matters — the
+    /// canonical path carries the `\\?\` prefix and the configured root does
+    /// not, so the name has to survive both spellings.
+    #[test]
+    fn digest_reads_a_file_with_a_name_no_url_would_like() {
+        let dir = std::env::temp_dir().join(format!("silica-llm-mcp-weird-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let name = "день с пробелом ✓ #1 [x] & %20.md";
+        let file = dir.join(name);
+        std::fs::write(&file, "line one\nline two\n").unwrap();
+        let path = file.to_string_lossy().into_owned();
+
+        let whole = read_excerpt(&backend_with(1 << 20), &path, None, false).unwrap();
+        assert_eq!(whole.body, "line one\nline two");
+        let only = read_excerpt(&backend_with(1 << 20), &path, Some("TWO"), false).unwrap();
+        assert_eq!(only.body, "line two");
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
