@@ -640,9 +640,11 @@ pub fn display_line_with(
 /// closing tag of the same name that balances it, both on this line, as one
 /// byte range. Each tag is its own inline HTML span; a span holding more
 /// than one tag is a line of an HTML block, which is the block's business.
-fn html_elements(line: &str, spans: &[HighlightSpan]) -> Vec<Range<usize>> {
-    // (range, lowercase name, closing)
-    let mut tags: Vec<(Range<usize>, String, bool)> = Vec::new();
+fn html_elements<'a>(line: &'a str, spans: &[HighlightSpan]) -> Vec<Range<usize>> {
+    // (range, tag name as written, closing) — names stay slices of `line`
+    // and compare case-insensitively, so the per-keystroke redraw of every
+    // visible line costs no allocation per tag.
+    let mut tags: Vec<(Range<usize>, &'a str, bool)> = Vec::new();
     for span in spans.iter().filter(|s| s.kind == HighlightKind::Html) {
         let Some(t) = line.get(span.range.clone()) else {
             continue;
@@ -657,11 +659,9 @@ fn html_elements(line: &str, spans: &[HighlightSpan]) -> Vec<Range<usize>> {
             Some(rest) => (true, rest),
             None => (false, inner),
         };
-        let name: String = rest
-            .chars()
-            .take_while(|c| c.is_ascii_alphanumeric())
-            .collect::<String>()
-            .to_ascii_lowercase();
+        let name = &rest[..rest
+            .find(|c: char| !c.is_ascii_alphanumeric())
+            .unwrap_or(rest.len())];
         if name.is_empty() {
             continue;
         }
@@ -674,7 +674,7 @@ fn html_elements(line: &str, spans: &[HighlightSpan]) -> Vec<Range<usize>> {
         }
         let mut depth = 0usize;
         for (range, other, other_closing) in &tags[i + 1..] {
-            if other != name {
+            if !other.eq_ignore_ascii_case(name) {
                 continue;
             }
             if !other_closing {
@@ -778,6 +778,16 @@ mod tests {
         // A heading keeps its scale around a widget.
         let d = render("## H <sup>2</sup>", None);
         assert_eq!(d.text, "H 2");
+    }
+
+    /// Tag names compare case-insensitively — `<B>` and `</b>` pair, as
+    /// they would in a browser.
+    #[test]
+    fn inline_html_elements_match_tag_names_case_insensitively() {
+        let d = render("a <B>bold</b> end", None);
+        assert_eq!(d.text, "a bold end");
+        assert_eq!(d.html.len(), 1);
+        assert_eq!(d.html[0].display, 2..6);
     }
 
     #[test]
