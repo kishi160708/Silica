@@ -245,3 +245,6 @@ insert-current-time
 zk-prefixer
 insert-unique-link
 random-note
+
+# Silica ids that are not Obsidian commands (marked by the `silica:` prefix).
+silica:export-site

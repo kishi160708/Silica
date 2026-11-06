@@ -35,6 +35,7 @@ mod mermaid;
 mod native_menus;
 mod page_preview;
 mod palette;
+mod site;
 mod panes;
 mod pdf;
 mod popout;
