@@ -355,19 +355,26 @@ fn next_tag(rest: &str) -> Option<usize> {
 }
 
 /// Replaces one attribute's value inside a tag, keeping the quotes.
+///
+/// The needle is anchored at a space: a bare `href="` also matches inside
+/// `data-href="`, which would rewrite the data attribute and leave the real
+/// href as the link text — a dead link on the exported page. The tags this
+/// pass rewrites always carry other attributes first (the renderer emits
+/// `class` before `href`, `alt` before `src`); the unanchored fallback only
+/// runs when the name is the first attribute, where no longer name can
+/// precede it.
 fn replace_attr(tag: &str, name: &str, value: &str) -> String {
-    let needle = format!("{name}=\"");
-    match tag.find(&needle) {
-        Some(at) => {
+    for needle in [format!(" {name}=\""), format!("{name}=\"")] {
+        if let Some(at) = tag.find(&needle) {
             let value_at = at + needle.len();
             let end = tag[value_at..]
                 .find('"')
                 .map(|i| value_at + i)
                 .unwrap_or(value_at);
-            format!("{}{}{}", &tag[..value_at], value, &tag[end..])
+            return format!("{}{}{}", &tag[..value_at], value, &tag[end..]);
         }
-        None => tag.to_string(),
     }
+    tag.to_string()
 }
 
 /// Removes one attribute and its value from a tag.
@@ -521,6 +528,21 @@ mod tests {
         let r = rewrite(&src, &map, &empty, 0);
         assert_eq!((r.links, r.unresolved), (1, 0), "{}", r.html);
         assert!(r.html.contains("href=\"A & B.html\""), "{}", r.html);
+        assert!(!r.html.contains("_blank"), "{}", r.html);
+    }
+
+    #[test]
+    fn a_rewritten_href_survives_a_data_href_written_before_it() {
+        let map = link_map(&[&note("Target.md")]);
+        let empty = HashMap::new();
+        // The renderer writes aria-label, then data-href, then href — a
+        // bare `href="` needle matches inside `data-href="` and rewrites
+        // the wrong attribute, leaving the real href as the link text.
+        let src = "<a data-tooltip-position=\"top\" aria-label=\"Target\" data-href=\"Target\" href=\"Target\" class=\"internal-link\" target=\"_blank\" rel=\"noopener nofollow\">T</a>";
+        let r = rewrite(src, &map, &empty, 0);
+        assert_eq!((r.links, r.unresolved), (1, 0), "{}", r.html);
+        assert!(r.html.contains(" href=\"Target.html\""), "{}", r.html);
+        assert!(r.html.contains("data-href=\"Target\""), "{}", r.html);
         assert!(!r.html.contains("_blank"), "{}", r.html);
     }
 
