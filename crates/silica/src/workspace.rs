@@ -17986,6 +17986,47 @@ mod tests {
         assert!(vault_path_in(&root, "dangling.md").is_err());
     }
 
+    /// What the rename dialog's typed name actually lands on. The extension
+    /// is carried over and the folder is kept, so a note can never be renamed
+    /// into a different file than the one the explorer shows — and a name the
+    /// OS would rewrite (trailing dot or space, which Windows silently drops)
+    /// is refused rather than allowed to clobber its neighbour.
+    #[test]
+    fn a_renamed_keeps_its_extension_and_its_folder() {
+        // * The extension comes back; only the stem is the typed part.
+        assert_eq!(renamed_path("Note.md", "Fresh", false).unwrap(), "Fresh.md");
+        // * A folder keeps its place, and gets no extension of its own.
+        assert_eq!(
+            renamed_path("Notes/Plan.md", "Roadmap", false).unwrap(),
+            "Notes/Roadmap.md"
+        );
+        // * A folder's typed name is its new whole path: the entry at the
+        // * vault root keeps its level, and a nested one keeps its parent.
+        assert_eq!(renamed_path("Notes", "Archive", true).unwrap(), "Archive");
+        assert_eq!(
+            renamed_path("Notes/Sub", "Moved", true).unwrap(),
+            "Notes/Moved"
+        );
+        // * A note with no extension stays without one: appending ".md" to
+        // * a file the user made deliberately extension-less changes its kind.
+        assert_eq!(renamed_path("Scratch", "Bin", false).unwrap(), "Bin");
+        // * Only the last extension is carried: Obsidian's rule, so a double
+        // * extension note is not silently given a different one.
+        assert_eq!(
+            renamed_path("archive.tar.gz", "backup", false).unwrap(),
+            "backup.gz"
+        );
+
+        // * A name the OS would rewrite is refused by the same validator the
+        // * vault uses, not renamed into something else.
+        for bad in ["Trailing.", "Trailing ", "  "] {
+            assert!(
+                renamed_path("Note.md", bad, false).is_err(),
+                "{bad:?} must be refused"
+            );
+        }
+    }
+
     /// A file kind reaches the state dump in lower case.
     #[test]
     fn file_kinds_are_named_in_lower_case() {
