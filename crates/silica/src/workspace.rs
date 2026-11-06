@@ -3152,6 +3152,7 @@ impl Workspace {
                 |this, _, event: &PromptEvent, window, cx| match event {
                     PromptEvent::Submit(value) => this.prompt_submitted(value, window, cx),
                     PromptEvent::Secondary => this.prompt_secondary(window, cx),
+                    PromptEvent::Tertiary => this.prompt_tertiary(window, cx),
                     PromptEvent::Cancel => {
                         this.pending = None;
                         this.close_modal(window, cx);
@@ -7606,6 +7607,7 @@ impl Workspace {
                 suggestions: candidates,
                 confirm: "Merge".into(),
                 secondary: None,
+                tertiary: None,
             },
             window,
             cx,
@@ -7698,6 +7700,7 @@ impl Workspace {
                 suggestions,
                 confirm: "Restore".into(),
                 secondary: None,
+                tertiary: None,
             },
             window,
             cx,
@@ -7865,6 +7868,24 @@ impl Workspace {
                 self.finish_restore_version(&file, value, window, cx)
             }
         }
+    }
+
+    /// The prompt's third button: "Always update" on the Update-links
+    /// prompt, which writes `alwaysUpdateLinks: true` — so this prompt is
+    /// never shown again — and then renames with the links rewritten.
+    fn prompt_tertiary(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(PendingOp::UpdateLinks { from, to }) = self.pending.clone() else {
+            return;
+        };
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let mut app = state.app().clone();
+        app.always_update_links = Some(true);
+        if let Err(err) = state.apply_setting(&SettingChange::App(app)) {
+            self.report(format!("Could not save the setting: {err}"), cx);
+        }
+        self.finish_rename(&from, &to, true, Some(window), cx);
     }
 
     /// The prompt's secondary button: "Don't update" the links.
@@ -8095,6 +8116,10 @@ impl Workspace {
                     input: None,
                     confirm: "Update links".into(),
                     secondary: Some("Don't update".into()),
+                    // * Obsidian's third answer: from here on, every rename
+                    //   rewrites without asking, which is the one control
+                    //   that writes `alwaysUpdateLinks: true`.
+                    tertiary: Some("Always update".into()),
                     ..PromptSpec::default()
                 },
                 w,
