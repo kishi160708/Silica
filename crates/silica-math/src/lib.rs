@@ -154,7 +154,11 @@ fn typeset_uncached(tex: &str, display: bool) -> Result {
     // * `\class`/`\style`/`\cssId`, `\unicode`) and user macros are handled
     // * here; see `mathjax`. RaTeX sets the rest.
     let tex = mathjax::normalize(tex);
-    let tex = if tex.trim().is_empty() { "{}" } else { tex.as_str() };
+    let tex = if tex.trim().is_empty() {
+        "{}"
+    } else {
+        tex.as_str()
+    };
     let nodes = ratex_parser::parse(tex).map_err(|e| MathError { message: e.message })?;
     let options = LayoutOptions {
         style: if display {

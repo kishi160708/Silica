@@ -132,7 +132,11 @@ fn load(fixture: &Fixture, open_note: Option<&str>) -> PluginHost {
 fn a_vault_only_plugin_registers_what_it_added() {
     let fixture = fixture(COUNTER);
     let host = load(&fixture, None);
-    assert!(!host.failed(), "load failed: {:?}", host.registrations().failure);
+    assert!(
+        !host.failed(),
+        "load failed: {:?}",
+        host.registrations().failure
+    );
 
     let registered = host.registrations();
     let ids: Vec<&str> = registered.commands.iter().map(|c| c.id.as_str()).collect();
@@ -184,14 +188,16 @@ fn running_a_command_does_the_work() {
     let fixture = fixture(COUNTER);
     let host = load(&fixture, None);
 
-    host.run_command("counter:create-file").expect("the command ran");
+    host.run_command("counter:create-file")
+        .expect("the command ran");
     let created = fixture.vault.join("count-new.md");
     assert_eq!(
         fs::read_to_string(&created).expect("the note"),
         "created by counter"
     );
 
-    host.run_command("counter:count-notes").expect("the command ran");
+    host.run_command("counter:count-notes")
+        .expect("the command ran");
     assert!(host.take_notices().iter().any(|n| n == "3 notes"));
 
     let unregistered = host.run_command("not-a-command").unwrap_err();
@@ -216,8 +222,14 @@ module.exports = NeedsElectron;
     let host = load(&fixture, None);
     assert!(host.failed());
     let reason = host.registrations().failure.clone().unwrap();
-    assert!(reason.contains("cannot require the module 'electron'"), "{reason}");
-    assert!(host.registrations().commands.is_empty(), "nothing half-registered");
+    assert!(
+        reason.contains("cannot require the module 'electron'"),
+        "{reason}"
+    );
+    assert!(
+        host.registrations().commands.is_empty(),
+        "nothing half-registered"
+    );
 }
 
 #[test]
@@ -242,14 +254,18 @@ fn a_write_to_the_note_open_in_the_editor_is_refused() {
     let host = load(&fixture, Some("Note.md"));
     let before = fs::read_to_string(fixture.vault.join("Note.md")).expect("the note");
 
-    host.run_command("counter:overwrite-open").expect("the command ran");
+    host.run_command("counter:overwrite-open")
+        .expect("the command ran");
 
     assert_eq!(
         fs::read_to_string(fixture.vault.join("Note.md")).expect("the note"),
         before
     );
     let notices = host.take_notices();
-    assert!(notices.iter().any(|n| n.contains("open in the editor")), "{notices:?}");
+    assert!(
+        notices.iter().any(|n| n.contains("open in the editor")),
+        "{notices:?}"
+    );
 }
 
 #[test]
@@ -259,7 +275,9 @@ fn a_path_out_of_the_vault_is_refused() {
     host.run_command("counter:escape").expect("the command ran");
     let notices = host.take_notices();
     assert!(
-        notices.iter().any(|n| n.contains("points outside the vault")),
+        notices
+            .iter()
+            .any(|n| n.contains("points outside the vault")),
         "{notices:?}"
     );
 }

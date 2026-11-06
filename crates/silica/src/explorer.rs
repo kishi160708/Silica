@@ -480,7 +480,11 @@ impl Render for FileDragPreview {
                     .border_color(theme.border)
                     .shadow_md()
                     .child(crate::assets::icon(
-                        if self.is_folder { "folder" } else { "file-text" },
+                        if self.is_folder {
+                            "folder"
+                        } else {
+                            "file-text"
+                        },
                         14.,
                         theme.text_muted,
                     ))
@@ -1130,10 +1134,9 @@ impl FileExplorer {
         if parent == dest_folder {
             return;
         }
-        if drag.is_folder
-            && (dest_folder == src || dest_folder.starts_with(&format!("{src}/"))) {
-                return;
-            }
+        if drag.is_folder && (dest_folder == src || dest_folder.starts_with(&format!("{src}/"))) {
+            return;
+        }
         cx.emit(ExplorerEvent::MoveToFolder {
             src: src.clone(),
             dest_folder: dest_folder.to_string(),

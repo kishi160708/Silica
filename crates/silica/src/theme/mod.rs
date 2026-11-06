@@ -532,7 +532,6 @@ pub fn load_css_snippets(vault_path: &Path, enabled: &[String], dark: bool) -> V
         .collect()
 }
 
-
 impl Theme {
     /// Apply a parsed community theme on top of this one. Only properties the
     /// theme explicitly sets are overridden; everything else keeps the base
@@ -713,8 +712,14 @@ mod tests {
         ";
         let dark = parse_css_theme(css, true);
         let light = parse_css_theme(css, false);
-        assert_eq!(dark.vars.get("--background-primary").map(String::as_str), Some("#111111"));
-        assert_eq!(light.vars.get("--background-primary").map(String::as_str), Some("#eeeeee"));
+        assert_eq!(
+            dark.vars.get("--background-primary").map(String::as_str),
+            Some("#111111")
+        );
+        assert_eq!(
+            light.vars.get("--background-primary").map(String::as_str),
+            Some("#eeeeee")
+        );
     }
 
     /// A name that could join its way out of `.obsidian` is refused before any
@@ -749,8 +754,11 @@ mod tests {
             ":root { --background-primary: #123456; }",
         )
         .expect("theme.css");
-        std::fs::write(themes.join("Flat.css"), ":root { --background-primary: #654321; }")
-            .expect("flat theme");
+        std::fs::write(
+            themes.join("Flat.css"),
+            ":root { --background-primary: #654321; }",
+        )
+        .expect("flat theme");
 
         let folded = load_css_theme(vault.path(), "Folded", true).expect("folder theme loads");
         assert_eq!(

@@ -67,18 +67,13 @@ pub fn render_preview_card(data: &PagePreviewData, theme: &Theme) -> Div {
         .border_b_1()
         .border_color(theme.border);
 
-    let title_text = div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap_1()
-        .child(
-            div()
-                .font_weight(FontWeight::BOLD)
-                .text_size(px(base * 0.9))
-                .text_color(theme.text)
-                .child(data.title.clone()),
-        );
+    let title_text = div().flex().flex_row().items_center().gap_1().child(
+        div()
+            .font_weight(FontWeight::BOLD)
+            .text_size(px(base * 0.9))
+            .text_color(theme.text)
+            .child(data.title.clone()),
+    );
 
     let title_row = if let Some(sub) = &data.subpath {
         title_text.child(
@@ -159,23 +154,13 @@ pub fn render_preview_card(data: &PagePreviewData, theme: &Theme) -> Div {
                 }
             })
             .collect();
-        card = card.child(
-            div()
-                .flex()
-                .flex_col()
-                .overflow_hidden()
-                .children(lines),
-        );
+        card = card.child(div().flex().flex_col().overflow_hidden().children(lines));
     }
 
     card
 }
 
-pub fn render_floating(
-    data: &PagePreviewData,
-    pos: Point<Pixels>,
-    theme: &Theme,
-) -> AnyElement {
+pub fn render_floating(data: &PagePreviewData, pos: Point<Pixels>, theme: &Theme) -> AnyElement {
     let card = render_preview_card(data, theme);
     div()
         .absolute()
@@ -353,7 +338,8 @@ mod tests {
 
     #[test]
     fn extracts_frontmatter_title_and_excerpt() {
-        let text = "---\ntitle: Sample Note\n---\n# Sample Note\nFirst paragraph.\n\nSecond paragraph.";
+        let text =
+            "---\ntitle: Sample Note\n---\n# Sample Note\nFirst paragraph.\n\nSecond paragraph.";
         let (title, excerpt) = extract_excerpt(text, 5);
         assert_eq!(title.as_deref(), Some("Sample Note"));
         assert!(excerpt.contains("First paragraph."));

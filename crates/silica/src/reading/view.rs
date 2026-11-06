@@ -13,7 +13,6 @@ use crate::fold::{self, FoldKey};
 use crate::math::{self, FormulaElement, Inline, Overlay, SpaceWidths};
 use crate::properties::{Field, Part, Target};
 use crate::properties::{PROPERTIES_FOLD_ID, PROPERTY_ID_BASE};
-use silica_plugins::live;
 use crate::theme::Theme;
 use gpui::{
     actions, canvas, div, img, list, prelude::*, px, AnyElement, AnyView, App, ClipboardItem,
@@ -28,6 +27,7 @@ use silica_formats::config::PropertyTypes;
 use silica_formats::properties::{Change, PropertiesInDocument, Property, PropertyType};
 use silica_formats::FileKind;
 use silica_markdown::Alignment;
+use silica_plugins::live;
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::ops::Range;
@@ -463,7 +463,13 @@ impl ReadingView {
 
     /// Starts `path` at `at`, replacing whatever was open. The task owns the
     /// decoder, so replacing a video kills the old `ffmpeg` by dropping it.
-    fn video_start(&self, path: PathBuf, info: crate::video::Info, at: f32, cx: &mut Context<Self>) {
+    fn video_start(
+        &self,
+        path: PathBuf,
+        info: crate::video::Info,
+        at: f32,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(old) = self.video.borrow_mut().take() {
             crate::video::drop_frame(old.frame, cx);
         }
@@ -476,7 +482,14 @@ impl ReadingView {
             frame,
             task: None,
         });
-        let task = Self::play_loop(cx.entity().downgrade(), self.video.clone(), path, info, at, cx);
+        let task = Self::play_loop(
+            cx.entity().downgrade(),
+            self.video.clone(),
+            path,
+            info,
+            at,
+            cx,
+        );
         if let Some(video) = self.video.borrow_mut().as_mut() {
             video.task = Some(task);
         }
@@ -891,8 +904,7 @@ impl ReadingView {
         let view_for_video = view.clone();
         let on_video: VideoHandler = Rc::new(move |path, share, _window, cx| {
             let path = path.to_path_buf();
-            view_for_video
-                .update(cx, |this, cx| this.video_clicked(&path, share, cx));
+            view_for_video.update(cx, |this, cx| this.video_clicked(&path, share, cx));
         });
         let host = ReadingHost {
             properties: self.properties_in_document,
@@ -1891,10 +1903,11 @@ impl<'a> Renderer<'a> {
                     .bg(gpui::black())
                     .id(("video-frame", label.len()))
                     .on_click(move |_, window, cx| on_frame(&frame_path, None, window, cx))
-                    .children(
-                        frame
-                            .map(|f| img(crate::video::frame_source(f)).size_full().object_fit(ObjectFit::Fill)),
-                    )
+                    .children(frame.map(|f| {
+                        img(crate::video::frame_source(f))
+                            .size_full()
+                            .object_fit(ObjectFit::Fill)
+                    }))
                     .when(!playing, |el| {
                         el.child(
                             div()
@@ -1931,7 +1944,9 @@ impl<'a> Renderer<'a> {
                             .w(px(14.))
                             .cursor_pointer()
                             .id(("video-toggle", label.len()))
-                            .on_click(move |_, window, cx| on_toggle(&toggle_path, None, window, cx))
+                            .on_click(move |_, window, cx| {
+                                on_toggle(&toggle_path, None, window, cx)
+                            })
                             .child(SharedString::from(if playing { "⏸" } else { "▶" })),
                     )
                     .child(SharedString::from(clock(at)))
@@ -2118,9 +2133,8 @@ impl<'a> Renderer<'a> {
                     .and_then(|n| n.to_str())
                     .unwrap_or(&embed.link)
                     .to_string();
-                let is_playing = AUDIO_PLAYER.with(|p| {
-                    p.borrow().as_ref().is_some_and(|player| player.is_playing)
-                });
+                let is_playing = AUDIO_PLAYER
+                    .with(|p| p.borrow().as_ref().is_some_and(|player| player.is_playing));
                 let path_clone = path.clone();
                 div()
                     .my_1()

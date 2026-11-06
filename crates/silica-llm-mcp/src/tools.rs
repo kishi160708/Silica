@@ -7,15 +7,15 @@
 //! the whole point of the tool — a 40,000-line `cargo test` log can be reduced
 //! to a paragraph without ever entering the conversation.
 
-use crate::model::{Answer, Ask, Backend, digest_path};
+use crate::model::{digest_path, Answer, Ask, Backend};
 use crate::rpc::{Fault, INVALID_PARAMS};
 use serde_json::{json, Map, Value};
-use std::io::{Read, Seek};
-use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::ffi::CString;
+use std::io::{Read, Seek};
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd};
+use std::path::{Path, PathBuf};
 
 enum Run {
     Models,
@@ -155,7 +155,7 @@ fn run(backend: &Backend, tool: &Tool, arguments: &Value) -> Result<String, Stri
             let origin = backend.config.url.origin();
             if names.is_empty() {
                 return Ok(format!(
-                "{origin} is up but serving no models; check \
+                    "{origin} is up but serving no models; check \
                      that the model is pulled and the server is serving it (wanted `{}`).",
                     backend.config.model
                 ));
@@ -363,10 +363,8 @@ fn open_digest_file(root: &Path, file: &Path) -> Result<std::fs::File, String> {
     let (dirs, last) = comps.split_at(comps.len() - 1);
     let mut dir_fd = root_fd;
     for comp in dirs {
-        let cname =
-            CString::new(comp.as_encoded_bytes()).map_err(|e| {
-                format!("invalid path component {}: {e}", comp.to_string_lossy())
-            })?;
+        let cname = CString::new(comp.as_encoded_bytes())
+            .map_err(|e| format!("invalid path component {}: {e}", comp.to_string_lossy()))?;
         let next = unsafe {
             libc::openat(
                 dir_fd.as_raw_fd(),
@@ -383,9 +381,8 @@ fn open_digest_file(root: &Path, file: &Path) -> Result<std::fs::File, String> {
         }
         dir_fd = unsafe { std::fs::File::from_raw_fd(next) };
     }
-    let cname = CString::new(last[0].as_encoded_bytes()).map_err(|e| {
-        format!("invalid path component {}: {e}", last[0].to_string_lossy())
-    })?;
+    let cname = CString::new(last[0].as_encoded_bytes())
+        .map_err(|e| format!("invalid path component {}: {e}", last[0].to_string_lossy()))?;
     let fd = unsafe {
         libc::openat(
             dir_fd.as_raw_fd(),
@@ -443,7 +440,9 @@ fn read_excerpt(
             .map_err(|e| format!("cannot read {path}: {e}"))?
     };
 
-    let meta = f.metadata().map_err(|e| format!("cannot stat {path}: {e}"))?;
+    let meta = f
+        .metadata()
+        .map_err(|e| format!("cannot stat {path}: {e}"))?;
     // Reject non-regular files (FIFOs, sockets, devices): they cannot be
     // meaningfully sought and may block or stream indefinitely.
     if !meta.file_type().is_file() {
@@ -465,10 +464,7 @@ fn read_excerpt(
             .take(max as u64)
             .read_to_end(&mut tail_buf)
             .map_err(|e| format!("cannot read {path}: {e}"))?;
-        let detail = format!(
-            ": {len} bytes in file, last {} bytes kept",
-            tail_buf.len()
-        );
+        let detail = format!(": {len} bytes in file, last {} bytes kept", tail_buf.len());
         note.push_str(&detail);
         note.push(']');
         return Ok(Excerpt {
@@ -547,16 +543,11 @@ fn read_excerpt(
                 ));
             }
             let body = kept.join("\n");
-            let detail = format!(
-                ": {bytes_read} bytes read, {count} lines match {needle:?}"
-            );
+            let detail = format!(": {bytes_read} bytes read, {count} lines match {needle:?}");
             (body, detail)
         }
         None => {
-            let detail = format!(
-                ": {bytes_read} bytes read, {} lines kept",
-                kept.len()
-            );
+            let detail = format!(": {bytes_read} bytes read, {} lines kept", kept.len());
             (kept.join("\n"), detail)
         }
     };
@@ -564,7 +555,6 @@ fn read_excerpt(
     note.push(']');
     Ok(Excerpt { body, note })
 }
-
 
 fn required_str<'a>(arguments: &'a Value, name: &str) -> Result<&'a str, String> {
     str_arg(arguments, name).ok_or_else(|| format!("`{name}` is required and must be a string"))
@@ -678,10 +668,8 @@ mod tests {
 
     #[test]
     fn long_single_line_is_bounded_by_max_bytes() {
-        let dir = std::env::temp_dir().join(format!(
-            "silica-llm-mcp-longline-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("silica-llm-mcp-longline-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("long.txt");
         // One line with no newline, far larger than the limit.
@@ -703,10 +691,8 @@ mod tests {
 
     #[test]
     fn contains_mode_stops_at_byte_limit_without_allocating_a_giant_line() {
-        let dir = std::env::temp_dir().join(format!(
-            "silica-llm-mcp-containlong-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("silica-llm-mcp-containlong-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("log.txt");
         // Every line is long and none contains the needle; the limit stops us
@@ -715,17 +701,14 @@ mod tests {
         std::fs::write(&path, "hello world\n".repeat(20_000)).unwrap();
         let path = path.to_string_lossy().into_owned();
 
-        let err = read_excerpt(&backend_with(50), &path, Some("match"), false)
-            .unwrap_err();
+        let err = read_excerpt(&backend_with(50), &path, Some("match"), false).unwrap_err();
         assert!(err.contains("no lines containing"), "{err}");
     }
 
     #[test]
     fn file_without_newline_and_match_within_limit() {
-        let dir = std::env::temp_dir().join(format!(
-            "silica-llm-mcp-nonewline-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("silica-llm-mcp-nonewline-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("note.txt");
         std::fs::write(&path, "abcdefghij").unwrap();
@@ -740,10 +723,7 @@ mod tests {
     fn digest_root_rejects_files_outside_it() {
         use std::env::temp_dir;
         use std::fs;
-        let base = temp_dir().join(format!(
-            "silica-digest-root-{}",
-            std::process::id()
-        ));
+        let base = temp_dir().join(format!("silica-digest-root-{}", std::process::id()));
         fs::create_dir_all(base.join("root/inside")).unwrap();
         fs::create_dir_all(base.join("outside")).unwrap();
         fs::write(base.join("root/inside/note.md"), "inside note").unwrap();
@@ -753,16 +733,11 @@ mod tests {
         config.digest_root = base.join("root");
         let backend = Backend::new(config);
         let inside = base.join("root/inside/note.md");
-        let out =
-            read_excerpt(&backend, inside.to_str().unwrap(), None, false).unwrap();
+        let out = read_excerpt(&backend, inside.to_str().unwrap(), None, false).unwrap();
         assert!(out.body.contains("inside note"), "{}", out.body);
         let outside = base.join("outside/secret.md");
-        let err = read_excerpt(&backend, outside.to_str().unwrap(), None, false)
-            .unwrap_err();
-        assert!(
-            err.contains("outside the permitted digest root"),
-            "{err}"
-        );
+        let err = read_excerpt(&backend, outside.to_str().unwrap(), None, false).unwrap_err();
+        assert!(err.contains("outside the permitted digest root"), "{err}");
         fs::remove_dir_all(&base).ok();
     }
 
@@ -775,10 +750,8 @@ mod tests {
 
     #[test]
     fn digest_head_caps_output_at_max_bytes() {
-        let dir = std::env::temp_dir().join(format!(
-            "silica-llm-mcp-headcap-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("silica-llm-mcp-headcap-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("big.txt");
         std::fs::write(&path, "alpha\nbeta\ngamma\ndelta\n").unwrap();
@@ -792,10 +765,7 @@ mod tests {
 
     #[test]
     fn digest_tail_reads_only_last_bytes() {
-        let dir = std::env::temp_dir().join(format!(
-            "silica-llm-mcp-tail-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("silica-llm-mcp-tail-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("big.txt");
         std::fs::write(&path, "0123456789\nabcdefghij\n").unwrap();
@@ -809,10 +779,7 @@ mod tests {
 
     #[test]
     fn digest_rejects_non_regular_file() {
-        let dir = std::env::temp_dir().join(format!(
-            "silica-llm-mcp-dir-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("silica-llm-mcp-dir-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let backend = backend_with(1 << 20);
         let err = read_excerpt(&backend, dir.to_str().unwrap(), None, false).unwrap_err();
@@ -826,13 +793,10 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-
     #[test]
     fn digest_oversized_first_line_capped_at_limit() {
-        let dir = std::env::temp_dir().join(format!(
-            "silica-llm-mcp-oversize-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("silica-llm-mcp-oversize-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("one_line.txt");
         std::fs::write(&path, "z".repeat(10_000)).unwrap();
@@ -850,10 +814,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_symlinked_root_is_the_same_root() {
-        let base = std::env::temp_dir().join(format!(
-            "silica-llm-mcp-linkroot-{}",
-            std::process::id()
-        ));
+        let base =
+            std::env::temp_dir().join(format!("silica-llm-mcp-linkroot-{}", std::process::id()));
         let real = base.join("real");
         std::fs::create_dir_all(&real).unwrap();
         std::fs::write(real.join("note.md"), "hello").unwrap();
@@ -876,10 +838,7 @@ mod tests {
 
     #[test]
     fn digest_exact_limit_file() {
-        let dir = std::env::temp_dir().join(format!(
-            "silica-llm-mcp-exact-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("silica-llm-mcp-exact-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("exact.txt");
         std::fs::write(&path, "0123456789").unwrap();
@@ -890,14 +849,11 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-
     #[test]
     #[cfg(unix)]
     fn digest_openat_traverses_nested_file() {
-        let dir = std::env::temp_dir().join(format!(
-            "silica-llm-mcp-openat-{0}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("silica-llm-mcp-openat-{0}", std::process::id()));
         std::fs::create_dir_all(dir.join("sub/dir")).unwrap();
         std::fs::write(dir.join("sub/dir/note.txt"), "nested content").unwrap();
         let file = dir.join("sub/dir/note.txt");
@@ -910,10 +866,8 @@ mod tests {
     #[cfg(unix)]
     fn digest_openat_rejects_symlinked_intermediate_directory() {
         use std::os::unix::fs::symlink;
-        let dir = std::env::temp_dir().join(format!(
-            "silica-llm-mcp-openat-sym-{0}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("silica-llm-mcp-openat-sym-{0}", std::process::id()));
         let real = std::env::temp_dir().join(format!(
             "silica-llm-mcp-openat-real-{0}",
             std::process::id()
@@ -923,12 +877,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         symlink(&real, dir.join("link")).unwrap();
         std::fs::write(dir.join("own.txt"), "own content").unwrap();
-        let err = open_digest_file(&dir, &dir.join("link/note/secret.txt"))
-            .unwrap_err();
-        assert!(
-            err.contains("cannot traverse component"),
-            "{err}"
-        );
+        let err = open_digest_file(&dir, &dir.join("link/note/secret.txt")).unwrap_err();
+        assert!(err.contains("cannot traverse component"), "{err}");
         let f = open_digest_file(&dir, &dir.join("own.txt")).unwrap();
         assert!(f.metadata().unwrap().file_type().is_file());
         std::fs::remove_dir_all(&dir).ok();

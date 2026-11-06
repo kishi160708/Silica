@@ -27,15 +27,13 @@ use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::os::windows::io::{AsRawHandle, FromRawHandle};
 use std::path::{Component, Path, PathBuf};
 
-use windows_sys::Win32::Foundation::{
-    GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
-};
+use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateDirectoryW, CreateFileW, DELETE, DeleteFileW, FILE_ATTRIBUTE_NORMAL,
-    FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-    FILE_RENAME_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FileRenameInfo,
-    GetFileInformationByHandle, GetFinalPathNameByHandleW, RemoveDirectoryW,
-    SetFileInformationByHandle, VOLUME_NAME_DOS,
+    CreateDirectoryW, CreateFileW, DeleteFileW, FileRenameInfo, GetFileInformationByHandle,
+    GetFinalPathNameByHandleW, RemoveDirectoryW, SetFileInformationByHandle, DELETE,
+    FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_RENAME_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, VOLUME_NAME_DOS,
 };
 
 /// `CREATE_ALWAYS`: truncate an existing file or make a new one.

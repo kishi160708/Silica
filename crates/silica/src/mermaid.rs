@@ -45,8 +45,7 @@ fn render_uncached(source: &str, dark: bool) -> Result<Arc<RenderImage>, String>
         layout: mermaid_rs_renderer::LayoutConfig::default(),
     };
 
-    let svg = mermaid_rs_renderer::render_with_options(source, opts)
-        .map_err(|e| format!("{e}"))?;
+    let svg = mermaid_rs_renderer::render_with_options(source, opts).map_err(|e| format!("{e}"))?;
 
     let mut opt = usvg::Options::default();
     opt.fontdb_mut().load_system_fonts();

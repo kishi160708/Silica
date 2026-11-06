@@ -64,14 +64,14 @@ impl Refusal {
                     .to_string()
             }
             Refusal::Node(module) => {
-                format!("Requires the Node module `{module}`, which a native app has no runtime for.")
+                format!(
+                    "Requires the Node module `{module}`, which a native app has no runtime for."
+                )
             }
             Refusal::CodeMirror => {
                 "Drives CodeMirror, which the native editor replaces.".to_string()
             }
-            Refusal::Dom => {
-                "Draws into the DOM, which the native renderer serves.".to_string()
-            }
+            Refusal::Dom => "Draws into the DOM, which the native renderer serves.".to_string(),
         }
     }
 }
@@ -269,11 +269,7 @@ mod tests {
     fn drawing_into_the_dom_is_refused() {
         let tier = classify(&manifest(None), "el.innerHTML = '<b>x</b>'", false);
         assert_eq!(tier, Tier::Refused(Refusal::Dom));
-        let dom = classify(
-            &manifest(None),
-            "document.createElement('div')",
-            false,
-        );
+        let dom = classify(&manifest(None), "document.createElement('div')", false);
         assert_eq!(dom, Tier::Refused(Refusal::Dom));
     }
 
@@ -290,10 +286,7 @@ class P extends Plugin {
 }
 module.exports = P;
 "#;
-        assert_eq!(
-            classify(&manifest(None), source, false),
-            Tier::Compat
-        );
+        assert_eq!(classify(&manifest(None), source, false), Tier::Compat);
     }
 
     #[test]

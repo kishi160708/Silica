@@ -154,18 +154,16 @@ fn collect(tex: &str, macros: &mut HashMap<String, Macro>) -> String {
             continue;
         };
         match name.as_str() {
-            "newcommand" | "renewcommand" | "providecommand" => {
-                match define(src, j) {
-                    Some((end, def, mname)) => {
-                        macros.insert(mname, def);
-                        i = end;
-                    }
-                    None => {
-                        out.push_str(&tex[i..j]);
-                        i = j;
-                    }
+            "newcommand" | "renewcommand" | "providecommand" => match define(src, j) {
+                Some((end, def, mname)) => {
+                    macros.insert(mname, def);
+                    i = end;
                 }
-            }
+                None => {
+                    out.push_str(&tex[i..j]);
+                    i = j;
+                }
+            },
             "DeclareMathOperator" => match declare_operator(src, j) {
                 Some((end, def, mname)) => {
                     macros.insert(mname, def);
@@ -224,7 +222,10 @@ fn define(src: &[u8], i: usize) -> Option<(usize, Macro, String)> {
     let mut optional_arg = None;
     // * `\newcommand{\n}[2][default]{body}`: brackets, not braces.
     if let Some((a, b)) = optional(src, i) {
-        params = String::from_utf8_lossy(&src[a..b]).trim().parse().unwrap_or(0);
+        params = String::from_utf8_lossy(&src[a..b])
+            .trim()
+            .parse()
+            .unwrap_or(0);
         i = skip_ws(src, b + 1);
         if let Some((a, b)) = optional(src, i) {
             optional_arg = Some(String::from_utf8_lossy(&src[a..b]).into_owned());
@@ -483,7 +484,8 @@ fn code_point(arg: &str) -> Option<char> {
         u32::from_str_radix(hex, 16).ok()?
     } else if let Some(hex) = s.strip_prefix('x').or_else(|| s.strip_prefix('X')) {
         u32::from_str_radix(hex, 16).ok()?
-    } else if s.chars().all(|c| c.is_ascii_hexdigit()) && s.chars().any(|c| c.is_ascii_alphabetic()) {
+    } else if s.chars().all(|c| c.is_ascii_hexdigit()) && s.chars().any(|c| c.is_ascii_alphabetic())
+    {
         u32::from_str_radix(s, 16).ok()?
     } else {
         s.parse().ok()?
@@ -540,7 +542,10 @@ mod tests {
         assert_eq!(normalize("\\newcommand{\\t}[2]{#2+#1}\\t{a}{b}"), "b+a");
         // * `##` is a literal `#`; `#3` with only two args is left alone.
         assert_eq!(normalize("\\newcommand{\\h}{\\#}"), "");
-        assert_eq!(normalize("\\DeclareMathOperator{\\Tr}{Tr}\\Tr"), "\\operatorname{Tr}");
+        assert_eq!(
+            normalize("\\DeclareMathOperator{\\Tr}{Tr}\\Tr"),
+            "\\operatorname{Tr}"
+        );
     }
 
     /// A reference prints `?`, as MathJax does when it cannot resolve one.
@@ -554,7 +559,11 @@ mod tests {
     /// engine's own error still names the real culprit.
     #[test]
     fn unknown_source_is_untouched() {
-        for tex in ["x^2 + \\frac{1}{2}", "\\begin{matrix}a&b\\end{matrix}", "\\alpha\\beta"] {
+        for tex in [
+            "x^2 + \\frac{1}{2}",
+            "\\begin{matrix}a&b\\end{matrix}",
+            "\\alpha\\beta",
+        ] {
             assert_eq!(normalize(tex), tex);
         }
     }

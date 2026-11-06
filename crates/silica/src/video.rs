@@ -187,7 +187,16 @@ impl Decoder {
             .args(["-ss", &format!("{seconds:.3}")])
             .arg("-i")
             .arg(path)
-            .args(["-frames:v", "1", "-an", "-f", "rawvideo", "-pix_fmt", "rgba", "-s"])
+            .args([
+                "-frames:v",
+                "1",
+                "-an",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgba",
+                "-s",
+            ])
             .arg(format!("{width}x{height}"))
             .arg("-")
             .stdin(Stdio::null())
@@ -241,9 +250,12 @@ pub fn drop_frame(previous: Option<Arc<RenderImage>>, cx: &mut App) {
 pub fn is_video(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
-        .is_some_and(|ext| silica_formats::VIDEO_EXTENSIONS.iter().any(|v| v.eq_ignore_ascii_case(ext)))
+        .is_some_and(|ext| {
+            silica_formats::VIDEO_EXTENSIONS
+                .iter()
+                .any(|v| v.eq_ignore_ascii_case(ext))
+        })
 }
-
 
 #[cfg(test)]
 mod tests {
