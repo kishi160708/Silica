@@ -1,0 +1,742 @@
+//! C# (`cs`, `dotnet`).
+//!
+//! Ported from Prism 1.29.0's `prism-clike.js`, `prism-csharp.js` and `prism-xml-doc.js`,
+//! as the grammar stands once all of them have loaded. Written by
+//! `tools/prism-port/port.js`, which walks the finished grammar objects;
+//! change that script and re-run it rather than editing this file.
+
+use crate::grammar::{e, p, pa, pai, pf, pi, Grammar, GR, LB};
+
+pub static CSHARP: Grammar = Grammar::new(&[
+    e(
+        "doc-comment",
+        &[pai(&[r"///.*"], GR, &["comment"], &CSHARP_DOC_COMMENT)],
+    ),
+    e(
+        "comment",
+        &[
+            pf(&[r"(^|[^\\])/\*[\s\S]*?(?:\*/|$)"], LB | GR),
+            pf(&[r"(^|[^\\:])//.*"], LB | GR),
+        ],
+    ),
+    e(
+        "interpolation-string",
+        &[
+            pi(
+                &[
+                    r#"(^|[^\\])(?:\$@|@\$)"(?:""|\\[\s\S]|\{\{|(?:\{(?!\{)(?:(?![}:])(?:[^"'/()]|(?:/(?![*/])|"#,
+                    r#"//[^\r\n]*[\r\n]|/\*(?:[^*]|\*(?!/))*\*/|(?:"(?:\\.|[^\\"\r\n])*"|'(?:[^\r\n'\\]|\\.|"#,
+                    r#"\\[Uux][\da-fA-F]{1,8})'))|\((?:[^"'/()]|(?:/(?![*/])|//[^\r\n]*[\r\n]|/\*(?:[^*]|"#,
+                    r#"\*(?!/))*\*/|(?:"(?:\\.|[^\\"\r\n])*"|'(?:[^\r\n'\\]|\\.|\\[Uux][\da-fA-F]{1,8})'))|"#,
+                    r#"\((?:[^"'/()]|(?:/(?![*/])|//[^\r\n]*[\r\n]|/\*(?:[^*]|\*(?!/))*\*/|(?:"(?:\\.|"#,
+                    r#"[^\\"\r\n])*"|'(?:[^\r\n'\\]|\\.|\\[Uux][\da-fA-F]{1,8})'))|\((?:[^"'/()]|(?:/(?![*/])|"#,
+                    r#"//[^\r\n]*[\r\n]|/\*(?:[^*]|\*(?!/))*\*/|(?:"(?:\\.|[^\\"\r\n])*"|'(?:[^\r\n'\\]|\\.|"#,
+                    r#"\\[Uux][\da-fA-F]{1,8})'))|\([^\s\S]*\))*\))*\))*\)))*(?::[^}\r\n]+)?\})|[^\\{"])*""#,
+                ],
+                LB | GR,
+                &CSHARP_INTERPOLATION_STRING_1,
+            ),
+            pi(
+                &[
+                    r#"(^|[^@\\])\$"(?:\\.|\{\{|(?:\{(?!\{)(?:(?![}:])(?:[^"'/()]|/(?!\*)|/\*(?:[^*]|\*(?!/))*\*/|"#,
+                    r#"(?:"(?:\\.|[^\\"\r\n])*"|'(?:[^\r\n'\\]|\\.|\\[Uux][\da-fA-F]{1,8})')|\((?:[^"'/()]|"#,
+                    r#"/(?!\*)|/\*(?:[^*]|\*(?!/))*\*/|(?:"(?:\\.|[^\\"\r\n])*"|'(?:[^\r\n'\\]|\\.|"#,
+                    r#"\\[Uux][\da-fA-F]{1,8})')|\((?:[^"'/()]|/(?!\*)|/\*(?:[^*]|\*(?!/))*\*/|(?:"(?:\\.|"#,
+                    r#"[^\\"\r\n])*"|'(?:[^\r\n'\\]|\\.|\\[Uux][\da-fA-F]{1,8})')|\((?:[^"'/()]|/(?!\*)|"#,
+                    r#"/\*(?:[^*]|\*(?!/))*\*/|(?:"(?:\\.|[^\\"\r\n])*"|'(?:[^\r\n'\\]|\\.|"#,
+                    r#"\\[Uux][\da-fA-F]{1,8})')|\([^\s\S]*\))*\))*\))*\)))*(?::[^}\r\n]+)?\})|[^\\"{])*""#,
+                ],
+                LB | GR,
+                &CSHARP_INTERPOLATION_STRING_2,
+            ),
+        ],
+    ),
+    e(
+        "char",
+        &[pf(&[r"'(?:[^\r\n'\\]|\\.|\\[Uux][\da-fA-F]{1,8})'"], GR)],
+    ),
+    e(
+        "string",
+        &[
+            pf(
+                &[r#"(^|[^$\\])(?:@"(?:""|\\[\s\S]|[^\\"])*"(?!"))"#],
+                LB | GR,
+            ),
+            pf(&[r#"(^|[^@$\\])(?:"(?:\\.|[^\\"\r\n])*")"#], LB | GR),
+        ],
+    ),
+    e(
+        "namespace",
+        &[pi(
+            &[
+                r"(\b(?:namespace|using)\s+)(?:@?\b[A-Za-z_]\w*\b)(?:\s*\.\s*(?:@?\b[A-Za-z_]\w*\b))*(?=\s*[",
+                r";{])",
+            ],
+            LB,
+            &CSHARP_NAMESPACE,
+        )],
+    ),
+    e(
+        "type-expression",
+        &[pai(
+            &[
+                r"(\b(?:default|sizeof|typeof)\s*\(\s*(?!\s))(?:[^()\s]|\s(?!\s)|(?:\((?:[^()]|(?:\((?:[^()]|",
+                r"(?:\((?:[^()]|(?:\((?:[^()]|[^\s\S])*\)))*\)))*\)))*\)))*(?=\s*\))",
+            ],
+            LB,
+            &["class-name"],
+            &CSHARP_TYPE_EXPRESSION,
+        )],
+    ),
+    e(
+        "return-type",
+        &[pai(
+            &[
+                r"(?:(?:(?:\((?:[^,()<>\[\];=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|[^\s\S])*>))*>))*>))*>)|(?:\((?:[^()]|",
+                r"(?:\((?:[^()]|(?:\((?:[^()]|(?:\((?:[^()]|[^\s\S])*\)))*\)))*\)))*\))|",
+                r"(?:\[\s*(?:,\s*)*\]))+(?:,(?:[^,()<>\[\];=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"[^\s\S])*>))*>))*>))*>)|(?:\((?:[^()]|(?:\((?:[^()]|(?:\((?:[^()]|(?:\((?:[^()]|",
+                r"[^\s\S])*\)))*\)))*\)))*\))|(?:\[\s*(?:,\s*)*\]))+)+\))|(?:(?!(?:\b(?:class|enum|interface|",
+                r"record|struct|add|alias|and|ascending|async|await|by|descending|from(?=\s*(?:\w|$))|get|",
+                r"global|group|into|init(?=\s*;)|join|let|nameof|not|notnull|on|or|orderby|partial|remove|",
+                r"select|set|unmanaged|value|when|where|with(?=\s*\{)|abstract|as|base|break|case|catch|",
+                r"checked|const|continue|default|delegate|do|else|event|explicit|extern|finally|fixed|for|",
+                r"foreach|goto|if|implicit|in|internal|is|lock|namespace|new|null|operator|out|override|",
+                r"params|private|protected|public|readonly|ref|return|sealed|sizeof|stackalloc|static|switch|",
+                r"this|throw|try|typeof|unchecked|unsafe|using|virtual|volatile|while|",
+                r"yield)\b))(?:(?:@?\b[A-Za-z_]\w*\b)(?:\s*(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"[^\s\S])*>))*>))*>))*>))?)(?:\s*\.\s*(?:(?:@?\b[A-Za-z_]\w*\b)(?:\s*(?:<(?:[^<>;=+\-*/%\&|",
+                r"^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"[^\s\S])*>))*>))*>))*>))?))*))(?:\s*(?:\?\s*)?(?:\[\s*(?:,\s*)*\]))*(?:\s*\?)?)(?=\s+(?:(?",
+                r":(?!(?:\b(?:class|enum|interface|record|struct|add|alias|and|ascending|async|await|by|",
+                r"descending|from(?=\s*(?:\w|$))|get|global|group|into|init(?=\s*;)|join|let|nameof|not|",
+                r"notnull|on|or|orderby|partial|remove|select|set|unmanaged|value|when|where|with(?=\s*\{)|",
+                r"abstract|as|base|break|case|catch|checked|const|continue|default|delegate|do|else|event|",
+                r"explicit|extern|finally|fixed|for|foreach|goto|if|implicit|in|internal|is|lock|namespace|",
+                r"new|null|operator|out|override|params|private|protected|public|readonly|ref|return|sealed|",
+                r"sizeof|stackalloc|static|switch|this|throw|try|typeof|unchecked|unsafe|using|virtual|",
+                r"volatile|while|yield)\b))(?:(?:@?\b[A-Za-z_]\w*\b)(?:\s*(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"[^\s\S])*>))*>))*>))*>))?)(?:\s*\.\s*(?:(?:@?\b[A-Za-z_]\w*\b)(?:\s*(?:<(?:[^<>;=+\-*/%\&|",
+                r"^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"[^\s\S])*>))*>))*>))*>))?))*)\s*(?:=>|[({]|\.\s*this\s*\[)|this\s*\[))",
+            ],
+            0,
+            &["class-name"],
+            &CSHARP_TYPE_EXPRESSION,
+        )],
+    ),
+    e(
+        "constructor-invocation",
+        &[pai(
+            &[
+                r"(\bnew\s+)(?:(?:(?:\((?:[^,()<>\[\];=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"[^\s\S])*>))*>))*>))*>)|(?:\((?:[^()]|(?:\((?:[^()]|(?:\((?:[^()]|(?:\((?:[^()]|",
+                r"[^\s\S])*\)))*\)))*\)))*\))|(?:\[\s*(?:,\s*)*\]))+(?:,(?:[^,()<>\[\];=+\-*/%\&|^]|",
+                r"(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"(?:<(?:[^<>;=+\-*/%\&|^]|[^\s\S])*>))*>))*>))*>)|(?:\((?:[^()]|(?:\((?:[^()]|(?:\((?:[^()]|",
+                r"(?:\((?:[^()]|[^\s\S])*\)))*\)))*\)))*\))|(?:\[\s*(?:,\s*)*\]))+)+\))|(?:(?!(?:\b(?:class|",
+                r"enum|interface|record|struct|add|alias|and|ascending|async|await|by|descending|",
+                r"from(?=\s*(?:\w|$))|get|global|group|into|init(?=\s*;)|join|let|nameof|not|notnull|on|or|",
+                r"orderby|partial|remove|select|set|unmanaged|value|when|where|with(?=\s*\{)|abstract|as|",
+                r"base|break|case|catch|checked|const|continue|default|delegate|do|else|event|explicit|",
+                r"extern|finally|fixed|for|foreach|goto|if|implicit|in|internal|is|lock|namespace|new|null|",
+                r"operator|out|override|params|private|protected|public|readonly|ref|return|sealed|sizeof|",
+                r"stackalloc|static|switch|this|throw|try|typeof|unchecked|unsafe|using|virtual|volatile|",
+                r"while|yield)\b))(?:(?:@?\b[A-Za-z_]\w*\b)(?:\s*(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"[^\s\S])*>))*>))*>))*>))?)(?:\s*\.\s*(?:(?:@?\b[A-Za-z_]\w*\b)(?:\s*(?:<(?:[^<>;=+\-*/%\&|",
+                r"^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"[^\s\S])*>))*>))*>))*>))?))*))(?:\s*(?:\?\s*)?(?:\[\s*(?:,\s*)*\]))*(?:\s*\?)?)(?=\s*[\[({",
+                r"])",
+            ],
+            LB,
+            &["class-name"],
+            &CSHARP_TYPE_EXPRESSION,
+        )],
+    ),
+    e(
+        "generic-method",
+        &[pi(
+            &[
+                r"(?:@?\b[A-Za-z_]\w*\b)\s*(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|[^\s\S])*>))*>))*>))*>)(?=\s*\()",
+            ],
+            0,
+            &CSHARP_GENERIC_METHOD,
+        )],
+    ),
+    e(
+        "type-list",
+        &[pi(
+            &[
+                r"\b((?:(?:\b(?:class|enum|interface|record|",
+                r"struct)\b)\s+(?:(?:@?\b[A-Za-z_]\w*\b)(?:\s*(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|",
+                r"^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|[^\s\S])*>))*>))*>))*>))?)|",
+                r"record\s+(?:(?:@?\b[A-Za-z_]\w*\b)(?:\s*(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"[^\s\S])*>))*>))*>))*>))?)\s*(?:\((?:[^()]|(?:\((?:[^()]|(?:\((?:[^()]|(?:\((?:[^()]|",
+                r"[^\s\S])*\)))*\)))*\)))*\))|where\s+(?:@?\b[A-Za-z_]\w*\b))\s*:\s*)(?:(?:(?:(?:\((?:[^,()<",
+                r">\[\];=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|",
+                r"^]|(?:<(?:[^<>;=+\-*/%\&|^]|[^\s\S])*>))*>))*>))*>)|(?:\((?:[^()]|(?:\((?:[^()]|",
+                r"(?:\((?:[^()]|(?:\((?:[^()]|[^\s\S])*\)))*\)))*\)))*\))|",
+                r"(?:\[\s*(?:,\s*)*\]))+(?:,(?:[^,()<>\[\];=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"[^\s\S])*>))*>))*>))*>)|(?:\((?:[^()]|(?:\((?:[^()]|(?:\((?:[^()]|(?:\((?:[^()]|",
+                r"[^\s\S])*\)))*\)))*\)))*\))|(?:\[\s*(?:,\s*)*\]))+)+\))|(?:(?!(?:\b(?:class|enum|interface|",
+                r"record|struct|add|alias|and|ascending|async|await|by|descending|from(?=\s*(?:\w|$))|get|",
+                r"global|group|into|init(?=\s*;)|join|let|nameof|not|notnull|on|or|orderby|partial|remove|",
+                r"select|set|unmanaged|value|when|where|with(?=\s*\{)|abstract|as|base|break|case|catch|",
+                r"checked|const|continue|default|delegate|do|else|event|explicit|extern|finally|fixed|for|",
+                r"foreach|goto|if|implicit|in|internal|is|lock|namespace|new|null|operator|out|override|",
+                r"params|private|protected|public|readonly|ref|return|sealed|sizeof|stackalloc|static|switch|",
+                r"this|throw|try|typeof|unchecked|unsafe|using|virtual|volatile|while|",
+                r"yield)\b))(?:(?:@?\b[A-Za-z_]\w*\b)(?:\s*(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"[^\s\S])*>))*>))*>))*>))?)(?:\s*\.\s*(?:(?:@?\b[A-Za-z_]\w*\b)(?:\s*(?:<(?:[^<>;=+\-*/%\&|",
+                r"^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"[^\s\S])*>))*>))*>))*>))?))*))(?:\s*(?:\?\s*)?(?:\[\s*(?:,\s*)*\]))*(?:\s*\?)?)|",
+                r"(?:\b(?:bool|byte|char|decimal|double|dynamic|float|int|long|object|sbyte|short|string|",
+                r"uint|ulong|ushort|var|void|class|enum|interface|record|struct|add|alias|and|ascending|",
+                r"async|await|by|descending|from(?=\s*(?:\w|$))|get|global|group|into|init(?=\s*;)|join|let|",
+                r"nameof|not|notnull|on|or|orderby|partial|remove|select|set|unmanaged|value|when|where|",
+                r"with(?=\s*\{)|abstract|as|base|break|case|catch|checked|const|continue|default|delegate|do|",
+                r"else|event|explicit|extern|finally|fixed|for|foreach|goto|if|implicit|in|internal|is|lock|",
+                r"namespace|new|null|operator|out|override|params|private|protected|public|readonly|ref|",
+                r"return|sealed|sizeof|stackalloc|static|switch|this|throw|try|typeof|unchecked|unsafe|using|",
+                r"virtual|volatile|while|yield)\b)|(?:(?:@?\b[A-Za-z_]\w*\b)(?:\s*(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"[^\s\S])*>))*>))*>))*>))?)\s*(?:\((?:[^()]|(?:\((?:[^()]|(?:\((?:[^()]|(?:\((?:[^()]|",
+                r"[^\s\S])*\)))*\)))*\)))*\))|(?:\bnew\s*\(\s*\)))(?:\s*,\s*(?:(?:(?:(?:\((?:[^,()<>\[\];=+\-",
+                r"*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"(?:<(?:[^<>;=+\-*/%\&|^]|[^\s\S])*>))*>))*>))*>)|(?:\((?:[^()]|(?:\((?:[^()]|(?:\((?:[^()]|",
+                r"(?:\((?:[^()]|[^\s\S])*\)))*\)))*\)))*\))|",
+                r"(?:\[\s*(?:,\s*)*\]))+(?:,(?:[^,()<>\[\];=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"[^\s\S])*>))*>))*>))*>)|(?:\((?:[^()]|(?:\((?:[^()]|(?:\((?:[^()]|(?:\((?:[^()]|",
+                r"[^\s\S])*\)))*\)))*\)))*\))|(?:\[\s*(?:,\s*)*\]))+)+\))|(?:(?!(?:\b(?:class|enum|interface|",
+                r"record|struct|add|alias|and|ascending|async|await|by|descending|from(?=\s*(?:\w|$))|get|",
+                r"global|group|into|init(?=\s*;)|join|let|nameof|not|notnull|on|or|orderby|partial|remove|",
+                r"select|set|unmanaged|value|when|where|with(?=\s*\{)|abstract|as|base|break|case|catch|",
+                r"checked|const|continue|default|delegate|do|else|event|explicit|extern|finally|fixed|for|",
+                r"foreach|goto|if|implicit|in|internal|is|lock|namespace|new|null|operator|out|override|",
+                r"params|private|protected|public|readonly|ref|return|sealed|sizeof|stackalloc|static|switch|",
+                r"this|throw|try|typeof|unchecked|unsafe|using|virtual|volatile|while|",
+                r"yield)\b))(?:(?:@?\b[A-Za-z_]\w*\b)(?:\s*(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"[^\s\S])*>))*>))*>))*>))?)(?:\s*\.\s*(?:(?:@?\b[A-Za-z_]\w*\b)(?:\s*(?:<(?:[^<>;=+\-*/%\&|",
+                r"^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"[^\s\S])*>))*>))*>))*>))?))*))(?:\s*(?:\?\s*)?(?:\[\s*(?:,\s*)*\]))*(?:\s*\?)?)|",
+                r"(?:\b(?:bool|byte|char|decimal|double|dynamic|float|int|long|object|sbyte|short|string|",
+                r"uint|ulong|ushort|var|void|class|enum|interface|record|struct|add|alias|and|ascending|",
+                r"async|await|by|descending|from(?=\s*(?:\w|$))|get|global|group|into|init(?=\s*;)|join|let|",
+                r"nameof|not|notnull|on|or|orderby|partial|remove|select|set|unmanaged|value|when|where|",
+                r"with(?=\s*\{)|abstract|as|base|break|case|catch|checked|const|continue|default|delegate|do|",
+                r"else|event|explicit|extern|finally|fixed|for|foreach|goto|if|implicit|in|internal|is|lock|",
+                r"namespace|new|null|operator|out|override|params|private|protected|public|readonly|ref|",
+                r"return|sealed|sizeof|stackalloc|static|switch|this|throw|try|typeof|unchecked|unsafe|using|",
+                r"virtual|volatile|while|yield)\b)|(?:\bnew\s*\(\s*\))))*(?=\s*(?:where|[{;]|=>|$))",
+            ],
+            LB,
+            &CSHARP_TYPE_LIST,
+        )],
+    ),
+    e(
+        "preprocessor",
+        &[pai(
+            &[r"(?m)(^[\t ]*)#.*"],
+            LB,
+            &["property"],
+            &CSHARP_PREPROCESSOR,
+        )],
+    ),
+    e(
+        "attribute",
+        &[pi(
+            &[
+                r"((?:^|[^\s\w>)?])\s*\[\s*)(?:(?:\b(?:assembly|event|field|method|module|param|property|",
+                r"return|type)\b)\s*:\s*)?(?:(?:(?!(?:\b(?:class|enum|interface|record|struct|add|alias|and|",
+                r"ascending|async|await|by|descending|from(?=\s*(?:\w|$))|get|global|group|into|init(?=\s*;)|",
+                r"join|let|nameof|not|notnull|on|or|orderby|partial|remove|select|set|unmanaged|value|when|",
+                r"where|with(?=\s*\{)|abstract|as|base|break|case|catch|checked|const|continue|default|",
+                r"delegate|do|else|event|explicit|extern|finally|fixed|for|foreach|goto|if|implicit|in|",
+                r"internal|is|lock|namespace|new|null|operator|out|override|params|private|protected|public|",
+                r"readonly|ref|return|sealed|sizeof|stackalloc|static|switch|this|throw|try|typeof|unchecked|",
+                r"unsafe|using|virtual|volatile|while|yield)\b))(?:(?:@?\b[A-Za-z_]\w*\b)(?:\s*(?:<(?:[^<>;=",
+                r"+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"[^\s\S])*>))*>))*>))*>))?)(?:\s*\.\s*(?:(?:@?\b[A-Za-z_]\w*\b)(?:\s*(?:<(?:[^<>;=+\-*/%\&|",
+                r"^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r#"[^\s\S])*>))*>))*>))*>))?))*)(?:\s*\((?:[^"'/()]|(?:/(?![*/])|//[^\r\n]*[\r\n]|/\*(?:[^*]|"#,
+                r#"\*(?!/))*\*/|(?:"(?:\\.|[^\\"\r\n])*"|'(?:[^\r\n'\\]|\\.|\\[Uux][\da-fA-F]{1,8})'))|"#,
+                r#"\((?:[^"'/()]|(?:/(?![*/])|//[^\r\n]*[\r\n]|/\*(?:[^*]|\*(?!/))*\*/|(?:"(?:\\.|"#,
+                r#"[^\\"\r\n])*"|'(?:[^\r\n'\\]|\\.|\\[Uux][\da-fA-F]{1,8})'))|\((?:[^"'/()]|(?:/(?![*/])|"#,
+                r#"//[^\r\n]*[\r\n]|/\*(?:[^*]|\*(?!/))*\*/|(?:"(?:\\.|[^\\"\r\n])*"|'(?:[^\r\n'\\]|\\.|"#,
+                r#"\\[Uux][\da-fA-F]{1,8})'))|\((?:[^"'/()]|(?:/(?![*/])|//[^\r\n]*[\r\n]|/\*(?:[^*]|"#,
+                r#"\*(?!/))*\*/|(?:"(?:\\.|[^\\"\r\n])*"|'(?:[^\r\n'\\]|\\.|\\[Uux][\da-fA-F]{1,8})'))|"#,
+                r"\([^\s\S]*\))*\))*\))*\))*\))?)(?:\s*,\s*(?:(?:(?!(?:\b(?:class|enum|interface|record|",
+                r"struct|add|alias|and|ascending|async|await|by|descending|from(?=\s*(?:\w|$))|get|global|",
+                r"group|into|init(?=\s*;)|join|let|nameof|not|notnull|on|or|orderby|partial|remove|select|",
+                r"set|unmanaged|value|when|where|with(?=\s*\{)|abstract|as|base|break|case|catch|checked|",
+                r"const|continue|default|delegate|do|else|event|explicit|extern|finally|fixed|for|foreach|",
+                r"goto|if|implicit|in|internal|is|lock|namespace|new|null|operator|out|override|params|",
+                r"private|protected|public|readonly|ref|return|sealed|sizeof|stackalloc|static|switch|this|",
+                r"throw|try|typeof|unchecked|unsafe|using|virtual|volatile|while|",
+                r"yield)\b))(?:(?:@?\b[A-Za-z_]\w*\b)(?:\s*(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"[^\s\S])*>))*>))*>))*>))?)(?:\s*\.\s*(?:(?:@?\b[A-Za-z_]\w*\b)(?:\s*(?:<(?:[^<>;=+\-*/%\&|",
+                r"^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r#"[^\s\S])*>))*>))*>))*>))?))*)(?:\s*\((?:[^"'/()]|(?:/(?![*/])|//[^\r\n]*[\r\n]|/\*(?:[^*]|"#,
+                r#"\*(?!/))*\*/|(?:"(?:\\.|[^\\"\r\n])*"|'(?:[^\r\n'\\]|\\.|\\[Uux][\da-fA-F]{1,8})'))|"#,
+                r#"\((?:[^"'/()]|(?:/(?![*/])|//[^\r\n]*[\r\n]|/\*(?:[^*]|\*(?!/))*\*/|(?:"(?:\\.|"#,
+                r#"[^\\"\r\n])*"|'(?:[^\r\n'\\]|\\.|\\[Uux][\da-fA-F]{1,8})'))|\((?:[^"'/()]|(?:/(?![*/])|"#,
+                r#"//[^\r\n]*[\r\n]|/\*(?:[^*]|\*(?!/))*\*/|(?:"(?:\\.|[^\\"\r\n])*"|'(?:[^\r\n'\\]|\\.|"#,
+                r#"\\[Uux][\da-fA-F]{1,8})'))|\((?:[^"'/()]|(?:/(?![*/])|//[^\r\n]*[\r\n]|/\*(?:[^*]|"#,
+                r#"\*(?!/))*\*/|(?:"(?:\\.|[^\\"\r\n])*"|'(?:[^\r\n'\\]|\\.|\\[Uux][\da-fA-F]{1,8})'))|"#,
+                r"\([^\s\S]*\))*\))*\))*\))*\))?))*(?=\s*\])",
+            ],
+            LB | GR,
+            &CSHARP_ATTRIBUTE,
+        )],
+    ),
+    e(
+        "class-name",
+        &[
+            pi(
+                &[
+                    r"(\busing\s+static\s+)(?:(?!(?:\b(?:class|enum|interface|record|struct|add|alias|and|",
+                    r"ascending|async|await|by|descending|from(?=\s*(?:\w|$))|get|global|group|into|init(?=\s*;)|",
+                    r"join|let|nameof|not|notnull|on|or|orderby|partial|remove|select|set|unmanaged|value|when|",
+                    r"where|with(?=\s*\{)|abstract|as|base|break|case|catch|checked|const|continue|default|",
+                    r"delegate|do|else|event|explicit|extern|finally|fixed|for|foreach|goto|if|implicit|in|",
+                    r"internal|is|lock|namespace|new|null|operator|out|override|params|private|protected|public|",
+                    r"readonly|ref|return|sealed|sizeof|stackalloc|static|switch|this|throw|try|typeof|unchecked|",
+                    r"unsafe|using|virtual|volatile|while|yield)\b))(?:(?:@?\b[A-Za-z_]\w*\b)(?:\s*(?:<(?:[^<>;=",
+                    r"+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                    r"[^\s\S])*>))*>))*>))*>))?)(?:\s*\.\s*(?:(?:@?\b[A-Za-z_]\w*\b)(?:\s*(?:<(?:[^<>;=+\-*/%\&|",
+                    r"^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                    r"[^\s\S])*>))*>))*>))*>))?))*)(?=\s*;)",
+                ],
+                LB,
+                &CSHARP_TYPE_EXPRESSION,
+            ),
+            pi(
+                &[
+                    r"(\busing\s+(?:@?\b[A-Za-z_]\w*\b)\s*=\s*)(?:(?:(?:\((?:[^,()<>\[\];=+\-*/%\&|^]|",
+                    r"(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                    r"(?:<(?:[^<>;=+\-*/%\&|^]|[^\s\S])*>))*>))*>))*>)|(?:\((?:[^()]|(?:\((?:[^()]|(?:\((?:[^()]|",
+                    r"(?:\((?:[^()]|[^\s\S])*\)))*\)))*\)))*\))|",
+                    r"(?:\[\s*(?:,\s*)*\]))+(?:,(?:[^,()<>\[\];=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                    r"(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                    r"[^\s\S])*>))*>))*>))*>)|(?:\((?:[^()]|(?:\((?:[^()]|(?:\((?:[^()]|(?:\((?:[^()]|",
+                    r"[^\s\S])*\)))*\)))*\)))*\))|(?:\[\s*(?:,\s*)*\]))+)+\))|(?:(?!(?:\b(?:class|enum|interface|",
+                    r"record|struct|add|alias|and|ascending|async|await|by|descending|from(?=\s*(?:\w|$))|get|",
+                    r"global|group|into|init(?=\s*;)|join|let|nameof|not|notnull|on|or|orderby|partial|remove|",
+                    r"select|set|unmanaged|value|when|where|with(?=\s*\{)|abstract|as|base|break|case|catch|",
+                    r"checked|const|continue|default|delegate|do|else|event|explicit|extern|finally|fixed|for|",
+                    r"foreach|goto|if|implicit|in|internal|is|lock|namespace|new|null|operator|out|override|",
+                    r"params|private|protected|public|readonly|ref|return|sealed|sizeof|stackalloc|static|switch|",
+                    r"this|throw|try|typeof|unchecked|unsafe|using|virtual|volatile|while|",
+                    r"yield)\b))(?:(?:@?\b[A-Za-z_]\w*\b)(?:\s*(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                    r"(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                    r"[^\s\S])*>))*>))*>))*>))?)(?:\s*\.\s*(?:(?:@?\b[A-Za-z_]\w*\b)(?:\s*(?:<(?:[^<>;=+\-*/%\&|",
+                    r"^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                    r"[^\s\S])*>))*>))*>))*>))?))*))(?:\s*(?:\?\s*)?(?:\[\s*(?:,\s*)*\]))*(?:\s*\?)?)(?=\s*;)",
+                ],
+                LB,
+                &CSHARP_TYPE_EXPRESSION,
+            ),
+            pf(&[r"(\busing\s+)(?:@?\b[A-Za-z_]\w*\b)(?=\s*=)"], LB),
+            pi(
+                &[
+                    r"(\b(?:\b(?:class|enum|interface|record|struct)\b)\s+)(?:(?:@?\b[A-Za-z_]\w*\b)(?:\s*(?:<(?",
+                    r":[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|",
+                    r"^]|[^\s\S])*>))*>))*>))*>))?)",
+                ],
+                LB,
+                &CSHARP_TYPE_EXPRESSION,
+            ),
+            pi(
+                &[
+                    r"(\bcatch\s*\(\s*)(?:(?!(?:\b(?:class|enum|interface|record|struct|add|alias|and|ascending|",
+                    r"async|await|by|descending|from(?=\s*(?:\w|$))|get|global|group|into|init(?=\s*;)|join|let|",
+                    r"nameof|not|notnull|on|or|orderby|partial|remove|select|set|unmanaged|value|when|where|",
+                    r"with(?=\s*\{)|abstract|as|base|break|case|catch|checked|const|continue|default|delegate|do|",
+                    r"else|event|explicit|extern|finally|fixed|for|foreach|goto|if|implicit|in|internal|is|lock|",
+                    r"namespace|new|null|operator|out|override|params|private|protected|public|readonly|ref|",
+                    r"return|sealed|sizeof|stackalloc|static|switch|this|throw|try|typeof|unchecked|unsafe|using|",
+                    r"virtual|volatile|while|yield)\b))(?:(?:@?\b[A-Za-z_]\w*\b)(?:\s*(?:<(?:[^<>;=+\-*/%\&|^]|",
+                    r"(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                    r"[^\s\S])*>))*>))*>))*>))?)(?:\s*\.\s*(?:(?:@?\b[A-Za-z_]\w*\b)(?:\s*(?:<(?:[^<>;=+\-*/%\&|",
+                    r"^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                    r"[^\s\S])*>))*>))*>))*>))?))*)",
+                ],
+                LB,
+                &CSHARP_TYPE_EXPRESSION,
+            ),
+            pf(&[r"(\bwhere\s+)(?:@?\b[A-Za-z_]\w*\b)"], LB),
+            pi(
+                &[
+                    r"(\b(?:is(?:\s+not)?|as)\s+)(?:(?:(?!(?:\b(?:class|enum|interface|record|struct|add|alias|",
+                    r"and|ascending|async|await|by|descending|from(?=\s*(?:\w|$))|get|global|group|into|",
+                    r"init(?=\s*;)|join|let|nameof|not|notnull|on|or|orderby|partial|remove|select|set|unmanaged|",
+                    r"value|when|where|with(?=\s*\{)|abstract|as|base|break|case|catch|checked|const|continue|",
+                    r"default|delegate|do|else|event|explicit|extern|finally|fixed|for|foreach|goto|if|implicit|",
+                    r"in|internal|is|lock|namespace|new|null|operator|out|override|params|private|protected|",
+                    r"public|readonly|ref|return|sealed|sizeof|stackalloc|static|switch|this|throw|try|typeof|",
+                    r"unchecked|unsafe|using|virtual|volatile|while|",
+                    r"yield)\b))(?:(?:@?\b[A-Za-z_]\w*\b)(?:\s*(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                    r"(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                    r"[^\s\S])*>))*>))*>))*>))?)(?:\s*\.\s*(?:(?:@?\b[A-Za-z_]\w*\b)(?:\s*(?:<(?:[^<>;=+\-*/%\&|",
+                    r"^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                    r"[^\s\S])*>))*>))*>))*>))?))*)(?:\s*(?:\?\s*)?(?:\[\s*(?:,\s*)*\]))*(?:\s*\?)?)",
+                ],
+                LB,
+                &CSHARP_TYPE_EXPRESSION,
+            ),
+            pi(
+                &[
+                    r"\b(?:(?:(?:\((?:[^,()<>\[\];=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                    r"(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|[^\s\S])*>))*>))*>))*>)|(?:\((?:[^()]|",
+                    r"(?:\((?:[^()]|(?:\((?:[^()]|(?:\((?:[^()]|[^\s\S])*\)))*\)))*\)))*\))|",
+                    r"(?:\[\s*(?:,\s*)*\]))+(?:,(?:[^,()<>\[\];=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                    r"(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                    r"[^\s\S])*>))*>))*>))*>)|(?:\((?:[^()]|(?:\((?:[^()]|(?:\((?:[^()]|(?:\((?:[^()]|",
+                    r"[^\s\S])*\)))*\)))*\)))*\))|(?:\[\s*(?:,\s*)*\]))+)+\))|(?:(?!(?:\b(?:class|enum|interface|",
+                    r"record|struct|add|alias|and|ascending|async|await|by|descending|from(?=\s*(?:\w|$))|get|",
+                    r"global|group|into|init(?=\s*;)|join|let|nameof|not|notnull|on|or|orderby|partial|remove|",
+                    r"select|set|unmanaged|value|when|where|with(?=\s*\{)|abstract|as|base|break|case|catch|",
+                    r"checked|const|continue|default|delegate|do|else|event|explicit|extern|finally|fixed|for|",
+                    r"foreach|goto|if|implicit|in|internal|is|lock|namespace|new|null|operator|out|override|",
+                    r"params|private|protected|public|readonly|ref|return|sealed|sizeof|stackalloc|static|switch|",
+                    r"this|throw|try|typeof|unchecked|unsafe|using|virtual|volatile|while|",
+                    r"yield)\b))(?:(?:@?\b[A-Za-z_]\w*\b)(?:\s*(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                    r"(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                    r"[^\s\S])*>))*>))*>))*>))?)(?:\s*\.\s*(?:(?:@?\b[A-Za-z_]\w*\b)(?:\s*(?:<(?:[^<>;=+\-*/%\&|",
+                    r"^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                    r"[^\s\S])*>))*>))*>))*>))?))*))(?:\s*(?:\?\s*)?(?:\[\s*(?:,\s*)*\]))*(?:\s*\?)?)(?=\s+(?!(?",
+                    r":\b(?:bool|byte|char|decimal|double|dynamic|float|int|long|object|sbyte|short|string|uint|",
+                    r"ulong|ushort|var|void|class|enum|interface|record|struct|abstract|as|base|break|case|catch|",
+                    r"checked|const|continue|default|delegate|do|else|event|explicit|extern|finally|fixed|for|",
+                    r"foreach|goto|if|implicit|in|internal|is|lock|namespace|new|null|operator|out|override|",
+                    r"params|private|protected|public|readonly|ref|return|sealed|sizeof|stackalloc|static|switch|",
+                    r"this|throw|try|typeof|unchecked|unsafe|using|virtual|volatile|while|yield)\b)|",
+                    r"with\s*\{)(?:@?\b[A-Za-z_]\w*\b)(?:\s*[=,;:{)\]]|\s+(?:in|when)\b))",
+                ],
+                0,
+                &CSHARP_TYPE_EXPRESSION,
+            ),
+        ],
+    ),
+    e(
+        "keyword",
+        &[p(&[
+            r"\b(?:bool|byte|char|decimal|double|dynamic|float|int|long|object|sbyte|short|string|uint|",
+            r"ulong|ushort|var|void|class|enum|interface|record|struct|add|alias|and|ascending|async|",
+            r"await|by|descending|from(?=\s*(?:\w|$))|get|global|group|into|init(?=\s*;)|join|let|nameof|",
+            r"not|notnull|on|or|orderby|partial|remove|select|set|unmanaged|value|when|where|",
+            r"with(?=\s*\{)|abstract|as|base|break|case|catch|checked|const|continue|default|delegate|do|",
+            r"else|event|explicit|extern|finally|fixed|for|foreach|goto|if|implicit|in|internal|is|lock|",
+            r"namespace|new|null|operator|out|override|params|private|protected|public|readonly|ref|",
+            r"return|sealed|sizeof|stackalloc|static|switch|this|throw|try|typeof|unchecked|unsafe|using|",
+            r"virtual|volatile|while|yield)\b",
+        ])],
+    ),
+    e("boolean", &[p(&[r"\b(?:false|true)\b"])]),
+    e("function", &[p(&[r"\b\w+(?=\()"])]),
+    e("range", &[pa(&[r"\.\."], 0, &["operator"])]),
+    e(
+        "number",
+        &[p(&[
+            r"(?i)(?:\b0(?:x[\da-f_]*[\da-f]|b[01_]*[01])|(?:\B\.\d+(?:_+\d+)*|",
+            r"\b\d+(?:_+\d+)*(?:\.\d+(?:_+\d+)*)?)(?:e[-+]?\d+(?:_+\d+)*)?)(?:[dflmu]|lu|ul)?\b",
+        ])],
+    ),
+    e(
+        "operator",
+        &[p(&[
+            r">>=?|<<=?|[-=]>|([-+\&|])\1|~|\?\?=?|[-+*/%\&|^!=<>]=?",
+        ])],
+    ),
+    e(
+        "named-parameter",
+        &[pa(
+            &[r"([(,]\s*)(?:@?\b[A-Za-z_]\w*\b)(?=\s*:)"],
+            LB,
+            &["punctuation"],
+        )],
+    ),
+    e("punctuation", &[p(&[r"\?\.?|::|[{}\[\];(),.:]"])]),
+]);
+
+pub(super) static CSHARP_DOC_COMMENT: Grammar = Grammar::new(&[e(
+    "tag",
+    &[pi(
+        &[
+            r#"</?(?!\d)[^\s>/=$<%]+(?:\s(?:\s*[^\s>/=]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s'">=]+(?=[\s>]))|"#,
+            r"(?=[\s/>])))+)?\s*/?>",
+        ],
+        GR,
+        &super::markup::MARKUP_TAG,
+    )],
+)]);
+
+pub(super) static CSHARP_INTERPOLATION_STRING_1: Grammar = Grammar::new(&[
+    e(
+        "interpolation",
+        &[pi(
+            &[
+                r#"((?:^|[^{])(?:\{\{)*)(?:\{(?!\{)(?:(?![}:])(?:[^"'/()]|(?:/(?![*/])|//[^\r\n]*[\r\n]|"#,
+                r#"/\*(?:[^*]|\*(?!/))*\*/|(?:"(?:\\.|[^\\"\r\n])*"|'(?:[^\r\n'\\]|\\.|"#,
+                r#"\\[Uux][\da-fA-F]{1,8})'))|\((?:[^"'/()]|(?:/(?![*/])|//[^\r\n]*[\r\n]|/\*(?:[^*]|"#,
+                r#"\*(?!/))*\*/|(?:"(?:\\.|[^\\"\r\n])*"|'(?:[^\r\n'\\]|\\.|\\[Uux][\da-fA-F]{1,8})'))|"#,
+                r#"\((?:[^"'/()]|(?:/(?![*/])|//[^\r\n]*[\r\n]|/\*(?:[^*]|\*(?!/))*\*/|(?:"(?:\\.|"#,
+                r#"[^\\"\r\n])*"|'(?:[^\r\n'\\]|\\.|\\[Uux][\da-fA-F]{1,8})'))|\((?:[^"'/()]|(?:/(?![*/])|"#,
+                r#"//[^\r\n]*[\r\n]|/\*(?:[^*]|\*(?!/))*\*/|(?:"(?:\\.|[^\\"\r\n])*"|'(?:[^\r\n'\\]|\\.|"#,
+                r"\\[Uux][\da-fA-F]{1,8})'))|\([^\s\S]*\))*\))*\))*\)))*(?::[^}\r\n]+)?\})",
+            ],
+            LB,
+            &CSHARP_INTERPOLATION_STRING_1_INTERPOLATION,
+        )],
+    ),
+    e("string", &[p(&[r"[\s\S]+"])]),
+]);
+
+pub(super) static CSHARP_INTERPOLATION_STRING_1_INTERPOLATION: Grammar = Grammar::new(&[
+    e(
+        "format-string",
+        &[pi(
+            &[
+                r#"(^\{(?:(?![}:])(?:[^"'/()]|(?:/(?![*/])|//[^\r\n]*[\r\n]|/\*(?:[^*]|\*(?!/))*\*/|"#,
+                r#"(?:"(?:\\.|[^\\"\r\n])*"|'(?:[^\r\n'\\]|\\.|\\[Uux][\da-fA-F]{1,8})'))|\((?:[^"'/()]|"#,
+                r#"(?:/(?![*/])|//[^\r\n]*[\r\n]|/\*(?:[^*]|\*(?!/))*\*/|(?:"(?:\\.|[^\\"\r\n])*"|"#,
+                r#"'(?:[^\r\n'\\]|\\.|\\[Uux][\da-fA-F]{1,8})'))|\((?:[^"'/()]|(?:/(?![*/])|//[^\r\n]*[\r\n]|"#,
+                r#"/\*(?:[^*]|\*(?!/))*\*/|(?:"(?:\\.|[^\\"\r\n])*"|'(?:[^\r\n'\\]|\\.|"#,
+                r#"\\[Uux][\da-fA-F]{1,8})'))|\((?:[^"'/()]|(?:/(?![*/])|//[^\r\n]*[\r\n]|/\*(?:[^*]|"#,
+                r#"\*(?!/))*\*/|(?:"(?:\\.|[^\\"\r\n])*"|'(?:[^\r\n'\\]|\\.|\\[Uux][\da-fA-F]{1,8})'))|"#,
+                r"\([^\s\S]*\))*\))*\))*\)))*)(?::[^}\r\n]+)(?=\}$)",
+            ],
+            LB,
+            &CSHARP_INTERPOLATION_STRING_1_INTERPOLATION_FORMAT_STRING,
+        )],
+    ),
+    e("punctuation", &[p(&[r"^\{|\}$"])]),
+    e(
+        "expression",
+        &[pai(&[r"[\s\S]+"], 0, &["language-csharp"], &CSHARP)],
+    ),
+]);
+
+pub(super) static CSHARP_INTERPOLATION_STRING_1_INTERPOLATION_FORMAT_STRING: Grammar =
+    Grammar::new(&[e("punctuation", &[p(&[r"^:"])])]);
+
+pub(super) static CSHARP_INTERPOLATION_STRING_2: Grammar = Grammar::new(&[
+    e(
+        "interpolation",
+        &[pi(
+            &[
+                r#"((?:^|[^{])(?:\{\{)*)(?:\{(?!\{)(?:(?![}:])(?:[^"'/()]|/(?!\*)|/\*(?:[^*]|\*(?!/))*\*/|"#,
+                r#"(?:"(?:\\.|[^\\"\r\n])*"|'(?:[^\r\n'\\]|\\.|\\[Uux][\da-fA-F]{1,8})')|\((?:[^"'/()]|"#,
+                r#"/(?!\*)|/\*(?:[^*]|\*(?!/))*\*/|(?:"(?:\\.|[^\\"\r\n])*"|'(?:[^\r\n'\\]|\\.|"#,
+                r#"\\[Uux][\da-fA-F]{1,8})')|\((?:[^"'/()]|/(?!\*)|/\*(?:[^*]|\*(?!/))*\*/|(?:"(?:\\.|"#,
+                r#"[^\\"\r\n])*"|'(?:[^\r\n'\\]|\\.|\\[Uux][\da-fA-F]{1,8})')|\((?:[^"'/()]|/(?!\*)|"#,
+                r#"/\*(?:[^*]|\*(?!/))*\*/|(?:"(?:\\.|[^\\"\r\n])*"|'(?:[^\r\n'\\]|\\.|"#,
+                r"\\[Uux][\da-fA-F]{1,8})')|\([^\s\S]*\))*\))*\))*\)))*(?::[^}\r\n]+)?\})",
+            ],
+            LB,
+            &CSHARP_INTERPOLATION_STRING_2_INTERPOLATION,
+        )],
+    ),
+    e("string", &[p(&[r"[\s\S]+"])]),
+]);
+
+pub(super) static CSHARP_INTERPOLATION_STRING_2_INTERPOLATION: Grammar = Grammar::new(&[
+    e(
+        "format-string",
+        &[pi(
+            &[
+                r#"(^\{(?:(?![}:])(?:[^"'/()]|/(?!\*)|/\*(?:[^*]|\*(?!/))*\*/|(?:"(?:\\.|[^\\"\r\n])*"|"#,
+                r#"'(?:[^\r\n'\\]|\\.|\\[Uux][\da-fA-F]{1,8})')|\((?:[^"'/()]|/(?!\*)|/\*(?:[^*]|\*(?!/))*\*/|"#,
+                r#"(?:"(?:\\.|[^\\"\r\n])*"|'(?:[^\r\n'\\]|\\.|\\[Uux][\da-fA-F]{1,8})')|\((?:[^"'/()]|"#,
+                r#"/(?!\*)|/\*(?:[^*]|\*(?!/))*\*/|(?:"(?:\\.|[^\\"\r\n])*"|'(?:[^\r\n'\\]|\\.|"#,
+                r#"\\[Uux][\da-fA-F]{1,8})')|\((?:[^"'/()]|/(?!\*)|/\*(?:[^*]|\*(?!/))*\*/|(?:"(?:\\.|"#,
+                r#"[^\\"\r\n])*"|'(?:[^\r\n'\\]|\\.|\\[Uux][\da-fA-F]{1,8})')|"#,
+                r"\([^\s\S]*\))*\))*\))*\)))*)(?::[^}\r\n]+)(?=\}$)",
+            ],
+            LB,
+            &CSHARP_INTERPOLATION_STRING_2_INTERPOLATION_FORMAT_STRING,
+        )],
+    ),
+    e("punctuation", &[p(&[r"^\{|\}$"])]),
+    e(
+        "expression",
+        &[pai(&[r"[\s\S]+"], 0, &["language-csharp"], &CSHARP)],
+    ),
+]);
+
+pub(super) static CSHARP_INTERPOLATION_STRING_2_INTERPOLATION_FORMAT_STRING: Grammar =
+    Grammar::new(&[e("punctuation", &[p(&[r"^:"])])]);
+
+pub(super) static CSHARP_NAMESPACE: Grammar = Grammar::new(&[e("punctuation", &[p(&[r"\."])])]);
+
+pub(super) static CSHARP_TYPE_EXPRESSION: Grammar = Grammar::new(&[
+    e(
+        "keyword",
+        &[p(&[
+            r"\b(?:bool|byte|char|decimal|double|dynamic|float|int|long|object|sbyte|short|string|uint|",
+            r"ulong|ushort|var|void|class|enum|interface|record|struct|add|alias|and|ascending|async|",
+            r"await|by|descending|from(?=\s*(?:\w|$))|get|global|group|into|init(?=\s*;)|join|let|nameof|",
+            r"not|notnull|on|or|orderby|partial|remove|select|set|unmanaged|value|when|where|",
+            r"with(?=\s*\{)|abstract|as|base|break|case|catch|checked|const|continue|default|delegate|do|",
+            r"else|event|explicit|extern|finally|fixed|for|foreach|goto|if|implicit|in|internal|is|lock|",
+            r"namespace|new|null|operator|out|override|params|private|protected|public|readonly|ref|",
+            r"return|sealed|sizeof|stackalloc|static|switch|this|throw|try|typeof|unchecked|unsafe|using|",
+            r"virtual|volatile|while|yield)\b",
+        ])],
+    ),
+    e("punctuation", &[p(&[r"[<>()?,.:\[\]]"])]),
+]);
+
+pub(super) static CSHARP_GENERIC_METHOD: Grammar = Grammar::new(&[
+    e("function", &[p(&[r"^(?:@?\b[A-Za-z_]\w*\b)"])]),
+    e(
+        "generic",
+        &[pai(
+            &[
+                r"<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"(?:<(?:[^<>;=+\-*/%\&|^]|[^\s\S])*>))*>))*>))*>",
+            ],
+            0,
+            &["class-name"],
+            &CSHARP_TYPE_EXPRESSION,
+        )],
+    ),
+]);
+
+pub(super) static CSHARP_TYPE_LIST: Grammar = Grammar::new(&[
+    e(
+        "record-arguments",
+        &[pi(
+            &[
+                r"(^(?!new\s*\()(?:(?:@?\b[A-Za-z_]\w*\b)(?:\s*(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"[^\s\S])*>))*>))*>))*>))?)\s*)(?:\((?:[^()]|(?:\((?:[^()]|(?:\((?:[^()]|(?:\((?:[^()]|",
+                r"[^\s\S])*\)))*\)))*\)))*\))",
+            ],
+            LB | GR,
+            &CSHARP,
+        )],
+    ),
+    e(
+        "keyword",
+        &[p(&[
+            r"\b(?:bool|byte|char|decimal|double|dynamic|float|int|long|object|sbyte|short|string|uint|",
+            r"ulong|ushort|var|void|class|enum|interface|record|struct|add|alias|and|ascending|async|",
+            r"await|by|descending|from(?=\s*(?:\w|$))|get|global|group|into|init(?=\s*;)|join|let|nameof|",
+            r"not|notnull|on|or|orderby|partial|remove|select|set|unmanaged|value|when|where|",
+            r"with(?=\s*\{)|abstract|as|base|break|case|catch|checked|const|continue|default|delegate|do|",
+            r"else|event|explicit|extern|finally|fixed|for|foreach|goto|if|implicit|in|internal|is|lock|",
+            r"namespace|new|null|operator|out|override|params|private|protected|public|readonly|ref|",
+            r"return|sealed|sizeof|stackalloc|static|switch|this|throw|try|typeof|unchecked|unsafe|using|",
+            r"virtual|volatile|while|yield)\b",
+        ])],
+    ),
+    e(
+        "class-name",
+        &[pi(
+            &[
+                r"(?:(?:\((?:[^,()<>\[\];=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|[^\s\S])*>))*>))*>))*>)|(?:\((?:[^()]|",
+                r"(?:\((?:[^()]|(?:\((?:[^()]|(?:\((?:[^()]|[^\s\S])*\)))*\)))*\)))*\))|",
+                r"(?:\[\s*(?:,\s*)*\]))+(?:,(?:[^,()<>\[\];=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"[^\s\S])*>))*>))*>))*>)|(?:\((?:[^()]|(?:\((?:[^()]|(?:\((?:[^()]|(?:\((?:[^()]|",
+                r"[^\s\S])*\)))*\)))*\)))*\))|(?:\[\s*(?:,\s*)*\]))+)+\))|(?:(?!(?:\b(?:class|enum|interface|",
+                r"record|struct|add|alias|and|ascending|async|await|by|descending|from(?=\s*(?:\w|$))|get|",
+                r"global|group|into|init(?=\s*;)|join|let|nameof|not|notnull|on|or|orderby|partial|remove|",
+                r"select|set|unmanaged|value|when|where|with(?=\s*\{)|abstract|as|base|break|case|catch|",
+                r"checked|const|continue|default|delegate|do|else|event|explicit|extern|finally|fixed|for|",
+                r"foreach|goto|if|implicit|in|internal|is|lock|namespace|new|null|operator|out|override|",
+                r"params|private|protected|public|readonly|ref|return|sealed|sizeof|stackalloc|static|switch|",
+                r"this|throw|try|typeof|unchecked|unsafe|using|virtual|volatile|while|",
+                r"yield)\b))(?:(?:@?\b[A-Za-z_]\w*\b)(?:\s*(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"[^\s\S])*>))*>))*>))*>))?)(?:\s*\.\s*(?:(?:@?\b[A-Za-z_]\w*\b)(?:\s*(?:<(?:[^<>;=+\-*/%\&|",
+                r"^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"[^\s\S])*>))*>))*>))*>))?))*))(?:\s*(?:\?\s*)?(?:\[\s*(?:,\s*)*\]))*(?:\s*\?)?",
+            ],
+            GR,
+            &CSHARP_TYPE_EXPRESSION,
+        )],
+    ),
+    e("punctuation", &[p(&[r"[,()]"])]),
+]);
+
+pub(super) static CSHARP_PREPROCESSOR: Grammar = Grammar::new(&[e(
+    "directive",
+    &[pa(
+        &[
+            r"(#)\b(?:define|elif|else|endif|endregion|error|if|line|nullable|pragma|region|undef|",
+            r"warning)\b",
+        ],
+        LB,
+        &["keyword"],
+    )],
+)]);
+
+pub(super) static CSHARP_ATTRIBUTE: Grammar = Grammar::new(&[
+    e(
+        "target",
+        &[pa(
+            &[
+                r"^(?:\b(?:assembly|event|field|method|module|param|property|return|type)\b)(?=\s*:)",
+            ],
+            0,
+            &["keyword"],
+        )],
+    ),
+    e(
+        "attribute-arguments",
+        &[pi(
+            &[
+                r#"\((?:[^"'/()]|(?:/(?![*/])|//[^\r\n]*[\r\n]|/\*(?:[^*]|\*(?!/))*\*/|(?:"(?:\\.|"#,
+                r#"[^\\"\r\n])*"|'(?:[^\r\n'\\]|\\.|\\[Uux][\da-fA-F]{1,8})'))|\((?:[^"'/()]|(?:/(?![*/])|"#,
+                r#"//[^\r\n]*[\r\n]|/\*(?:[^*]|\*(?!/))*\*/|(?:"(?:\\.|[^\\"\r\n])*"|'(?:[^\r\n'\\]|\\.|"#,
+                r#"\\[Uux][\da-fA-F]{1,8})'))|\((?:[^"'/()]|(?:/(?![*/])|//[^\r\n]*[\r\n]|/\*(?:[^*]|"#,
+                r#"\*(?!/))*\*/|(?:"(?:\\.|[^\\"\r\n])*"|'(?:[^\r\n'\\]|\\.|\\[Uux][\da-fA-F]{1,8})'))|"#,
+                r#"\((?:[^"'/()]|(?:/(?![*/])|//[^\r\n]*[\r\n]|/\*(?:[^*]|\*(?!/))*\*/|(?:"(?:\\.|"#,
+                r#"[^\\"\r\n])*"|'(?:[^\r\n'\\]|\\.|\\[Uux][\da-fA-F]{1,8})'))|\([^\s\S]*\))*\))*\))*\))*\)"#,
+            ],
+            0,
+            &CSHARP,
+        )],
+    ),
+    e(
+        "class-name",
+        &[pi(
+            &[
+                r"(?!(?:\b(?:class|enum|interface|record|struct|add|alias|and|ascending|async|await|by|",
+                r"descending|from(?=\s*(?:\w|$))|get|global|group|into|init(?=\s*;)|join|let|nameof|not|",
+                r"notnull|on|or|orderby|partial|remove|select|set|unmanaged|value|when|where|with(?=\s*\{)|",
+                r"abstract|as|base|break|case|catch|checked|const|continue|default|delegate|do|else|event|",
+                r"explicit|extern|finally|fixed|for|foreach|goto|if|implicit|in|internal|is|lock|namespace|",
+                r"new|null|operator|out|override|params|private|protected|public|readonly|ref|return|sealed|",
+                r"sizeof|stackalloc|static|switch|this|throw|try|typeof|unchecked|unsafe|using|virtual|",
+                r"volatile|while|yield)\b))(?:(?:@?\b[A-Za-z_]\w*\b)(?:\s*(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"[^\s\S])*>))*>))*>))*>))?)(?:\s*\.\s*(?:(?:@?\b[A-Za-z_]\w*\b)(?:\s*(?:<(?:[^<>;=+\-*/%\&|",
+                r"^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|(?:<(?:[^<>;=+\-*/%\&|^]|",
+                r"[^\s\S])*>))*>))*>))*>))?))*",
+            ],
+            0,
+            &CSHARP_ATTRIBUTE_CLASS_NAME,
+        )],
+    ),
+    e("punctuation", &[p(&[r"[:,]"])]),
+]);
+
+pub(super) static CSHARP_ATTRIBUTE_CLASS_NAME: Grammar =
+    Grammar::new(&[e("punctuation", &[p(&[r"\."])])]);

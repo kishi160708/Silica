@@ -129,8 +129,18 @@ mod tests {
 
     #[test]
     fn unported_language_is_plain() {
-        let runs = highlight("const x = 'hello';", Some("javascript"));
+        let runs = highlight("const x = 'hello';", Some("cobol"));
         assert!(runs.is_empty(), "unported language should produce no runs");
+    }
+
+    #[test]
+    fn javascript_keywords() {
+        let runs = highlight("const x = 'hello';", Some("javascript"));
+        assert!(
+            runs.iter().any(|r| r.style.paint == Paint::Keyword),
+            "expected a keyword run, got {:?}",
+            runs
+        );
     }
 
     #[test]
