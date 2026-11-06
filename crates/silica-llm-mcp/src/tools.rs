@@ -267,10 +267,17 @@ fn keep_line(
     kept_bytes: &mut usize,
     max: usize,
     line: &[u8],
+    // `budgeted`: a line the read stopped at EOF for is kept whatever the
+    // earlier lines used — its bytes were already inside the read cap.
+    // `replaced`: counts lines that were not valid UTF-8, for the note.
+    budgeted: bool,
+    replaced: &mut usize,
 ) -> bool {
-    let mut text = std::str::from_utf8(line).unwrap_or("");
-    while text.ends_with('\r') {
-        text = &text[..text.len() - 1];
+    let decoded = String::from_utf8_lossy(line);
+    let invalid = matches!(decoded, std::borrow::Cow::Owned(_));
+    let text = decoded.trim_end_matches('\r');
+    if invalid {
+        *replaced += 1;
     }
     match needle {
         Some(needle) => {
@@ -286,7 +293,7 @@ fn keep_line(
                     *kept_bytes = end;
                     return false;
                 }
-                if *kept_bytes + text.len() + 1 > max && *kept_bytes > 0 {
+                if budgeted && *kept_bytes + text.len() + 1 > max && *kept_bytes > 0 {
                     return false;
                 }
                 *kept_bytes += text.len() + 1;
@@ -303,7 +310,7 @@ fn keep_line(
                 *kept_bytes = end;
                 return false;
             }
-            if *kept_bytes + text.len() + 1 > max && *kept_bytes > 0 {
+            if budgeted && *kept_bytes + text.len() + 1 > max && *kept_bytes > 0 {
                 return false;
             }
             *kept_bytes += text.len() + 1;
@@ -485,6 +492,11 @@ fn read_excerpt(
     let mut kept_bytes = 0usize;
     let mut partial: Vec<u8> = Vec::with_capacity(CHUNK);
     let mut stopped_early = false;
+    // * Whether the loop ended at the end of the file rather than at the byte
+    // * cap: bytes left in `partial` are then a whole line, not a partial one.
+    let mut at_eof = false;
+    // * Lines that were not valid UTF-8, read as the replacement character.
+    let mut replaced = 0usize;
 
     loop {
         if bytes_read >= max as u64 {
@@ -492,7 +504,10 @@ fn read_excerpt(
         }
         let remaining = (max as u64 - bytes_read) as usize;
         let n = match reader.read(&mut buf[..remaining.min(CHUNK)]) {
-            Ok(0) => break,
+            Ok(0) => {
+                at_eof = true;
+                break;
+            }
             Ok(n) => n,
             Err(e) => return Err(format!("cannot read {path}: {e}")),
         };
@@ -505,7 +520,15 @@ fn read_excerpt(
                     let end = pos + at;
                     let mut line = partial.clone();
                     line.extend_from_slice(&data[pos..end]);
-                    if !keep_line(&needle, &mut kept, &mut kept_bytes, max, &line) {
+                    if !keep_line(
+                        &needle,
+                        &mut kept,
+                        &mut kept_bytes,
+                        max,
+                        &line,
+                        true,
+                        &mut replaced,
+                    ) {
                         stopped_early = true;
                         break;
                     }
@@ -524,14 +547,23 @@ fn read_excerpt(
     }
 
     // Any bytes left in `partial` form the final unterminated line. Emit it
-    // only when nothing else was kept (an oversized first line with no
-    // newline); otherwise it is an incomplete line read past the cutoff.
-    if !stopped_early && !partial.is_empty() && kept.is_empty() {
+    // when nothing else was kept (an oversized first line with no newline) or
+    // when the read reached the end of the file — a whole line, dropped only
+    // while it is one read past the byte cap and therefore incomplete.
+    if !stopped_early && !partial.is_empty() && (kept.is_empty() || at_eof) {
         let mut line = partial;
         if line.len() > max {
             line.truncate(max);
         }
-        keep_line(&needle, &mut kept, &mut kept_bytes, max, &line);
+        keep_line(
+            &needle,
+            &mut kept,
+            &mut kept_bytes,
+            max,
+            &line,
+            !at_eof,
+            &mut replaced,
+        );
     }
 
     let (body, detail) = match &needle {
@@ -552,6 +584,13 @@ fn read_excerpt(
         }
     };
     note.push_str(&detail);
+    // * A line read as the replacement character must be named here: a
+    //   summary that silently dropped it would look like a whole file.
+    if replaced > 0 {
+        note.push_str(&format!(
+            "; {replaced} line(s) were not valid UTF-8 and read as the replacement character"
+        ));
+    }
     note.push(']');
     Ok(Excerpt { body, note })
 }
@@ -883,5 +922,50 @@ mod tests {
         assert!(f.metadata().unwrap().file_type().is_file());
         std::fs::remove_dir_all(&dir).ok();
         std::fs::remove_dir_all(&real).ok();
+    }
+
+    /// A file whose last line has no newline is still read to its end: the
+    /// bytes after the final `\n` are a whole line when the read stopped at
+    /// EOF rather than at the byte cap, and dropping it loses the tail of
+    /// every digest of every file that does not end in a newline.
+    #[test]
+    fn digest_keeps_a_final_line_with_no_newline() {
+        let dir =
+            std::env::temp_dir().join(format!("silica-llm-mcp-notrail-{0}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("tail.txt");
+        std::fs::write(&path, "alpha\nbeta\ngamma").unwrap();
+        let path = path.to_string_lossy().into_owned();
+
+        let head = read_excerpt(&backend_with(1 << 20), &path, None, false).unwrap();
+        assert_eq!(head.body, "alpha\nbeta\ngamma");
+        assert!(head.note.contains("3 lines kept"), "{}", head.note);
+
+        // * The filter sees it too: it is a line like any other.
+        let only = read_excerpt(&backend_with(1 << 20), &path, Some("gamma"), false).unwrap();
+        assert_eq!(only.body, "gamma");
+        assert!(only.note.contains("1 lines match"), "{}", only.note);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A line that is not valid UTF-8 is kept with the replacement character
+    /// and named in the note — never replaced by nothing, which would make a
+    /// summary of a file with binary lines in it look complete.
+    #[test]
+    fn digest_names_a_line_that_was_not_valid_utf8() {
+        let dir = std::env::temp_dir().join(format!("silica-llm-mcp-utf8-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("mixed.bin");
+        std::fs::write(&path, b"ok line\n\xff\xfe not utf8\nlast\n").unwrap();
+        let path = path.to_string_lossy().into_owned();
+
+        let head = read_excerpt(&backend_with(1 << 20), &path, None, false).unwrap();
+        assert_eq!(head.body, "ok line\n\u{FFFD}\u{FFFD} not utf8\nlast");
+        assert!(
+            head.note.contains("not valid UTF-8"),
+            "the note must say a line was replaced: {}",
+            head.note
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
