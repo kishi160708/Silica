@@ -1442,6 +1442,36 @@ mod tests {
         assert_eq!(r.resolve("plan", "Note.md"), Some("Projects/Plan.md"));
     }
 
+    /// A plugin folder whose manifest is corrupt (or absent) is skipped
+    /// rather than failing the whole scan: one broken plugin may not hide
+    /// the installed ones, and it may not stop the vault opening either.
+    #[test]
+    fn a_plugin_manifest_that_will_not_parse_is_skipped_not_listed() {
+        let dir = sample_vault();
+        let r = dir.path();
+        // * Corrupt, not just missing: JSON cut off mid-key.
+        fs::write(
+            r.join(".obsidian/plugins/broken/manifest.json"),
+            "{\"id\": \"brok",
+        )
+        .unwrap();
+        // * A second healthy one, to show the scan went on.
+        fs::create_dir_all(r.join(".obsidian/plugins/good")).unwrap();
+        fs::write(
+            r.join(".obsidian/plugins/good/manifest.json"),
+            r#"{"id":"good","name":"Good","version":"2.0.0","author":"me","description":"d"}"#,
+        )
+        .unwrap();
+
+        let manifests = Vault::open(r).unwrap().plugin_manifests();
+        let listed: Vec<&str> = manifests.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(
+            listed,
+            vec!["good", "x"],
+            "the corrupt and the manifest-less folders are skipped, both healthy ones listed: {listed:?}"
+        );
+    }
+
     #[test]
     fn refresh_path_tracks_files_folders_and_removals() {
         let dir = sample_vault();
