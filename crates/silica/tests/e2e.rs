@@ -331,3 +331,37 @@ fn renaming_a_tree_row_renames_the_file_in_place() {
         "the note stays open under its new name"
     );
 }
+
+/// A note opened while an editing mode is on screen builds no reading-view
+/// model; the model is built on the way into Reading view, so a reader who
+/// switches there meets the note fully rendered, not a blank pane.
+#[test]
+fn the_reading_model_is_built_on_the_way_into_reading_view() {
+    if !e2e_enabled() {
+        eprintln!("skipped: no display available for the graphical end-to-end tests");
+        return;
+    }
+    let vault = Vault::new();
+    let mut app = match App::launch(&vault.root) {
+        Some(a) => a,
+        None => {
+            eprintln!("skipped: no graphical session to launch silica in");
+            return;
+        }
+    };
+    app.settle();
+    app.call("open_path", json!({"path": "Note.md"}));
+    app.settle();
+    let blocks = |app: &mut App| {
+        app.call("state", json!({}))
+            .get("reading")
+            .and_then(|r| r.get("blocks"))
+            .and_then(|b| b.as_u64())
+            .unwrap_or(0)
+    };
+    // * Opened in the default editing mode: no model was built.
+    assert_eq!(blocks(&mut app), 0, "an editing mode built a reading model");
+    app.run_command("markdown:toggle-preview");
+    app.settle();
+    assert!(blocks(&mut app) > 0, "Reading view shows no blocks");
+}

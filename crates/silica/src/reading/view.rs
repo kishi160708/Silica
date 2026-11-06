@@ -1317,6 +1317,11 @@ impl ReadingView {
         let top = self.list.logical_scroll_top();
         json!({
             "path": self.path,
+            // * How many blocks the built model holds: the count is 0 while
+            //   the note was last opened in an editing mode, which has not
+            //   built a model at all, and is what a mode switch into
+            //   Reading view rebuilds.
+            "blocks": self.model.blocks.len(),
             "scroll": {
                 "item": top.item_ix,
                 "offset": f32::from(top.offset_in_item),
