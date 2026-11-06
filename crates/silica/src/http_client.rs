@@ -24,17 +24,32 @@ pub const MAX_REDIRECTS: u32 = 5;
 pub const MAX_CACHE_BYTES: u64 = 100 * 1024 * 1024;
 
 /// The total size of every file in `dir`, in bytes.
-fn dir_size(dir: &Path) -> u64 {
+/// A string no two in-flight downloads will pick at the same time.
+///
+/// The process id keeps separate runs apart; the counter keeps threads within
+/// one run apart, and the clock keeps a counter reset (a fork, a wrapped
+/// sequence) from repeating a name a previous attempt still holds.
+fn unique_suffix() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    format!("{}-{n}-{nanos}", std::process::id())
+}
+
+fn dir_size(dir: &Path) -> std::io::Result<u64> {
     let mut total = 0u64;
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let Ok(meta) = entry.metadata() else { continue };
-            if meta.is_file() {
-                total += meta.len();
-            }
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let meta = entry.metadata()?;
+        if meta.is_file() {
+            total += meta.len();
         }
     }
-    total
+    Ok(total)
 }
 
 /// Evicts the oldest files in `dir` until its total size is at or below
@@ -55,15 +70,18 @@ fn evict_to_limit(dir: &Path, limit: u64) {
         }
     }
     files.sort_by_key(|(_, mtime)| *mtime);
-    let mut total = dir_size(dir);
+    let mut total = dir_size(dir).unwrap_or(0);
     for (path, _) in files {
         if total <= limit {
             break;
         }
-        if let Ok(meta) = std::fs::metadata(&path) {
-            total = total.saturating_sub(meta.len());
+        // * The accounting follows the removal: a file that could not be
+        // * deleted is still on disk, so subtracting its size would make the
+        // * cache look smaller than it is and the next sweep would stop early.
+        let len = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        if std::fs::remove_file(&path).is_ok() {
+            total = total.saturating_sub(len);
         }
-        let _ = std::fs::remove_file(&path);
     }
 }
 
@@ -74,7 +92,11 @@ fn sweep_temp_files(dir: &Path) {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            if name.ends_with(".tmp") || name.contains(".silica-tmp") {
+            // * Only our own prefix, exactly. Matching a bare `.tmp` suffix or
+            // * a `.silica-tmp` substring would delete a user file that merely
+            // * looks like a download — the cache dir holds images, not only
+            // * ours.
+            if name.starts_with(".silica-tmp-") {
                 let _ = std::fs::remove_file(entry.path());
             }
         }
@@ -323,12 +345,23 @@ impl HttpClient for SilicaHttpClient {
 
                 let result = 'redirects: {
                     loop {
-                        let temp_path = cache_path_clone.with_extension("tmp");
-                        let headers_path = cache_path_clone.with_extension("headers");
+                        // * Unique per attempt, not derived from the cache
+                        // * name: two downloads of the same URL — or two
+                        // * windows showing the same note — would otherwise
+                        // * share one `.tmp` and truncate each other's bytes.
+                        // * The prefix is what `sweep_temp_files` looks for.
+                        let unique = unique_suffix();
+                        let temp_path = cache_path_clone
+                            .with_file_name(format!(".silica-tmp-{unique}.part"));
+                        let headers_path = cache_path_clone
+                            .with_file_name(format!(".silica-tmp-{unique}.headers"));
 
                         let status = std::process::Command::new("curl")
                             .arg("-s")
                             .arg("-f")
+                            .arg("--no-config")
+                            .arg("--noproxy")
+                            .arg("*")
                             // * No -L: we follow redirects ourselves so each hop
                             //   can be validated against the private-network
                             //   rules before the connection is made.
@@ -576,19 +609,29 @@ mod tests {
         std::fs::write(dir.path().join("a.bin"), b"hello").unwrap();
         std::fs::write(dir.path().join("b.bin"), b"world!").unwrap();
         std::fs::write(dir.path().join("c.bin"), b"!!").unwrap();
-        assert_eq!(dir_size(dir.path()), 13);
+        assert_eq!(dir_size(dir.path()).unwrap(), 13);
     }
 
     #[test]
     fn sweep_temp_files_removes_partial_downloads() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("real.png"), b"png").unwrap();
+        // * A user's own `.tmp` and a name that merely contains the old
+        // * substring must both survive; only our prefix is swept.
         std::fs::write(dir.path().join("partial.png.tmp"), b"part").unwrap();
         std::fs::write(dir.path().join("image.silica-tmp"), b"part2").unwrap();
+        std::fs::write(dir.path().join(".silica-tmp-123-0-0.part"), b"partial").unwrap();
         sweep_temp_files(dir.path());
         assert!(dir.path().join("real.png").exists());
-        assert!(!dir.path().join("partial.png.tmp").exists());
-        assert!(!dir.path().join("image.silica-tmp").exists());
+        assert!(
+            dir.path().join("partial.png.tmp").exists(),
+            "a user file ending in .tmp must not be swept"
+        );
+        assert!(
+            dir.path().join("image.silica-tmp").exists(),
+            "a name merely containing the substring must not be swept"
+        );
+        assert!(!dir.path().join(".silica-tmp-123-0-0.part").exists());
     }
 
     #[test]
@@ -597,9 +640,12 @@ mod tests {
         for name in ["a.bin", "b.bin", "c.bin"] {
             std::fs::write(dir.path().join(name), b"0123456789").unwrap();
         }
-        assert_eq!(dir_size(dir.path()), 30);
+        assert_eq!(dir_size(dir.path()).unwrap(), 30);
         evict_to_limit(dir.path(), 15);
-        assert!(dir_size(dir.path()) <= 15, "the cache was not evicted");
+        assert!(
+            dir_size(dir.path()).unwrap() <= 15,
+            "the cache was not evicted"
+        );
         // * At least one file had to go; at least one had to stay.
         let remaining: Vec<_> = ["a.bin", "b.bin", "c.bin"]
             .iter()
@@ -651,10 +697,10 @@ mod tests {
         }
 
         // * The cache must be at or under the budget.
+        let size = dir_size(&path).expect("the cache dir is readable");
         assert!(
-            dir_size(&path) <= limit,
-            "cache grew past its budget: {} > {limit}",
-            dir_size(&path)
+            size <= limit,
+            "cache grew past its budget: {size} > {limit}"
         );
 
         // * No temp files may remain.
@@ -662,7 +708,7 @@ mod tests {
             let name = entry.file_name();
             let name = name.to_string_lossy();
             assert!(
-                !name.ends_with(".tmp") && !name.contains(".silica-tmp"),
+                !name.starts_with(".silica-tmp-"),
                 "a temp file survived the sweep: {name}"
             );
         }

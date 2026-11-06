@@ -3,11 +3,25 @@
 //! Each plugin implements [`crate::native::Plugin`] and registers itself
 //! via [`crate::native::register_native`] at startup.
 
-use crate::date;
 use crate::live::register_native;
 use crate::native::{NativeCommand, Plugin, PluginContext};
 use serde_json::Value;
 use std::time::SystemTime;
+
+/// Today's civil date, in the local zone, as `YYYY-MM-DD`.
+///
+/// The Gregorian calendar is not 365 days a year and months are not 30 days:
+/// the old arithmetic here read 2024-03-01 as 2024-02-29 and drifted a day
+/// every four years, so the daily note opened the wrong file. `Stamp` already
+/// does the civil conversion the rest of the app uses.
+///
+/// The zone offset is taken from the OS rather than assumed UTC, because a
+/// daily note is named for the day the user is having.
+fn today_local() -> String {
+    // * `chrono::Local` is what the rest of the app uses for a wall-clock day,
+    // * so the daily note and the template's `{{date}}` agree.
+    chrono::Local::now().format("%Y-%m-%d").to_string()
+}
 
 /// Daily notes: create or open today's dated note (YYYY-MM-DD.md).
 pub struct DailyNotes;
@@ -36,7 +50,7 @@ impl Plugin for DailyNotes {
     ) -> Result<(), String> {
         match id {
             "daily-notes:open" => {
-                let today = date::today();
+                let today = today_local();
 
                 let path = format!("{today}.md");
                 if (ctx.file_exists)(&path)? {
@@ -108,6 +122,20 @@ impl Plugin for Backlink {
                         }
                     }
                 }
+                // * The count and the names are the whole point of the
+                // * command; before this the vector was built and dropped.
+                match backlinks.len() {
+                    0 => (ctx.notify)("No backlinks"),
+                    1 => (ctx.notify)(&format!("1 backlink: {}", backlinks[0])),
+                    n => {
+                        let mut names = backlinks.join(", ");
+                        if names.len() > 200 {
+                            names.truncate(200);
+                            names.push('…');
+                        }
+                        (ctx.notify)(&format!("{n} backlinks: {names}"));
+                    }
+                }
                 Ok(())
             }
             _ => Err(format!("'{id}' is not a command this plugin registered")),
@@ -145,6 +173,35 @@ impl Plugin for OutgoingLink {
                 let current = (ctx.current_note)().unwrap_or_default();
                 if current.is_empty() {
                     return Err("No note is open".to_string());
+                }
+                // * The note's own `links` from the metadata cache. This used
+                // * to check that the open note existed and stop, so the
+                // * command reported success without showing anything.
+                let metadata = (ctx.metadata_cache)(&current)?;
+                let meta: serde_json::Value =
+                    serde_json::from_str(&metadata).map_err(|e| e.to_string())?;
+                let links: Vec<String> = meta
+                    .get("links")
+                    .and_then(|v| v.as_array())
+                    .map(|array| {
+                        array
+                            .iter()
+                            .filter_map(|l| l.get("link").and_then(|v| v.as_str()))
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                match links.len() {
+                    0 => (ctx.notify)("No outgoing links"),
+                    1 => (ctx.notify)(&format!("1 outgoing link: {}", links[0])),
+                    n => {
+                        let mut names = links.join(", ");
+                        if names.len() > 200 {
+                            names.truncate(200);
+                            names.push('…');
+                        }
+                        (ctx.notify)(&format!("{n} outgoing links: {names}"));
+                    }
                 }
                 Ok(())
             }
@@ -272,7 +329,15 @@ impl Plugin for WordCount {
                     return Err("No note is open".to_string());
                 }
                 let content = (ctx.read_file)(&current)?;
-                let _words = content.split_whitespace().count();
+                // * The count was computed and thrown away. Words, not
+                // * whitespace runs: a note's prose is words, and the two agree
+                // * only when nothing but spaces separates them.
+                let words = content.split_whitespace().count();
+                let chars = content.chars().count();
+                let reading_minutes = (words as f64 / 200.0).ceil().max(1.0) as u64;
+                (ctx.notify)(&format!(
+                    "{words} words, {chars} characters (~{reading_minutes} min read)"
+                ));
                 Ok(())
             }
             _ => Err(format!("'{id}' is not a command this plugin registered")),
@@ -354,7 +419,7 @@ impl Plugin for ZkPrefixer {
         match id {
             "zk-prefixer:create" => {
                 let title = value.and_then(|v| v.as_str()).unwrap_or("note");
-                let now = date::today();
+                let now = today_local();
                 let path = format!("{now}-{title}.md");
                 let content = format!("# {title}\n\n");
                 (ctx.create_file)(&path, &content)?;
@@ -406,6 +471,39 @@ impl Plugin for WebViewer {
     }
 }
 
+/// Every `.md` path under a folder, found by asking `list_dir` one folder at a
+/// time.
+///
+/// `list_dir` answers for a single folder, so a folder is recognised by
+/// answering with a listing of its own. The depth cap is a runaway guard: a
+/// vault is not nested 64 deep, and a symlink loop is.
+fn collect_notes(
+    ctx: &PluginContext<'_>,
+    folder: &str,
+    out: &mut Vec<String>,
+    depth: u32,
+) -> Result<(), String> {
+    if depth > 64 {
+        return Err("the vault is nested too deeply to publish".to_string());
+    }
+    let entries = match (ctx.list_dir)(folder) {
+        Ok(entries) => entries,
+        // * A file is not a folder; that is not an error here.
+        Err(_) => return Ok(()),
+    };
+    for entry in entries {
+        if entry.ends_with(".md") {
+            out.push(entry);
+            continue;
+        }
+        // * A file answers with an error from `list_dir`; a folder answers
+        // * with its own listing, so recurse either way. The depth cap bounds
+        // * it even if a symlink loop sneaks in.
+        collect_notes(ctx, &entry, out, depth + 1)?;
+    }
+    Ok(())
+}
+
 /// Publish: export vault notes to HTML for publishing.
 pub struct Publish;
 
@@ -415,7 +513,7 @@ impl Plugin for Publish {
     }
 
     fn name(&self) -> &'static str {
-        "Publish"
+        "Publish vault"
     }
 
     fn commands(&self) -> Vec<NativeCommand> {
@@ -427,41 +525,73 @@ impl Plugin for Publish {
 
     fn run_command(
         &self,
-        id: &str,
+        _id: &str,
         _value: Option<&Value>,
         ctx: &PluginContext<'_>,
     ) -> Result<(), String> {
-        match id {
+        match _id {
             "publish:publish" => {
                 let root = ctx.vault_root;
                 let publish_dir = root.join("publish");
                 std::fs::create_dir_all(&publish_dir)
                     .map_err(|e| format!("Failed to create publish dir: {e}"))?;
 
-                let all_files = (ctx.list_dir)("")?;
-                let mut index = String::from("# Published Notes\n\n");
+                // * Every note, nested ones included. `list_dir` answers for one
+                // * folder, so a folder is walked by asking again — an entry
+                // * that answers with a listing is a folder.
+                let mut notes = Vec::new();
+                collect_notes(ctx, "", &mut notes, 0)?;
 
-                for file in &all_files {
-                    if file.as_str().ends_with(".md") {
-                        let content = (ctx.read_file)(file)?;
-                        let html = format!(
-                            "<!DOCTYPE html>\n<html>\n<head><meta charset='utf-8'><title>{}</title></head>\n<body><pre>{}</pre></body>\n</html>",
-                            file,
-                            escape_html(&content)
-                        );
-                        let html_path = format!("{}.html", file);
-                        std::fs::write(publish_dir.join(&html_path), html)
-                            .map_err(|e| format!("Failed to write {html_path}: {e}"))?;
-                        index.push_str(&format!("- [{file}]({html_path})\n"));
+                let mut index = String::from("# Published Notes\n\n");
+                let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+                for file in &notes {
+                    if !file.as_str().ends_with(".md") {
+                        continue;
                     }
+                    let content = (ctx.read_file)(file)?;
+                    // ! Both the title and the body are user text. A note named
+                    // ! `<script>alert(1)</script>.md` would otherwise put that
+                    // ! script in a page the vault then serves.
+                    let title = escape_html(file);
+                    let html = format!(
+                        "<!DOCTYPE html>\n<html>\n<head><meta charset='utf-8'><title>{title}</title></head>\n<body><pre>{}</pre></body>\n</html>",
+                        escape_html(&content)
+                    );
+
+                    // ! The output name is built from the note's path, so it
+                    // ! must not keep the separators: `a/b.md` joined onto the
+                    // ! publish folder writes into `a/`, which does not exist —
+                    // ! and a crafted path would climb out of it entirely.
+                    let stem = file.trim_end_matches(".md").replace(['/', '\\'], "-");
+                    let mut html_path = format!("{stem}.html");
+                    // ! Two notes can flatten alike (`a/b.md`, `a-b.md`).
+                    let mut n = 1u32;
+                    while !used.insert(html_path.clone()) {
+                        html_path = format!("{stem}-{n}.html");
+                        n += 1;
+                        if n > 10_000 {
+                            return Err(format!("too many notes collide on {stem}"));
+                        }
+                    }
+
+                    std::fs::write(publish_dir.join(&html_path), html)
+                        .map_err(|e| format!("Failed to write {html_path}: {e}"))?;
+                    // * A link target with a space or bracket would break the
+                    // * list; the name is escaped the way the page is.
+                    index.push_str(&format!("- [{}]({html_path})\n", escape_html(file)));
                 }
 
                 std::fs::write(publish_dir.join("index.md"), index)
                     .map_err(|e| format!("Failed to write index: {e}"))?;
 
+                // * Publishing is a filesystem action the user asked for; say
+                // * how many notes it covered.
+                (ctx.notify)(&format!("Published {} notes", used.len()));
+
                 Ok(())
             }
-            _ => Err(format!("'{id}' is not a command this plugin registered")),
+            _ => Err("'publish:publish' is not a command this plugin registered".to_string()),
         }
     }
 }
@@ -580,7 +710,13 @@ impl Plugin for FileRecovery {
                     if let Some(name) = entry.file_name().to_str() {
                         let src = entry.path();
                         let dst = root.join(name);
-                        let _ = std::fs::copy(&src, &dst);
+                        // ! Never restore over a note that already exists: the
+                        // * snapshot is the user's older copy, not theirs now.
+                        if dst.exists() {
+                            return Err(format!("{name} already exists; refusing to overwrite"));
+                        }
+                        std::fs::copy(&src, &dst)
+                            .map_err(|e| format!("failed to restore {name}: {e}"))?;
                     }
                 }
 
@@ -614,17 +750,13 @@ impl Plugin for AudioRecorder {
         &self,
         id: &str,
         _value: Option<&Value>,
-        ctx: &PluginContext<'_>,
+        _ctx: &PluginContext<'_>,
     ) -> Result<(), String> {
         match id {
             "audio-recorder:record" => {
-                let now = date::today();
-
-                let path = format!("{now}-audio.md");
-                let content = format!("# Audio recording - {now}\n\n*Recording not yet implemented.*\n\nTo record audio, use your system's recording software and attach the audio file here.\n");
-                (ctx.create_file)(&path, &content)?;
-                (ctx.open_note)(&path)?;
-                Ok(())
+                // * Silica has no audio capture: do not fabricate a note that
+                // * pretends a recording happened. The plugin is told plainly.
+                Err("audio recording is not supported by Silica".to_string())
             }
             _ => Err(format!("'{id}' is not a command this plugin registered")),
         }
@@ -777,6 +909,19 @@ impl Plugin for TagPane {
                     }
                 }
 
+                // * The collected tags are what the command is for; before
+                // * this the set was built and dropped.
+                if tags.is_empty() {
+                    (ctx.notify)("No tags in this vault");
+                } else {
+                    let names: Vec<&str> = tags.iter().map(String::as_str).collect();
+                    let mut listed = names.join(", ");
+                    if listed.len() > 200 {
+                        listed.truncate(200);
+                        listed.push('…');
+                    }
+                    (ctx.notify)(&format!("{} tags: {listed}", tags.len()));
+                }
                 Ok(())
             }
             _ => Err(format!("'{id}' is not a command this plugin registered")),
@@ -797,10 +942,16 @@ impl Plugin for Workspaces {
     }
 
     fn commands(&self) -> Vec<NativeCommand> {
-        vec![NativeCommand {
-            id: "workspaces:save".into(),
-            name: "Save workspace".into(),
-        }]
+        vec![
+            NativeCommand {
+                id: "workspaces:save".into(),
+                name: "Save workspace".into(),
+            },
+            NativeCommand {
+                id: "workspaces:load".into(),
+                name: "Load workspace".into(),
+            },
+        ]
     }
 
     fn run_command(
@@ -826,6 +977,24 @@ impl Plugin for Workspaces {
                     &workspace_path,
                     &serde_json::to_string_pretty(&workspace).map_err(|e| e.to_string())?,
                 )?;
+                Ok(())
+            }
+            "workspaces:load" => {
+                let name = value.and_then(|v| v.as_str()).unwrap_or("default");
+                let workspace_path = format!(".silica/workspaces/{name}.json");
+                if !(ctx.file_exists)(&workspace_path)? {
+                    return Err(format!("no workspace named {name}"));
+                }
+                let content = (ctx.read_file)(&workspace_path)?;
+                let workspace: Value = serde_json::from_str(&content)
+                    .map_err(|e| format!("workspace {name} is not valid JSON: {e}"))?;
+                let note = workspace
+                    .get("current_note")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if !note.is_empty() {
+                    (ctx.open_note)(note)?;
+                }
                 Ok(())
             }
             _ => Err(format!("'{id}' is not a command this plugin registered")),
@@ -870,7 +1039,7 @@ impl Plugin for SlashCommand {
 
                 match cmd {
                     "daily" => {
-                        let today = date::today();
+                        let today = today_local();
                         let path = format!("{today}.md");
                         if !(ctx.file_exists)(&path)? {
                             let content = format!("# {today}\n\n{args}");
@@ -908,4 +1077,206 @@ pub fn register_all() {
     register_native(Box::new(Workspaces));
     register_native(Box::new(SlashCommand));
     register_native(Box::new(crate::vault_doctor::VaultDoctor));
+}
+
+#[cfg(test)]
+mod date_tests {
+    use super::*;
+
+    /// The civil conversion the calendar actually has, at the boundaries the
+    /// old 365-day/30-day arithmetic got wrong.
+    fn civil(unix: i64, offset: i64) -> (i64, u32, u32) {
+        let stamp = silica_templates::Stamp::from_unix(unix, offset);
+        (stamp.year, stamp.month, stamp.day)
+    }
+
+    /// A leap day is a real date, and the day after it is March.
+    #[test]
+    fn a_leap_day_is_the_twenty_ninth_of_february() {
+        // * 2024-02-29 12:00 UTC.
+        assert_eq!(civil(1_709_208_000, 0), (2024, 2, 29));
+        // * The next day is March, not February 30th.
+        assert_eq!(civil(1_709_208_000 + 86_400, 0), (2024, 3, 1));
+    }
+
+    /// A year boundary is the 1st of January, not a 366th of December.
+    #[test]
+    fn a_year_boundary_rolls_to_january() {
+        // * 2024-12-31 12:00 UTC, then the next day.
+        let end = 1_735_646_400;
+        assert_eq!(civil(end, 0), (2024, 12, 31));
+        assert_eq!(civil(end + 86_400, 0), (2025, 1, 1));
+    }
+
+    /// A month boundary is the 1st of the next month, and the months are not
+    /// all thirty days.
+    #[test]
+    fn month_lengths_are_the_calendars() {
+        // * 2024-01-31 -> February 1st.
+        let jan_end = 1_706_702_400;
+        assert_eq!(civil(jan_end, 0), (2024, 1, 31));
+        assert_eq!(civil(jan_end + 86_400, 0), (2024, 2, 1));
+        // * 2024-04-30 -> May 1st.
+        let apr_end = 1_714_478_400;
+        assert_eq!(civil(apr_end, 0), (2024, 4, 30));
+        assert_eq!(civil(apr_end + 86_400, 0), (2024, 5, 1));
+    }
+
+    /// The offset moves the civil date, which is what makes a daily note
+    /// follow the user's day rather than UTC's.
+    #[test]
+    fn a_zone_offset_moves_the_day() {
+        // * 2024-03-01 00:30 UTC is still 2024-02-29 west of Greenwich.
+        let instant = 1_709_253_000;
+        assert_eq!(civil(instant, 0), (2024, 3, 1));
+        assert_eq!(civil(instant, -3600), (2024, 2, 29));
+        assert_eq!(civil(instant, 8 * 3600), (2024, 3, 1));
+    }
+
+    /// What the app produces is a date the vault can name a file with.
+    #[test]
+    fn todays_name_is_iso_shaped() {
+        let today = today_local();
+        assert_eq!(today.len(), 10, "{today}");
+        let parts: Vec<&str> = today.split('-').collect();
+        assert_eq!(parts.len(), 3, "{today}");
+        assert_eq!(parts[0].len(), 4, "{today}");
+        assert_eq!(parts[1].len(), 2, "{today}");
+        assert_eq!(parts[2].len(), 2, "{today}");
+    }
+}
+
+/// Commands that gather something and show it.
+///
+/// Each of these computed an answer and returned `Ok(())` without putting the
+/// answer anywhere, so the work happened and the user saw nothing.
+#[cfg(test)]
+mod report_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::rc::Rc;
+
+    /// A context over a fixed set of notes and metadata, recording notices.
+    struct Harness {
+        notices: Rc<RefCell<Vec<String>>>,
+    }
+
+    impl Harness {
+        fn new(
+            notes: &[(&str, &str)],
+            meta: HashMap<String, String>,
+            open: &str,
+        ) -> (Self, PluginContext<'static>) {
+            let notices = Rc::new(RefCell::new(Vec::new()));
+            let shown = Rc::clone(&notices);
+            let files: Vec<String> = notes.iter().map(|(p, _)| p.to_string()).collect();
+            let bodies: HashMap<String, String> = notes
+                .iter()
+                .map(|(p, b)| (p.to_string(), b.to_string()))
+                .collect();
+            let current = open.to_string();
+            let ctx = PluginContext {
+                vault_root: std::path::Path::new("."),
+                read_file: Box::new(move |p| {
+                    bodies
+                        .get(p)
+                        .cloned()
+                        .ok_or_else(|| format!("no such file: {p}"))
+                }),
+                write_file: Box::new(|_, _| Ok(())),
+                append_file: Box::new(|_, _| Ok(())),
+                create_file: Box::new(|_, _| Ok(())),
+                create_folder: Box::new(|_| Ok(())),
+                delete_file: Box::new(|_| Ok(())),
+                rename_file: Box::new(|_, _| Ok(())),
+                list_dir: Box::new(move |_| Ok(files.clone())),
+                file_exists: Box::new(|_| Ok(true)),
+                metadata_cache: Box::new(move |p| {
+                    meta.get(p)
+                        .cloned()
+                        .ok_or_else(|| format!("no metadata: {p}"))
+                }),
+                open_note: Box::new(|_| Ok(())),
+                current_note: Box::new(move || Some(current.clone())),
+                notify: Box::new(move |line: &str| shown.borrow_mut().push(line.to_string())),
+            };
+            (Self { notices }, ctx)
+        }
+    }
+
+    #[test]
+    fn backlinks_are_reported_not_discarded() {
+        let mut meta = HashMap::new();
+        meta.insert(
+            "A.md".to_string(),
+            r#"{"links":[{"link":"B.md"}]}"#.to_string(),
+        );
+        meta.insert("B.md".to_string(), r#"{"links":[]}"#.to_string());
+        let (h, ctx) = Harness::new(&[("A.md", ""), ("B.md", "")], meta, "B.md");
+        Backlink.run_command("backlink:show", None, &ctx).unwrap();
+
+        let shown = h.notices.borrow();
+        assert_eq!(shown.len(), 1, "one line is shown");
+        assert!(shown[0].contains("1 backlink"), "{}", shown[0]);
+        assert!(shown[0].contains("A.md"), "the linking note is named");
+    }
+
+    #[test]
+    fn a_note_with_no_backlinks_says_so() {
+        let mut meta = HashMap::new();
+        meta.insert("B.md".to_string(), r#"{"links":[]}"#.to_string());
+        let (h, ctx) = Harness::new(&[("B.md", "")], meta, "B.md");
+        Backlink.run_command("backlink:show", None, &ctx).unwrap();
+        assert_eq!(h.notices.borrow().as_slice(), ["No backlinks"]);
+    }
+
+    #[test]
+    fn outgoing_links_are_reported() {
+        let mut meta = HashMap::new();
+        meta.insert(
+            "A.md".to_string(),
+            r#"{"links":[{"link":"B.md"},{"link":"C.md"}]}"#.to_string(),
+        );
+        let (h, ctx) = Harness::new(&[("A.md", "")], meta, "A.md");
+        OutgoingLink
+            .run_command("outgoing-link:show", None, &ctx)
+            .unwrap();
+
+        let shown = h.notices.borrow();
+        assert_eq!(shown.len(), 1);
+        assert!(shown[0].contains("2 outgoing links"), "{}", shown[0]);
+        assert!(shown[0].contains("B.md") && shown[0].contains("C.md"));
+    }
+
+    #[test]
+    fn the_word_count_is_shown() {
+        let (h, ctx) = Harness::new(
+            &[("A.md", "one two three four five")],
+            HashMap::new(),
+            "A.md",
+        );
+        WordCount
+            .run_command("word-count:show", None, &ctx)
+            .unwrap();
+
+        let shown = h.notices.borrow();
+        assert_eq!(shown.len(), 1);
+        assert!(shown[0].starts_with("5 words"), "{}", shown[0]);
+    }
+
+    #[test]
+    fn the_collected_tags_are_shown() {
+        let (h, ctx) = Harness::new(
+            &[("A.md", "#alpha some text #beta"), ("B.md", "no tags here")],
+            HashMap::new(),
+            "A.md",
+        );
+        TagPane.run_command("tag-pane:show", None, &ctx).unwrap();
+
+        let shown = h.notices.borrow();
+        assert_eq!(shown.len(), 1);
+        assert!(shown[0].contains("2 tags"), "{}", shown[0]);
+        assert!(shown[0].contains("alpha") && shown[0].contains("beta"));
+    }
 }

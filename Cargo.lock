@@ -1524,7 +1524,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1730,7 +1730,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2744,6 +2744,8 @@ version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
 dependencies = [
+ "allocator-api2",
+ "equivalent",
  "foldhash 0.1.5",
 ]
 
@@ -3555,6 +3557,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lru"
+version = "0.12.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "234cf4f4a04dc1f57e24b96cc0cd600cf2af460d4161ac5ecdd0af8e1f3b2a38"
+dependencies = [
+ "hashbrown 0.15.5",
+]
+
+[[package]]
 name = "lyon"
 version = "1.0.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4040,7 +4051,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5559,7 +5570,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5958,7 +5969,7 @@ dependencies = [
 
 [[package]]
 name = "silica"
-version = "0.5.7"
+version = "0.5.10"
 dependencies = [
  "anyhow",
  "async-channel 2.5.0",
@@ -5971,6 +5982,7 @@ dependencies = [
  "http_client",
  "image",
  "indexmap",
+ "lru",
  "mermaid-rs-renderer",
  "notify",
  "rayon",
@@ -6001,7 +6013,7 @@ dependencies = [
 
 [[package]]
 name = "silica-bases"
-version = "0.5.7"
+version = "0.5.10"
 dependencies = [
  "chrono",
  "indexmap",
@@ -6012,7 +6024,7 @@ dependencies = [
 
 [[package]]
 name = "silica-bench"
-version = "0.5.7"
+version = "0.5.10"
 dependencies = [
  "rayon",
  "silica-cache",
@@ -6022,7 +6034,7 @@ dependencies = [
 
 [[package]]
 name = "silica-cache"
-version = "0.5.7"
+version = "0.5.10"
 dependencies = [
  "serde",
  "serde_yaml",
@@ -6032,7 +6044,7 @@ dependencies = [
 
 [[package]]
 name = "silica-canvas"
-version = "0.5.7"
+version = "0.5.10"
 dependencies = [
  "serde_json",
  "silica-formats",
@@ -6040,7 +6052,7 @@ dependencies = [
 
 [[package]]
 name = "silica-commands"
-version = "0.5.7"
+version = "0.5.10"
 dependencies = [
  "serde_json",
  "silica-formats",
@@ -6048,7 +6060,7 @@ dependencies = [
 
 [[package]]
 name = "silica-control"
-version = "0.5.7"
+version = "0.5.10"
 dependencies = [
  "serde",
  "serde_json",
@@ -6057,7 +6069,7 @@ dependencies = [
 
 [[package]]
 name = "silica-formats"
-version = "0.5.7"
+version = "0.5.10"
 dependencies = [
  "indexmap",
  "serde",
@@ -6067,7 +6079,7 @@ dependencies = [
 
 [[package]]
 name = "silica-highlight"
-version = "0.5.7"
+version = "0.5.10"
 dependencies = [
  "fancy-regex 0.16.2",
  "serde",
@@ -6076,7 +6088,7 @@ dependencies = [
 
 [[package]]
 name = "silica-llm-mcp"
-version = "0.5.7"
+version = "0.5.10"
 dependencies = [
  "libc",
  "native-tls",
@@ -6086,11 +6098,11 @@ dependencies = [
 
 [[package]]
 name = "silica-markdown"
-version = "0.5.7"
+version = "0.5.10"
 
 [[package]]
 name = "silica-math"
-version = "0.5.7"
+version = "0.5.10"
 dependencies = [
  "ab_glyph",
  "ratex-font",
@@ -6102,7 +6114,7 @@ dependencies = [
 
 [[package]]
 name = "silica-mcp"
-version = "0.5.7"
+version = "0.5.10"
 dependencies = [
  "serde",
  "serde_json",
@@ -6111,14 +6123,14 @@ dependencies = [
 
 [[package]]
 name = "silica-pdf"
-version = "0.5.7"
+version = "0.5.10"
 dependencies = [
  "hayro",
 ]
 
 [[package]]
 name = "silica-plugins"
-version = "0.5.7"
+version = "0.5.10"
 dependencies = [
  "chrono",
  "rquickjs",
@@ -6127,13 +6139,14 @@ dependencies = [
  "serde_yaml",
  "silica-cache",
  "silica-formats",
+ "silica-templates",
  "silica-vault",
  "tempfile",
 ]
 
 [[package]]
 name = "silica-search"
-version = "0.5.7"
+version = "0.5.10"
 dependencies = [
  "regex",
  "serde_yaml",
@@ -6141,7 +6154,7 @@ dependencies = [
 
 [[package]]
 name = "silica-suggest"
-version = "0.5.7"
+version = "0.5.10"
 dependencies = [
  "silica-cache",
  "silica-formats",
@@ -6152,11 +6165,11 @@ dependencies = [
 
 [[package]]
 name = "silica-templates"
-version = "0.5.7"
+version = "0.5.10"
 
 [[package]]
 name = "silica-text"
-version = "0.5.7"
+version = "0.5.10"
 dependencies = [
  "regex",
  "serde",
@@ -6172,7 +6185,7 @@ dependencies = [
 
 [[package]]
 name = "silica-vault"
-version = "0.5.7"
+version = "0.5.10"
 dependencies = [
  "indexmap",
  "libc",
@@ -6827,10 +6840,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand 2.5.0",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.6",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7914,7 +7927,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8358,7 +8371,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d6f32a0ff4a9f6f01231eb2059cc85479330739333e0e58cadf03b6af2cca10"
 dependencies = [
  "cfg-if",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

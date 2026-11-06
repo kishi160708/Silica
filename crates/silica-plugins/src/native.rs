@@ -23,6 +23,9 @@ type ListDir<'a> = Box<dyn Fn(&str) -> Result<Vec<String>, String> + 'a>;
 type FileExists<'a> = Box<dyn Fn(&str) -> Result<bool, String> + 'a>;
 type OpenNote<'a> = Box<dyn Fn() -> Option<String> + 'a>;
 type StrToUnit<'a> = Box<dyn Fn(&str) -> Result<(), String> + 'a>;
+/// Show a line to the user. A command that computes an answer has nowhere
+/// else to put it: `run_command` returns only success or failure.
+type NoticeSink<'a> = Box<dyn Fn(&str) + 'a>;
 
 /// Context handed to a plugin when one of its commands runs. The app fills
 /// in the closures; the plugin only calls them.
@@ -53,6 +56,13 @@ pub struct PluginContext<'a> {
     pub open_note: StrToUnit<'a>,
     /// Get the currently open note's vault-relative path, if any.
     pub current_note: OpenNote<'a>,
+    /// Show a line to the user, the way Obsidian's `Notice` does.
+    ///
+    /// A command that gathers something — backlinks, outgoing links, a word
+    /// count — has no return value to put it in: `run_command` reports only
+    /// success or failure. Without this the work was done and the result was
+    /// dropped on the floor.
+    pub notify: NoticeSink<'a>,
 }
 
 /// A plugin Silica runs in-process: no bridge, no sandbox, no QuickJS.

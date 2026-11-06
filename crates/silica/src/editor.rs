@@ -187,6 +187,7 @@ const SCROLLBAR_WIDTH: f32 = 12.0;
 /// The thumb never shrinks below this, so it can still be grabbed.
 const SCROLLBAR_MIN_THUMB: f32 = 24.0;
 
+#[derive(Clone)]
 pub enum EditorEvent {
     /// The buffer changed; the owner schedules a save.
     Edited,
@@ -205,6 +206,38 @@ pub enum EditorEvent {
     },
     /// Files in the vault changed (e.g. an attachment was saved); the workspace absorbs them.
     FilesChanged(crate::workspace::Changes),
+    /// Context menu: cut the selection.
+    Cut,
+    /// Context menu: copy the selection.
+    Copy,
+    /// Context menu: paste from the clipboard.
+    Paste,
+    /// Context menu: select all text.
+    SelectAll,
+    /// Context menu: toggle bold on the selection.
+    ToggleBold,
+    /// Context menu: toggle italic on the selection.
+    ToggleItalic,
+    /// Context menu: toggle highlight on the selection.
+    ToggleHighlight,
+    /// Context menu: insert a wikilink at the caret.
+    InsertWikilink,
+    /// Context menu: insert a markdown link at the caret.
+    InsertLink,
+    /// Context menu: insert an embed at the caret.
+    InsertEmbed,
+    /// Context menu: toggle a checkbox on the current line.
+    ToggleCheckbox,
+    /// Context menu: set heading level 1.
+    SetHeading1,
+    /// Context menu: set heading level 2.
+    SetHeading2,
+    /// Context menu: toggle bullet list on the current line.
+    ToggleBullet,
+    /// Context menu: toggle numbered list on the current line.
+    ToggleNumbered,
+    /// Context menu: toggle blockquote on the current line.
+    ToggleBlockquote,
 }
 
 /// A table cell being typed into.
@@ -682,6 +715,24 @@ pub struct Editor {
     pub parse_samples: Sample,
     /// Edit-to-decoration latency, including waiting for the background thread.
     pub parse_latency: Sample,
+    /// The right-click context menu over the editor, if one is open.
+    context_menu: Option<ContextMenu>,
+}
+
+/// A right-click context menu over the editor.
+struct ContextMenu {
+    /// Where the menu should appear, in viewport pixels.
+    position: Point<Pixels>,
+    /// What was right-clicked: the byte offset, or None for empty space.
+    target: Option<usize>,
+}
+
+/// One context menu row: label, icon, and the command it emits.
+#[derive(Clone)]
+struct MenuItem {
+    label: &'static str,
+    icon: &'static str,
+    event: EditorEvent,
 }
 
 impl EventEmitter<EditorEvent> for Editor {}
@@ -779,6 +830,7 @@ impl Editor {
             frame_samples: Sample::default(),
             parse_samples: Sample::default(),
             parse_latency: Sample::default(),
+            context_menu: None,
         }
     }
 
@@ -1011,18 +1063,91 @@ impl Editor {
 
     /// One of Obsidian's formatting toggles: wraps each selection in
     /// `marker`, or takes the marker off when it is already there.
-    pub fn toggle_wrap(&mut self, marker: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn toggle_wrap(
+        &mut self,
+        marker: &str,
+        window: Option<&mut Window>,
+        cx: &mut Context<Self>,
+    ) {
         if self.buf.toggle_wrap(marker) {
-            self.after_edit(Some(window), cx);
+            self.after_edit(window, cx);
         }
     }
 
     /// `editor:toggle-checklist-status` (Mod+L): a checkbox on every
     /// selected line that has none, or the one it has flipped, writing
     /// the same bytes a click on the rendered checkbox writes.
-    pub fn toggle_checklist(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn toggle_checklist(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
         if self.buf.toggle_checklist() {
-            self.after_edit(Some(window), cx);
+            self.after_edit(window, cx);
+        }
+    }
+
+    /// Cut the selection to the clipboard (called from the context menu).
+    pub fn do_cut(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
+        if self.field_kind().is_some() {
+            return;
+        }
+        let ranges = self.buf.copy_ranges();
+        if ranges.iter().any(|r| !r.is_empty()) {
+            cx.write_to_clipboard(ClipboardItem::new_string(self.buf.clipboard_text(&ranges)));
+            let edits: Vec<(Range<usize>, String)> =
+                ranges.into_iter().map(|r| (r, String::new())).collect();
+            self.edit_all(edits, EditKind::Other, window, cx);
+        }
+    }
+
+    /// Copy the selection to the clipboard (called from the context menu).
+    pub fn do_copy(&mut self, _window: Option<&mut Window>, cx: &mut Context<Self>) {
+        if self.field_kind().is_some() {
+            return;
+        }
+        let ranges = self.buf.copy_ranges();
+        if ranges.iter().any(|r| !r.is_empty()) {
+            cx.write_to_clipboard(ClipboardItem::new_string(self.buf.clipboard_text(&ranges)));
+        }
+    }
+
+    /// Paste from the clipboard (called from the context menu).
+    pub fn do_paste(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
+        let Some(item) = cx.read_from_clipboard() else {
+            return;
+        };
+        if let Some(field) = self.active_field() {
+            if let Some(text) = item.text() {
+                field.insert(&text);
+                cx.notify();
+            }
+            return;
+        }
+        if let Some(text) = item.text() {
+            if self.buf.paste(&text) {
+                self.after_edit(window, cx);
+            }
+        }
+    }
+
+    /// Select all text (called from the context menu).
+    pub fn do_select_all(&mut self, cx: &mut Context<Self>) {
+        let len = self.buf.len();
+        if len > 0 {
+            self.buf.head = len;
+            self.buf.anchor = 0;
+            cx.notify();
+        }
+    }
+
+    /// Toggle a bullet list on the current line(s).
+    pub fn toggle_list(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
+        if self.buf.toggle_line_prefix(LinePrefix::Bullet) {
+            self.after_edit(window, cx);
+        }
+    }
+
+    /// Toggle a blockquote on the current line(s).
+    pub fn toggle_blockquote(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
+        if self.buf.toggle_line_prefix(LinePrefix::Quote) {
+            self.after_edit(window, cx);
         }
     }
 
@@ -1061,9 +1186,9 @@ impl Editor {
     }
 
     /// `editor:set-heading-<n>`: rewrites the selected lines' `#`s.
-    pub fn set_heading(&mut self, level: u8, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn set_heading(&mut self, level: u8, window: Option<&mut Window>, cx: &mut Context<Self>) {
         if self.buf.set_heading(level) {
-            self.after_edit(Some(window), cx);
+            self.after_edit(window, cx);
         }
     }
 
@@ -4749,6 +4874,7 @@ impl Render for Editor {
             .children(panel)
             .children(popup.flatten())
             .children(preview)
+            .children(self.render_menu(cx))
     }
 }
 
@@ -4881,6 +5007,112 @@ impl Editor {
             .on_action(cx.listener(Self::focus_other_field))
             .child(find_row)
             .children(replace_row)
+    }
+
+    /// The editor's right-click context menu items, matching Obsidian's.
+    fn menu_items(_target: Option<usize>) -> Vec<MenuItem> {
+        use EditorEvent as E;
+        let item = |label, icon, event| MenuItem { label, icon, event };
+        let mut items: Vec<MenuItem> = vec![
+            item("Cut", "scissors", E::Cut),
+            item("Copy", "copy", E::Copy),
+            item("Paste", "clipboard", E::Paste),
+        ];
+        items.push(item("Select all", "select-all", E::SelectAll));
+        items.push(item("Toggle bold", "bold", E::ToggleBold));
+        items.push(item("Toggle italic", "italic", E::ToggleItalic));
+        items.push(item("Toggle highlight", "highlighter", E::ToggleHighlight));
+        items.push(item("Insert link", "link", E::InsertLink));
+        items.push(item("Insert wikilink", "link-2", E::InsertWikilink));
+        items.push(item("Insert embed", "image", E::InsertEmbed));
+        items.push(item("Toggle checkbox", "check-square", E::ToggleCheckbox));
+        items.push(item("Heading 1", "type", E::SetHeading1));
+        items.push(item("Heading 2", "type", E::SetHeading2));
+        items.push(item("Bullet list", "list", E::ToggleBullet));
+        items.push(item("Numbered list", "list-ordered", E::ToggleNumbered));
+        items.push(item("Blockquote", "quote", E::ToggleBlockquote));
+        items
+    }
+
+    /// Renders the right-click context menu over the editor.
+    fn render_menu(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let menu = self.context_menu.as_ref()?;
+        let theme = cx.global::<Theme>().clone();
+        let items = Self::menu_items(menu.target);
+        let mut list = div()
+            .id("editor-menu")
+            .absolute()
+            .absolute()
+            .left(menu.position.x)
+            .top(menu.position.y)
+            .flex()
+            .flex_col()
+            .min_w(px(180.))
+            .py_1()
+            .bg(theme.bg_secondary)
+            .border_1()
+            .border_color(theme.border)
+            .rounded_md()
+            .shadow_lg()
+            .text_size(px(13.))
+            .text_color(theme.text)
+            .occlude();
+        for item in items {
+            let entity = cx.entity();
+            list = list.child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .px_2()
+                    .py_0p5()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme.bg_active))
+                    .child(
+                        div()
+                            .w(px(16.))
+                            .flex_shrink_0()
+                            .text_color(theme.text_muted)
+                            .child(crate::assets::icon(item.icon, 14., theme.text_muted)),
+                    )
+                    .child(item.label)
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(move |_this, _, _, cx| {
+                            entity.update(cx, |e, cx| {
+                                e.context_menu = None;
+                                match item.event {
+                                    EditorEvent::Cut => e.do_cut(None, cx),
+                                    EditorEvent::Copy => e.do_copy(None, cx),
+                                    EditorEvent::Paste => e.do_paste(None, cx),
+                                    EditorEvent::SelectAll => e.do_select_all(cx),
+                                    EditorEvent::ToggleBold => e.toggle_wrap("**", None, cx),
+                                    EditorEvent::ToggleItalic => e.toggle_wrap("*", None, cx),
+                                    EditorEvent::ToggleHighlight => e.toggle_wrap("==", None, cx),
+                                    EditorEvent::InsertWikilink => {
+                                        // * Handled by typing [[ in the editor
+                                    }
+                                    EditorEvent::InsertLink => {
+                                        // * Handled by typing [](url) in the editor
+                                    }
+                                    EditorEvent::InsertEmbed => {
+                                        // * Handled by typing ![[ in the editor
+                                    }
+                                    EditorEvent::ToggleCheckbox => e.toggle_checklist(None, cx),
+                                    EditorEvent::SetHeading1 => e.set_heading(1, None, cx),
+                                    EditorEvent::SetHeading2 => e.set_heading(2, None, cx),
+                                    EditorEvent::ToggleBullet => e.toggle_list(None, cx),
+                                    EditorEvent::ToggleNumbered => e.toggle_list(None, cx),
+                                    EditorEvent::ToggleBlockquote => e.toggle_blockquote(None, cx),
+                                    _ => {}
+                                }
+                            });
+                        }),
+                    ),
+            );
+        }
+        Some(list.into_any_element())
     }
 }
 
@@ -5305,6 +5537,7 @@ impl Element for EditorElement {
                 on_toggle,
                 String::new(),
                 WeakEntity::<ReadingView>::new_invalid(),
+                None,
             );
             let mut lines: Vec<(VisibleLine, Shaped)> = Vec::new();
             let mut widgets: Vec<WidgetPaint> = Vec::new();
@@ -6032,6 +6265,32 @@ impl Element for EditorElement {
                 && hitbox.is_hovered(window)
             {
                 editor.update(cx, |editor, cx| editor.mouse_down(event, window, cx));
+            }
+            if phase == DispatchPhase::Bubble
+                && event.button == MouseButton::Right
+                && hitbox.is_hovered(window)
+            {
+                let at = editor.read(cx).offset_at_point(window, event.position);
+                editor.update(cx, |editor, cx| {
+                    editor.context_menu = Some(ContextMenu {
+                        position: event.position,
+                        target: at,
+                    });
+                    // * Place the caret at the click unless it lands inside
+                    //   the current selection, which stays intact.
+                    if let Some(at) = at {
+                        let sels = editor.buf.cursors();
+                        let inside = sels
+                            .sels
+                            .iter()
+                            .any(|s| !s.is_empty() && s.head >= at && s.head <= at);
+                        if !inside {
+                            editor.buf.head = at;
+                            editor.buf.anchor = at;
+                        }
+                    }
+                    cx.notify();
+                });
             }
         });
         let editor = self.editor.clone();

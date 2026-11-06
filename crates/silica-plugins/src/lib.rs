@@ -14,7 +14,6 @@
 //!
 //! See `docs/silica/Plugins.md` for the design and the tiers.
 
-pub mod date;
 pub mod host;
 pub mod launch;
 pub mod live;

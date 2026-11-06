@@ -160,12 +160,47 @@ impl VaultRegistry {
     }
 
     /// Writes the document back, making the folder it lives in.
+    ///
+    /// The bytes land in a unique companion in the same folder and are renamed
+    /// onto the registry, so a crash mid-write leaves the old document in
+    /// place instead of a truncated JSON file that nothing can parse. Renaming
+    /// within one folder is atomic on every platform Silica ships.
     pub fn save(&self) -> std::io::Result<()> {
         if let Some(dir) = self.path.parent() {
             std::fs::create_dir_all(dir)?;
         }
         let text = serde_json::to_string(&self.doc)?;
-        std::fs::write(&self.path, text)
+        let temp = self.path.with_file_name(format!(
+            ".{}.{}.silica-tmp",
+            self.path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "registry".to_string()),
+            std::process::id()
+        ));
+        {
+            use std::io::Write as _;
+            let mut file = std::fs::File::create(&temp)?;
+            file.write_all(text.as_bytes())?;
+            // * Flushed to the device before the rename, so the name never
+            // * points at bytes still only in the page cache.
+            file.sync_all()?;
+        }
+        match std::fs::rename(&temp, &self.path) {
+            Ok(()) => {
+                // * The directory entry is what a crash could lose.
+                if let Some(dir) = self.path.parent() {
+                    if let Ok(handle) = std::fs::File::open(dir) {
+                        let _ = handle.sync_all();
+                    }
+                }
+                Ok(())
+            }
+            Err(error) => {
+                let _ = std::fs::remove_file(&temp);
+                Err(error)
+            }
+        }
     }
 
     /// A document-level string setting, kept beside `vaults` rather than in

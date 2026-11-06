@@ -27,7 +27,27 @@ thread_local! {
 
 struct Loaded {
     root: PathBuf,
+    /// Which plugins this load was built for, so a settings change is noticed.
+    ///
+    /// The root alone is not enough: enabling or disabling a plugin does not
+    /// change the vault, and keying on the path alone is what made a newly
+    /// enabled plugin wait for a vault switch before it existed. This is the
+    /// `(id, enabled)` set the hosts were built from — cheap to compare and
+    /// exactly what the load depends on.
+    key: Vec<(String, bool)>,
     hosts: Vec<PluginHost>,
+}
+
+/// The plugin set a load depends on, in a stable order.
+fn load_key(registry: &Registry) -> Vec<(String, bool)> {
+    let mut key: Vec<(String, bool)> = registry
+        .records()
+        .iter()
+        .filter(|record| record.tier == Tier::Compat)
+        .map(|record| (record.id().to_string(), record.enabled))
+        .collect();
+    key.sort();
+    key
 }
 
 /// Registers a native plugin compiled into Silica. Called at startup by core
@@ -43,7 +63,16 @@ pub fn register_native(plugin: Box<dyn Plugin>) {
 pub fn ensure(root: &Path, config_dir: &str, registry: &Registry) {
     LOADED.with(|loaded| {
         let mut loaded = loaded.borrow_mut();
-        if loaded.as_ref().is_some_and(|loaded| loaded.root == root) {
+        // * Reload when the vault changes *or* when the enabled set does. A
+        // * settings change does not touch the vault, so keying on the path
+        // * alone left a newly enabled plugin unloaded until the next vault
+        // * switch — and a disabled one still running, because its host was
+        // * never dropped.
+        let key = load_key(registry);
+        if loaded
+            .as_ref()
+            .is_some_and(|loaded| loaded.root == root && loaded.key == key)
+        {
             return;
         }
         let plugins = root.join(config_dir).join("plugins");
@@ -57,6 +86,7 @@ pub fn ensure(root: &Path, config_dir: &str, registry: &Registry) {
             .collect();
         *loaded = Some(Loaded {
             root: root.to_path_buf(),
+            key,
             hosts,
         });
     });
@@ -179,6 +209,74 @@ mod tests {
         }
     }
 
+    /// Enabling and disabling a plugin in an open vault takes effect at once.
+    ///
+    /// The bug this covers: `ensure` keyed only on the vault path, so a
+    /// settings change did not reload anything — the new plugin stayed absent
+    /// and the disabled one kept running until a vault switch.
+    #[test]
+    fn enabling_and_disabling_a_plugin_takes_effect_without_restarting() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let root = dir.path().join("vault");
+        let plugin = root.join(".obsidian/plugins/counter");
+        fs::create_dir_all(&plugin).expect("the plugin dir");
+        fs::write(root.join("Note.md"), "note\n").expect("a note");
+        fs::write(
+            plugin.join("manifest.json"),
+            r#"{"id":"counter","name":"Counter","version":"1.0.0"}"#,
+        )
+        .expect("a manifest");
+        fs::write(
+            plugin.join("main.js"),
+            r#"
+const { Plugin } = require("obsidian");
+class Counter extends Plugin {
+  onload() { this.addCommand({ id: "hello", name: "Hello", callback: () => {} }); }
+}
+module.exports = Counter;
+"#,
+        )
+        .expect("the plugin source");
+
+        let enabled_path = root.join(".obsidian/community-plugins.json");
+        fs::write(&enabled_path, r#"[]"#).expect("nothing enabled yet");
+
+        let vault = silica_vault::Vault::open(&root).expect("the vault opens");
+        forget();
+
+        // * Start with nothing enabled.
+        let registry = Registry::scan(&vault);
+        ensure(&root, vault.config_dir(), &registry);
+        assert_eq!(hosts(|hosts| hosts.len()), 0, "nothing enabled yet");
+
+        // * Enabling it in the same session must load it.
+        fs::write(&enabled_path, r#"["counter"]"#).expect("enable it");
+        let registry = Registry::scan(&vault);
+        ensure(&root, vault.config_dir(), &registry);
+        assert_eq!(
+            hosts(|hosts| hosts.iter().map(|h| h.id()).collect::<Vec<_>>()),
+            ["counter"],
+            "an enabled plugin must load without a restart"
+        );
+
+        // * And disabling it must drop the host, not merely hide it.
+        fs::write(&enabled_path, r#"[]"#).expect("disable it");
+        let registry = Registry::scan(&vault);
+        ensure(&root, vault.config_dir(), &registry);
+        assert_eq!(
+            hosts(|hosts| hosts.len()),
+            0,
+            "a disabled plugin must stop running at once"
+        );
+
+        // * Re-enabling works again, so the drop above left nothing broken.
+        fs::write(&enabled_path, r#"["counter"]"#).expect("enable it again");
+        let registry = Registry::scan(&vault);
+        ensure(&root, vault.config_dir(), &registry);
+        assert_eq!(hosts(|hosts| hosts.len()), 1, "re-enabling works");
+        forget();
+    }
+
     #[test]
     fn ensuring_a_vault_loads_its_enabled_plugin_and_its_command_runs() {
         let dir = tempfile::tempdir().expect("a temp dir");
@@ -240,6 +338,7 @@ module.exports = Counter;
             metadata_cache: Box::new(|_| Err("no vault".to_string())),
             open_note: Box::new(|_| Err("no vault".to_string())),
             current_note: Box::new(|| None),
+            notify: Box::new(|_| {}),
         };
         let (outcome, _) = run("counter:hello", None, &ctx).expect("the plugin owns this command");
         outcome.expect("the command ran");
@@ -263,6 +362,7 @@ module.exports = Counter;
             metadata_cache: Box::new(|_| Err("no vault".to_string())),
             open_note: Box::new(|_| Err("no vault".to_string())),
             current_note: Box::new(|| None),
+            notify: Box::new(|_| {}),
         };
         assert!(run("silica:open-settings", None, &ctx).is_none());
         // * A second ask for the same vault keeps the same runtime.
@@ -291,6 +391,7 @@ module.exports = Counter;
             metadata_cache: Box::new(|_| Err("no vault".to_string())),
             open_note: Box::new(|_| Err("no vault".to_string())),
             current_note: Box::new(|| None),
+            notify: Box::new(|_| {}),
         };
 
         // * Native plugins are global: they run without a vault loaded.
@@ -363,6 +464,7 @@ module.exports = W;
             metadata_cache: Box::new(|_| Ok("{}".into())),
             open_note: Box::new(|_| Ok(())),
             current_note: Box::new(move || Some(open.clone())),
+            notify: Box::new(|_| {}),
         };
         let (outcome, _) = run("w:hit", None, &ctx).expect("the plugin owns it");
         assert!(outcome.is_err(), "the write was allowed: {outcome:?}");

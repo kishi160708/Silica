@@ -54,6 +54,7 @@ impl CssWatcher {
                         let ours = event.paths.iter().any(|p| {
                             p.extension().is_some_and(|e| e.eq_ignore_ascii_case("css"))
                                 && p.components().any(|c| c.as_os_str() == ".obsidian")
+                                && !is_symlink(p)
                         });
                         if ours {
                             let _ = tx.lock().unwrap().send(());
@@ -74,6 +75,15 @@ impl CssWatcher {
 
         Ok((Self { _watcher: watcher }, rx))
     }
+}
+
+/// A watcher event that names a symlink points at something the vault did not
+/// place there, so it is refused: a link planted under `.obsidian` must not
+/// make Silica reload CSS from outside the vault.
+fn is_symlink(path: &Path) -> bool {
+    path.symlink_metadata()
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
 }
 
 #[cfg(test)]

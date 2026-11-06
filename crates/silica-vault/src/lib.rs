@@ -554,6 +554,40 @@ fn is_link_like(meta: &std::fs::Metadata) -> bool {
     false
 }
 
+/// Reject a relative path that could leave `root` before any filesystem call.
+///
+/// Every read and write goes through this: an absolute path, a `..` component
+/// or a prefix is refused outright rather than resolved and then compared,
+/// because a name that can leave the vault at all is a name Silica does not
+/// take. Windows callers then verify the handle as well; this is the half that
+/// is the same on every platform.
+fn sane_relative(relative: &Path) -> std::io::Result<()> {
+    if relative.is_absolute() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "an absolute path cannot be read from a vault",
+        ));
+    }
+    for part in relative.components() {
+        match part {
+            std::path::Component::ParentDir => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "the path points outside the vault",
+                ))
+            }
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "the path is not relative to the vault",
+                ))
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// Read a file under `root` without following a link at any step, bounding it
 /// at `max_bytes`.
 ///
@@ -564,6 +598,7 @@ fn is_link_like(meta: &std::fs::Metadata) -> bool {
 /// landed. A link swapped in between naming the file and opening it therefore
 /// cannot redirect the read or slip past the size limit.
 pub fn read_verified(root: &Path, relative: &Path, max_bytes: u64) -> std::io::Result<String> {
+    sane_relative(relative)?;
     #[cfg(unix)]
     let mut file = {
         use std::os::unix::fs::OpenOptionsExt as _;
@@ -591,8 +626,35 @@ pub fn read_verified(root: &Path, relative: &Path, max_bytes: u64) -> std::io::R
             meta.len()
         )));
     }
+    // * The metadata check above is what a well-behaved file reports; this
+    // * bound is what the read actually obeys. A file that grows between the
+    // * two — or a device that lies about its length — would otherwise be read
+    // * past the limit, so the reader stops one byte past it and reports the
+    // * overflow rather than allocating whatever arrives.
     let mut out = String::new();
-    std::io::Read::read_to_string(&mut file, &mut out)?;
+    {
+        use std::io::Read as _;
+        std::io::Read::take(&mut file, max_bytes.saturating_add(1))
+            .read_to_string(&mut out)
+            .map_err(|error| {
+                // * A file cut off mid-character is not UTF-8; say so rather
+                // * than reporting a generic I/O failure.
+                if error.kind() == std::io::ErrorKind::InvalidData {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("{} is not valid UTF-8", relative.display()),
+                    )
+                } else {
+                    error
+                }
+            })?;
+    }
+    if out.len() as u64 > max_bytes {
+        return Err(std::io::Error::other(format!(
+            "{} grew past the {max_bytes}-byte limit while being read",
+            relative.display()
+        )));
+    }
     Ok(out)
 }
 
@@ -788,12 +850,14 @@ impl Vault {
                     .into_io_error()
                     .unwrap_or_else(|| std::io::Error::other("walk")),
             })?;
-            let rel = entry
-                .path()
-                .strip_prefix(&self.root)
-                .expect("entry under root")
-                .to_string_lossy()
-                .replace('\\', "/");
+            let rel = match entry.path().strip_prefix(&self.root) {
+                Ok(rel) => rel.to_string_lossy().replace('\\', "/"),
+                // * The walker only yields entries under the root it was given;
+                // * anything else is not a vault path and is skipped rather than
+                // * asserted on, since asserting here would take the window down
+                // * over a directory that moved mid-scan.
+                Err(_) => continue,
+            };
             if entry.file_type().is_dir() {
                 if entry.depth() > 0 {
                     folders.push(rel);
@@ -1007,7 +1071,13 @@ impl Vault {
                     Err(_) => return Err(VaultError::Unparseable(path)),
                 }
             }
-            Err(_) => (false, fresh),
+            // ! Only a file that is *not there* may be created. A permission
+            // ! error, a bad disk or a file that is not UTF-8 says the
+            // ! existing document could not be read — and overwriting what
+            // ! could not be read would replace the user's whole
+            // ! configuration with defaults. Those propagate instead.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (false, fresh),
+            Err(source) => return Err(VaultError::Io { path, source }),
         };
         let text = serde_json::to_string_pretty(&merged).map_err(|source| VaultError::Json {
             path: path.clone(),
@@ -1177,6 +1247,106 @@ fn same_config_value(old: &serde_json::Value, new: &serde_json::Value) -> bool {
 mod tests {
     use super::*;
     use std::fs;
+
+    /// A configuration that cannot be read must not be replaced.
+    ///
+    /// The bytes are made unreadable — not deleted — so the read fails with
+    /// something other than `NotFound`. Writing then has to propagate that
+    /// failure and leave the original file exactly as it was; treating the
+    /// error as "no file yet" would put defaults over the user's settings.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_config_is_never_overwritten() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = sample_vault();
+        let path = dir.path().join(".obsidian/app.json");
+        let original = fs::read(&path).unwrap();
+
+        // * A directory in the file's place is unreadable as text on every
+        // * platform, and cannot be replaced by a write either.
+        // * A directory in the file's place cannot be read as text on any
+        // * platform, and cannot be replaced by a write either.
+        let blocked = dir.path().join(".obsidian/appearance.json");
+        fs::create_dir(&blocked).unwrap();
+        let vault = Vault::open(dir.path()).unwrap();
+
+        let value = serde_json::json!({"theme": "moonstone"});
+        let error = vault.write_config("appearance.json", &value);
+        assert!(error.is_err(), "writing over an unreadable file must fail");
+        assert!(blocked.is_dir(), "the unreadable entry must still be there");
+
+        // * An existing configuration is untouched by a failed sibling write.
+        assert_eq!(fs::read(&path).unwrap(), original);
+
+        // * And a permission error on the file itself propagates rather than
+        // * being read as "no file yet".
+        let locked = dir.path().join(".obsidian/app.json");
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+        let unreadable = fs::read_to_string(&locked).is_err();
+        let result = vault.write_config("app.json", &serde_json::json!({"vimMode": false}));
+        // * Root can read anything, so this half only runs where the mode
+        // * actually took effect — and reads back only after restoring it.
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o644)).unwrap();
+        if unreadable {
+            assert!(result.is_err(), "an unreadable config must not be replaced");
+            assert_eq!(fs::read(&path).unwrap(), original, "bytes preserved");
+        }
+    }
+
+    /// `read_verified` refuses a path that could leave the vault before it
+    /// touches the filesystem at all.
+    #[test]
+    fn read_verified_refuses_traversal_and_absolute_paths() {
+        let dir = sample_vault();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+
+        for bad in ["../outside.md", "Projects/../../outside.md", "/etc/passwd"] {
+            let error = read_verified(&root, Path::new(bad), 4096)
+                .expect_err(&format!("{bad} must be refused"));
+            assert_eq!(
+                error.kind(),
+                std::io::ErrorKind::InvalidInput,
+                "{bad} should be refused as invalid input, got {error}"
+            );
+        }
+
+        // * A path inside still reads.
+        assert_eq!(
+            read_verified(&root, Path::new("Projects/Plan.md"), 4096).unwrap(),
+            "plan"
+        );
+    }
+
+    /// A symlinked ancestor is not followed, and a file over the limit is
+    /// refused on the opened handle rather than by trusting its metadata.
+    #[cfg(unix)]
+    #[test]
+    fn read_verified_refuses_a_link_and_an_oversized_file() {
+        let dir = sample_vault();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("secret.md"), "secret").unwrap();
+        std::os::unix::fs::symlink(
+            outside.path().join("secret.md"),
+            root.join("Projects/linked.md"),
+        )
+        .unwrap();
+
+        let error = read_verified(&root, Path::new("Projects/linked.md"), 4096)
+            .expect_err("a symlinked file must not be read");
+        assert!(
+            error.to_string().to_lowercase().contains("regular file")
+                || error.raw_os_error() == Some(libc::ELOOP),
+            "{error}"
+        );
+
+        fs::write(root.join("big.md"), "0123456789").unwrap();
+        let error = read_verified(&root, Path::new("big.md"), 5)
+            .expect_err("a file over the limit must be refused");
+        assert!(error.to_string().contains("limit"), "{error}");
+    }
 
     fn sample_vault() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();

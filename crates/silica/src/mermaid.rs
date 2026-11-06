@@ -4,31 +4,43 @@
 use gpui::RenderImage;
 use image::{Frame, RgbaImage};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-/// Cached rendered Mermaid diagram textures.
-type Cache = HashMap<(String, bool), Result<Arc<RenderImage>, String>>;
+/// How many rendered diagrams are kept.
+///
+/// A vault is edited in one window, so the diagrams on screen are a handful;
+/// 256 leaves room for a long note scrolled back and forth. Past that the
+/// oldest *unused* entry goes, not the whole cache — clearing it threw away the
+/// diagrams still being painted, so every eviction cost a re-render of
+/// everything visible.
+const CAPACITY: NonZeroUsize = match NonZeroUsize::new(256) {
+    Some(n) => n,
+    // * Unreachable for 256, and `MIN` keeps this a `const` with no panic
+    // * path in the binary.
+    None => NonZeroUsize::MIN,
+};
+
+/// Cached rendered Mermaid diagram textures, least-recently-used first out.
+type Cache = lru::LruCache<(String, bool), Result<Arc<RenderImage>, String>>;
 
 thread_local! {
-    static CACHE: RefCell<Cache> = RefCell::new(HashMap::new());
+    static CACHE: RefCell<Cache> = RefCell::new(Cache::new(CAPACITY));
 }
 
 /// Render Mermaid diagram source to a GPU-ready [`RenderImage`].
 pub fn render_mermaid(source: &str, dark: bool) -> Result<Arc<RenderImage>, String> {
     let key = (source.trim().to_string(), dark);
-    if let Some(hit) = CACHE.with(|c| c.borrow().get(&key).cloned()) {
+    // * `get` moves the entry to the front, so what is on screen stays; only
+    // * what nobody has asked for is evicted.
+    if let Some(hit) = CACHE.with(|c| c.borrow_mut().get(&key).cloned()) {
         return hit;
     }
 
     let result = render_uncached(&key.0, dark);
 
     CACHE.with(|c| {
-        let mut cache = c.borrow_mut();
-        if cache.len() > 512 {
-            cache.clear();
-        }
-        cache.insert(key, result.clone());
+        c.borrow_mut().put(key, result.clone());
     });
 
     result

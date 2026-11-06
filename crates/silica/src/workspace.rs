@@ -28,6 +28,26 @@ use crate::pdf::view::{PdfEvent, PdfView};
 use crate::popout::PopoutWindow;
 use crate::prompt::{Prompt, PromptEvent, PromptSpec};
 use crate::reading::{self, LinkTarget, ReadingEvent, ReadingView, TaskMarker, TaskToggled};
+
+thread_local! {
+    /// Notes a plugin asked to open, waiting for the workspace to act.
+    ///
+    /// The plugin callback is a plain closure with no view to call, so it can
+    /// only record the request; the render pass drains it and opens the note
+    /// through `open_file`, which is where history, the reading view and the
+    /// editor all follow. Before this the callback checked the file existed
+    /// and returned `Ok(())`, so a plugin's "open note" did nothing at all.
+    static PLUGIN_OPEN_QUEUE: std::cell::RefCell<Vec<String>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+
+    /// Lines a plugin asked the app to show, waiting for the next frame.
+    ///
+    /// A plugin that gathers something — backlinks, a word count — has no
+    /// return value to put it in, so it hands the line over here and the
+    /// render pass reports it like any other notice.
+    static PLUGIN_NOTICE_QUEUE: std::cell::RefCell<Vec<String>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
 use crate::search::{CopyEntry, SearchEvent, SearchPane};
 use crate::settings::{self, SettingChange, SettingsEvent, SettingsView};
 use crate::switcher::{QuickSwitcher, SwitcherEvent};
@@ -730,6 +750,14 @@ impl VaultState {
                     .write()
                     .unwrap_or_else(|e| e.into_inner()) = config.clone();
             }
+            SettingChange::Templates(config) => {
+                self.write_config("templates.json", config)?;
+                *self.templates.write().unwrap_or_else(|e| e.into_inner()) = config.clone();
+            }
+            SettingChange::DailyNotes(config) => {
+                self.write_config("daily-notes.json", config)?;
+                *self.daily_notes.write().unwrap_or_else(|e| e.into_inner()) = config.clone();
+            }
             SettingChange::Hotkeys(overrides) => {
                 // * Whole, not merged: an entry taken out is a command back
                 //   on its defaults, and a merge would keep it.
@@ -934,6 +962,9 @@ impl VaultState {
 
     /// Copies a file next to itself as `Name 1.ext` and indexes the copy.
     pub fn duplicate(&self, path: &str) -> Result<(String, Changes), String> {
+        if self.vault().absolute(path).is_dir() {
+            return self.duplicate_folder(path);
+        }
         let (target, from, to) = {
             let vault = self.vault();
             let (folder, name) = match path.rsplit_once('/') {
@@ -955,6 +986,36 @@ impl VaultState {
             .unwrap_or_else(|e| e.into_inner())
             .refresh_path(&to);
         Ok((target, self.absorb(files)))
+    }
+
+    /// Copies a whole folder tree to a free sibling name (`Notes` ->
+    /// `Notes 1`). Returns the new folder's path and the index changes.
+    ///
+    /// Links inside the copies are left pointing at their originals: a copy
+    /// is a snapshot, and rewriting `[[Plan]]` to `[[Plan 1]]` inside
+    /// `Notes 1/` would make the copy describe files it does not own.
+    fn duplicate_folder(&self, path: &str) -> Result<(String, Changes), String> {
+        let path = path.trim_matches('/');
+        let (target, from, to) = {
+            let vault = self.vault();
+            let (parent, name) = match path.rsplit_once('/') {
+                Some((d, n)) => (d, n),
+                None => ("", path),
+            };
+            let target = vault.available_path(parent, name, "");
+            let from = vault.absolute(path);
+            let to = vault
+                .write_path(&target)
+                .map_err(|e| format!("Could not copy {path}: {e}"))?;
+            (target, from, to)
+        };
+        copy_tree(&from, &to).map_err(|e| format!("Could not copy {path}: {e}"))?;
+        let files = self
+            .vault
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .refresh_path(&to);
+        Ok((target.clone(), self.absorb(files)))
     }
 
     /// The rewrites a rename would need, without doing anything:
@@ -1508,6 +1569,15 @@ enum PendingOp {
     /// "Edit bookmark" on a note that already has one: Save keeps it,
     /// Remove takes it out.
     EditBookmark(String),
+    /// "Merge entire file with...": the open note takes `other` in.
+    Merge {
+        file: String,
+        other: String,
+    },
+    /// "Open version history": the snapshot stamp to restore `file` to.
+    RestoreVersion {
+        file: String,
+    },
     /// Note composer's merge: the value names the note the current one
     /// is absorbed into.
     MergeCurrent(String),
@@ -2714,6 +2784,9 @@ pub struct Workspace {
     title_focus: FocusHandle,
     /// The header title being renamed in place, if any.
     title_edit: Option<TitleEdit>,
+    /// The right-dock context menu: the file path it was opened on, for
+    /// backlinks/outgoing links/tags/outline rows.
+    right_dock_context_menu: Option<String>,
     /// Where each group's header title was painted and how it was shaped,
     /// left by the last frame: what a click on a title is measured against.
     title_layout: HashMap<u64, TitleLayout>,
@@ -2841,6 +2914,25 @@ fn view_subscriptions(
         cx.subscribe(reading, |this, _, event: &ReadingEvent, cx| {
             if let ReadingEvent::PropertyChanged { path, changes } = event {
                 this.change_property(path, changes, cx)
+            } else if let ReadingEvent::RenameFile { path, new_name } = event {
+                let Some(state) = this.state.clone() else {
+                    return;
+                };
+                let to = match this.renamed_path(path, new_name) {
+                    Ok(to) => to,
+                    Err(_) => return,
+                };
+                if *path == to {
+                    return;
+                }
+                let update_links = state.update_links_automatically();
+                match state.rename(path, &to, update_links) {
+                    Ok(outcome) => {
+                        this.apply_rename(outcome, cx);
+                        this.refresh_vault_views(cx);
+                    }
+                    Err(err) => this.report(format!("could not rename: {err}"), cx),
+                }
             }
         }),
         cx.subscribe(editor, |this, _, event: &EditorEvent, cx| match event {
@@ -2859,6 +2951,24 @@ fn view_subscriptions(
             EditorEvent::Reported(message) => this.report(message.clone(), cx),
             EditorEvent::FilesChanged(changes) => {
                 this.after_changes(changes.clone(), cx);
+            }
+            EditorEvent::Cut
+            | EditorEvent::Copy
+            | EditorEvent::Paste
+            | EditorEvent::SelectAll
+            | EditorEvent::ToggleBold
+            | EditorEvent::ToggleItalic
+            | EditorEvent::ToggleHighlight
+            | EditorEvent::InsertWikilink
+            | EditorEvent::InsertLink
+            | EditorEvent::InsertEmbed
+            | EditorEvent::ToggleCheckbox
+            | EditorEvent::SetHeading1
+            | EditorEvent::SetHeading2
+            | EditorEvent::ToggleBullet
+            | EditorEvent::ToggleNumbered
+            | EditorEvent::ToggleBlockquote => {
+                // * Handled directly in the editor's context menu handler.
             }
         }),
     ]
@@ -2980,7 +3090,7 @@ impl Workspace {
                         } else {
                             format!("{dest_folder}/{name}")
                         };
-                        this.rename_with_links(src, &to, window, cx);
+                        this.rename_with_links(src, &to, Some(window), cx);
                     }
                     ExplorerEvent::Duplicate(path) => this.duplicate(path, cx),
                     ExplorerEvent::Delete(path) => this.start_delete(path, window, cx),
@@ -2992,6 +3102,14 @@ impl Workspace {
                     }
                     ExplorerEvent::CopyPath(path) => this.copy_path(path, cx),
                     ExplorerEvent::OpenInDefaultApp(path) => this.open_in_default_app(path, cx),
+                    ExplorerEvent::OpenInPopout(path) => this.open_popout(path, window, cx),
+                    ExplorerEvent::ShowInSystemExplorer(path) => {
+                        this.show_in_system_explorer(path, cx)
+                    }
+                    ExplorerEvent::Merge(path) => this.start_merge(path, window, cx),
+                    ExplorerEvent::VersionHistory(path) => {
+                        this.start_version_history(path, window, cx)
+                    }
                     ExplorerEvent::SearchInFolder(folder) => {
                         this.search_in_folder(folder, window, cx)
                     }
@@ -3260,6 +3378,7 @@ impl Workspace {
             tab_bounds: HashMap::new(),
             title_focus: cx.focus_handle(),
             title_edit: None,
+            right_dock_context_menu: None,
             title_layout: HashMap::new(),
             layout: None,
             layout_restored: false,
@@ -4541,13 +4660,16 @@ impl Workspace {
                     if !full_path.exists() {
                         return Err(format!("'{path}' does not exist"));
                     }
-                    // * Open the note by setting current and reloading the model
-                    //   This is handled by the workspace; for now just return OK
-                    //   and let the caller handle it. The plugin signals success.
+                    // * Recorded, not opened: this closure has no view. The
+                    // * render pass drains the queue and calls `open_file`.
+                    PLUGIN_OPEN_QUEUE.with(|q| q.borrow_mut().push(path.to_string()));
                     Ok(())
                 }
             }),
             current_note: Box::new(move || current.clone()),
+            notify: Box::new(|line: &str| {
+                PLUGIN_NOTICE_QUEUE.with(|q| q.borrow_mut().push(line.to_string()));
+            }),
         };
 
         if let Some((outcome, _notices)) = silica_plugins::live::run(id, None, &ctx) {
@@ -4693,7 +4815,7 @@ impl Workspace {
                         _ => "%%",
                     };
                     self.editor
-                        .update(cx, |e, cx| e.toggle_wrap(marker, window, cx));
+                        .update(cx, |e, cx| e.toggle_wrap(marker, Some(window), cx));
                 }
             }
             "editor:toggle-bullet-list"
@@ -4712,7 +4834,7 @@ impl Workspace {
             "editor:toggle-checklist-status" => {
                 if self.editing_or_report(id, window, cx) {
                     self.editor
-                        .update(cx, |e, cx| e.toggle_checklist(window, cx));
+                        .update(cx, |e, cx| e.toggle_checklist(Some(window), cx));
                 }
             }
             "editor:cycle-list-checklist" => {
@@ -4779,7 +4901,7 @@ impl Workspace {
                         .and_then(|n| n.parse::<u8>().ok())
                         .unwrap_or(0);
                     self.editor
-                        .update(cx, |e, cx| e.set_heading(level, window, cx));
+                        .update(cx, |e, cx| e.set_heading(level, Some(window), cx));
                 }
             }
             "editor:indent-list" | "editor:unindent-list" => {
@@ -6704,6 +6826,12 @@ impl Workspace {
         match silica_vault::write_no_follow(&absolute, contents.as_bytes()) {
             Ok(()) => {
                 self.editor.update(cx, |e, _| e.mark_saved(&contents));
+                // * A snapshot of what was just written, so "Open version
+                //   history" has something to show. The store keeps the
+                //   last [`crate::history::KEEP`] per note and swallows its
+                //   own errors: the note saved, which is what matters.
+                crate::history::History::new(&state.root, state.vault().config_dir())
+                    .record(&name, &contents);
                 self.report(format!("{name} saved"), cx);
             }
             Err(err) => {
@@ -6774,6 +6902,41 @@ impl Workspace {
         let outcome = silica_plugins::launch::open_path(&absolute);
         if let Err(err) = outcome {
             self.report(format!("Could not open {path}: {err}"), cx);
+        }
+    }
+
+    /// "Show in system explorer": select the file in the desktop's file
+    /// manager via D-Bus `FileManager1.ShowItems`, with opening the
+    /// containing folder as fallback.
+    fn show_in_system_explorer(&mut self, path: &str, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let absolute = state.vault().absolute(path);
+        // * D-Bus first: `org.freedesktop.FileManager1.ShowItems` selects
+        //   the file(s) in the file manager. It has to *finish*, not just
+        //   spawn: a session bus with nothing answering the name exits
+        //   dbus-send non-zero a moment later, and `spawn()` alone would
+        //   report success and never run the fallback.
+        let selected = show_items(&absolute);
+        if selected {
+            return;
+        }
+        // * Fallback: open the containing folder in the file manager.
+        let folder = absolute.parent().map(std::path::Path::to_path_buf);
+        match folder {
+            Some(folder) => {
+                if let Err(err) = silica_plugins::launch::open_path(&folder) {
+                    self.report(
+                        format!("Could not show {path} in system explorer: {err}"),
+                        cx,
+                    );
+                }
+            }
+            None => self.report(
+                format!("Could not show {path} in system explorer: no parent folder"),
+                cx,
+            ),
         }
     }
 
@@ -7416,6 +7579,185 @@ impl Workspace {
         );
     }
 
+    /// The explorer menu's "Merge entire file with...": the open note takes
+    /// another note in. The chooser lists the vault's other notes; the merge
+    /// itself is [`merge::merge`] against the two files on disk, and the
+    /// result lands in the open note's buffer to be saved -- nothing is
+    /// written until it is.
+    fn start_merge(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        if self.current.as_deref() != Some(path) {
+            // * The merge lands in the open buffer, so the file being merged
+            //   into has to be the one on screen.
+            self.open_file(path.to_string(), None, cx);
+        }
+        let mut candidates: Vec<String> = state
+            .vault()
+            .files()
+            .iter()
+            .map(|f| f.path.clone())
+            .filter(|p| p != path && p.ends_with(".md"))
+            .collect();
+        candidates.sort();
+        let name = path.rsplit('/').next().unwrap_or(path);
+        self.open_prompt(
+            PendingOp::Merge {
+                file: path.to_string(),
+                other: String::new(),
+            },
+            PromptSpec {
+                title: "Merge entire file with...".into(),
+                detail: Some(format!("{name} takes in another note's changes.").into()),
+                input: Some(String::new()),
+                placeholder: "Note to merge in".into(),
+                suggestions: candidates,
+                confirm: "Merge".into(),
+                secondary: None,
+            },
+            window,
+            cx,
+        );
+    }
+
+    /// Runs the merge once the chooser names its note: three-way against
+    /// the two files on disk, with the shared base taken as what the open
+    /// note held when it was loaded. The buffer is replaced with the result
+    /// and left dirty, so the merge is reviewed before it is saved.
+    fn finish_merge(
+        &mut self,
+        file: &str,
+        other: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        if other.trim().is_empty() {
+            return;
+        }
+        let other = if other.ends_with(".md") {
+            other.to_string()
+        } else {
+            format!("{other}.md")
+        };
+        if other == file {
+            self.prompt.update(cx, |p, cx| {
+                p.set_error("A note cannot be merged with itself.", cx)
+            });
+            return;
+        }
+        let theirs = match std::fs::read_to_string(state.vault().absolute(&other)) {
+            Ok(text) => text,
+            Err(err) => {
+                let message = format!("Could not read {other}: {err}");
+                self.prompt.update(cx, |p, cx| p.set_error(message, cx));
+                return;
+            }
+        };
+        // * The base is what was last saved: the disk copy, read before the
+        //   buffer's own edits are folded in.
+        let ours = self.editor.read(cx).file_contents();
+        let base = std::fs::read_to_string(state.vault().absolute(file)).unwrap_or_default();
+        let (merged, conflicts) = crate::merge::merge(&base, &ours, &theirs);
+        self.pending = None;
+        self.close_modal(window, cx);
+        self.editor
+            .update(cx, |e, cx| e.set_text(file.to_string(), merged, cx));
+        match conflicts {
+            0 => self.report(format!("Merged {other} into {file}; not saved yet"), cx),
+            n => self.report(
+                format!(
+                    "Merged {other} into {file} with {n} conflict{}; not saved yet",
+                    plural(n)
+                ),
+                cx,
+            ),
+        }
+        cx.notify();
+    }
+
+    /// The explorer menu's "Open version history": the snapshots this note
+    /// was saved through, newest first. Picking one loads those bytes into
+    /// the buffer, unsaved, so the restore is reviewed before it lands --
+    /// the same rule the merge follows.
+    fn start_version_history(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let history = crate::history::History::new(&state.root, state.vault().config_dir());
+        let versions = history.list(path);
+        if versions.is_empty() {
+            self.report(format!("{path} has no saved versions yet"), cx);
+            return;
+        }
+        // * The stamp is the suggestion's text, so what the picker matches
+        //   on is what gets looked up again on submit.
+        let suggestions: Vec<String> = versions.iter().map(|v| v.label()).collect();
+        let name = path.rsplit('/').next().unwrap_or(path);
+        self.open_prompt(
+            PendingOp::RestoreVersion {
+                file: path.to_string(),
+            },
+            PromptSpec {
+                title: format!("Version history for {name}").into(),
+                detail: Some(
+                    format!(
+                        "{} saved version{}; the newest is first.",
+                        versions.len(),
+                        plural(versions.len())
+                    )
+                    .into(),
+                ),
+                input: Some(String::new()),
+                placeholder: "Pick a version".into(),
+                suggestions,
+                confirm: "Restore".into(),
+                secondary: None,
+            },
+            window,
+            cx,
+        );
+    }
+
+    /// Loads the picked snapshot's bytes into the buffer, leaving the note
+    /// dirty rather than saving over the current contents.
+    fn finish_restore_version(
+        &mut self,
+        file: &str,
+        label: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let history = crate::history::History::new(&state.root, state.vault().config_dir());
+        let Some(version) = history.list(file).into_iter().find(|v| v.label() == label) else {
+            self.prompt.update(cx, |p, cx| {
+                p.set_error(format!("No version {label} any more."), cx)
+            });
+            return;
+        };
+        let Some(contents) = history.read(file, version.at) else {
+            self.prompt.update(cx, |p, cx| {
+                p.set_error("That version could not be read.", cx)
+            });
+            return;
+        };
+        self.pending = None;
+        self.close_modal(window, cx);
+        if self.current.as_deref() != Some(file) {
+            self.open_file(file.to_string(), None, cx);
+        }
+        self.editor
+            .update(cx, |e, cx| e.set_text(file.to_string(), contents, cx));
+        self.report(format!("{file} restored from {label}; not saved yet"), cx);
+        cx.notify();
+    }
+
     fn delete_now(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Some(state) = self.state.clone() else {
             return;
@@ -7450,10 +7792,16 @@ impl Workspace {
         };
         match state.duplicate(path) {
             // * Nothing is reported for a copy that worked either; the new
-            //   file opening is the feedback.
+            //   file opening is the feedback. A copied folder is reported
+            //   instead, since there is nothing to open.
             Ok((copy, changes)) => {
+                let is_folder = state.vault().absolute(&copy).is_dir();
                 self.after_changes(changes, cx);
-                self.open_file(copy, None, cx);
+                if is_folder {
+                    self.report(format!("Copied to {copy}"), cx);
+                } else {
+                    self.open_file(copy, None, cx);
+                }
             }
             Err(err) => self.report(err, cx),
         }
@@ -7617,7 +7965,7 @@ link to it is rewritten. The current note is deleted."
                         return;
                     }
                 };
-                self.rename_with_links(&from, &to, window, cx);
+                self.rename_with_links(&from, &to, Some(window), cx);
             }
             PendingOp::Move(from) => {
                 let folder = value.trim_matches('/');
@@ -7627,7 +7975,7 @@ link to it is rewritten. The current note is deleted."
                 } else {
                     format!("{folder}/{name}")
                 };
-                self.rename_with_links(&from, &to, window, cx);
+                self.rename_with_links(&from, &to, Some(window), cx);
             }
             PendingOp::Delete(path) => {
                 self.pending = None;
@@ -7656,7 +8004,9 @@ link to it is rewritten. The current note is deleted."
                     Err(err) => self.prompt.update(cx, |p, cx| p.set_error(err, cx)),
                 }
             }
-            PendingOp::UpdateLinks { from, to } => self.finish_rename(&from, &to, true, window, cx),
+            PendingOp::UpdateLinks { from, to } => {
+                self.finish_rename(&from, &to, true, Some(window), cx)
+            }
             PendingOp::AddBookmark(draft) => {
                 self.pending = None;
                 self.close_modal(window, cx);
@@ -7666,6 +8016,10 @@ link to it is rewritten. The current note is deleted."
             PendingOp::EditBookmark(_) => {
                 self.pending = None;
                 self.close_modal(window, cx);
+            }
+            PendingOp::Merge { file, .. } => self.finish_merge(&file, value, window, cx),
+            PendingOp::RestoreVersion { file } => {
+                self.finish_restore_version(&file, value, window, cx)
             }
             PendingOp::MergeCurrent(source) => {
                 self.pending = None;
@@ -7690,7 +8044,7 @@ link to it is rewritten. The current note is deleted."
     fn prompt_secondary(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.pending.clone() {
             Some(PendingOp::UpdateLinks { from, to }) => {
-                self.finish_rename(&from, &to, false, window, cx);
+                self.finish_rename(&from, &to, false, Some(window), cx);
             }
             Some(PendingOp::EditBookmark(path)) => {
                 self.pending = None;
@@ -7872,7 +8226,7 @@ link to it is rewritten. The current note is deleted."
         &mut self,
         from: &str,
         to: &str,
-        window: &mut Window,
+        window: Option<&mut Window>,
         cx: &mut Context<Self>,
     ) {
         let Some(state) = self.state.clone() else {
@@ -7880,7 +8234,9 @@ link to it is rewritten. The current note is deleted."
         };
         if from == to {
             self.pending = None;
-            self.close_modal(window, cx);
+            if let Some(w) = window {
+                self.close_modal(w, cx);
+            }
             return;
         }
         if state.update_links_automatically() {
@@ -7893,29 +8249,34 @@ link to it is rewritten. The current note is deleted."
             return;
         }
         let name = from.rsplit('/').next().unwrap_or(from);
-        self.open_prompt(
-            PendingOp::UpdateLinks {
-                from: from.to_string(),
-                to: to.to_string(),
-            },
-            PromptSpec {
-                title: "Update links?".into(),
-                detail: Some(
-                    format!(
-                        "{links} link{} in {files} file{} point to {name}. Update them to the new name?",
-                        if links == 1 { "" } else { "s" },
-                        if files == 1 { "" } else { "s" }
-                    )
-                    .into(),
-                ),
-                input: None,
-                confirm: "Update links".into(),
-                secondary: Some("Don't update".into()),
-                ..PromptSpec::default()
-            },
-            window,
-            cx,
-        );
+        if let Some(w) = window {
+            self.open_prompt(
+                PendingOp::UpdateLinks {
+                    from: from.to_string(),
+                    to: to.to_string(),
+                },
+                PromptSpec {
+                    title: "Update links?".into(),
+                    detail: Some(
+                        format!(
+                            "{links} link{} in {files} file{} point to {name}. Update them to the new name?",
+                            if links == 1 { "" } else { "s" },
+                            if files == 1 { "" } else { "s" }
+                        )
+                        .into(),
+                    ),
+                    input: None,
+                    confirm: "Update links".into(),
+                    secondary: Some("Don't update".into()),
+                    ..PromptSpec::default()
+                },
+                w,
+                cx,
+            );
+        } else {
+            // * No window available (inline title rename): auto-update links.
+            self.finish_rename(from, to, true, None, cx);
+        }
     }
 
     fn finish_rename(
@@ -7923,7 +8284,7 @@ link to it is rewritten. The current note is deleted."
         from: &str,
         to: &str,
         update_links: bool,
-        window: &mut Window,
+        window: Option<&mut Window>,
         cx: &mut Context<Self>,
     ) {
         let Some(state) = self.state.clone() else {
@@ -7935,7 +8296,9 @@ link to it is rewritten. The current note is deleted."
         match state.rename(from, to, update_links) {
             Ok(outcome) => {
                 self.pending = None;
-                self.close_modal(window, cx);
+                if let Some(w) = window {
+                    self.close_modal(w, cx);
+                }
                 self.apply_rename(outcome, cx);
             }
             Err(err) => self.prompt.update(cx, |p, cx| p.set_error(err, cx)),
@@ -8046,7 +8409,7 @@ link to it is rewritten. The current note is deleted."
         } else {
             format!("{folder}/{new_name}.{ext}")
         };
-        self.finish_rename(&from, &to, true, window, cx);
+        self.finish_rename(&from, &to, true, Some(window), cx);
     }
 
     /// Opens one of the file prompts for the open note (`--prompt` on the
@@ -8785,7 +9148,7 @@ link to it is rewritten. The current note is deleted."
         // * The keyboard goes back to the view before the rename, which may
         //   put the "Update links?" prompt up and want it for itself.
         self.focus_main(window, cx);
-        self.rename_with_links(&edit.path, &to, window, cx);
+        self.rename_with_links(&edit.path, &to, Some(window), cx);
         cx.notify();
     }
 
@@ -11853,6 +12216,12 @@ link to it is rewritten. The current note is deleted."
                 Some(PendingOp::EditBookmark(path)) => {
                     json!({"op": "edit-bookmark", "path": path})
                 }
+                Some(PendingOp::Merge { file, .. }) => {
+                    json!({"op": "merge", "path": file})
+                }
+                Some(PendingOp::RestoreVersion { file }) => {
+                    json!({"op": "restore-version", "path": file})
+                }
                 Some(PendingOp::MergeCurrent(source)) => {
                     json!({"op": "merge-current", "source": source})
                 }
@@ -12905,6 +13274,8 @@ link to it is rewritten. The current note is deleted."
         });
         let mut hover = theme.accent;
         hover.a = 0.33;
+        let path_for_right_click = path.clone();
+        let entity = cx.entity();
         div()
             .id(("pane-match", ix))
             .group("pane-match")
@@ -12926,6 +13297,14 @@ link to it is rewritten. The current note is deleted."
                     }
                 }
             }))
+            .on_mouse_down(gpui::MouseButton::Right, move |_, _, cx| {
+                if let Some(path) = path_for_right_click.clone() {
+                    entity.update(cx, |ws, cx| {
+                        ws.right_dock_context_menu = Some(path);
+                        cx.notify();
+                    });
+                }
+            })
             .child(
                 div()
                     .text_size(px(FONT_UI_SMALLER))
@@ -14072,10 +14451,88 @@ link to it is rewritten. The current note is deleted."
             .child(div().flex_1().overflow_hidden().child(body))
             .children(self.render_side_menu(theme, cx))
             .child(self.dock_handle(false, theme))
+            .children(self.render_right_dock_context_menu(theme, cx))
+    }
+
+    /// Renders the right-dock context menu over backlinks/outgoing links/tags/outline rows.
+    fn render_right_dock_context_menu(
+        &mut self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        let Some(path) = &self.right_dock_context_menu else {
+            return None;
+        };
+        let entity = cx.entity();
+        let path_clone = path.clone();
+        let mut list = div()
+            .id("right-dock-menu")
+            .absolute()
+            .left(px(10.))
+            .top(px(40.))
+            .flex()
+            .flex_col()
+            .min_w(px(180.))
+            .py_1()
+            .bg(theme.bg_secondary)
+            .border_1()
+            .border_color(theme.border)
+            .rounded_md()
+            .shadow_lg()
+            .text_size(px(13.))
+            .text_color(theme.text)
+            .occlude();
+        let items: Vec<(&'static str, &'static str)> = vec![
+            ("Open in new tab", "file-plus"),
+            ("Open to the right", "separator-vertical"),
+            ("Copy path", "clipboard"),
+        ];
+        for (label, icon) in items {
+            let path_for_item = path_clone.clone();
+            let entity_for_item = entity.clone();
+            list = list.child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .px_2()
+                    .py_0p5()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme.bg_active))
+                    .child(
+                        div()
+                            .w(px(16.))
+                            .flex_shrink_0()
+                            .text_color(theme.text_muted)
+                            .child(crate::assets::icon(icon, 14., theme.text_muted)),
+                    )
+                    .child(label)
+                    .on_mouse_down(gpui::MouseButton::Left, move |_, _, cx| {
+                        let path_for_item = path_for_item.clone();
+                        entity_for_item.update(cx, |ws, cx| {
+                            ws.right_dock_context_menu = None;
+                            match label {
+                                "Open in new tab" => {
+                                    ws.open_file(path_for_item.clone(), None, cx);
+                                }
+                                "Open to the right" => {
+                                    ws.open_file(path_for_item.clone(), None, cx);
+                                }
+                                "Copy path" => {
+                                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                        path_for_item,
+                                    ));
+                                }
+                                _ => {}
+                            }
+                        });
+                    }),
+            );
+        }
+        Some(list.into_any_element())
     }
 }
-
-/// Unlinked mentions for `path`: other notes mentioning its names (incoming)
 /// and names of other notes mentioned in it (outgoing).
 /// Whether the status bar carries the parse, span and shape numbers.
 ///
@@ -14094,6 +14551,102 @@ fn plural(n: usize) -> &'static str {
     } else {
         "s"
     }
+}
+
+/// Copies a directory tree, creating `to` and every folder under it. Files
+/// are copied byte for byte; a symlink is followed, not copied as a link,
+/// so the copy does not depend on where it lands.
+fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let src = entry.path();
+        let dst = to.join(entry.file_name());
+        if src.is_dir() {
+            copy_tree(&src, &dst)?;
+        } else {
+            std::fs::copy(&src, &dst)?;
+        }
+    }
+    Ok(())
+}
+
+/// Asks the desktop's file manager to select `path`, through
+/// `org.freedesktop.FileManager1.ShowItems`. Returns whether a file manager
+/// was there to take it.
+///
+/// The destination is checked first. `dbus-send` reports success whether or
+/// not anybody owns the name it was given -- a call to a name with no owner
+/// exits 0 and prints nothing -- so its exit status says nothing about
+/// whether the file manager saw the call. `NameHasOwner` is the question
+/// that actually has an answer.
+fn show_items(path: &std::path::Path) -> bool {
+    // * `ShowItems` takes an array of URIs. dbus-send spells an array as the
+    //   type prefix followed by every element quoted inside one argument,
+    //   and a path is only a URI once its spaces and `#`/`?` are escaped;
+    //   unescaped, a note called `a b.md` arrives as two URIs.
+    let uri = format!("file://{}", percent_encode_path(&path.to_string_lossy()));
+    // * Nobody owning the name is not the same as no file manager: every
+    //   desktop ships a `.service` file for it, and the bus starts one on
+    //   the first call. So the owner is asked before the call only to
+    //   decide *how* to call -- a name that is activatable still gets the
+    //   call, and it is the call's reply that says whether anything took it.
+    let activatable = || {
+        let asked = std::process::Command::new("dbus-send")
+            .args([
+                "--session",
+                "--dest=org.freedesktop.DBus",
+                "--type=method_call",
+                "--print-reply",
+                "/org/freedesktop/DBus",
+                "org.freedesktop.DBus.ListActivatableNames",
+            ])
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output();
+        match asked {
+            Ok(out) => {
+                String::from_utf8_lossy(&out.stdout).contains("\"org.freedesktop.FileManager1\"")
+            }
+            Err(_) => false,
+        }
+    };
+    if !activatable() {
+        return false;
+    }
+    // * Somebody owns or can start the name; hand it the URI and let the
+    //   bus bring a file manager up. Fire and forget: waiting on the reply
+    //   would stall the frame for a window appearing.
+    std::process::Command::new("dbus-send")
+        .args([
+            "--session",
+            "--dest=org.freedesktop.FileManager1",
+            "--type=method_call",
+            "/org/freedesktop/FileManager1",
+            "org.freedesktop.FileManager1.ShowItems",
+            &format!("array:string:{uri}"),
+            "string:",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .is_ok()
+}
+
+/// Escapes a filesystem path for use in a `file://` URI: everything outside
+/// the URI-unreserved set becomes `%XX`.
+fn percent_encode_path(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for byte in path.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+                out.push(*byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
 }
 
 fn mention_sections(
@@ -15069,6 +15622,27 @@ impl Render for Workspace {
                 self.recompute_theme(&state, window, cx);
                 cx.notify();
             }
+        }
+        // * A plugin that asked to open a note gets it opened here, where
+        //   `open_file` can update history, the reading view and the editor.
+        //   Only the first is taken per frame: opening flushes the current
+        //   save and records history, and a plugin asking for several notes in
+        //   one callback means the last one it named, not a flicker through
+        //   all of them.
+        let plugin_open = PLUGIN_OPEN_QUEUE.with(|q| {
+            let mut queue = q.borrow_mut();
+            let first = queue.first().cloned();
+            queue.clear();
+            first
+        });
+        if let Some(path) = plugin_open {
+            self.open_file(path, None, cx);
+        }
+        // * What a plugin computed, shown the way the app's own notices are.
+        let plugin_notices: Vec<String> =
+            PLUGIN_NOTICE_QUEUE.with(|q| q.borrow_mut().drain(..).collect());
+        for line in plugin_notices {
+            self.report(line, cx);
         }
         let corners = self.corners;
         if let Some(kind) = self.pending_canvas_pick.take() {
@@ -16932,6 +17506,25 @@ mod tests {
     fn file_kinds_are_named_in_lower_case() {
         assert_eq!(kind_name(FileKind::Markdown), "markdown");
         assert_eq!(kind_name(FileKind::Other), "other");
+    }
+
+    #[test]
+    fn show_items_escapes_a_path_into_one_uri() {
+        // * A space left bare splits the array's single element in two, and
+        //   `on error resume next` in dbus-send turns that into a silent
+        //   no-op: the file manager would open nothing and nothing would
+        //   say why.
+        assert_eq!(
+            percent_encode_path("/home/lwx/Silica Vault/a b.md"),
+            "/home/lwx/Silica%20Vault/a%20b.md"
+        );
+        // * `#` and `?` would end the path and start a fragment or query.
+        assert_eq!(percent_encode_path("/v/a#b?c.md"), "/v/a%23b%3Fc.md");
+        // * Unreserved bytes and separators stay readable.
+        assert_eq!(
+            percent_encode_path("/v/Notes-1_x~y.md"),
+            "/v/Notes-1_x~y.md"
+        );
     }
 
     #[test]

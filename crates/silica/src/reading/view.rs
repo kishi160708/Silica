@@ -45,6 +45,8 @@ actions!(
         ScrollLineUp,
         ScrollToTop,
         ScrollToBottom,
+        Copy,
+        SelectAll,
     ]
 );
 
@@ -67,6 +69,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-home", ScrollToTop, ctx),
         KeyBinding::new("end", ScrollToBottom, ctx),
         KeyBinding::new("ctrl-end", ScrollToBottom, ctx),
+        KeyBinding::new("ctrl-c", Copy, ctx),
+        KeyBinding::new("ctrl-a", SelectAll, ctx),
     ]);
 }
 
@@ -247,6 +251,12 @@ pub enum ReadingEvent {
         path: String,
         changes: Vec<silica_formats::properties::Change>,
     },
+    /// The reader committed an inline title edit: rename the file to the new
+    /// stem. The workspace renames the file and rewrites its links.
+    RenameFile {
+        path: String,
+        new_name: String,
+    },
 }
 
 /// A reader clicked a task checkbox. The reading view does not write the
@@ -281,6 +291,9 @@ pub struct ReadingView {
     /// title. It sits above the scroller rather than scrolling with the
     /// text, which is the one visible difference from Obsidian's.
     inline_title: bool,
+    /// The inline title is being edited: the text the user has typed. `None`
+    /// when the title is just a static label.
+    inline_title_edit: Option<String>,
     properties_in_document: PropertiesInDocument,
     /// The vault's `types.json`, for the type each property row shows.
     property_types: PropertyTypes,
@@ -301,6 +314,29 @@ pub struct ReadingView {
     /// is driven from a click inside them; the read loop is a task that
     /// holds the decoder, so the entry disappearing is what stops `ffmpeg`.
     pub video: Rc<RefCell<Option<VideoState>>>,
+    /// The property field the reader is typing into, if any: its key or
+    /// value, or one item of a list-shaped value. The field's text lives
+    /// here while the caret is in it, and a commit writes it back to the
+    /// vault through `ReadingEvent::PropertyChanged`.
+    pub property_field: Option<Field>,
+    /// The pill a Backspace selected in an open list field: the first of
+    /// the two presses that remove it, drawn focused until the second takes
+    /// it.
+    pub selected_pill: Option<usize>,
+    /// The key whose type menu is open, if any.
+    pub property_menu: Option<String>,
+    /// The property entries of the last-rendered properties block, so a
+    /// pill remove or retype can look up the row it acts on. Set from
+    /// `render_block` whenever a properties block is painted.
+    pub property_entries: Option<Vec<silica_formats::properties::Property>>,
+    /// The reader's text selection: one entry per selected RichText run,
+    /// holding the block index, the run's id, and the byte range within it.
+    /// `None` when nothing is selected.
+    pub selection: Option<Vec<(usize, usize, usize, usize)>>,
+    /// The block index where the current drag selection started, and the
+    /// byte offset within its first RichText run. `None` when no drag is in
+    /// progress.
+    pub drag_start: Option<(usize, usize)>,
 }
 
 /// One video in the player.
@@ -373,6 +409,7 @@ impl ReadingView {
             hidden: Vec::new(),
             readable_line_length: true,
             inline_title: true,
+            inline_title_edit: None,
             properties_in_document: PropertiesInDocument::default(),
             property_types: PropertyTypes::default(),
             copied: None,
@@ -380,6 +417,12 @@ impl ReadingView {
             width: px(900.),
             preview_resolver: None,
             video: Rc::new(RefCell::new(None)),
+            property_field: None,
+            selected_pill: None,
+            property_menu: None,
+            property_entries: None,
+            selection: None,
+            drag_start: None,
         }
     }
 
@@ -417,6 +460,478 @@ impl ReadingView {
 
     pub fn set_property_types(&mut self, types: PropertyTypes) {
         self.property_types = types;
+    }
+
+    /// Handles a property action from the reading view's properties block.
+    /// Writes the change to the vault through `ReadingEvent::PropertyChanged`,
+    /// which the workspace turns into the same byte-level edit Live Preview
+    /// makes. Field-opening actions (`Edit`, `EditItem`, `AddRow`) only
+    /// update local state; the workspace writes the file when the field is
+    /// committed.
+    fn handle_property_action(&mut self, action: PropertyAction, cx: &mut Context<Self>) {
+        // * A click is not a Backspace: whatever pill one selected loses
+        //   the selection.
+        self.selected_pill = None;
+        let Some(path) = self.path.as_deref() else {
+            return;
+        };
+        let Some(entries) = self.property_entries.as_ref() else {
+            return;
+        };
+        let mut next_id = crate::properties::PROPERTY_ID_BASE;
+        let rows = crate::properties::rows(
+            entries,
+            |key| silica_formats::properties::type_of(key, entries, &self.property_types),
+            &mut next_id,
+        );
+        match action {
+            PropertyAction::RemoveItem { key, index } => {
+                if let Some(row) = rows.iter().find(|r| r.key == key) {
+                    if let Some(change) = crate::properties::remove_item(row, index) {
+                        cx.emit(ReadingEvent::PropertyChanged {
+                            path: path.to_string(),
+                            changes: vec![change],
+                        });
+                    }
+                }
+            }
+            PropertyAction::Retype { key, ty } => {
+                if let Some(row) = rows.iter().find(|r| r.key == key) {
+                    let change = crate::properties::retype(row, ty);
+                    cx.emit(ReadingEvent::PropertyChanged {
+                        path: path.to_string(),
+                        changes: vec![change],
+                    });
+                    // * Update the in-memory type table so the row's glyph
+                    //   and UI stay consistent with the new type.
+                    self.property_types
+                        .types
+                        .insert(key.clone(), ty.as_str().to_string());
+                    self.property_menu = None;
+                }
+            }
+            PropertyAction::AddRow => {
+                self.property_field = Some(Field::new(Target::New, Part::Key, ""));
+            }
+            PropertyAction::Edit { target, part } => {
+                self.property_menu = None;
+                let row = match (&target, part) {
+                    (Target::Existing(key), Part::Value) => {
+                        rows.iter().find(|r| &r.key == key).cloned()
+                    }
+                    _ => None,
+                };
+                self.property_field = Some(match row {
+                    Some(row) => Field::new(
+                        Target::Existing(row.key.clone()),
+                        Part::Value,
+                        row.edit_text.clone(),
+                    ),
+                    None => Field::new(target, part, String::new()),
+                });
+            }
+            PropertyAction::EditItem { key, index } => {
+                self.property_menu = None;
+                if let Some(row) = rows.iter().find(|r| r.key == key) {
+                    self.property_field = Some(row.item_field(index.min(row.items.len())));
+                }
+            }
+            PropertyAction::OpenTypeMenu { key } => {
+                self.property_menu = if self.property_menu.as_deref() == Some(key.as_str()) {
+                    None
+                } else {
+                    Some(key)
+                };
+            }
+            PropertyAction::Remove { key } => {
+                cx.emit(ReadingEvent::PropertyChanged {
+                    path: path.to_string(),
+                    changes: vec![Change::Remove { key }],
+                });
+            }
+        }
+    }
+
+    /// Commits the open property field: turns its text into a `Change` and
+    /// emits `ReadingEvent::PropertyChanged` so the workspace writes it to
+    /// the vault. Clears the field afterwards.
+    fn commit_property_field(&mut self, cx: &mut Context<Self>) {
+        let Some(field) = self.property_field.take() else {
+            return;
+        };
+        let Some(path) = self.path.as_deref() else {
+            return;
+        };
+        let Some(entries) = self.property_entries.as_ref() else {
+            return;
+        };
+        // * Look up the row's type so `commit` reads the value correctly.
+        let ty = field
+            .key()
+            .and_then(|k| {
+                entries.iter().find(|p| p.key == k).map(|p| {
+                    silica_formats::properties::type_of(&p.key, entries, &self.property_types)
+                })
+            })
+            .unwrap_or(PropertyType::Text);
+        let Some(change) = crate::properties::commit(&field, ty) else {
+            return;
+        };
+        cx.emit(ReadingEvent::PropertyChanged {
+            path: path.to_string(),
+            changes: vec![change],
+        });
+    }
+
+    /// Handles key events while a property field is open. Enter commits,
+    /// Escape abandons, everything else edits the text. When no field is
+    /// open, the event falls through to the view's own bindings (scrolling,
+    /// etc.).
+    fn field_key_down(
+        &mut self,
+        _event: &gpui::KeyDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // * This handler only runs when the root div has focus. If a field
+        //   is open, every key belongs to it; otherwise the view's scrolling
+        //   bindings handle the key via `on_action`.
+        if self.property_field.is_none() {
+            return;
+        }
+        cx.stop_propagation();
+        let key = _event.keystroke.key.clone();
+        match key.as_str() {
+            "Enter" => {
+                Self::commit_property_field(self, cx);
+            }
+            "Escape" => {
+                self.property_field = None;
+            }
+            "Backspace" => {
+                if let Some(field) = self.property_field.as_mut() {
+                    match field.backspace(self.selected_pill) {
+                        crate::properties::PillStep::Remove(ix) => {
+                            if let Some(key) = field.key() {
+                                if let Some(entries) = self.property_entries.as_ref() {
+                                    let mut next_id = crate::properties::PROPERTY_ID_BASE;
+                                    let rows = crate::properties::rows(
+                                        entries,
+                                        |k| {
+                                            silica_formats::properties::type_of(
+                                                k,
+                                                entries,
+                                                &self.property_types,
+                                            )
+                                        },
+                                        &mut next_id,
+                                    );
+                                    if let Some(row) = rows.iter().find(|r| r.key == key) {
+                                        if let Some(change) =
+                                            crate::properties::remove_item(row, ix)
+                                        {
+                                            cx.emit(ReadingEvent::PropertyChanged {
+                                                path: self.path.clone().unwrap_or_default(),
+                                                changes: vec![change],
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                            self.selected_pill = None;
+                            self.property_field = None;
+                        }
+                        crate::properties::PillStep::Select(ix) => {
+                            self.selected_pill = Some(ix);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            "Delete" => {
+                if let Some(field) = self.property_field.as_mut() {
+                    field.delete();
+                }
+            }
+            "ArrowLeft" => {
+                if let Some(field) = self.property_field.as_mut() {
+                    field.left();
+                }
+            }
+            "ArrowRight" => {
+                if let Some(field) = self.property_field.as_mut() {
+                    field.right();
+                }
+            }
+            "Home" => {
+                if let Some(field) = self.property_field.as_mut() {
+                    field.cursor = 0;
+                }
+            }
+            "End" => {
+                if let Some(field) = self.property_field.as_mut() {
+                    field.cursor = field.text.len();
+                }
+            }
+            s if s.len() == 1 => {
+                if let Some(field) = self.property_field.as_mut() {
+                    field.insert(s);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Copies the current selection to the clipboard. With no selection,
+    /// copies the entire note's plain text, as Obsidian's reading view does.
+    fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
+        let text = if let Some(ranges) = &self.selection {
+            self.selection_text(ranges)
+        } else {
+            self.all_text()
+        };
+        if !text.is_empty() {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+        }
+    }
+
+    /// Selects every RichText run in the note.
+    fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
+        let mut ranges: Vec<(usize, usize, usize, usize)> = Vec::new();
+        for (ix, block) in self.model.blocks.iter().enumerate() {
+            self.collect_runs(block, ix, &mut ranges);
+        }
+        self.selection = if ranges.is_empty() {
+            None
+        } else {
+            Some(ranges)
+        };
+        self.drag_start = None;
+        cx.notify();
+    }
+
+    /// Plain text of every RichText run in the note, in document order,
+    /// with a newline between blocks.
+    fn all_text(&self) -> String {
+        let mut out = String::new();
+        for block in &self.model.blocks {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(&self.block_text(block));
+        }
+        out
+    }
+
+    /// The text of the selected ranges, joined with newlines between
+    /// different blocks.
+    fn selection_text(&self, ranges: &[(usize, usize, usize, usize)]) -> String {
+        let mut out = String::new();
+        let mut last_block: Option<usize> = None;
+        for (ix, _rich_id, start, end) in ranges {
+            let Some(block) = self.model.blocks.get(*ix) else {
+                continue;
+            };
+            if last_block != Some(*ix) {
+                if !out.is_empty() {
+                    out.push('\n');
+                }
+                last_block = Some(*ix);
+            }
+            if let Some(text) = self.rich_text_in_block(block, *start, *end) {
+                out.push_str(&text);
+            }
+        }
+        out
+    }
+
+    /// Collects every (block_ix, rich_id, 0, len) in `block`'s subtree.
+    fn collect_runs(&self, block: &RBlock, ix: usize, out: &mut Vec<(usize, usize, usize, usize)>) {
+        match block {
+            RBlock::Properties(_) => {}
+            RBlock::Paragraph(segments) => {
+                for seg in segments {
+                    if let Segment::Text(rt) = seg {
+                        out.push((ix, rt.id, 0, rt.text.len()));
+                    }
+                }
+            }
+            RBlock::Heading { text, .. } => {
+                out.push((ix, text.id, 0, text.text.len()));
+            }
+            RBlock::ThematicBreak => {}
+            RBlock::Code { .. } => {}
+            RBlock::Html(rt) => {
+                out.push((ix, rt.id, 0, rt.text.len()));
+            }
+            RBlock::Quote(children) => {
+                for child in children {
+                    self.collect_runs(child, ix, out);
+                }
+            }
+            RBlock::Callout {
+                title, children, ..
+            } => {
+                out.push((ix, title.id, 0, title.text.len()));
+                for child in children {
+                    self.collect_runs(child, ix, out);
+                }
+            }
+            RBlock::List { items, .. } => {
+                for item in items {
+                    self.collect_item(item, ix, out);
+                }
+            }
+            RBlock::Table { header, rows, .. } => {
+                for rt in header {
+                    out.push((ix, rt.id, 0, rt.text.len()));
+                }
+                for row in rows {
+                    for rt in row {
+                        out.push((ix, rt.id, 0, rt.text.len()));
+                    }
+                }
+            }
+            RBlock::Math(_) => {}
+            RBlock::Mermaid { .. } => {}
+            RBlock::Footnotes(notes) => {
+                for (_, blocks) in notes {
+                    for block in blocks {
+                        self.collect_runs(block, ix, out);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Collects runs from a list item: its children blocks hold the text.
+    fn collect_item(
+        &self,
+        item: &crate::reading::model::RItem,
+        ix: usize,
+        out: &mut Vec<(usize, usize, usize, usize)>,
+    ) {
+        for child in &item.children {
+            self.collect_runs(child, ix, out);
+        }
+    }
+
+    /// Plain text of everything inside `block`, for "copy all".
+    fn block_text(&self, block: &RBlock) -> String {
+        let mut out = String::new();
+        match block {
+            RBlock::Properties(entries) => {
+                for p in entries {
+                    match &p.value {
+                        silica_formats::properties::Value::Text(s) => out.push_str(s),
+                        silica_formats::properties::Value::List(items) => {
+                            for item in items {
+                                out.push_str(item);
+                                out.push('\n');
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            RBlock::Paragraph(segments) => {
+                for seg in segments {
+                    if let Segment::Text(rt) = seg {
+                        out.push_str(&rt.text);
+                    }
+                }
+            }
+            RBlock::Heading { text, .. } => out.push_str(&text.text),
+            RBlock::ThematicBreak => out.push_str("---"),
+            RBlock::Code { text, .. } => out.push_str(text),
+            RBlock::Html(rt) => out.push_str(&rt.text),
+            RBlock::Quote(children) => {
+                for child in children {
+                    out.push_str("> ");
+                    out.push_str(&self.block_text(child));
+                    out.push('\n');
+                }
+            }
+            RBlock::Callout {
+                title, children, ..
+            } => {
+                out.push_str(&title.text);
+                out.push('\n');
+                for child in children {
+                    out.push_str(&self.block_text(child));
+                }
+            }
+            RBlock::List { items, .. } => {
+                for item in items {
+                    let marker = match item.task {
+                        Some(' ') => "[ ] ",
+                        Some('x') => "[x] ",
+                        _ => "",
+                    };
+                    out.push_str(marker);
+                    for child in &item.children {
+                        out.push_str(&self.block_text(child));
+                    }
+                    out.push('\n');
+                }
+            }
+            RBlock::Table { header, rows, .. } => {
+                for rt in header {
+                    out.push_str(&rt.text);
+                    out.push_str(" | ");
+                }
+                out.push('\n');
+                for row in rows {
+                    for rt in row {
+                        out.push_str(&rt.text);
+                        out.push_str(" | ");
+                    }
+                    out.push('\n');
+                }
+            }
+            RBlock::Math(_) => {}
+            RBlock::Mermaid { .. } => {}
+            RBlock::Footnotes(notes) => {
+                for (_, blocks) in notes {
+                    for block in blocks {
+                        out.push_str(&self.block_text(block));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// The byte range `[start, end)` of text inside `block`, looking only at
+    /// RichText runs (approximate at block level: returns whole runs that
+    /// intersect the range).
+    fn rich_text_in_block(&self, block: &RBlock, start: usize, end: usize) -> Option<String> {
+        let mut out = String::new();
+        match block {
+            RBlock::Paragraph(segments) => {
+                for seg in segments {
+                    if let Segment::Text(rt) = seg {
+                        if rt.text.get(start..end).is_some() {
+                            out.push_str(&rt.text[start..end]);
+                        } else if start < rt.text.len() {
+                            out.push_str(&rt.text[start..]);
+                        }
+                    }
+                }
+            }
+            RBlock::Heading { text, .. } => {
+                return text.text.get(start..end).map(|s| s.to_string());
+            }
+            RBlock::Html(rt) => {
+                return rt.text.get(start..end).map(|s| s.to_string());
+            }
+            _ => {}
+        }
+        if out.is_empty() {
+            None
+        } else {
+            Some(out)
+        }
     }
 
     /// Plays (or pauses, or seeks) a video embed clicked in the note.
@@ -922,23 +1437,15 @@ impl ReadingView {
         // * The reading view's properties block is now editable: clicks on
         //   rows come back as PropertyChanged events that the workspace
         //   writes to the vault file.
-        let path_for_prop = self.path.clone().unwrap_or_default();
         let view_for_prop = view.clone();
         let on_property_action: PropertyHandler = Rc::new(move |action, _window, cx| {
-            if let PropertyAction::Remove { key } = action {
-                view_for_prop.update(cx, |_, cx| {
-                    cx.emit(ReadingEvent::PropertyChanged {
-                        path: path_for_prop.clone(),
-                        changes: vec![Change::Remove { key }],
-                    });
-                });
-            }
+            view_for_prop.update(cx, |this, cx| this.handle_property_action(action, cx));
         });
         let properties_host = PropertiesHost {
-            field: None,
-            selected_pill: None,
+            field: self.property_field.clone(),
+            selected_pill: self.selected_pill,
             mode: self.properties_in_document,
-            menu: None,
+            menu: self.property_menu.clone(),
             on_action: on_property_action,
         };
         let r = Renderer::new(
@@ -953,8 +1460,14 @@ impl ReadingView {
             on_toggle,
             self.path.clone().unwrap_or_default(),
             view.downgrade(),
+            self.selection.as_deref(),
         )
         .with_reading_host(&host);
+        // * Remember the entries of the properties block so a pill remove,
+        //   retype or item edit can look up the row it acts on.
+        if let RBlock::Properties(entries) = block {
+            self.property_entries = Some(entries.clone());
+        }
         let mut inner = r.block(block, false);
         // * A heading carries Obsidian's `heading-collapse-indicator`: a
         //   chevron in the margin to its left, shown on hover or while
@@ -1027,6 +1540,9 @@ impl ReadingView {
             }
         }
         let last = ix + 1 == model.blocks.len();
+        let view_down = view.clone();
+        let view_move = view.clone();
+        let view_up = view.clone();
         div()
             .w_full()
             .flex()
@@ -1035,6 +1551,32 @@ impl ReadingView {
             .px(px(32.))
             .when(ix == 0, |d| d.pt(px(24.)))
             .when(last, |d| d.pb(px(120.)))
+            .on_mouse_down(gpui::MouseButton::Left, move |_, _, cx| {
+                view_down.update(cx, |v, cx| {
+                    v.drag_start = Some((ix, 0));
+                    v.selection = Some(vec![(ix, 0, 0, 0)]);
+                    cx.notify();
+                });
+            })
+            .on_mouse_move(move |_, _, cx| {
+                view_move.update(cx, |v, cx| {
+                    if v.drag_start.is_some() {
+                        if let Some(ranges) = v.selection.as_mut() {
+                            let already = ranges.iter().any(|(b, _, _, _)| *b == ix);
+                            if !already {
+                                ranges.push((ix, 0, 0, 0));
+                            }
+                        }
+                        cx.notify();
+                    }
+                });
+            })
+            .on_mouse_up(gpui::MouseButton::Left, move |_, _, cx| {
+                view_up.update(cx, |v, cx| {
+                    v.drag_start = None;
+                    cx.notify();
+                });
+            })
             .child(
                 div()
                     .w_full()
@@ -1042,6 +1584,97 @@ impl ReadingView {
                     .child(inner),
             )
             .into_any_element()
+    }
+
+    fn render_inline_title(&mut self, base: f32, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.global::<Theme>().clone();
+        let name = self
+            .path
+            .as_deref()
+            .and_then(|p| p.rsplit('/').next())
+            .unwrap_or_default()
+            .trim_end_matches(".md")
+            .to_string();
+        if self.inline_title_edit.is_some() {
+            // * Editing: a focused text field. Key events are handled by
+            //   inline_title_key_down on the root div.
+            div()
+                .id("inline-title")
+                .px(px(base * 2.))
+                .pt(px(base * 1.6))
+                .pb(px(base * 0.4))
+                .text_size(px(base * 1.6))
+                .text_color(theme.text)
+                .font_weight(gpui::FontWeight::BOLD)
+                .cursor_pointer()
+                .bg(theme.bg_active)
+                .rounded_sm()
+                .px_1()
+                .child(SharedString::from(
+                    self.inline_title_edit.as_deref().unwrap_or(&name),
+                ))
+                .into_any_element()
+        } else {
+            // * Static label: a single click starts editing.
+            let view = cx.entity();
+            div()
+                .id("inline-title")
+                .px(px(base * 2.))
+                .pt(px(base * 1.6))
+                .pb(px(base * 0.4))
+                .text_size(px(base * 1.6))
+                .text_color(theme.text)
+                .font_weight(gpui::FontWeight::BOLD)
+                .cursor_pointer()
+                .child(SharedString::from(name.clone()))
+                .on_mouse_down(gpui::MouseButton::Left, move |_, _, cx| {
+                    view.update(cx, |v, cx| {
+                        v.inline_title_edit = Some(name.clone());
+                        cx.notify();
+                    });
+                })
+                .into_any_element()
+        }
+    }
+
+    /// Handles key events while the inline title is being edited. Enter
+    /// commits the rename, Escape abandons, everything else edits the text.
+    fn inline_title_key_down(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.inline_title_edit.is_none() {
+            return;
+        }
+        cx.stop_propagation();
+        let key = event.keystroke.key.clone();
+        match key.as_str() {
+            "Enter" => {
+                let new_name = self.inline_title_edit.take().unwrap_or_default();
+                let path = self.path.clone().unwrap_or_default();
+                cx.emit(ReadingEvent::RenameFile {
+                    path,
+                    new_name: new_name.trim().to_string(),
+                });
+            }
+            "Escape" => {
+                self.inline_title_edit = None;
+            }
+            "Backspace" => {
+                if let Some(text) = &mut self.inline_title_edit {
+                    text.pop();
+                }
+            }
+            s if s.len() == 1 => {
+                if let Some(text) = &mut self.inline_title_edit {
+                    text.push_str(s);
+                }
+            }
+            _ => {}
+        }
+        cx.notify();
     }
 }
 
@@ -1053,12 +1686,16 @@ impl Render for ReadingView {
         div()
             .key_context("ReadingView")
             .track_focus(&self.focus_handle)
+            .on_key_down(cx.listener(Self::field_key_down))
+            .on_key_down(cx.listener(Self::inline_title_key_down))
             .on_action(cx.listener(Self::scroll_page_down))
             .on_action(cx.listener(Self::scroll_page_up))
             .on_action(cx.listener(Self::scroll_line_down))
             .on_action(cx.listener(Self::scroll_line_up))
             .on_action(cx.listener(Self::scroll_to_top))
             .on_action(cx.listener(Self::scroll_to_bottom))
+            .on_action(cx.listener(Self::copy))
+            .on_action(cx.listener(Self::select_all))
             .size_full()
             .flex()
             .flex_col()
@@ -1067,24 +1704,10 @@ impl Render for ReadingView {
             .line_height(px(base * LINE_HEIGHT))
             .text_color(theme.text)
             .relative()
-            .children(self.inline_title.then(|| {
-                let name = self
-                    .path
-                    .as_deref()
-                    .and_then(|p| p.rsplit('/').next())
-                    .unwrap_or_default()
-                    .trim_end_matches(".md")
-                    .to_string();
-                div()
-                    .id("inline-title")
-                    .px(px(base * 2.))
-                    .pt(px(base * 1.6))
-                    .pb(px(base * 0.4))
-                    .text_size(px(base * 1.6))
-                    .text_color(theme.text)
-                    .font_weight(gpui::FontWeight::BOLD)
-                    .child(SharedString::from(name))
-            }))
+            .children(
+                self.inline_title
+                    .then(|| self.render_inline_title(base, cx)),
+            )
             .child(
                 div().flex_1().min_h_0().child(
                     list(self.list.clone(), move |ix, window, cx| {
@@ -1150,6 +1773,8 @@ pub(crate) struct Renderer<'a> {
     text_system: Arc<WindowTextSystem>,
     /// Inner width of a top-level block, in pixels.
     available: f32,
+    /// The reading view's current selection, for highlighting selected text.
+    selection: Option<&'a [(usize, usize, usize, usize)]>,
 }
 
 impl<'a> Renderer<'a> {
@@ -1166,6 +1791,7 @@ impl<'a> Renderer<'a> {
         on_toggle: ToggleHandler,
         path: String,
         view: WeakEntity<ReadingView>,
+        selection: Option<&'a [(usize, usize, usize, usize)]>,
     ) -> Renderer<'a> {
         Renderer {
             theme,
@@ -1183,6 +1809,7 @@ impl<'a> Renderer<'a> {
             available: available.max(100.),
             path,
             view,
+            selection,
         }
     }
 
@@ -1747,7 +2374,13 @@ impl<'a> Renderer<'a> {
     fn segment(&self, segment: &Segment) -> AnyElement {
         match segment {
             Segment::Text(text) => self.rich(text),
-            Segment::Embed(embed) => self.embed(embed),
+            Segment::Embed(embed) => match &embed.kind {
+                // * Inline images (local or remote) render as an inline img
+                //   so `![[img]]` and `![url]` work mid-sentence, in lists,
+                //   blockquotes and callout titles without breaking the line.
+                EmbedKind::Image(_) | EmbedKind::RemoteImage(_) => self.inline_embed(embed),
+                _ => self.embed(embed),
+            },
             // * Display math inside a paragraph is a block of its own; the
             //   paragraph's own gap follows the paragraph, not this.
             Segment::Math(tex) => self.math_block(tex, px(0.)),
@@ -1998,6 +2631,46 @@ impl<'a> Renderer<'a> {
             .child(SharedString::from("▶ "))
             .child(SharedString::from(label.to_string()))
             .into_any_element()
+    }
+
+    /// Renders an image embed inline (mid-sentence, in lists, blockquotes,
+    /// callout titles) without a block wrapper, so text flows around it.
+    fn inline_embed(&self, embed: &Embed) -> AnyElement {
+        let t = self.theme;
+        let base = t.base_font_size;
+        let image = match &embed.kind {
+            EmbedKind::Image(path) => img(path.clone())
+                .max_w_full()
+                .object_fit(ObjectFit::Contain),
+            EmbedKind::RemoteImage(url) => {
+                let err_url = url.clone();
+                let bg_sec = t.bg_secondary;
+                let fg_muted = t.text_muted;
+                img(url.clone())
+                    .max_w_full()
+                    .object_fit(ObjectFit::Contain)
+                    .with_fallback(move || {
+                        div()
+                            .px_3()
+                            .py_2()
+                            .rounded_md()
+                            .bg(bg_sec)
+                            .text_color(fg_muted)
+                            .text_size(px(base * 0.85))
+                            .child(format!("Image failed to load: {}", err_url))
+                            .into_any_element()
+                    })
+            }
+            _ => unreachable!("inline_embed only called for image kinds"),
+        };
+        let mut image = image;
+        if let Some(w) = embed.width {
+            image = image.w(px(w));
+        }
+        if let Some(h) = embed.height {
+            image = image.h(px(h));
+        }
+        image.into_any_element()
     }
 
     fn embed(&self, embed: &Embed) -> AnyElement {
@@ -2950,10 +3623,20 @@ impl<'a> Renderer<'a> {
         links: &[(Range<usize>, LinkTarget)],
     ) -> (InteractiveText, gpui::TextLayout) {
         let t = self.theme;
-        let highlights: Vec<_> = runs
+        let mut highlights: Vec<_> = runs
             .iter()
             .map(|(range, style)| (range.clone(), self.highlight(*style)))
             .collect();
+        // * Selection highlight: this RichText's id is unique in the model, so
+        //   matching it against the selection finds the selected byte range.
+        if let Some((start, end)) = self.selection.and_then(|ranges| {
+            ranges
+                .iter()
+                .find(|(_, rid, _, _)| *rid == text.id)
+                .map(|(_, _, s, e)| (*s, *e))
+        }) {
+            highlights.push((start..end, self.selection_highlight()));
+        }
         let mono: Vec<_> = runs
             .iter()
             .filter(|(_, s)| s.code || s.html)
@@ -3044,6 +3727,16 @@ impl<'a> Renderer<'a> {
             });
         }
         h
+    }
+
+    /// Selection background color, drawn behind a selected byte range.
+    fn selection_highlight(&self) -> HighlightStyle {
+        let t = self.theme;
+        HighlightStyle {
+            background_color: Some(t.accent),
+            color: Some(t.bg),
+            ..Default::default()
+        }
     }
 }
 

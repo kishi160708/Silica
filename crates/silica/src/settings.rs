@@ -35,7 +35,8 @@ use gpui::{
 use serde_json::{json, Value};
 use silica_commands::{hotkey_label, keystroke, Command};
 use silica_formats::config::{
-    AppConfig, AppearanceConfig, CorePlugins, Hotkey, Hotkeys, SwitcherConfig, CORE_PLUGINS,
+    AppConfig, AppearanceConfig, CorePlugins, DailyNotesConfig, Hotkey, Hotkeys, SwitcherConfig,
+    TemplatesConfig, CORE_PLUGINS, DAILY_NOTE_DEFAULT_FORMAT,
 };
 use silica_plugins::Tier;
 use silica_search::fuzzy_match;
@@ -838,6 +839,8 @@ pub enum SettingChange {
     Switcher(SwitcherConfig),
     CorePlugins(CorePlugins),
     CommunityPlugins(Vec<String>),
+    Templates(TemplatesConfig),
+    DailyNotes(DailyNotesConfig),
     /// `hotkeys.json` whole: the map in the file's order with one entry
     /// added, changed or removed.
     Hotkeys(Hotkeys),
@@ -858,6 +861,8 @@ impl SettingChange {
             SettingChange::Switcher(_) => "switcher.json",
             SettingChange::CorePlugins(_) => "core-plugins.json",
             SettingChange::CommunityPlugins(_) => "community-plugins.json",
+            SettingChange::Templates(_) => "templates.json",
+            SettingChange::DailyNotes(_) => "daily-notes.json",
             SettingChange::Hotkeys(_) => "hotkeys.json",
             SettingChange::Frame(_) => "silica.json",
             SettingChange::ConfigFolder(_) => "silica.json",
@@ -2682,6 +2687,134 @@ impl SettingsView {
                     items.push(item(&name, id, Control::None));
                 }
                 items
+            }
+            "daily-notes" => {
+                vec![
+                    field(
+                        "Format",
+                        "The date format used for new daily notes.",
+                        state,
+                        TextField {
+                            key: "format",
+                            placeholder: DAILY_NOTE_DEFAULT_FORMAT,
+                            prefix: "",
+                            read: |s| s.daily_notes().format.clone().unwrap_or_default(),
+                            write: |s, value| {
+                                let mut next = s.daily_notes().clone();
+                                if value.is_empty() {
+                                    next.format = None;
+                                } else {
+                                    next.format = Some(value.to_string());
+                                }
+                                SettingChange::DailyNotes(next)
+                            },
+                        },
+                    ),
+                    field(
+                        "Folder",
+                        "The folder new daily notes are created in.",
+                        state,
+                        TextField {
+                            key: "folder",
+                            placeholder: "",
+                            prefix: "",
+                            read: |s| s.daily_notes().folder.clone().unwrap_or_default(),
+                            write: |s, value| {
+                                let mut next = s.daily_notes().clone();
+                                if value.is_empty() {
+                                    next.folder = None;
+                                } else {
+                                    next.folder = Some(value.to_string());
+                                }
+                                SettingChange::DailyNotes(next)
+                            },
+                        },
+                    ),
+                    field(
+                        "Template",
+                        "A template applied to new daily notes.",
+                        state,
+                        TextField {
+                            key: "template",
+                            placeholder: "",
+                            prefix: "",
+                            read: |s| s.daily_notes().template.clone().unwrap_or_default(),
+                            write: |s, value| {
+                                let mut next = s.daily_notes().clone();
+                                if value.is_empty() {
+                                    next.template = None;
+                                } else {
+                                    next.template = Some(value.to_string());
+                                }
+                                SettingChange::DailyNotes(next)
+                            },
+                        },
+                    ),
+                ]
+            }
+            "templates" => {
+                vec![
+                    field(
+                        "Folder",
+                        "The folder templates are stored in.",
+                        state,
+                        TextField {
+                            key: "folder",
+                            placeholder: "",
+                            prefix: "",
+                            read: |s| s.templates().folder.clone().unwrap_or_default(),
+                            write: |s, value| {
+                                let mut next = s.templates().clone();
+                                if value.is_empty() {
+                                    next.folder = None;
+                                } else {
+                                    next.folder = Some(value.to_string());
+                                }
+                                SettingChange::Templates(next)
+                            },
+                        },
+                    ),
+                    field(
+                        "Date format",
+                        "The moment.js format used for {{date}} in templates.",
+                        state,
+                        TextField {
+                            key: "dateFormat",
+                            placeholder: "",
+                            prefix: "",
+                            read: |s| s.templates().date_format.clone().unwrap_or_default(),
+                            write: |s, value| {
+                                let mut next = s.templates().clone();
+                                if value.is_empty() {
+                                    next.date_format = None;
+                                } else {
+                                    next.date_format = Some(value.to_string());
+                                }
+                                SettingChange::Templates(next)
+                            },
+                        },
+                    ),
+                    field(
+                        "Time format",
+                        "The moment.js format used for {{time}} in templates.",
+                        state,
+                        TextField {
+                            key: "timeFormat",
+                            placeholder: "",
+                            prefix: "",
+                            read: |s| s.templates().time_format.clone().unwrap_or_default(),
+                            write: |s, value| {
+                                let mut next = s.templates().clone();
+                                if value.is_empty() {
+                                    next.time_format = None;
+                                } else {
+                                    next.time_format = Some(value.to_string());
+                                }
+                                SettingChange::Templates(next)
+                            },
+                        },
+                    ),
+                ]
             }
             _ => vec![item(
                 "Options not shown yet",

@@ -23,8 +23,13 @@ use std::collections::{BTreeSet, HashMap};
 pub struct LinkResolver {
     /// Original-case vault-relative paths.
     files: BTreeSet<String>,
-    /// Lowercased path -> original path.
-    by_lower: HashMap<String, String>,
+    /// Lowercased path -> every original path that lowercases to it.
+    ///
+    /// On a case-sensitive filesystem `A.md` and `a.md` are different notes
+    /// that share one lowercase key. Storing a single `String` let the second
+    /// insert replace the first, and removing either deleted the mapping the
+    /// other still needed; a `Vec` keeps both and lets resolution pick.
+    by_lower: HashMap<String, Vec<String>>,
     /// Lowercased basename (without extension) -> original paths.
     by_basename: HashMap<String, Vec<String>>,
 }
@@ -83,7 +88,11 @@ impl LinkResolver {
         if !self.files.insert(path.clone()) {
             return;
         }
-        self.by_lower.insert(path.to_lowercase(), path.clone());
+        let lowered = path.to_lowercase();
+        let bucket = self.by_lower.entry(lowered).or_default();
+        if !bucket.contains(&path) {
+            bucket.push(path.clone());
+        }
         self.by_basename
             .entry(basename_no_ext(&path).to_lowercase())
             .or_default()
@@ -95,7 +104,12 @@ impl LinkResolver {
         if !self.files.remove(&path) {
             return;
         }
-        self.by_lower.remove(&path.to_lowercase());
+        if let Some(bucket) = self.by_lower.get_mut(&path.to_lowercase()) {
+            bucket.retain(|p| p != &path);
+            if bucket.is_empty() {
+                self.by_lower.remove(&path.to_lowercase());
+            }
+        }
         if let Some(v) = self
             .by_basename
             .get_mut(&basename_no_ext(&path).to_lowercase())
@@ -113,9 +127,28 @@ impl LinkResolver {
     }
 
     fn exact(&self, candidate: &str) -> Option<&str> {
+        let bucket = self.by_lower.get(&candidate.to_lowercase())?;
+        // * A case-sensitive vault can hold `A.md` and `a.md` at once. When
+        // * the link names one of them exactly, that is the note meant; only
+        // * an inexact spelling falls back to the bucket's first entry, which
+        // * is insertion order and therefore stable across runs.
+        bucket
+            .iter()
+            .find(|path| path.as_str() == candidate)
+            .or_else(|| bucket.first())
+            .map(String::as_str)
+    }
+
+    /// Every original-case path that `candidate` could name.
+    ///
+    /// Resolution takes the first, but a caller that has to report an
+    /// ambiguity — or a test asserting both notes survived a removal — needs
+    /// them all.
+    pub fn all_exact(&self, candidate: &str) -> &[String] {
         self.by_lower
             .get(&candidate.to_lowercase())
-            .map(String::as_str)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
     fn with_extensions(&self, stem: &str) -> Option<&str> {
@@ -169,7 +202,14 @@ impl LinkResolver {
         }
         let source_folder = folder_of(&normalize(source_path)).to_lowercase();
         // * Prefer markdown when the link has no extension, then the vault
-        // * root, then the source's folder, then the shortest path.
+        // * root, then the source's folder, then the shortest path, then an
+        // * exact case match.
+        //
+        // * The case key is what separates `A.md` from `a.md` on a
+        // * case-sensitive vault: the lowercased path ties for both, so
+        // * without it the winner was whichever was inserted first — stable,
+        // * but a link written `[[a]]` would open `A.md`.
+        let want_case = target.clone();
         let score = |p: &&String| {
             let md = if want_ext.is_none() && FileKind::from_path(p).is_markdown() {
                 0
@@ -179,7 +219,12 @@ impl LinkResolver {
             let folder = folder_of(p).to_lowercase();
             let root = if folder.is_empty() { 0 } else { 1 };
             let same = if folder == source_folder { 0 } else { 1 };
-            (md, root, same, p.len(), p.to_lowercase())
+            let exact_case = if p.as_str() == want_case || basename_no_ext(p) == want_case {
+                0
+            } else {
+                1
+            };
+            (md, root, same, exact_case, p.len(), p.to_lowercase())
         };
         matching.into_iter().min_by_key(score).map(String::as_str)
     }
@@ -321,5 +366,31 @@ mod tests {
             r.resolve("../Nested/Plan", "Deep/Other/X.md"),
             Some("Deep/Nested/Plan.md")
         );
+    }
+
+    /// On a case-sensitive filesystem `A.md` and `a.md` are two notes with one
+    /// lowercase key. Both must resolve, and removing one must leave the other.
+    #[test]
+    fn case_collisions_keep_both_notes() {
+        let mut r = LinkResolver::new(["A.md", "a.md"]);
+
+        assert_eq!(r.all_exact("A.md").len(), 2, "both notes are remembered");
+        // * An exactly-cased link resolves to that note, not its neighbour.
+        assert_eq!(r.resolve("A", "Note.md"), Some("A.md"));
+        assert_eq!(r.resolve("a", "Note.md"), Some("a.md"));
+
+        // * Removing one leaves the other intact.
+        r.remove("A.md");
+        assert_eq!(r.all_exact("A.md"), &["a.md".to_string()]);
+        assert_eq!(r.resolve("a", "Note.md"), Some("a.md"));
+        assert_eq!(
+            r.resolve("A", "Note.md"),
+            Some("a.md"),
+            "the survivor still answers"
+        );
+
+        r.remove("a.md");
+        assert!(r.all_exact("a.md").is_empty());
+        assert_eq!(r.resolve("a", "Note.md"), None);
     }
 }

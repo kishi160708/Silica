@@ -394,3 +394,94 @@ module.exports = App;
         );
     }
 }
+
+/// Deleting two notes whose paths flatten to one name keeps both.
+///
+/// `a/b.md` and `a-b.md` both became `a-b.md` in `.trash`, so the second
+/// delete silently destroyed the first trashed note.
+#[test]
+fn two_paths_that_flatten_alike_both_survive_in_the_trash() {
+    let fixture = fixture(
+        r#"
+const { Plugin } = require("obsidian");
+class Counter extends Plugin {
+  onload() {
+    this.addCommand({ id: "delete-two", name: "Delete two", callback: async () => {
+      await this.app.vault.trash("a/b.md");
+      await this.app.vault.trash("a-b.md");
+    }});
+  }
+}
+module.exports = Counter;
+"#,
+    );
+    fs::create_dir_all(fixture.vault.join("a")).expect("a folder");
+    fs::write(fixture.vault.join("a/b.md"), "first").expect("the nested note");
+    fs::write(fixture.vault.join("a-b.md"), "second").expect("the flat note");
+
+    let host = load(&fixture, None);
+    host.run_command("counter:delete-two")
+        .expect("both deletes ran");
+
+    let trashed: Vec<String> = fs::read_dir(fixture.vault.join(".trash"))
+        .expect("a trash folder")
+        .flatten()
+        .map(|e| fs::read_to_string(e.path()).unwrap_or_default())
+        .collect();
+    assert_eq!(trashed.len(), 2, "both notes are in the trash: {trashed:?}");
+    assert!(
+        trashed.contains(&"first".to_string()),
+        "the nested note survived"
+    );
+    assert!(
+        trashed.contains(&"second".to_string()),
+        "the flat note survived"
+    );
+}
+
+/// A `.trash` that is a link is refused rather than used.
+#[cfg(unix)]
+#[test]
+fn a_symlinked_trash_is_refused() {
+    let fixture = fixture(
+        r#"
+const { Plugin } = require("obsidian");
+class Counter extends Plugin {
+  onload() {
+    this.addCommand({ id: "delete", name: "Delete", callback: () => {
+      // * Synchronous: a rejected promise from an async callback would be
+      // * swallowed, and the test would pass without the throw reaching Rust.
+      this.app.vault.trash("Doomed.md");
+    }});
+  }
+}
+module.exports = Counter;
+"#,
+    );
+    fs::write(fixture.vault.join("Doomed.md"), "doomed").expect("the note to delete");
+
+    // * A folder outside the vault, which the link points at.
+    let outside = tempfile::tempdir().expect("an outside folder");
+    std::os::unix::fs::symlink(outside.path(), fixture.vault.join(".trash"))
+        .expect("a linked trash");
+
+    let host = load(&fixture, None);
+    let error = host
+        .run_command("counter:delete")
+        .expect_err("a linked trash must not be used");
+    let text = format!("{error:?}");
+    assert!(
+        text.contains("not a plain directory"),
+        "the refusal must be the trash check: {text}"
+    );
+    // * The note is still where it was.
+    assert!(fixture.vault.join("Doomed.md").exists());
+    // * And nothing landed outside the vault.
+    assert_eq!(
+        fs::read_dir(outside.path())
+            .expect("the outside folder")
+            .count(),
+        0,
+        "nothing may be written outside the vault"
+    );
+}

@@ -24,7 +24,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.5.7"
+version = "0.5.10"
 edition = "2021"
 rust-version = "1.85"
 repository = "https://github.com/lw-xiong/Silica.git"
@@ -80,6 +80,7 @@ windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Securit
 # fonts renders the same on every machine without touching system fonts.
 hayro = "0.8"
 mermaid-rs-renderer = { version = "0.3.1", default-features = false }
+lru = "0.12"
 resvg = "0.45.1"
 usvg = "0.45.1"
 # RaTeX: a KaTeX-compatible TeX math engine in pure Rust, for `$x$` and `$$x$$`.
