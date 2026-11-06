@@ -78,7 +78,8 @@ use silica_commands::{hotkey_label, keystroke, CommandRegistry};
 use silica_formats::bookmarks::{Bookmark, Bookmarks};
 use silica_formats::config::{
     self as config, AppConfig, AppearanceConfig, CommandPaletteConfig, CorePlugins,
-    DailyNotesConfig, Hotkeys, PropertyTypes, SwitcherConfig, TemplatesConfig, CORE_PLUGINS,
+    DailyNotesConfig, Hotkeys, PropertyTypes, SwitcherConfig, TemplatesConfig, ZkPrefixerConfig,
+    CORE_PLUGINS, ZK_PREFIXER_DEFAULT_FORMAT,
 };
 use silica_formats::properties::{Change, PropertiesInDocument};
 use silica_formats::{validate_renamed_file, FileKind};
@@ -416,6 +417,11 @@ pub const RUNNABLE: &[&str] = &[
     "file-explorer:new-file-in-current-tab",
     "file-explorer:new-file-in-new-pane",
     "file-explorer:new-folder",
+    "theme:switch",
+    "theme:toggle-light-dark",
+    "zk-prefixer",
+    "insert-unique-link",
+    "random-note",
     "file-explorer:move-file",
     "file-explorer:duplicate-file",
     "workspace:edit-file-title",
@@ -4701,6 +4707,118 @@ impl Workspace {
             self.recent_commands.truncate(20);
         }
         match id {
+            // * `theme:switch` cycles system → moonstone (light) → obsidian
+            //   (dark) → system, mirroring Obsidian's theme switcher.
+            //   `theme:toggle-light-dark` toggles light/dark; system starts
+            //   at light. Both write `appearance.json` and recompute the
+            //   global theme live via `change_setting` → `recompute_theme`,
+            //   no restart required (Specification.md, "Appearance").
+            "theme:switch" => {
+                let Some(state) = self.state.as_ref() else {
+                    self.report("no vault loaded", cx);
+                    return;
+                };
+                let config = {
+                    let appearance = state.appearance();
+                    appearance.clone()
+                };
+                let next_theme = match config.theme.as_deref() {
+                    Some("system") => "moonstone",
+                    Some("moonstone") => "obsidian",
+                    _ => "system",
+                };
+                let mut config = config;
+                config.theme = Some(next_theme.to_string());
+                self.change_setting(SettingChange::Appearance(config), window, cx);
+            }
+            "theme:toggle-light-dark" => {
+                let Some(state) = self.state.as_ref() else {
+                    self.report("no vault loaded", cx);
+                    return;
+                };
+                let config = {
+                    let appearance = state.appearance();
+                    appearance.clone()
+                };
+                let next_theme = match config.theme.as_deref() {
+                    Some("obsidian") => "moonstone",
+                    _ => "obsidian",
+                };
+                let mut config = config;
+                config.theme = Some(next_theme.to_string());
+                self.change_setting(SettingChange::Appearance(config), window, cx);
+            }
+            // * `zk-prefixer`: nyalakan/matikan awalan timestamp otomatis pada
+            //   nama note baru (`file-explorer:new-file`). Tersimpan di
+            //   `zk-prefixer.json` (`enabled`, `format` moment.js, default
+            //   `YYYYMMDDHHmm`), tidak perlu restart.
+            "zk-prefixer" => {
+                let Some(state) = self.state.as_ref() else {
+                    self.report("no vault loaded", cx);
+                    return;
+                };
+                let result = {
+                    let vault = state.vault();
+                    let config: ZkPrefixerConfig = vault
+                        .read_config("zk-prefixer.json")
+                        .unwrap_or_default()
+                        .unwrap_or_default();
+                    let next_enabled = !config.enabled.unwrap_or(false);
+                    let mut new_config = config;
+                    new_config.enabled = Some(next_enabled);
+                    vault
+                        .write_config("zk-prefixer.json", &new_config)
+                        .map(|()| next_enabled)
+                };
+                match result {
+                    Ok(next_enabled) => self.report(
+                        format!("zk-prefixer {}", if next_enabled { "on" } else { "off" }),
+                        cx,
+                    ),
+                    Err(err) => self.report(format!("zk-prefixer could not be written: {err}"), cx),
+                }
+            }
+            // * `insert-unique-link`: sisipkan wikilink ke note aktif di kursor.
+            //   Teks link adalah nama note (tanpa `.md`); cursor di tempatkan
+            //   setelah kurung tutup seperti perilaku Obsidian.
+            "insert-unique-link" => {
+                let Some(state) = self.state.as_ref() else {
+                    self.report("no vault loaded", cx);
+                    return;
+                };
+                let _ = state;
+                let Some(current) = self.current.as_deref() else {
+                    self.report("no note open", cx);
+                    return;
+                };
+                let link_text = current.trim_end_matches(".md");
+                self.editor.update(cx, |e, cx| {
+                    e.insert_at_cursors(&format!("[[{link_text}]]"), window, cx);
+                });
+            }
+            // * `random-note`: buka note acak dari vault. Indeks dihasilkan
+            //   dari waktu sistem saat ini (tanpa dependensi `rand`).
+            "random-note" => {
+                let Some(state) = self.state.as_ref() else {
+                    self.report("no vault loaded", cx);
+                    return;
+                };
+                let notes: Vec<String> = state
+                    .vault()
+                    .markdown_files()
+                    .map(|f| f.path.clone())
+                    .collect();
+                if notes.is_empty() {
+                    self.report("no notes in vault", cx);
+                    return;
+                };
+                let nanos = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos();
+                let ix = (nanos % notes.len() as u128) as usize;
+                self.open_file(notes[ix].clone(), None, cx);
+            }
             "command-palette:open" => self.open_palette("", window, cx),
             "editor:save-file" => self.flush_save(cx),
             "editor:open-search" => self.open_find("", false, window, cx),
@@ -6974,7 +7092,37 @@ impl Workspace {
         let Some(state) = self.state.clone() else {
             return;
         };
-        let path = state.vault().available_path(folder, "Untitled", "md");
+        let vault = state.vault();
+        let name = if vault
+            .read_config::<ZkPrefixerConfig>("zk-prefixer.json")
+            .unwrap_or_default()
+            .unwrap_or_default()
+            .enabled
+            .unwrap_or(false)
+        {
+            let config = vault
+                .read_config::<ZkPrefixerConfig>("zk-prefixer.json")
+                .unwrap_or_default()
+                .unwrap_or_default();
+            let format = config
+                .format
+                .as_deref()
+                .unwrap_or(ZK_PREFIXER_DEFAULT_FORMAT);
+            let local = chrono::Local::now();
+            let naive = local.naive_local();
+            let stamp = templates::Stamp {
+                year: chrono::Datelike::year(&naive) as i64,
+                month: chrono::Datelike::month(&naive),
+                day: chrono::Datelike::day(&naive),
+                hour: chrono::Timelike::hour(&naive),
+                minute: chrono::Timelike::minute(&naive),
+                second: chrono::Timelike::second(&naive),
+            };
+            format!("{} Untitled", templates::moment::format(format, &stamp))
+        } else {
+            "Untitled".to_string()
+        };
+        let path = vault.available_path(folder, &name, "md");
         match state.create_note(&path, "") {
             Ok(changes) => {
                 self.after_changes(changes, cx);

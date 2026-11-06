@@ -496,6 +496,22 @@ pub struct DailyNotesConfig {
 /// What a daily note is named when the format is empty or absent.
 pub const DAILY_NOTE_DEFAULT_FORMAT: &str = "YYYY-MM-DD";
 
+/// `zk-prefixer.json`: saat enabled, note baru yang dibuat via "New note"
+/// diberi awalan timestamp dalam format moment.js (default `YYYYMMDDHHmm`),
+/// misal `202611061430 Catatan.md`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ZkPrefixerConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+/// Format default untuk awalan zk-prefixer.
+pub const ZK_PREFIXER_DEFAULT_FORMAT: &str = "YYYYMMDDHHmm";
+
 /// `plugins/<id>/manifest.json` of an installed community plugin.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct PluginManifest {
