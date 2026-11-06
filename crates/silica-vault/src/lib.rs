@@ -1885,6 +1885,38 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "newer");
     }
 
+    /// A note past MAX_PATH exists: the app creates its folders and first
+    /// bytes through `win_fs`, whose Win32 calls carry the `\\?\` prefix.
+    /// Saving it goes through `write_no_follow` — the save entry point
+    /// `Vault::write_bytes` uses on Windows — whose std calls do not. So the
+    /// save that follows a deep note's creation fails with "cannot find the
+    /// path specified" (os error 3), the scratch file's longer name crossing
+    /// the limit first. A note win_fs can write must be saveable too.
+    #[cfg(windows)]
+    #[test]
+    fn a_save_past_max_path_lands_and_reads_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        // * One 60-char component per level: three dirs plus the file name
+        // * carry the absolute path well past 260 without ever naming `..`.
+        let long = "l".repeat(60);
+        let relative = Path::new(&long)
+            .join(&long)
+            .join(&long)
+            .join(format!("{long}.md"));
+
+        win_fs::create_dir_all_at(&root, relative.parent().expect("has a parent"))
+            .expect("create_dir_all_at past MAX_PATH");
+        win_fs::write_at(&root, &relative, b"first save\n").expect("write_at past MAX_PATH");
+
+        write_no_follow(&root.join(&relative), b"second save\n")
+            .expect("write_no_follow past MAX_PATH");
+
+        let read_back =
+            win_fs::read_inside(&root, &relative, 32).expect("read_inside past MAX_PATH");
+        assert_eq!(read_back, b"second save\n");
+    }
+
     #[cfg(unix)]
     #[test]
     fn write_no_follow_still_refuses_a_link() {
