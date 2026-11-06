@@ -18076,6 +18076,59 @@ mod tests {
         );
     }
 
+    /// A note whose name carries spaces, non-ASCII letters and a symbol is
+    /// indexed and linked like any other: the vault lists it, a wikilink to
+    /// its display name resolves, and the notes it points at count it. A name
+    /// the walk or the resolver mishandled would leave the note in the file
+    /// list but silently unlinked — the graph just missing edges with nothing
+    /// to say so.
+    #[test]
+    fn a_note_with_a_name_no_url_would_like_is_indexed_and_linked() {
+        let (dir, state) = vault();
+        let weird = dir.path().join("Ω notes ✓.md");
+        fs::write(&weird, "# Weird\n\nTalks of [[B]] and [[Sub/S]].\n").unwrap();
+        // * A note that links to it by its display name.
+        let linker = dir.path().join("Linker.md");
+        fs::write(&linker, "See [[Ω notes ✓]] for the details.\n").unwrap();
+
+        state.apply(&[weird, linker]);
+
+        assert!(
+            state
+                .vault()
+                .files()
+                .iter()
+                .any(|f| f.path == "Ω notes ✓.md"),
+            "not in the file list: {:?}",
+            state.vault().files()
+        );
+        assert!(state.cache().file("Ω notes ✓.md").is_some(), "not indexed");
+        assert!(state.texts().get("Ω notes ✓.md").is_some(), "not cached");
+        // * The link to it resolves, so the resolver carried the whole name.
+        assert_eq!(
+            state.cache().backlinks("Ω notes ✓.md").len(),
+            1,
+            "the wikilink to the odd name dangled"
+        );
+        assert!(
+            state.cache().unresolved_links("Linker.md").is_none(),
+            "Linker's link is unresolved: {:?}",
+            state.cache().unresolved_links("Linker.md")
+        );
+        // * Its own links resolve the other way, and are counted.
+        assert!(state.cache().unresolved_links("Ω notes ✓.md").is_none());
+        assert_eq!(
+            state.cache().backlinks("B.md").len(),
+            3,
+            "A, Sub/S and this one"
+        );
+        assert_eq!(
+            state.cache().backlinks("Sub/S.md").len(),
+            2,
+            "A and this one"
+        );
+    }
+
     /// And the mirror: a folder that appears from outside — a restore, a
     /// sync client unpacking a tree — is walked and every note in it is
     /// indexed, with the folder itself in the file list. A restored tree the
