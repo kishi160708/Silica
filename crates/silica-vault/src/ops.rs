@@ -788,6 +788,45 @@ mod tests {
         assert!(v.rename("renamed a.md", "renamed a.md").unwrap().is_empty());
     }
 
+    /// Menghapus folder yang berisi file yang sedang dibuka proses lain
+    /// (tidak ada sharing) harus gagal bersih: ada yang terhapus, ada yang
+    /// tersisa, dan errornya menyatakan alamatnya. Tidak boleh panic, dan
+    /// tidak boleh dianggap berhasil karena sebagian file sudah pergi.
+    #[cfg(windows)]
+    #[test]
+    fn trash_refuses_a_folder_holding_a_locked_file() {
+        use std::fs::OpenOptions;
+        use std::os::windows::fs::OpenOptionsExt;
+        let (dir, mut v) = vault();
+        let root = dir.path();
+        fs::create_dir_all(root.join("Locked")).unwrap();
+        fs::write(root.join("Locked/note.md"), "inside\n").unwrap();
+        // * share_mode(0): proses lain memegang catatan, tanpa sharing sama sekali.
+        let locked = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .share_mode(0)
+            .open(root.join("Locked/note.md"));
+        let locked = match locked {
+            Ok(h) => h,
+            Err(_) => return,
+            // * CI tanpa hak buka file eksklusif: tidak ada yang diuji.
+        };
+        let err = v.trash("Locked", TrashOption::Local).unwrap_err();
+        assert!(
+            matches!(err, OpError::Io { .. }),
+            "trash folder with locked file must return an io error: {err}"
+        );
+        // * Folder masih ada dan belum disentang, meski catatan dikunci:
+        // * tidak ada penghapusan parsial yang diam-diam.
+        assert!(root.join("Locked/note.md").is_file());
+        drop(locked);
+        assert_eq!(
+            fs::read_to_string(root.join("Locked/note.md")).unwrap(),
+            "inside\n"
+        );
+    }
+
     /// A folder typed with the wrong case still reports every move, so the
     /// caller rewrites links instead of silently dropping them (F2).
     #[test]
