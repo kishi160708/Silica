@@ -6120,6 +6120,7 @@ dependencies = [
 name = "silica-plugins"
 version = "0.5.7"
 dependencies = [
+ "chrono",
  "rquickjs",
  "serde",
  "serde_json",

@@ -3,6 +3,7 @@
 //! Each plugin implements [`crate::native::Plugin`] and registers itself
 //! via [`crate::native::register_native`] at startup.
 
+use crate::date;
 use crate::live::register_native;
 use crate::native::{NativeCommand, Plugin, PluginContext};
 use serde_json::Value;
@@ -35,18 +36,7 @@ impl Plugin for DailyNotes {
     ) -> Result<(), String> {
         match id {
             "daily-notes:open" => {
-                let today = SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .map(|d| {
-                        let secs = d.as_secs();
-                        let days = secs / 86400;
-                        let year = 1970u32 + (days / 365) as u32;
-                        let day_of_year = days % 365;
-                        let month = 1u32 + (day_of_year / 30) as u32;
-                        let day = 1u32 + (day_of_year % 30) as u32;
-                        format!("{year:04}-{month:02}-{day:02}")
-                    })
-                    .unwrap_or_else(|_| "unknown".to_string());
+                let today = date::today();
 
                 let path = format!("{today}.md");
                 if (ctx.file_exists)(&path)? {
@@ -110,10 +100,8 @@ impl Plugin for Backlink {
                             .cloned()
                             .unwrap_or_default();
                         for link in file_links {
-                            let link_target = link
-                                .get("link")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("");
+                            let link_target =
+                                link.get("link").and_then(|v| v.as_str()).unwrap_or("");
                             if link_target == current {
                                 backlinks.push(file.clone());
                             }
@@ -235,10 +223,8 @@ impl Plugin for RandomNote {
         match id {
             "random-note:open" => {
                 let files = (ctx.list_dir)("")?;
-                let md_files: Vec<String> = files
-                    .into_iter()
-                    .filter(|f| f.ends_with(".md"))
-                    .collect();
+                let md_files: Vec<String> =
+                    files.into_iter().filter(|f| f.ends_with(".md")).collect();
                 if md_files.is_empty() {
                     return Err("No notes in vault".to_string());
                 }
@@ -368,18 +354,7 @@ impl Plugin for ZkPrefixer {
         match id {
             "zk-prefixer:create" => {
                 let title = value.and_then(|v| v.as_str()).unwrap_or("note");
-                let now = SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .map(|d| {
-                        let secs = d.as_secs();
-                        let days = secs / 86400;
-                        let year = 1970u32 + (days / 365) as u32;
-                        let day_of_year = days % 365;
-                        let month = 1u32 + (day_of_year / 30) as u32;
-                        let day = 1u32 + (day_of_year % 30) as u32;
-                        format!("{year:04}-{month:02}-{day:02}")
-                    })
-                    .unwrap_or_else(|_| "unknown".to_string());
+                let now = date::today();
                 let path = format!("{now}-{title}.md");
                 let content = format!("# {title}\n\n");
                 (ctx.create_file)(&path, &content)?;
@@ -589,10 +564,12 @@ impl Plugin for FileRecovery {
                     .collect();
 
                 files.sort_by(|a, b| {
-                    let a_time = a.metadata()
+                    let a_time = a
+                        .metadata()
                         .and_then(|m| m.modified())
                         .unwrap_or(SystemTime::UNIX_EPOCH);
-                    let b_time = b.metadata()
+                    let b_time = b
+                        .metadata()
                         .and_then(|m| m.modified())
                         .unwrap_or(SystemTime::UNIX_EPOCH);
                     b_time.cmp(&a_time)
@@ -641,18 +618,7 @@ impl Plugin for AudioRecorder {
     ) -> Result<(), String> {
         match id {
             "audio-recorder:record" => {
-                let now = SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .map(|d| {
-                        let secs = d.as_secs();
-                        let days = secs / 86400;
-                        let year = 1970u32 + (days / 365) as u32;
-                        let day_of_year = days % 365;
-                        let month = 1u32 + (day_of_year / 30) as u32;
-                        let day = 1u32 + (day_of_year % 30) as u32;
-                        format!("{year:04}-{month:02}-{day:02}")
-                    })
-                    .unwrap_or_else(|_| "unknown".to_string());
+                let now = date::today();
 
                 let path = format!("{now}-audio.md");
                 let content = format!("# Audio recording - {now}\n\n*Recording not yet implemented.*\n\nTo record audio, use your system's recording software and attach the audio file here.\n");
@@ -789,7 +755,8 @@ impl Plugin for TagPane {
         match id {
             "tag-pane:show" => {
                 let all_files = (ctx.list_dir)("")?;
-                let mut tags: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+                let mut tags: std::collections::BTreeSet<String> =
+                    std::collections::BTreeSet::new();
 
                 for file in &all_files {
                     if file.as_str().ends_with(".md") {
@@ -797,7 +764,10 @@ impl Plugin for TagPane {
                         for line in content.lines() {
                             for word in line.split_whitespace() {
                                 if word.starts_with('#') && word.len() > 1 {
-                                    let tag = word.trim_start_matches('#').trim_matches(|c: char| c.is_ascii_punctuation() && c != '_');
+                                    let tag =
+                                        word.trim_start_matches('#').trim_matches(|c: char| {
+                                            c.is_ascii_punctuation() && c != '_'
+                                        });
                                     if !tag.is_empty() {
                                         tags.insert(tag.to_string());
                                     }
@@ -852,7 +822,10 @@ impl Plugin for Workspaces {
                         .map(|d| d.as_secs())
                         .unwrap_or(0)
                 });
-                (ctx.create_file)(&workspace_path, &serde_json::to_string_pretty(&workspace).map_err(|e| e.to_string())?)?;
+                (ctx.create_file)(
+                    &workspace_path,
+                    &serde_json::to_string_pretty(&workspace).map_err(|e| e.to_string())?,
+                )?;
                 Ok(())
             }
             _ => Err(format!("'{id}' is not a command this plugin registered")),
@@ -897,18 +870,7 @@ impl Plugin for SlashCommand {
 
                 match cmd {
                     "daily" => {
-                        let today = SystemTime::now()
-                            .duration_since(SystemTime::UNIX_EPOCH)
-                            .map(|d| {
-                                let secs = d.as_secs();
-                                let days = secs / 86400;
-                                let year = 1970u32 + (days / 365) as u32;
-                                let day_of_year = days % 365;
-                                let month = 1u32 + (day_of_year / 30) as u32;
-                                let day = 1u32 + (day_of_year % 30) as u32;
-                                format!("{year:04}-{month:02}-{day:02}")
-                            })
-                            .unwrap_or_else(|_| "unknown".to_string());
+                        let today = date::today();
                         let path = format!("{today}.md");
                         if !(ctx.file_exists)(&path)? {
                             let content = format!("# {today}\n\n{args}");
@@ -945,4 +907,5 @@ pub fn register_all() {
     register_native(Box::new(TagPane));
     register_native(Box::new(Workspaces));
     register_native(Box::new(SlashCommand));
+    register_native(Box::new(crate::vault_doctor::VaultDoctor));
 }
