@@ -842,6 +842,82 @@ mod tests {
         assert_eq!(&stamp[10..11], "T");
         assert!(stamp.starts_with("20"));
     }
+
+    #[test]
+    fn list_trash_is_empty_when_there_is_no_trash_folder() {
+        let (_dir, v) = vault();
+        assert_eq!(v.list_trash().unwrap(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn list_trash_returns_every_trashed_entry_sorted() {
+        let (dir, mut v) = vault();
+        fs::create_dir_all(dir.path().join(".trash")).unwrap();
+        fs::write(dir.path().join(".trash/Z.md"), "z").unwrap();
+        fs::write(dir.path().join(".trash/A.md"), "a").unwrap();
+        fs::write(dir.path().join(".trash/M.md"), "m").unwrap();
+        assert_eq!(
+            v.list_trash().unwrap(),
+            vec![
+                "A.md".to_string(),
+                "M.md".to_string(),
+                "Z.md".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn restore_from_trash_puts_the_file_back_at_its_entry_path() {
+        let (dir, mut v) = vault();
+        fs::create_dir_all(dir.path().join(".trash")).unwrap();
+        v.trash("A.md", TrashOption::Local).unwrap();
+        assert!(!dir.path().join("A.md").exists());
+        assert!(dir.path().join(".trash/A.md").exists());
+        v.restore_from_trash("A.md").unwrap();
+        assert!(dir.path().join("A.md").exists());
+        assert!(!dir.path().join(".trash/A.md").exists());
+        assert!(v.exists("A.md"));
+    }
+
+    #[test]
+    fn restore_from_trash_errors_when_entry_is_missing_or_target_exists() {
+        let (_dir, mut v) = vault();
+        fs::create_dir_all(dir.path().join(".trash")).unwrap();
+        assert!(matches!(
+            v.restore_from_trash("Gone.md"),
+            Err(OpError::NotFound(_))
+        ));
+        fs::write(dir.path().join(".trash/Untitled.md"), "trashed").unwrap();
+        assert!(matches!(
+            v.restore_from_trash("Untitled.md"),
+            Err(OpError::DestinationExists)
+        ));
+    }
+
+    #[test]
+    fn exists_is_false_for_empty_and_missing_true_for_present() {
+        let (_dir, v) = vault();
+        assert!(!v.exists(""));
+        assert!(!v.exists("Nope.md"));
+        assert!(v.exists("A.md"));
+        assert!(v.exists("Sub/Deep/D.md"));
+    }
+
+    #[test]
+    fn trash_option_from_config_maps_local_none_and_falls_back_to_system() {
+        assert_eq!(TrashOption::from_config(Some("local")), TrashOption::Local);
+        assert_eq!(TrashOption::from_config(Some("none")), TrashOption::None);
+        assert_eq!(TrashOption::from_config(None), TrashOption::System);
+        assert_eq!(
+            TrashOption::from_config(Some("whatever")),
+            TrashOption::System
+        );
+        assert_eq!(
+            TrashOption::from_config(Some("Local")),
+            TrashOption::System
+        );
+    }
+
 }
 
 /// Where a daily note goes, and which one is next to it.
