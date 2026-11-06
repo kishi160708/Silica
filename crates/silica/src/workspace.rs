@@ -372,6 +372,7 @@ pub const RUNNABLE: &[&str] = &[
     //   what the repo marks its native additions with.
     "silica:export-site",
     "silica:export-site-watch",
+    "silica:open-exported-site",
     "silica:toggle-graph-pane",
     "canvas:new-file",
     "canvas:jump-to-group",
@@ -2880,6 +2881,9 @@ pub struct Workspace {
     /// The site-export watch, while one runs: the flag its thread checks,
     /// so a second "export (watching)" run stops it. `None` = not watching.
     site_watch: Option<Arc<AtomicBool>>,
+    /// The folder of the last site export, so "open exported site" has a
+    /// target without re-exporting. `None` until the first export lands.
+    last_site_export: Option<PathBuf>,
     /// Pending autosave, two seconds after the last edit.
     save_task: Option<Task<()>>,
     /// Whether the startup flags have been applied. A client driving the
@@ -3468,6 +3472,7 @@ impl Workspace {
             chars: 0,
             _watcher: None,
             site_watch: None,
+            last_site_export: None,
             save_task: None,
             started: false,
             _subscriptions: subscriptions,
@@ -4912,6 +4917,7 @@ impl Workspace {
             "silica:toggle-graph-pane" => self.toggle_graph_pane(cx),
             "silica:export-site" => self.start_export_site(window, cx, false),
             "silica:export-site-watch" => self.start_export_site(window, cx, true),
+            "silica:open-exported-site" => self.open_exported_site(cx),
             // * Asked for by id with no file open -- the palette does not offer
             //   it, and `can_run` says so -- this opens nothing, which is what
             //   Obsidian's `checkCallback` does rather than falling back to the
@@ -5831,6 +5837,29 @@ impl Workspace {
         self.site_watch = Some(stop.clone());
         std::thread::spawn(move || crate::site::watch_loop(root, out, stop));
         self.report("Watching the vault — the site re-exports on change.", cx);
+    }
+
+    /// `silica:open-exported-site`: the last export's index.html in the
+    /// default browser — the "preview" half of the site export, with no
+    /// re-export and no temp server to leave running.
+    fn open_exported_site(&mut self, cx: &mut Context<Self>) {
+        let Some(out) = self.last_site_export.clone() else {
+            self.report(
+                "No export to open yet — run Export vault as site first.",
+                cx,
+            );
+            return;
+        };
+        let index = out.join("index.html");
+        if !index.exists() {
+            self.report(
+                format!("No index.html in {} — export it again.", out.display()),
+                cx,
+            );
+            return;
+        }
+        cx.open_url(&crate::site::index_url(&out));
+        self.report(format!("Opening {} in the browser.", index.display()), cx);
     }
 
     /// Whether the keyboard is somewhere nothing can use it: on the
@@ -8398,6 +8427,7 @@ link to it is rewritten. The current note is deleted."
                 };
                 match crate::site::export(&vault_root, &files, &out) {
                     Ok(done) => {
+                        self.last_site_export = Some(done.output.clone());
                         self.report(
                             format!(
                                 "Exported {} note{}, {} link{} to {}",
