@@ -433,6 +433,15 @@ impl MetadataCache {
         if source == target {
             return Vec::new();
         }
+        // * Windows is case-insensitive: a merge may arrive with a different
+        //   case than the path the index stores ("a.md" for "A.md"). The
+        //   resolver answers in stored case; the plan runs on that.
+        let source = self.resolver().resolve(source, source).unwrap_or(source);
+        let target = if source == target {
+            return Vec::new();
+        } else {
+            self.resolver().resolve(target, target).unwrap_or(target)
+        };
         let before = self.resolver();
         let mut after = before.clone();
         after.remove(source);
@@ -833,5 +842,18 @@ mod tests {
             out["A.md"].lines().nth(4).unwrap(),
             "self [[A#Top]] [[#Top]] [[A]] rel [T](T.md) [[T]] [[T]] ext [x](https://e.com/A.md)"
         );
+    }
+
+    #[test]
+    fn merge_finds_backlinks_of_a_case_insensitive_source() {
+        // * Windows paths are case-insensitive: a merge asked for "a.md"
+        //   must still reach the backlinks of "A.md" on disk.
+        let out = run_merge("a.md", "A2.md", LinkFormat::Shortest);
+        assert_eq!(
+            out["B.md"].lines().nth(1).unwrap(),
+            "related: \"[[A2]]\"",
+            "frontmatter backlink of A.md is rewritten for source \"a.md\""
+        );
+        assert_eq!(out["Sub/T.md"], "[[S]] [[Sub/S]] [S](S.md) [[A2]]\n");
     }
 }
