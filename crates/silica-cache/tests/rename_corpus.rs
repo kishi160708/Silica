@@ -104,7 +104,16 @@ fn without_links(text: &str) -> String {
 
 fn check(renames: &[(String, String)], format: LinkFormat) {
     let (paths, texts) = load();
-    let before = build(&paths, &texts);
+    check_vault(renames, format, &paths, &texts);
+}
+
+fn check_vault(
+    renames: &[(String, String)],
+    format: LinkFormat,
+    paths: &[String],
+    texts: &BTreeMap<String, String>,
+) {
+    let before = build(paths, texts);
     let (resolved_before, unresolved_before) = edges(&before);
     let map: HashMap<&str, &str> = renames
         .iter()
@@ -220,20 +229,27 @@ fn moving_folders_keeps_every_link_in_every_format() {
 }
 
 #[test]
-fn attachments_rename_too() {
-    let (paths, _) = load();
-    let renames: Vec<(String, String)> = paths
-        .iter()
-        .filter(|p| !p.ends_with(".md"))
-        .map(|p| {
-            (
-                p.clone(),
-                format!("Attachments/moved {}", p.rsplit('/').next().unwrap()),
-            )
-        })
+fn an_attachment_rename_rewrites_the_links_that_name_it() {
+    // The conformance corpus is markdown-only, so the attachment case is
+    // built here: one note that embeds and links a file kept beside it.
+    let texts: BTreeMap<String, String> = [(
+        "Note.md".to_string(),
+        "Look: ![[Attachments/pic.png]] and [text](Attachments/pic.png).\n".to_string(),
+    )]
+    .into_iter()
+    .collect();
+    let paths: Vec<String> = texts
+        .keys()
+        .cloned()
+        .chain(["Attachments/pic.png".to_string()])
         .collect();
-    if renames.is_empty() {
-        return;
-    }
-    check(&renames, LinkFormat::Shortest);
+    check_vault(
+        &[(
+            "Attachments/pic.png".to_string(),
+            "Attachments/moved pic.png".to_string(),
+        )],
+        LinkFormat::Shortest,
+        &paths,
+        &texts,
+    );
 }

@@ -145,8 +145,18 @@ mod tests {
 
     #[test]
     fn every_grammar_compiles() {
-        for (_name, _aliases, grammar) in LANGUAGES {
-            let _ = compiled::compile(grammar);
+        // `compile_pattern` keeps a failed regex as `None` on purpose, so the
+        // compiled table is the only place that failure shows: discarding the
+        // result let a broken grammar pass as one that silently matched nothing.
+        for (name, _aliases, grammar) in LANGUAGES {
+            for (scope, patterns) in &compiled::compile(grammar).entries {
+                for pattern in patterns {
+                    assert!(
+                        pattern.re.is_some(),
+                        "{name}: the {scope} pattern did not compile"
+                    );
+                }
+            }
         }
     }
 }
