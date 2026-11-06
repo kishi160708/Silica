@@ -18143,7 +18143,11 @@ mod tests {
         fs::write(&empty, "").unwrap();
         state.apply(std::slice::from_ref(&empty));
 
-        assert!(state.vault().files().iter().any(|f| f.path == "Untitled.md"));
+        assert!(state
+            .vault()
+            .files()
+            .iter()
+            .any(|f| f.path == "Untitled.md"));
         assert!(state.cache().file("Untitled.md").is_some(), "not indexed");
         assert_eq!(
             state.texts()["Untitled.md"].as_str(),
@@ -18176,8 +18180,15 @@ mod tests {
             "frontmatter of a note that no longer has any stayed: {:?}",
             state.cache().file("B.md").unwrap().frontmatter
         );
-        assert_eq!(state.texts()["B.md"].as_str(), "", "the emptied text was not re-read");
-        assert!(state.cache().file("B.md").is_some(), "the note vanished from the index");
+        assert_eq!(
+            state.texts()["B.md"].as_str(),
+            "",
+            "the emptied text was not re-read"
+        );
+        assert!(
+            state.cache().file("B.md").is_some(),
+            "the note vanished from the index"
+        );
     }
 
     /// And the mirror: a folder that appears from outside — a restore, a
