@@ -909,6 +909,27 @@ mod tests {
         );
     }
 
+    // * A rename that finds the destination taken must refuse, and the file
+    //   already there must survive byte for byte: the window between the
+    //   exists check and fs::rename is where a silent overwrite loses the
+    //   only copy of someone else's note (Unix rename replaces; this asserts
+    //   the vault never does).
+    #[test]
+    fn a_refused_rename_never_overwrites_the_destination() {
+        let (dir, mut v) = vault();
+        fs::write(dir.path().join("A.md"), "mine").unwrap();
+        fs::write(dir.path().join("B.md"), "theirs").unwrap();
+        assert!(matches!(
+            v.rename("A.md", "B.md"),
+            Err(OpError::DestinationExists)
+        ));
+        assert_eq!(
+            fs::read_to_string(dir.path().join("B.md")).unwrap(),
+            "theirs"
+        );
+        assert_eq!(fs::read_to_string(dir.path().join("A.md")).unwrap(), "mine");
+    }
+
     #[test]
     fn exists_is_false_for_empty_and_missing_true_for_present() {
         let (_dir, v) = vault();
