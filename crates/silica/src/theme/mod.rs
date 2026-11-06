@@ -121,6 +121,11 @@ pub struct Theme {
     pub link: Hsla,
     pub tag: Hsla,
     pub highlight_bg: Hsla,
+    /// A task's box in Live Preview (`--checkbox-*`): the fill when checked,
+    /// the outline when open, and the tick's colour.
+    pub checkbox: Hsla,
+    pub checkbox_border: Hsla,
+    pub checkbox_marker: Hsla,
     pub ui_font: SharedString,
     pub text_font: SharedString,
     pub mono_font: SharedString,
@@ -241,6 +246,9 @@ impl Theme {
             link: hsla(255. / 360., 0.8976, 0.759, 1.),
             tag: hsla(255. / 360., 0.8976, 0.759, 1.),
             highlight_bg: rgba(0xffd70066).into(),
+            checkbox: hsla(258. / 360., 0.88, 0.66, 1.),
+            checkbox_border: rgb(0x666666).into(),
+            checkbox_marker: rgb(0x1c1c1c).into(),
             ui_font: crate::assets::FONT_FAMILY.into(),
             text_font: crate::assets::FONT_FAMILY.into(),
             mono_font: DEFAULT_MONO_FONT.into(),
@@ -267,6 +275,9 @@ impl Theme {
             link: hsla(258. / 360., 0.88, 0.66, 1.),
             tag: hsla(258. / 360., 0.88, 0.66, 1.),
             highlight_bg: rgba(0xffd70080).into(),
+            checkbox: hsla(258. / 360., 0.88, 0.66, 1.),
+            checkbox_border: rgb(0xababab).into(),
+            checkbox_marker: rgb(0xffffff).into(),
             ui_font: crate::assets::FONT_FAMILY.into(),
             text_font: crate::assets::FONT_FAMILY.into(),
             mono_font: DEFAULT_MONO_FONT.into(),
@@ -588,6 +599,21 @@ impl Theme {
                 "--background-modifier-border-focus" => {
                     if let value::Value::Color(c) = v {
                         self.border_focus = *c;
+                    }
+                }
+                "--checkbox-color" => {
+                    if let value::Value::Color(c) = v {
+                        self.checkbox = *c;
+                    }
+                }
+                "--checkbox-border-color" => {
+                    if let value::Value::Color(c) = v {
+                        self.checkbox_border = *c;
+                    }
+                }
+                "--checkbox-marker-color" => {
+                    if let value::Value::Color(c) = v {
+                        self.checkbox_marker = *c;
                     }
                 }
                 "--text-normal" => {

@@ -3,13 +3,15 @@
 //! Obsidian renders the HTML written inside a note; Silica used to paint
 //! every tag as monospace source. This pass draws the tags it can draw
 //! faithfully — the inline formatting tags, their block containers, `<a
-//! href>` and `<br>` — and keeps the old source rendering for everything
-//! else: scripts, comments, tables, lists, an `<img>` mixed with text, any
-//! tag it does not know. A block that meets one of those is kept whole,
-//! source and all, so nothing is silently dropped or half-drawn.
+//! href>`, `<br>` and a raw `<table>` — and keeps the old source rendering
+//! for everything else: scripts, comments, lists, an `<img>` mixed with
+//! text, any tag it does not know. A block that meets one of those is kept
+//! whole, source and all, so nothing is silently dropped or half-drawn.
 
 use super::{InlineStyle, LinkTarget, RichBuilder};
 use silica_markdown::html::{is_vault_destination, percent_decode};
+use silica_markdown::Alignment;
+use std::ops::Range;
 
 /// What an open tag adds to the text inside it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -358,6 +360,241 @@ pub(crate) fn block(src: &str, id: usize) -> Option<super::RichText> {
         at = lt + len;
     }
     Some(acc.finish(id))
+}
+
+// ----- a raw table -----------------------------------------------------------
+
+/// One cell of a raw `<table>`: its inner HTML and whether it was a `<th>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct HtmlCell {
+    pub html: String,
+    /// A `<th>` outside the header row, drawn bold.
+    pub head: bool,
+}
+
+/// A raw `<table>` as rows of cells' inner HTML.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(super) struct HtmlTable {
+    /// The `<thead>` row, or a first row of nothing but `<th>`; empty when
+    /// the table has neither.
+    pub header: Vec<HtmlCell>,
+    pub rows: Vec<Vec<HtmlCell>>,
+    /// Per column, from the `align` attribute of the first row's cells.
+    pub alignments: Vec<Alignment>,
+}
+
+/// The attributes of a tag's `attrs` text, as `(name, value)` pairs. A bare
+/// name carries an empty value, which is how `<td nowrap>` reads.
+fn attrs_of(attrs: &str) -> Vec<(String, String)> {
+    let name_end = |c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    let mut out = Vec::new();
+    let mut rest = attrs;
+    while !rest.is_empty() {
+        rest = rest.trim_start_matches(name_end);
+        if rest.is_empty() {
+            break;
+        }
+        let end = rest.find(name_end).unwrap_or(rest.len());
+        let name = rest[..end].to_ascii_lowercase();
+        let mut tail = rest[end..].trim_start();
+        let mut value = String::new();
+        if let Some(after) = tail.strip_prefix('=') {
+            let after = after.trim_start();
+            match after.chars().next() {
+                Some(q @ ('"' | '\'')) => {
+                    let close = after[1..].find(q).unwrap_or(after.len() - 1);
+                    value = after[1..1 + close].to_string();
+                    tail = &after[1 + close + q.len_utf8()..];
+                }
+                _ => {
+                    let e = after.find(char::is_whitespace).unwrap_or(after.len());
+                    value = after[..e].to_string();
+                    tail = &after[e..];
+                }
+            }
+        }
+        out.push((name, value));
+        rest = tail;
+    }
+    out
+}
+
+/// The cells of a raw `<table>` block, or `None` for one this grid cannot
+/// hold: a table nested in a cell, or one with no cell at all. Markdown
+/// between a cell's tags is not parsed — a cell shows what its HTML shows.
+pub(super) fn parse_table(html: &str) -> Option<HtmlTable> {
+    let mut table = HtmlTable::default();
+    let mut row: Option<(Vec<HtmlCell>, bool)> = None;
+    let mut cell: Option<(String, bool, Alignment)> = None;
+    let mut in_head = false;
+    let mut first_alignments: Option<Vec<Alignment>> = None;
+    let mut depth = 0usize;
+    let finish_cell = |cell: &mut Option<(String, bool, Alignment)>,
+                       row: &mut Option<(Vec<HtmlCell>, bool)>,
+                       aligns: &mut Vec<Alignment>| {
+        if let Some((html, head, align)) = cell.take() {
+            let (cells, _) = row.get_or_insert_with(|| (Vec::new(), false));
+            cells.push(HtmlCell { html, head });
+            aligns.push(align);
+        }
+    };
+    let mut row_aligns: Vec<Alignment> = Vec::new();
+    let finish_row = |row: &mut Option<(Vec<HtmlCell>, bool)>,
+                      row_aligns: &mut Vec<Alignment>,
+                      first: &mut Option<Vec<Alignment>>,
+                      table: &mut HtmlTable| {
+        let aligns = std::mem::take(row_aligns);
+        let Some((cells, head_section)) = row.take() else {
+            return;
+        };
+        if cells.is_empty() {
+            return;
+        }
+        if first.is_none() {
+            *first = Some(aligns);
+        }
+        let all_th = cells.iter().all(|c| c.head);
+        if table.header.is_empty() && table.rows.is_empty() && (head_section || all_th) {
+            table.header = cells
+                .into_iter()
+                .map(|c| HtmlCell { head: false, ..c })
+                .collect();
+        } else {
+            table.rows.push(cells);
+        }
+    };
+    let mut rest = html.trim();
+    while !rest.is_empty() {
+        let (token, text) = match rest.find('<') {
+            Some(0) => {
+                let end = rest.find('>').map(|i| i + 1).unwrap_or(rest.len());
+                let token = &rest[..end];
+                rest = &rest[end..];
+                (Some(token), "")
+            }
+            Some(at) => {
+                let text = &rest[..at];
+                rest = &rest[at..];
+                (None, text)
+            }
+            None => {
+                let text = rest;
+                rest = "";
+                (None, text)
+            }
+        };
+        let Some(token) = token else {
+            if let Some((inner, ..)) = cell.as_mut() {
+                inner.push_str(text);
+            }
+            continue;
+        };
+        // * A tag the pass does not recognise as one of its own — a comment,
+        //   a doctype — is text inside whatever cell is open.
+        let Some((closing, name, attrs, _)) = parse_tag(token) else {
+            if let Some((inner, ..)) = cell.as_mut() {
+                inner.push_str(token);
+            }
+            continue;
+        };
+        let name = name.to_ascii_lowercase();
+        match (name.as_str(), closing) {
+            ("table", false) => {
+                if depth > 0 {
+                    return None;
+                }
+                depth += 1;
+            }
+            ("table", true) => {
+                finish_cell(&mut cell, &mut row, &mut row_aligns);
+                finish_row(&mut row, &mut row_aligns, &mut first_alignments, &mut table);
+                break;
+            }
+            ("thead", open_or_close) => {
+                finish_cell(&mut cell, &mut row, &mut row_aligns);
+                finish_row(&mut row, &mut row_aligns, &mut first_alignments, &mut table);
+                in_head = !open_or_close;
+            }
+            ("tbody" | "tfoot", _) => {
+                finish_cell(&mut cell, &mut row, &mut row_aligns);
+                finish_row(&mut row, &mut row_aligns, &mut first_alignments, &mut table);
+                in_head = false;
+            }
+            ("tr", false) => {
+                finish_cell(&mut cell, &mut row, &mut row_aligns);
+                finish_row(&mut row, &mut row_aligns, &mut first_alignments, &mut table);
+                row = Some((Vec::new(), in_head));
+            }
+            ("tr", true) => {
+                finish_cell(&mut cell, &mut row, &mut row_aligns);
+                finish_row(&mut row, &mut row_aligns, &mut first_alignments, &mut table);
+            }
+            ("td" | "th", false) => {
+                finish_cell(&mut cell, &mut row, &mut row_aligns);
+                if row.is_none() {
+                    row = Some((Vec::new(), in_head));
+                }
+                let align = attrs_of(attrs)
+                    .into_iter()
+                    .find(|(n, _)| n == "align")
+                    .map(|(_, v)| match v.to_ascii_lowercase().as_str() {
+                        "left" => Alignment::Left,
+                        "center" => Alignment::Center,
+                        "right" => Alignment::Right,
+                        _ => Alignment::None,
+                    })
+                    .unwrap_or(Alignment::None);
+                cell = Some((String::new(), name == "th", align));
+            }
+            ("td" | "th", true) => finish_cell(&mut cell, &mut row, &mut row_aligns),
+            _ => {
+                if let Some((inner, ..)) = cell.as_mut() {
+                    inner.push_str(token);
+                }
+            }
+        }
+    }
+    finish_cell(&mut cell, &mut row, &mut row_aligns);
+    finish_row(&mut row, &mut row_aligns, &mut first_alignments, &mut table);
+    if table.header.is_empty() && table.rows.is_empty() {
+        return None;
+    }
+    table.alignments = first_alignments.unwrap_or_default();
+    Some(table)
+}
+
+/// A cell's inner HTML as the rich text it draws: the tags through the
+/// inline overlay, the text between them literal.
+pub(super) fn rich_cell(html: &str, id: usize) -> super::RichText {
+    let mut acc = RichBuilder::default();
+    inline(&mut acc, html);
+    acc.finish(id)
+}
+
+/// `runs` over a text of `len` bytes with bold laid over every byte, the
+/// gaps between them included.
+pub(super) fn embolden(
+    runs: Vec<(Range<usize>, InlineStyle)>,
+    len: usize,
+) -> Vec<(Range<usize>, InlineStyle)> {
+    let bold = InlineStyle {
+        bold: true,
+        ..InlineStyle::default()
+    };
+    let mut out = Vec::new();
+    let mut at = 0;
+    for (range, mut style) in runs {
+        if range.start > at {
+            out.push((at..range.start, bold));
+        }
+        style.bold = true;
+        at = range.end;
+        out.push((range, style));
+    }
+    if at < len {
+        out.push((at..len, bold));
+    }
+    out
 }
 
 #[cfg(test)]

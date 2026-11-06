@@ -30,6 +30,8 @@ pub enum PromptEvent {
     Submit(String),
     /// The secondary button.
     Secondary,
+    /// A third button, when the prompt states one.
+    Tertiary,
     Cancel,
 }
 
@@ -46,6 +48,9 @@ pub struct PromptSpec {
     pub suggestions: Vec<String>,
     pub confirm: SharedString,
     pub secondary: Option<SharedString>,
+    /// A third button, painted leftmost, for prompts that offer a
+    /// "keep this choice" answer beside the one-off ones.
+    pub tertiary: Option<SharedString>,
 }
 
 pub struct Prompt {
@@ -329,6 +334,10 @@ impl Render for Prompt {
                     .justify_end()
                     .gap_2()
                     .mt_1()
+                    .children(self.spec.tertiary.clone().map(|label| {
+                        button("prompt-tertiary", label, false, &theme)
+                            .on_click(cx.listener(|_, _, _, cx| cx.emit(PromptEvent::Tertiary)))
+                    }))
                     .children(self.spec.secondary.clone().map(|label| {
                         button("prompt-secondary", label, false, &theme)
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(PromptEvent::Secondary)))
