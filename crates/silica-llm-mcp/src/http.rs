@@ -533,6 +533,31 @@ mod tests {
         assert_eq!(got.body, "hello");
     }
 
+    /// A header that promises a length cannot parse — a negative number, a
+    /// float, a hex digit — means no length at all, so the reply is read to
+    /// EOF rather than answered short; and a socket closed before the header
+    /// ends is an error, never an empty answer.
+    #[test]
+    fn a_content_length_that_cannot_parse_leaves_the_body_read_to_eof() {
+        for header in [
+            "Content-Length: -5",
+            "Content-Length: 1.5",
+            "Content-Length: 0x10",
+            "Content-Length: 99999999999999999999",
+        ] {
+            let wire = format!("HTTP/1.1 200 OK\r\n{header}\r\n\r\nhello").into_bytes();
+            let got = read_response(&mut std::io::Cursor::new(wire), "test")
+                .unwrap_or_else(|e| panic!("{header}: {e}"));
+            assert_eq!(got.body, "hello", "{header} should read to EOF");
+        }
+
+        // * Closed before the header ends: an error, not an empty 200.
+        let cut = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n".to_vec();
+        let err = read_response(&mut std::io::Cursor::new(cut), "test")
+            .expect_err("a header cut off mid-way must not answer Ok");
+        assert!(err.contains("closed"), "{err}");
+    }
+
     /// A chunk whose declared size covers the body but whose trailing CRLF is
     /// missing: the last chunk is taken, the loop stops cleanly.
     #[test]
