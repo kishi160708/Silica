@@ -248,4 +248,6 @@ random-note
 
 # Silica ids that are not Obsidian commands (marked by the `silica:` prefix).
 silica:export-site
+silica:export-site-watch
 silica:toggle-graph-pane
+
