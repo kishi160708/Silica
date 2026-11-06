@@ -402,6 +402,41 @@ impl Vault {
         let target_abs = self.entry_path(&target)?;
         std::fs::rename(&abs, &target_abs).map_err(io("move to .trash", &abs))
     }
+
+    /// Lists the contents of the vault's own `.trash/` folder, returning
+    /// vault-relative paths of every trashed entry.
+    pub fn list_trash(&self) -> Result<Vec<String>, OpError> {
+        let trash = self.write_path(".trash")?;
+        if !trash.exists() {
+            return Ok(Vec::new());
+        }
+        let mut out: Vec<String> = std::fs::read_dir(&trash)
+            .map_err(io("read trash", &trash))?
+            .filter_map(|e| e.ok())
+            .filter_map(|e| e.file_name().to_str().map(|s| s.to_string()))
+            .collect();
+        out.sort();
+        out.dedup();
+        Ok(out)
+    }
+
+    /// Restores a trashed entry back to its original vault path.
+    /// `name` is the entry's file name as returned by [`list_trash`].
+    pub fn restore_from_trash(&self, name: &str) -> Result<(), OpError> {
+        let trash = self.write_path(".trash")?;
+        let src = trash.join(name);
+        if !src.exists() {
+            return Err(OpError::NotFound(name.to_string()));
+        }
+        let dst = self.entry_path(name)?;
+        if dst.exists() {
+            return Err(OpError::DestinationExists);
+        }
+        if let Some(parent) = dst.parent() {
+            std::fs::create_dir_all(parent).map_err(io("create folder", parent))?;
+        }
+        std::fs::rename(&src, dst).map_err(io("restore from trash", &src))
+    }
 }
 
 /// Moves `abs` to the freedesktop.org trash (`$XDG_DATA_HOME/Trash`), writing
