@@ -270,3 +270,64 @@ fn overwriting_a_note_snapshots_its_previous_bytes() {
         "the newest bytes are on disk: {on_disk:?}"
     );
 }
+
+/// F2 on a focused tree row turns the row's own label into the field with
+/// the name selected; typing replaces it and Enter takes it. The file on
+/// disk gets the new name, and the note stays open under it.
+#[test]
+fn renaming_a_tree_row_renames_the_file_in_place() {
+    if !e2e_enabled() {
+        eprintln!("skipped: no display available for the graphical end-to-end tests");
+        return;
+    }
+    let vault = Vault::new();
+    fs::write(vault.root.join("Beta.md"), "beta\n").expect("a second note");
+    let mut app = match App::launch(&vault.root) {
+        Some(a) => a,
+        None => {
+            eprintln!("skipped: no graphical session to launch silica in");
+            return;
+        }
+    };
+    app.settle();
+    app.call("open_path", json!({"path": "Beta.md"}));
+    app.settle();
+    // The tree, with the focus ring on the open file's row.
+    app.run_command("file-explorer:open");
+    app.settle();
+    // F2 opens the field; typing goes through the control's IME-commit path
+    // because the focused view is the field, not the editor.
+    app.call("keys", json!({"keys": ["f2"]}));
+    app.settle();
+    app.call("type", json!({"text": "Gamma"}));
+    app.settle();
+    app.call("keys", json!({"keys": ["enter"]}));
+    app.settle();
+
+    let root = app.socket.parent().expect("the vault folder").to_path_buf();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if root.join("Gamma.md").exists() && !root.join("Beta.md").exists() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            let listed: Vec<String> = fs::read_dir(&root)
+                .expect("the vault folder")
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect();
+            panic!("the file was not renamed in place: {listed:?}");
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(
+        fs::read_to_string(root.join("Gamma.md")).expect("the renamed note"),
+        "beta\n",
+        "the renamed file keeps its bytes"
+    );
+    assert_eq!(
+        app.text(),
+        "beta\n",
+        "the note stays open under its new name"
+    );
+}

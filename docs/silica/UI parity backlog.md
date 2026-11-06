@@ -344,6 +344,13 @@ own app data, never in the vault.
 
 *medium, parity-gap, large*
 
+**Landed in part 2026-11-06.** The reading view renders image embeds inline mid-sentence
+(`ba9d79f`, `inline_embed` in view.rs): `Look: ![[real.png]] here` draws the picture in the
+sentence instead of breaking the line. Still open: the nested cases (an embed inside a list item
+or a blockquote) and the same inline placement in Live Preview, which needs a non-text piece kind
+in `preview.rs`'s `DisplayLine` threaded through shaping, hit testing, selection and the cursor
+maths.
+
 **Silica.** With an 80×80 PNG in the vault, `- ![[real.png]]`, `Look: ![[real.png]] here` and
 `> ![[real.png]]` each measure one 24 px text row and a click on them navigates to the file, while
 the same embed alone on a line measures ~104 px. Sizing works (`|40` gives ~64 px); only placement
@@ -364,6 +371,14 @@ and the cursor maths, which is an `editor.rs` project of its own.
 ### HTML other than an `<img>`-only block is still raw muted source
 
 *medium, parity-gap, medium*
+
+**Landed in part 2026-11-06.** Raw `<table>` renders as a real table in Live Preview (`4dd6db1`,
+`RBlock::Table` with header, ragged-row padding and `align=`), and inline elements render as
+themselves in Live Preview (`0ee03d6`): `<b>bold</b>` draws bold, an element is substituted from
+its opener to the closer that balances it, and a cursor anywhere in it — edges included — brings
+the whole element's source back. Still source: a `<div>`, `<pre>`, a comment, a lone `<br>` (one
+display line cannot hold a second row), and anything unclosed. `<sup>`/`<sub>` draw without a
+baseline shift — the text layer carries no vertical-offset attribute, a gpui limit.
 
 **Silica.** An HTML block that holds nothing but `<img>` tags now resolves and renders as an image
 widget in both views. Everything else — comments, `<div>`, `<pre>`, `<a>`, inline `<u>`, `<sup>`,
@@ -430,6 +445,12 @@ a definition resolves to that block rather than past the end.
 ### No keyboard at all: neither scrolling nor selection nor copy
 
 *high, missing-feature, large*
+
+**Landed 2026-11-06.** Scrolling: `ScrollPageDown`/`ScrollPageUp`/`ScrollLineDown`/`ScrollLineUp`/
+`ScrollToTop`/`ScrollToBottom` are actions bound in the `ReadingView` context (`pagedown` among
+them) over the pane's `ListState`. Selection and copy landed with `6d9279c`: drag select, double-
+and triple-click, Ctrl+A, and Copy joined the reading view. The `bind_keys` `ctx` bug this entry
+named is gone with both.
 
 **Silica.** Focus is `{reading, [Workspace, ReadingView]}` and every key is inert. PageDown,
 PageUp, Down, Up, Home, End, Ctrl+Home, Ctrl+End and Space all leave `reading.scroll` at
@@ -498,6 +519,11 @@ workspace turns into the same `properties::plan` write the editor uses.
 ### No inline title anywhere; `showInlineTitle` has no reader
 
 *medium, parity-gap, medium*
+
+**Landed 2026-11-06.** `show_inline_title` is read from `app.json` and pushed into the reading
+view (`set_inline_title`, workspace.rs), and the view header's title is clickable and editable —
+`0c6c957` made it a real inline field with Enter renaming through the link rewrite and Escape
+abandoning. The same inline field now serves the file tree's rows (F2 and the context menu).
 
 **Silica.** `show_inline_title` occurs exactly twice in the workspace: the Settings row and the
 serde field. Live, with it true and the properties block hidden, a note whose whole body is one
@@ -662,6 +688,12 @@ change with them, not alone.
 
 *low, missing-feature, medium* · **Filed:** 2026-10-28
 
+**Landed 2026-11-06.** The reading view's properties block edits and writes:
+`ReadingEvent::PropertyChanged` carries the change to the workspace and through
+`silica_formats::properties::plan` onto disk, and a pill's remove goes through
+`properties::remove_item` the same way (view.rs) — the block is no longer read-only and the
+pills draw their ×.
+
 **Obsidian.** Obsidian edits properties in reading view as well as in Live Preview, and the reading
 view's own DOM carries the control: a tag pill is `div.multi-select-pill[tabindex=0]` holding
 `div.multi-select-pill-content > span` **and** a `div.multi-select-pill-remove-button` with a
@@ -684,6 +716,11 @@ needs nothing new — `properties::remove_item` is already the editor's.
 ### Raw and inline HTML is literal source; remote images render as a link
 
 *medium, parity-gap, large*
+
+**Landed in part 2026-11-06.** Remote `http(s):` images render — `EmbedKind::RemoteImage` (with
+`RemoteAudio`/`RemoteVideo` beside it) fetches and draws them, no prompt. The inline half is the
+Live Preview widgets above (`0ee03d6`) and the reading view's own tag mapping; `<sup>`/`<sub>`
+remain the gpui vertical-offset limit, and a `<div>`/`<pre>` block still shows source.
 
 **Silica.** `line one<br>line two`, `<u>underlined</u>` and `<sup>2</sup>` all appear as their tags;
 `![remote](https://…)` becomes a link-styled run with an External target, so clicking it would open
@@ -894,6 +931,11 @@ asking which graph is showing; `graph:open-local` is not a toggle, so the pair i
 
 *low, parity-gap, medium*
 
+**Landed 2026-11-06, verified in the tree.** All four options exist: `local_depth` drives the
+walk with a Depth control (± buttons) in the local graph's panel, and the Backlinks, Forelinks
+and Interlinks toggles gate the walk's directions and the same-depth edges, matching
+`localJumps` / `localBacklinks` / `localForelinks` / `localInterlinks`.
+
 **Silica.** The local graph of a note with two forward links, one of which also links the other,
 keeps the neighbour-to-neighbour edge and every one-hop neighbour in either direction. Depth is the
 literal `if depth >= 1 { continue; }`, and `grep` for `local_jumps`, `interlink`, `forelink` or
@@ -937,6 +979,13 @@ rewrites the matched range to `[[Name]]` through the text crate's edit plan.
 
 *low, missing-feature, medium*
 
+**Landed in part 2026-11-06.** A right click on a Backlinks, Outgoing links, Tags or Outline row
+opens a context menu with the three items that need nothing the row does not already have — Open
+in new tab, Open to the right, Copy path (`right_dock_context_menu`, workspace.rs). The full
+Obsidian menu waits on the file menu being shared: Rename and Delete take `&mut Window` the row
+closure does not receive, and the remaining items are the same ones
+[[#No context-menu items wait on features Silica has not got]] lists.
+
 **Silica.** A right click on a Links row, a mentions group row or a match does nothing;
 the app has no file context menu anywhere yet (the Files view's is a separate entry).
 
@@ -951,6 +1000,11 @@ Open in default app, Show in system explorer, Reveal file in navigation.
 ### Tags, All properties and Outline rows have no context menu and no keyboard
 
 *low, missing-feature, medium*
+
+**Landed in part 2026-11-06.** The tag and outline rows carry the same right-click menu the
+Links rows got — Open in new tab, Open to the right, Copy path. Property rows are still menu-less
+(Obsidian's Rename / Property type / Delete property wants frontmatter-wide rewrites and
+`types.json`), and no row here takes keys yet.
 
 **Silica.** A right click on a tag, property or outline row does nothing, and the rows take no
 keys. Everything else these panes do landed on 2026-10-22

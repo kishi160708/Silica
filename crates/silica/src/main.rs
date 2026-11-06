@@ -27,6 +27,7 @@ mod history;
 mod html_to_markdown;
 mod http_client;
 mod i18n;
+mod inline_field;
 mod math;
 mod mentions;
 mod merge;

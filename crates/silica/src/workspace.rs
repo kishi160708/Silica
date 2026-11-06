@@ -3087,6 +3087,19 @@ impl Workspace {
                     ExplorerEvent::NewFolder { parent } => {
                         this.start_new_folder(parent, window, cx)
                     }
+                    ExplorerEvent::RenameTo { path, name } => {
+                        // * A name the tree row cannot take leaves the
+                        //   field open and says nothing: an empty one, one
+                        //   that collides with a sibling, one with a
+                        //   forbidden character. That is Obsidian's
+                        //   behaviour — the caret stays where it was.
+                        if let Ok(to) = this.renamed_path(path, name) {
+                            if this.destination_free(path, &to) {
+                                this.explorer.update(cx, |tree, cx| tree.end_rename(cx));
+                                this.rename_with_links(path, &to, Some(window), cx);
+                            }
+                        }
+                    }
                     ExplorerEvent::Rename(path) => this.start_rename(path, window, cx),
                     ExplorerEvent::Move(path) => this.start_move(path, window, cx),
                     ExplorerEvent::MoveToFolder { src, dest_folder } => {
@@ -3202,7 +3215,11 @@ impl Workspace {
                         this.open_in_new_tab(path.clone(), None, cx);
                     }
                     SearchEvent::Rename(path) => {
-                        this.start_rename(path, window, cx);
+                        // * The tree row is where Obsidian renames from the
+                        //   search pane's menu: the row's own label becomes
+                        //   the field, and the keyboard goes with it.
+                        this.explorer
+                            .update(cx, |tree, cx| tree.start_rename(path, cx));
                     }
                     SearchEvent::Delete(path) => {
                         this.start_delete(path, window, cx);
@@ -9387,6 +9404,25 @@ link to it is rewritten. The current note is deleted."
         renamed_path(from, value, is_folder)
     }
 
+    /// Whether a rename may land on `to`: anything already at the
+    /// destination refuses it, except a case-only rename of the same entry,
+    /// which is what the vault's own rename allows. The pre-check exists so
+    /// the inline field can keep its editor up on a colliding name instead
+    /// of closing it and reporting after the fact.
+    fn destination_free(&self, from: &str, to: &str) -> bool {
+        let Some(state) = self.state.as_ref() else {
+            return true;
+        };
+        let vault = state.vault();
+        let to_abs = vault.absolute(to);
+        if !to_abs.exists() {
+            return true;
+        }
+        from.eq_ignore_ascii_case(to)
+            && std::fs::canonicalize(vault.absolute(from)).ok()
+                == std::fs::canonicalize(&to_abs).ok()
+    }
+
     /// What a group's area paints, by the same rule as [`Workspace::main_view`]
     /// over that group's own views. There is one graph view; a second group
     /// showing the graph says where it is instead.
@@ -12547,6 +12583,11 @@ link to it is rewritten. The current note is deleted."
         //   through the workspace's own input handler.
         if self.title_focus.is_focused(window) {
             return "view-title";
+        }
+        // * A tree row being renamed takes typed text through the
+        //   explorer's own input handler.
+        if self.explorer.read(cx).renaming_focus().is_focused(window) {
+            return "explorer-rename";
         }
         if self.switcher.focus_handle(cx).is_focused(window) {
             return "switcher-input";
