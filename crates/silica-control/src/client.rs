@@ -8,7 +8,7 @@
 use crate::net::UnixStream;
 use crate::{Request, Response};
 use serde_json::Value;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufReader, Read, Write};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -127,26 +127,39 @@ impl Client {
             return Err(format!("control socket: writing {method}: {e}"));
         }
 
+        // * The reply is read in fixed chunks so the bound is enforced
+        //   DURING the read, not after an unbounded buffer has grown:
+        //   a peer that streams without a newline must not be able to
+        //   drive allocation past the time limit.
         let mut bytes = Vec::new();
-        match self.reader.read_until(b'\n', &mut bytes) {
-            Ok(0) => {
-                self.broken = true;
-                return Err(format!("control socket: closed while waiting for {method}"));
+        let mut chunk = [0u8; 8192];
+        loop {
+            match self.reader.read(&mut chunk) {
+                Ok(0) => {
+                    self.broken = true;
+                    return Err(format!("control socket: closed while waiting for {method}"));
+                }
+                Ok(n) => {
+                    if let Some(pos) = chunk[..n].iter().position(|&b| b == b'\n') {
+                        bytes.extend_from_slice(&chunk[..=pos]);
+                        break;
+                    }
+                    bytes.extend_from_slice(&chunk[..n]);
+                    if bytes.len() > MAX_REPLY_BYTES {
+                        self.broken = true;
+                        return Err(format!(
+                            "control socket: reply to {method} is too large ({} bytes)",
+                            bytes.len()
+                        ));
+                    }
+                }
+                Err(e) => {
+                    // * Usually the read timeout: the request stands, and its reply
+                    // * will land on top of whatever is asked next.
+                    self.broken = true;
+                    return Err(format!("control socket: reading {method}: {e}"));
+                }
             }
-            Ok(_) => {}
-            Err(e) => {
-                // * Usually the read timeout: the request stands, and its reply
-                // * will land on top of whatever is asked next.
-                self.broken = true;
-                return Err(format!("control socket: reading {method}: {e}"));
-            }
-        }
-        if bytes.len() > MAX_REPLY_BYTES {
-            self.broken = true;
-            return Err(format!(
-                "control socket: reply to {method} is too large ({} bytes)",
-                bytes.len()
-            ));
         }
         let reply = match String::from_utf8(bytes) {
             Ok(reply) => reply,
@@ -185,6 +198,7 @@ mod tests {
     use super::*;
     use crate::net::UnixListener;
     use serde_json::json;
+    use std::io::BufRead;
     use std::io::BufWriter;
     use std::path::PathBuf;
 
@@ -218,6 +232,18 @@ mod tests {
                     Response::ok(request.id, Value::Null)
                 }
                 "liar" => Response::ok(request.id + 100, Value::Null),
+                // * A flood that never ends the line: the bound must bite
+                //   while reading, not after the buffer has grown.
+                "raw-flood" => {
+                    let junk = "y".repeat(1024 * 1024);
+                    for _ in 0..12 {
+                        if writer.write_all(junk.as_bytes()).is_err() {
+                            break;
+                        }
+                    }
+                    let _ = writer.flush();
+                    continue;
+                }
                 // * A reply past any bound a client could reasonably read:
                 //   a line of it, newline included, well over the cap.
                 "flood" => {
@@ -392,6 +418,32 @@ mod tests {
         assert!(
             client.is_broken(),
             "a flooded connection is broken and must be replaced"
+        );
+
+        drop(client);
+        server.join().expect("the server thread");
+        std::fs::remove_file(&path).expect("removes the socket");
+    }
+
+    /// A reply with no newline at all past the cap is refused while it is
+    /// still being read: allocation stops at the bound, the client breaks.
+    #[test]
+    fn an_unterminated_flood_is_refused_during_the_read() {
+        let path = socket_path("raw-flood-reply");
+        let listener = UnixListener::bind(&path).expect("binds");
+        let server = std::thread::spawn(move || serve(listener));
+
+        let mut client = Client::connect(&path, Duration::from_secs(2)).expect("connects");
+        let e = client
+            .call("raw-flood", json!({}))
+            .expect_err("unterminated");
+        assert!(
+            e.contains("too large"),
+            "the bound must bite during the read: {e}"
+        );
+        assert!(
+            client.is_broken(),
+            "an over-large unterminated reply breaks the client"
         );
 
         drop(client);
