@@ -575,8 +575,14 @@ impl Base {
             let v = match name.as_str() {
                 // * `summaries` is in the preserved map as well, but what is
                 // * written is always the re-serialized statements, not the
-                // * bytes the file had.
-                "summaries" => string_map_value(self.summaries.as_ref().unwrap()),
+                // * bytes the file had. `key_order` only asks for this arm when
+                // * the field is Some, but a hand-built value could disagree:
+                // * emitting Null keeps the save path panic-free.
+                "summaries" => self
+                    .summaries
+                    .as_ref()
+                    .map(string_map_value)
+                    .unwrap_or(Value::Null),
                 "filters" => self
                     .filters
                     .as_ref()
@@ -757,13 +763,17 @@ fn emit_value(v: &Value, indent: usize, out: &mut String) {
 /// has its items at 4.
 fn emit_sequence(items: &[Value], indent: usize, out: &mut String) {
     for item in items {
+        let empty = is_empty_collection(item);
         out.push_str(&" ".repeat(indent));
         out.push_str("- ");
+        // * An empty collection renders as `[]`/`{}` on the dash line rather
+        //   than opening a nested block for nothing.
+        if let Some(empty) = empty {
+            out.push_str(empty);
+            out.push('\n');
+            continue;
+        }
         match item {
-            _ if is_empty_collection(item).is_some() => {
-                out.push_str(is_empty_collection(item).unwrap());
-                out.push('\n');
-            }
             // * A mapping in a sequence item puts its first key on the dash's
             // * own line and the rest at the item's text column.
             Value::Mapping(m) => {
@@ -975,5 +985,21 @@ newItemFolder: Notes
                 .unwrap();
         assert_eq!(b.views[0].group_order.len(), 2);
         assert!(b.views[0].group_order[1].is_null());
+    }
+
+    /// Regression check: `to_value` used to unwrap `summaries`, trusting
+    /// `key_order` to only ask for it when Some. A value whose field was
+    /// dropped after parsing (hand-built or future refactor) now serializes
+    /// with a Null arm instead of panicking in the save path.
+    #[test]
+    fn to_value_survives_a_dropped_summaries() {
+        let mut b = Base::from_yaml("summaries:\n  a: count()\nviews: []\n").unwrap();
+        assert_eq!(b.summaries.as_ref().unwrap().len(), 1);
+        b.summaries = None;
+        let root = b.to_value();
+        let summaries = root
+            .as_mapping()
+            .and_then(|m| m.get(Value::String("summaries".into())));
+        assert!(summaries.is_none_or(|v| v.is_null()));
     }
 }
