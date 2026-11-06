@@ -374,4 +374,89 @@ module.exports = W;
         forget();
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    /// Vault doctor runs end to end over a real vault through `run`'s native
+    /// dispatch, with the context backed by std::fs: attachments and dot
+    /// folders stay out of the report, a frontmatter-only note counts as
+    /// empty, and the report lands in the vault and opens.
+    #[test]
+    fn vault_doctor_writes_a_report_that_ignores_attachments_and_dot_folders() {
+        register_native(Box::new(crate::vault_doctor::VaultDoctor));
+
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let root = dir.path().join("vault");
+        std::fs::create_dir_all(root.join(".obsidian")).expect("config dir");
+        std::fs::write(
+            root.join("Note.md"),
+            "links to [[Missing]] and ![[pic.png]]\n",
+        )
+        .expect("a note");
+        std::fs::write(root.join("pic.png"), b"png").expect("an attachment");
+        std::fs::write(root.join(".obsidian/config.json"), "{}").expect("a config");
+        std::fs::write(root.join("Empty.md"), "---\ntitle: empty\n---\n  \n")
+            .expect("a frontmatter-only note");
+
+        let read_root = root.clone();
+        let list_root = root.clone();
+        let write_root = root.clone();
+        let ctx = PluginContext {
+            vault_root: &root,
+            read_file: Box::new(move |p| {
+                fs::read_to_string(read_root.join(p)).map_err(|e| e.to_string())
+            }),
+            write_file: Box::new(move |p, text| {
+                fs::write(write_root.join(p), text).map_err(|e| e.to_string())
+            }),
+            append_file: Box::new(|_, _| Err("no vault".to_string())),
+            create_file: Box::new(|_, _| Err("no vault".to_string())),
+            create_folder: Box::new(|_| Err("no vault".to_string())),
+            delete_file: Box::new(|_| Err("no vault".to_string())),
+            rename_file: Box::new(|_, _| Err("no vault".to_string())),
+            list_dir: Box::new(move |d| {
+                let base = if d == "." {
+                    list_root.clone()
+                } else {
+                    list_root.join(d)
+                };
+                let mut out: Vec<String> = Vec::new();
+                for entry in fs::read_dir(&base).map_err(|e| e.to_string())? {
+                    let entry = entry.map_err(|e| e.to_string())?;
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    if entry.file_type().map_err(|e| e.to_string())?.is_dir() {
+                        out.push(format!("{name}/"));
+                    } else {
+                        out.push(name);
+                    }
+                }
+                Ok(out)
+            }),
+            file_exists: Box::new(|_| Ok(false)),
+            metadata_cache: Box::new(|_| Err("no vault".to_string())),
+            open_note: Box::new(|_| Ok(())),
+            current_note: Box::new(|| None),
+        };
+
+        let (outcome, _) = run("vault-doctor:run", None, &ctx).expect("the native plugin owns it");
+        outcome.expect("the command ran");
+
+        let report = fs::read_to_string(root.join("Vault doctor.md")).expect("the report");
+        assert!(
+            report.contains("`[[Missing]]`"),
+            "the broken link is listed: {report}"
+        );
+        assert!(
+            !report.contains("pic.png"),
+            "the attachment is not a broken link: {report}"
+        );
+        assert!(
+            !report.contains("config.json"),
+            "dot folders are not scanned: {report}"
+        );
+        assert!(
+            report.contains("[[Empty]]"),
+            "the frontmatter-only note is empty: {report}"
+        );
+
+        forget_native();
+    }
 }
