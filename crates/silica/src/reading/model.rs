@@ -1290,6 +1290,23 @@ impl<'v> Builder<'v> {
     }
 }
 
+/// What Live Preview draws in place of one inline HTML element (`<b>x</b>`,
+/// opener to matching closer) while no cursor touches it: the element
+/// rendered, its content literal — `<b>**md**</b>` shows `**md**` in bold,
+/// where the reading view parses it. `None` keeps the source: an element
+/// that renders nothing (`<script>`), carries a tag the inline overlay
+/// cannot draw, or breaks the line (`<br>`), since one display line cannot
+/// hold a second row.
+pub fn html_inline_widget(element: &str) -> Option<RichText> {
+    let mut acc = RichBuilder::default();
+    raw_html::inline(&mut acc, element);
+    let rich = acc.finish(0);
+    let drawable = !rich.text.trim().is_empty()
+        && !rich.text.contains('\n')
+        && !rich.runs.iter().any(|(_, s)| s.html);
+    drawable.then_some(rich)
+}
+
 /// Accumulates text with a style stack into one [`RichText`].
 #[derive(Default)]
 struct RichBuilder {

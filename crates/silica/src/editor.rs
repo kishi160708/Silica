@@ -25,7 +25,9 @@ use crate::fold::{self, Foldable};
 use crate::math::SpaceWidths;
 use crate::preview::{self, DisplayLine, Piece};
 use crate::properties::{self, Field, Part, PillStep, Target};
-use crate::reading::model::{build_widgets, BuildOptions, EmbedSource, LinkTarget, RBlock, Widget};
+use crate::reading::model::{
+    build_widgets, BuildOptions, EmbedSource, InlineStyle, LinkTarget, RBlock, Widget,
+};
 use crate::reading::view::{LinkHandler, ReadingView, Renderer, ToggleHandler};
 use crate::reading::view::{PropertiesHost, PropertyAction};
 use crate::reading::view::{TableAction, TableHost};
@@ -5246,7 +5248,10 @@ fn runs_for_display(
                 }
             }
             Piece::Sub {
-                source, len, kind, ..
+                display: at,
+                source,
+                len,
+                kind,
             } => {
                 if *len == 0 {
                     continue;
@@ -5256,7 +5261,36 @@ fn runs_for_display(
                     .find(|(r, _)| r.start <= source.start && source.start < r.end)
                     .map(|(_, k)| k.clone())
                     .unwrap_or_else(|| vec![*kind]);
-                push(run_for(&kinds, base, *len, p, done));
+                // * An inline HTML element drawn as itself: the constructs
+                //   around it (a heading, a `**strong**` it sits in) and then
+                //   its own tags' styles, never the muted colour of its
+                //   source.
+                let element = (*kind == HighlightKind::Html)
+                    .then(|| display.html.iter().find(|h| h.display.start == *at))
+                    .flatten();
+                match element {
+                    Some(element) => {
+                        let outer: Vec<HighlightKind> = kinds
+                            .into_iter()
+                            .filter(|k| *k != HighlightKind::Html)
+                            .collect();
+                        let mut cut = 0;
+                        let mut emit = |to: usize, style: InlineStyle| {
+                            if to > cut {
+                                let mut run = run_for(&outer, base, to - cut, p, done);
+                                style_html_run(&mut run, style, p);
+                                push(run);
+                                cut = to;
+                            }
+                        };
+                        for (range, style) in &element.runs {
+                            emit(range.start, InlineStyle::default());
+                            emit(range.end, *style);
+                        }
+                        emit(*len, InlineStyle::default());
+                    }
+                    None => push(run_for(&kinds, base, *len, p, done)),
+                }
             }
         }
     }
@@ -5303,6 +5337,51 @@ fn unstrike(runs: &mut Vec<TextRun>, range: Range<usize>) {
         }
     }
     *runs = out;
+}
+
+/// Lays an inline HTML element's own style over its run, the way the
+/// reading view draws the same tags: `<code>` and `<kbd>` wear inline
+/// code's mono and box, `<u>` underlines in the text colour, a raw
+/// `<a href>` is a link. `<sup>` and `<sub>` have no look of their own,
+/// as in the reading view.
+fn style_html_run(run: &mut TextRun, s: InlineStyle, p: &Palette) {
+    if s.bold {
+        run.font.weight = FontWeight::BOLD;
+    }
+    if s.italic {
+        run.font.style = FontStyle::Italic;
+    }
+    if s.code {
+        run.font = Font {
+            family: p.mono.clone(),
+            ..run.font.clone()
+        };
+        run.background_color = Some(p.code_bg);
+    }
+    if s.highlight {
+        run.background_color = Some(p.highlight_bg);
+    }
+    if s.strike {
+        run.strikethrough = Some(StrikethroughStyle {
+            thickness: px(1.),
+            color: Some(run.color),
+        });
+    }
+    if s.underline {
+        run.underline = Some(UnderlineStyle {
+            color: Some(run.color),
+            thickness: px(1.),
+            wavy: false,
+        });
+    }
+    if s.link {
+        run.color = p.link;
+        run.underline = Some(UnderlineStyle {
+            color: Some(p.link),
+            thickness: px(1.),
+            wavy: false,
+        });
+    }
 }
 
 /// Paints each task's box over its placeholder in `shaped`, whose first row
