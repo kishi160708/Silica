@@ -8021,15 +8021,46 @@ link to it is rewritten. The current note is deleted."
             return Err("A note cannot merge into itself".to_string());
         }
 
-        let source_text = state
-            .texts()
-            .get(source)
-            .map(|t| t.to_string())
-            .or_else(|| std::fs::read_to_string(state.vault().absolute(source)).ok())
-            .ok_or_else(|| format!("{source} could not be read"))?;
-        let target_text = std::fs::read_to_string(state.vault().absolute(&target))
-            .map_err(|e| format!("{target} could not be read: {e}"))?;
-        let merged = format!("{target_text}\n\n{source_text}");
+        // * The open note's unsaved edits live in the editor buffer, not
+        //   on disk or in the index: the autosave is two seconds out and
+        //   a merge can land inside that window. Merging either side from
+        //   disk would silently drop those edits, so the buffer wins for
+        //   the note it holds.
+        let open = {
+            let editor = self.editor.read(cx);
+            let name = editor.name.to_string();
+            if name.is_empty() || !editor.is_dirty() {
+                None
+            } else {
+                Some((name, editor.file_contents()))
+            }
+        };
+        let read_note = |path: &str| -> Result<String, String> {
+            if let Some((open_name, text)) = &open {
+                if open_name == path {
+                    return Ok(text.clone());
+                }
+            }
+            state
+                .texts()
+                .get(path)
+                .map(|t| t.to_string())
+                .or_else(|| std::fs::read_to_string(state.vault().absolute(path)).ok())
+                .ok_or_else(|| format!("{path} could not be read"))
+        };
+        let source_text = read_note(source)?;
+        let target_text = read_note(&target)?;
+        // * Obsidian separates the two halves with one blank line; a
+        //   trailing newline on either side would otherwise stack into a
+        //   triple newline that the next save would happily write back.
+        let mut merged = format!(
+            "{}\n\n{}",
+            target_text.trim_end_matches(['\n', '\r']),
+            source_text.trim_end_matches(['\n', '\r'])
+        );
+        if source_text.ends_with('\n') {
+            merged.push('\n');
+        }
 
         // * The link rewrites are planned against the pre-merge index and
         //   written before the source disappears, so a failure leaves the
