@@ -556,7 +556,9 @@ pub fn plan_extract_rewrites(
                 let Some(t) = target_of_extract(&link.link, source, &heads, target, before) else {
                     continue;
                 };
-                let Some(new) = rebuild_extract_wikilink(&link.original, &t.new_path, basename(source)) else {
+                let Some(new) =
+                    rebuild_extract_wikilink(&link.original, &t.new_path, basename(source))
+                else {
                     continue;
                 };
                 for (at, _) in yaml.match_indices(link.original.as_str()) {
@@ -619,7 +621,10 @@ fn target_of_extract(
         return None;
     }
     let head = heads.iter().find(|h| {
-        h.len() <= sub.len() && h.iter().zip(sub.iter()).all(|(a, b)| a.eq_ignore_ascii_case(b))
+        h.len() <= sub.len()
+            && h.iter()
+                .zip(sub.iter())
+                .all(|(a, b)| a.eq_ignore_ascii_case(b))
     })?;
     let remainder = &sub[head.len()..];
     let (path_part, frag) = match target.find('#') {
@@ -1143,7 +1148,8 @@ mod tests {
         target: &str,
     ) -> HashMap<String, String> {
         let (cache, texts) = build(notes);
-        let plan = plan_extract_rewrites(&cache, source, headings, target, &|p| texts.get(p).cloned());
+        let plan =
+            plan_extract_rewrites(&cache, source, headings, target, &|p| texts.get(p).cloned());
         plan.into_iter().map(|r| (r.new_path, r.text)).collect()
     }
 
@@ -1190,10 +1196,7 @@ mod tests {
     fn extract_heading_case_insensitive_and_with_hash_prefix() {
         let notes = [("Src.md", "# Alpha\n\n[[Src#alpha]] [[Src#ALPHA]]\n")];
         let out = run_extract(&notes, "Src.md", &["#alpha"], "Src/Alpha.md");
-        assert_eq!(
-            out["Src.md"],
-            "# Alpha\n\n[[Src/Alpha]] [[Src/Alpha]]\n"
-        );
+        assert_eq!(out["Src.md"], "# Alpha\n\n[[Src/Alpha]] [[Src/Alpha]]\n");
     }
 
     #[test]
@@ -1217,4 +1220,3 @@ mod tests {
         assert!(out.is_empty());
     }
 }
-
