@@ -17,6 +17,7 @@ use silica_formats::config::{
     TemplatesConfig, DEFAULT_CONFIG_DIR,
 };
 use silica_formats::FileKind;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, thiserror::Error)]
@@ -44,6 +45,11 @@ pub enum VaultError {
     /// write is refused and the bytes are left alone.
     #[error("{0} is not valid JSON; Silica will not overwrite it")]
     Unparseable(PathBuf),
+    /// Windows strips a trailing dot or space from every path component, so
+    /// writing `note.md.` silently lands on `note.md` — a different note
+    /// than asked for. Refuse before the OS rewrites anything.
+    #[error("File name must not end with a dot or a space: {0}")]
+    RefusedName(PathBuf),
 }
 
 /// One file in the vault. `path` is vault-relative with `/` separators.
@@ -781,6 +787,14 @@ impl Vault {
         }
         let last = parts.len() - 1;
         for (ix, part) in parts.into_iter().enumerate() {
+            // * Windows strips a trailing dot or space from every path
+            // * component, so `note.md.` silently lands on `note.md` — a
+            // * different note than asked for. Refuse before the OS rewrites
+            // * anything; the leaf counts too, since a rename target may be
+            // * a link the caller is allowed to replace.
+            if Self::has_trailing_dot_or_space(&part) {
+                return Err(VaultError::RefusedName(absolute.join(&part)));
+            }
             absolute.push(part);
             if ix == last && leaf_may_link {
                 break;
@@ -794,6 +808,13 @@ impl Vault {
             }
         }
         Ok(absolute)
+    }
+
+    /// A trailing dot or space is silently dropped by Win32 path parsing,
+    /// so `note.md.` and `note ` resolve to a different file than typed.
+    fn has_trailing_dot_or_space(part: &OsStr) -> bool {
+        let name = part.to_string_lossy();
+        !name.is_empty() && (name.ends_with('.') || name.ends_with(' '))
     }
 
     /// Writes `bytes` to a vault-relative path, through [`Vault::write_path`]
@@ -1797,6 +1818,41 @@ mod tests {
         }
         vault.write_bytes("Sub/a.md", b"b").unwrap();
         assert_eq!(fs::read_to_string(r.join("Sub/a.md")).unwrap(), "b");
+    }
+
+    /// `note.md.` would be silently rewritten by Windows to `note.md`, so
+    /// the vault refuses it instead of overwriting a neighbour's note. The
+    /// same refusal runs on every platform so the vault behaves the same
+    /// wherever it is opened.
+    #[test]
+    fn write_bytes_refuses_a_name_an_os_would_rewrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = dir.path();
+        fs::create_dir_all(r.join(".obsidian")).unwrap();
+        fs::create_dir_all(r.join(".trash")).unwrap();
+        let vault = Vault::open(r).unwrap();
+
+        vault.write_bytes("note.md", b"original\n").unwrap();
+        let err = vault.write_bytes("note.md.", b"overwrite\n").unwrap_err();
+        assert!(
+            matches!(err, VaultError::RefusedName(_)),
+            "a name ending in a dot must be refused: {err}"
+        );
+        // * The neighbour note is untouched — no silent overwrite.
+        assert_eq!(
+            fs::read_to_string(r.join("note.md")).unwrap(),
+            "original\n",
+            "the neighbour's bytes changed"
+        );
+        // * A normal name still writes fine.
+        vault.write_bytes("other.md", b"ok\n").unwrap();
+        assert_eq!(fs::read_to_string(r.join("other.md")).unwrap(), "ok\n");
+
+        // * The rename path is refused too, through checked_path.
+        assert!(matches!(
+            vault.write_path("note.md."),
+            Err(VaultError::RefusedName(_))
+        ));
     }
 
     #[cfg(unix)]
