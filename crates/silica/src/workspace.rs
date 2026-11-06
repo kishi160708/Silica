@@ -18027,6 +18027,49 @@ mod tests {
         }
     }
 
+    /// A note deleted behind the app's back — another app, a sync client, a
+    /// shell — reaches the index through the watcher's `apply`. The file list,
+    /// the metadata cache and the cached text all have to drop it: a ghost
+    /// entry would keep the note in search and in the explorer, its links
+    /// would keep resolving, and opening it would fail on a file that is not
+    /// there. Trash covers the app's own deletion; this is the outside one.
+    #[test]
+    fn a_note_deleted_behind_the_apps_back_leaves_the_index() {
+        let (dir, state) = vault();
+        let gone = dir.path().join("A.md");
+        assert!(state.cache().file("A.md").is_some(), "the fixture holds A");
+        assert!(
+            !state.cache().backlinks("A.md").is_empty(),
+            "B and Sub/S.md link to A in the fixture"
+        );
+
+        // * The other app deletes it; the watcher reports the path.
+        fs::remove_file(&gone).unwrap();
+        let changes = state.apply(std::slice::from_ref(&gone));
+
+        assert_eq!(
+            changes.removed_notes,
+            vec!["A.md".to_string()],
+            "the removal has to reach the caller"
+        );
+        assert!(
+            state.cache().file("A.md").is_none(),
+            "the index kept a ghost note"
+        );
+        assert!(
+            state.texts().get("A.md").is_none(),
+            "the text of a note that is gone stayed cached"
+        );
+        assert!(
+            state.vault().files().iter().all(|f| f.path != "A.md"),
+            "the file list still lists it"
+        );
+        assert!(
+            state.cache().backlinks("A.md").is_empty(),
+            "links still point at a file that does not exist"
+        );
+    }
+
     /// A file kind reaches the state dump in lower case.
     #[test]
     fn file_kinds_are_named_in_lower_case() {
