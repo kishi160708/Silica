@@ -858,11 +858,7 @@ mod tests {
         fs::write(dir.path().join(".trash/M.md"), "m").unwrap();
         assert_eq!(
             v.list_trash().unwrap(),
-            vec![
-                "A.md".to_string(),
-                "M.md".to_string(),
-                "Z.md".to_string(),
-            ]
+            vec!["A.md".to_string(), "M.md".to_string(), "Z.md".to_string(),]
         );
     }
 
@@ -912,12 +908,8 @@ mod tests {
             TrashOption::from_config(Some("whatever")),
             TrashOption::System
         );
-        assert_eq!(
-            TrashOption::from_config(Some("Local")),
-            TrashOption::System
-        );
+        assert_eq!(TrashOption::from_config(Some("Local")), TrashOption::System);
     }
-
 }
 
 /// Where a daily note goes, and which one is next to it.
