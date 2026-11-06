@@ -6336,7 +6336,13 @@ impl Element for EditorElement {
                 }
                 // * Task boxes over their placeholders, from the same
                 //   `--checkbox-*` tokens the reading view draws them with.
-                paint_task_boxes(shaped, origin, font_size * shaped.display.scale, &palette, window);
+                paint_task_boxes(
+                    shaped,
+                    origin,
+                    font_size * shaped.display.scale,
+                    &palette,
+                    window,
+                );
             }
             for w in prepaint.widgets.iter_mut() {
                 w.element.paint(window, cx);

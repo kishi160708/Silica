@@ -709,8 +709,14 @@ mod tests {
         assert_eq!(h.scale, heading_scale(2));
         assert_eq!(render("- item", None).text, "• item");
         assert_eq!(render("1. item", None).text, "1. item");
-        assert_eq!(render("- [ ] open", None).text, format!("{} open", TASK_BOX));
-        assert_eq!(render("- [x] done", None).text, format!("{} done", TASK_BOX));
+        assert_eq!(
+            render("- [ ] open", None).text,
+            format!("{} open", TASK_BOX)
+        );
+        assert_eq!(
+            render("- [x] done", None).text,
+            format!("{} done", TASK_BOX)
+        );
         // * Every padding the parser accepts between bullet and checkbox.
         assert_eq!(
             render("-  [x] padded", None).text,
