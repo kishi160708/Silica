@@ -1027,4 +1027,37 @@ mod tests {
         assert_eq!(only.body, "line two");
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    /// A file another process holds with no sharing at all (the "file is
+    /// locked" case). The digest must come back as a readable refusal naming
+    /// the path — never a panic, and never an `Ok` with an empty body that
+    /// reads like an empty file.
+    #[cfg(windows)]
+    #[test]
+    fn digest_of_a_locked_file_is_a_readable_refusal() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let dir = std::env::temp_dir().join(format!("silica-llm-mcp-lock-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("held.txt");
+        std::fs::write(&path, "some content\n").unwrap();
+        // * share_mode(0): deny every other open, which is what an editor
+        // * holding a note open looks like to this process.
+        let held = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .share_mode(0)
+            .open(&path)
+            .expect("open the file with no sharing");
+
+        let held_path = path.to_string_lossy().into_owned();
+        let err = read_excerpt(&backend_with(1 << 20), &held_path, None, false)
+            .expect_err("a locked file must not answer Ok");
+        assert!(err.contains("held.txt"), "{err}");
+        assert!(
+            err.contains("cannot read"),
+            "a locked file must be refused by its path, not silently read: {err}"
+        );
+        drop(held);
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
