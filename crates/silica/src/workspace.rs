@@ -18371,6 +18371,55 @@ mod tests {
         }
     }
 
+    /// The other half of the watcher's `apply`: a file that appears from
+    /// outside — a sync client dropping a note, a restore, a copy in — has to
+    /// reach the index, the file list and the link resolver. A note that
+    /// stays invisible until restart is data the app cannot see, and the
+    /// search that misses it is worse than one that lists a ghost.
+    #[test]
+    fn a_note_that_appears_from_outside_reaches_the_index() {
+        let (dir, state) = vault();
+        let added = dir.path().join("Fresh.md");
+        fs::write(&added, "# Fresh\n\nPoints at [[B]] and [[Sub/S]].\n").unwrap();
+
+        let changes = state.apply(std::slice::from_ref(&added));
+
+        assert_eq!(
+            changes.files,
+            vec![FileChange::Added("Fresh.md".into())],
+            "the arrival has to reach the caller"
+        );
+        assert!(state.cache().file("Fresh.md").is_some(), "not indexed");
+        assert!(state.texts().get("Fresh.md").is_some(), "not cached");
+        assert!(
+            state.vault().files().iter().any(|f| f.path == "Fresh.md"),
+            "not in the file list"
+        );
+        // * Its links resolve, and the notes it points at count it: A and
+        //   Sub/S already link to B, so the third is this one.
+        assert!(state.cache().unresolved_links("Fresh.md").is_none());
+        assert_eq!(state.cache().backlinks("B.md").len(), 3);
+
+        // * A note whose bytes changed underneath is re-indexed the same way:
+        //   the old links leave the resolver and the new ones arrive, or the
+        //   graph keeps pointing where the text no longer does. B used to
+        //   carry three links to A; it now carries none.
+        let b = dir.path().join("B.md");
+        fs::write(&b, "\u{feff}# B\n\nNow only [[Sub/S]].\n").unwrap();
+        state.apply(std::slice::from_ref(&b));
+        assert_eq!(
+            state.cache().backlinks("A.md").len(),
+            1,
+            "only Sub/S links to A now"
+        );
+        assert!(state.cache().unresolved_links("B.md").is_none());
+        assert_eq!(
+            state.texts()["B.md"].as_str(),
+            "\u{feff}# B\n\nNow only [[Sub/S]].\n",
+            "the changed text was not re-read"
+        );
+    }
+
     /// A note deleted behind the app's back — another app, a sync client, a
     /// shell — reaches the index through the watcher's `apply`. The file list,
     /// the metadata cache and the cached text all have to drop it: a ghost
