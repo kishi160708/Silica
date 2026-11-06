@@ -658,36 +658,41 @@ fn is_plain(s: &str) -> bool {
     )
 }
 
-/// A scalar as Obsidian writes it: plain where YAML allows, otherwise quoted —
-/// double quotes, except that a value holding a `"` and no `'` takes single
-/// ones, which is how four of the fixture's statements came back.
+/// A string scalar the way YAML round-trips it: plain text passes through,
+/// anything the grammar would misread gets quoted (single quotes preferred)
+/// and escaped. Shared by `scalar` and the mapping-key path so a key is not
+/// cloned into a throwaway `Value` just to be rendered.
+fn quote_key(s: &str) -> String {
+    if is_plain(s) {
+        return s.to_string();
+    }
+    if s.contains('"') && !s.contains('\\') {
+        return format!("'{s}'");
+    }
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// A rendered scalar: `null`/bool/number pass through typed, strings quote
+/// as YAML round-trips them, anything else defers to serde.
 fn scalar(v: &Value) -> String {
     match v {
         Value::Null => "null".to_string(),
         Value::Bool(b) => b.to_string(),
         Value::Number(n) => number(n),
-        Value::String(s) => {
-            if is_plain(s) {
-                return s.clone();
-            }
-            if s.contains('"') && !s.contains('\'') {
-                return format!("'{s}'");
-            }
-            let mut out = String::with_capacity(s.len() + 2);
-            out.push('"');
-            for c in s.chars() {
-                match c {
-                    '"' => out.push_str("\\\""),
-                    '\\' => out.push_str("\\\\"),
-                    '\n' => out.push_str("\\n"),
-                    '\t' => out.push_str("\\t"),
-                    '\r' => out.push_str("\\r"),
-                    c => out.push(c),
-                }
-            }
-            out.push('"');
-            out
-        }
+        Value::String(s) => quote_key(s),
         // ! A mapping or sequence never reaches here: emit handles them.
         other => serde_yaml::to_string(other)
             .unwrap_or_default()
@@ -723,10 +728,10 @@ fn is_empty_collection(v: &Value) -> Option<&'static str> {
 fn emit_mapping(m: &serde_yaml::Mapping, indent: usize, out: &mut String) {
     for (k, v) in m {
         let name = match k {
-            Value::String(s) => scalar(&Value::String(s.clone())),
+            Value::String(s) => quote_key(s),
             other => scalar(other),
         };
-        out.push_str(&" ".repeat(indent));
+        out.extend(std::iter::repeat_n(' ', indent));
         out.push_str(&name);
         out.push(':');
         emit_value(v, indent, out);
@@ -764,7 +769,7 @@ fn emit_value(v: &Value, indent: usize, out: &mut String) {
 fn emit_sequence(items: &[Value], indent: usize, out: &mut String) {
     for item in items {
         let empty = is_empty_collection(item);
-        out.push_str(&" ".repeat(indent));
+        out.extend(std::iter::repeat_n(' ', indent));
         out.push_str("- ");
         // * An empty collection renders as `[]`/`{}` on the dash line rather
         //   than opening a nested block for nothing.
