@@ -1329,6 +1329,33 @@ arguably better as it is — decide it deliberately rather than by accident.
 
 ## Source editor
 
+### A terminal pane inside the app does not exist
+
+*medium, missing-feature, large* · **Filed:** 2026-11-06
+
+The most-installed community terminal plugins prove the demand; the app
+has no pane that runs a shell.
+
+**Design, deliberately not built yet.** The shape that fits this codebase:
+a right-dock tab beside Backlinks and Outline holding one PTY per pane
+(`portable-pty`), the VT stream fed through the same emulator layer
+`alacritty_terminal` provides, and the emulator's character grid painted
+into gpui the way the editor paints `DisplayLine`s — styled runs per row,
+a quad for the cursor, the theme's `--code-*` tokens for the palette.
+What makes it large is everything around the loop: resize handoff (PTY
+size and grid size must move together), scrollback, IME, mouse reporting
+modes, and the pane's own key context so Ctrl+C reaches the shell and
+Ctrl+P still reaches the palette. A half-working terminal is worse than
+none — a pane that mangles output looks like the app lying — so it is
+filed with this design rather than started under time pressure.
+
+**Fix.** One tab, one session, no tabs-in-pane: `Term` + `Processor` +
+grid renderer + resize + key forwarding, with the terminal's keys bound
+in its own context and Escape/`Ctrl+backtick` as the way out. Then
+scrollback, then mouse reporting.
+
+## Workspace shell
+
 ### Right-clicking in the editor does nothing: no context menu, no caret placement
 
 *low, missing-feature, large*
