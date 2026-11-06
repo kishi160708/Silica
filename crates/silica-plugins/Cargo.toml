@@ -20,6 +20,10 @@ serde.workspace = true
 serde_yaml.workspace = true
 serde_json.workspace = true
 rquickjs = "0.11.0"
+# Audio capture for the audio-recorder plugin: microphone input via cpal,
+# WAV encoding via hound.
+cpal.workspace = true
+hound.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

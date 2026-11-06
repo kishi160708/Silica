@@ -362,6 +362,11 @@ pub const RUNNABLE: &[&str] = &[
     "editor:insert-embed",
     "editor:follow-link",
     "editor:open-link-in-new-leaf",
+    "editor:copy",
+    "editor:cut",
+    "editor:paste",
+    "editor:redo",
+    "editor:undo",
     "switcher:open",
     "global-search:open",
     "graph:open",
@@ -406,6 +411,9 @@ pub const RUNNABLE: &[&str] = &[
     "editor:table-col-align-right",
     "app:go-back",
     "app:go-forward",
+    "app:reload",
+    "audio-recorder:start",
+    "audio-recorder:stop",
     "app:open-settings",
     "app:open-help",
     "app:open-vault",
@@ -1599,6 +1607,8 @@ enum PendingOp {
     /// Note composer's merge: the value names the note the current one
     /// is absorbed into.
     MergeCurrent(String),
+    /// "Rename tag...": the value names the tag the old one becomes.
+    RenameTag { from: String },
 }
 
 /// One tab of the main area: what it shows and where it has been. The
@@ -2395,6 +2405,46 @@ fn renamed_path(from: &str, value: &str, is_folder: bool) -> Result<String, Stri
     } else {
         format!("{folder}/{new_name}")
     })
+}
+
+/// Replaces every occurrence of `#old_tag` with `#new_tag` in `content`,
+/// but only when the tag is a standalone construct: the character before
+/// `#` is not alphanumeric or underscore, and the character after the tag
+/// name is not alphanumeric, underscore, or slash (so `#tag` in
+/// `#tagged` or `#tag/subtag` is left alone). Frontmatter tags like
+/// `tag: old_tag` or `- old_tag` are matched the same way on the `#`-less
+/// form because the caller strips the leading `#` before calling this.
+fn rename_tag_in_content(content: &str, old_tag: &str, new_tag: &str) -> String {
+    let tag_marker = format!("#{}", old_tag);
+    let mut result = String::with_capacity(content.len());
+    let mut start = 0;
+    while let Some(found) = content[start..].find(&tag_marker) {
+        let abs_start = start + found;
+        let abs_end = abs_start + tag_marker.len();
+        // * Character before # must not be alphanumeric or underscore.
+        let before_ok = abs_start == 0 || {
+            let prev = content.as_bytes()[abs_start - 1];
+            !prev.is_ascii_alphanumeric() && prev != b'_'
+        };
+        // * Character after tag name must not be alphanumeric, underscore,
+        //   or slash (so nested tags like #tag/subtag are not renamed when
+        //   renaming #tag).
+        let after_ok = abs_end == content.len() || {
+            let next = content.as_bytes()[abs_end];
+            !next.is_ascii_alphanumeric() && next != b'_' && next != b'/'
+        };
+        if before_ok && after_ok {
+            result.push_str(&content[start..abs_start]);
+            result.push('#');
+            result.push_str(new_tag);
+            start = abs_end;
+        } else {
+            result.push_str(&content[start..abs_end]);
+            start = abs_end;
+        }
+    }
+    result.push_str(&content[start..]);
+    result
 }
 
 /// Whether the view header carries the mode switch. An empty tab's header
@@ -5137,6 +5187,23 @@ impl Workspace {
             }
             "app:go-back" => self.go_back(&GoBack, window, cx),
             "app:go-forward" => self.go_forward(&GoForward, window, cx),
+            "app:reload" => {
+                self.close_modal(window, cx);
+                let Ok(exe) = std::env::current_exe() else {
+                    self.report("Reload failed: cannot find executable", cx);
+                    return;
+                };
+                let args: Vec<String> = std::env::args().collect();
+                if std::process::Command::new(exe)
+                    .args(&args[1..])
+                    .spawn()
+                    .is_ok()
+                {
+                    std::process::exit(0);
+                } else {
+                    self.report("Reload failed: cannot restart", cx);
+                }
+            }
             "app:open-settings" => self.open_settings(None, window, cx),
             "app:toggle-left-sidebar" => {
                 self.left_visible = !self.left_visible;
@@ -8410,6 +8477,77 @@ link to it is rewritten. The current note is deleted."
                         }
                     }
                     Err(err) => self.report(err, cx),
+                }
+            }
+            PendingOp::RenameTag { from } => {
+                self.pending = None;
+                self.close_modal(window, cx);
+                let Some(state) = self.state.clone() else {
+                    return;
+                };
+                let new_tag = value.trim();
+                if new_tag.is_empty() {
+                    self.report("Tag name cannot be empty", cx);
+                    return;
+                }
+                if !new_tag.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '/') {
+                    self.report("Tag name contains invalid characters", cx);
+                    return;
+                }
+                if new_tag == from {
+                    return;
+                }
+                // * Find every file containing the old tag, rewrite it in
+                //   place, and let the watcher re-index. The rename rewrites
+                //   inline #tags and frontmatter tags alike.
+                let tag_lower = from.to_lowercase();
+                let files = state
+                    .cache()
+                    .tags()
+                    .get(&tag_lower)
+                    .map(|e| e.files.clone())
+                    .unwrap_or_default();
+                let vault_root = state.vault().root().to_path_buf();
+                let mut changed = Vec::new();
+                for path in &files {
+                    let absolute = vault_root.join(path);
+                    let Ok(content) = std::fs::read_to_string(&absolute) else {
+                        continue;
+                    };
+                    let next = rename_tag_in_content(&content, &from, new_tag);
+                    if next != content {
+                        if let Err(err) =
+                            silica_vault::write_no_follow(&absolute, next.as_bytes())
+                        {
+                            self.report(format!("Could not write {path}: {err}"), cx);
+                            return;
+                        }
+                        changed.push(path.clone());
+                    }
+                }
+                if !changed.is_empty() {
+                    let count = changed.len();
+                    self.after_changes(
+                        Changes {
+                            files: changed
+                                .into_iter()
+                                .map(FileChange::Modified)
+                                .collect(),
+                            notes: Vec::new(),
+                            removed_notes: Vec::new(),
+                        },
+                        cx,
+                    );
+                    self.report(
+                        format!(
+                            "Renamed \"#{from}\" to \"#{new_tag}\" in {} file{}",
+                            count,
+                            if count == 1 { "" } else { "s" }
+                        ),
+                        cx,
+                    );
+                } else {
+                    self.report("No files to rename", cx);
                 }
             }
         }
@@ -12665,6 +12803,9 @@ link to it is rewritten. The current note is deleted."
                 Some(PendingOp::MergeCurrent(source)) => {
                     json!({"op": "merge-current", "source": source})
                 }
+                Some(PendingOp::RenameTag { from }) => {
+                    json!({"op": "rename-tag", "from": from})
+                }
                 Some(PendingOp::ExportSite) => json!({"op": "export-site"}),
             },
         );
@@ -14212,9 +14353,9 @@ link to it is rewritten. The current note is deleted."
                     .py_1()
                     .cursor_pointer()
                     .hover(|s| s.bg(theme.bg_alt))
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                    .on_click(cx.listener(move |this, _, window, cx| {
                         this.close_side_menu(cx);
-                        this.handle_side_menu_action(&item.action, cx);
+                        this.handle_side_menu_action(&item.action, window, cx);
                         cx.notify();
                     }))
                     .child(crate::assets::icon(item.icon, 16., theme.text_muted))
@@ -14236,15 +14377,39 @@ link to it is rewritten. The current note is deleted."
 
     /// Handles a side-pane context menu action: searches for tags/properties,
     /// copies paths, or opens outline headings.
-    fn handle_side_menu_action(&mut self, action: &SidePaneAction, cx: &mut Context<Self>) {
+    fn handle_side_menu_action(&mut self, action: &SidePaneAction, window: &mut Window, cx: &mut Context<Self>) {
         match action {
             SidePaneAction::SearchTag(tag) => {
                 self.show_search(&format!("tag:#{tag}"), None, cx);
             }
-            SidePaneAction::RenameTag(_tag) => {
-                // * Tag renaming is not yet implemented: Obsidian's rename
-                //   rewrites every occurrence across the vault, which requires
-                //   a vault-wide scan and link repair that is not yet built.
+            SidePaneAction::RenameTag(tag) => {
+                // * The prompt asks for the new tag name; the rename itself
+                //   rewrites every occurrence across the vault on submit.
+                let Some(state) = self.state.clone() else {
+                    return;
+                };
+                let tag_lower = tag.to_lowercase();
+                let count = state
+                    .cache()
+                    .tags()
+                    .get(&tag_lower)
+                    .map(|e| e.count)
+                    .unwrap_or(0);
+                self.open_prompt(
+                    PendingOp::RenameTag { from: tag.clone() },
+                    PromptSpec {
+                        title: "Rename tag".into(),
+                        detail: Some(
+                            format!("Rename \"#{tag}\" to what? ({count} occurrence{} across the vault)", if count == 1 { "" } else { "s" }).into(),
+                        ),
+                        input: None,
+                        placeholder: "Tag name".into(),
+                        confirm: "Rename".into(),
+                        ..PromptSpec::default()
+                    },
+                    window,
+                    cx,
+                );
             }
             SidePaneAction::CopyTag(tag) => {
                 self.copy_path(tag, cx);

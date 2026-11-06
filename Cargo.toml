@@ -97,6 +97,10 @@ ratex-katex-fonts = "0.1.15"
 # tell the KaTeX italics from the uprights (no italic flag in the files).
 ab_glyph = "0.2"
 rodio = { version = "0.16", default-features = false, features = ["symphonia-mp3", "symphonia-vorbis", "symphonia-flac", "symphonia-wav"] }
+# Audio capture for the audio-recorder plugin: microphone input via cpal,
+# WAV encoding via hound.
+cpal = "0.16"
+hound = "3.4"
 # Already in the tree through gpui; crates/silica/build.rs compiles the icon
 # and VERSIONINFO into silica.exe with it, and does nothing off Windows.
 embed-resource = "3"

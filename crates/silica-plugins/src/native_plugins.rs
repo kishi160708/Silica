@@ -6,7 +6,11 @@
 use crate::live::register_native;
 use crate::native::{NativeCommand, Plugin, PluginContext};
 use serde_json::Value;
+use std::io::BufWriter;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 /// Today's civil date, in the local zone, as `YYYY-MM-DD`.
 ///
@@ -727,8 +731,33 @@ impl Plugin for FileRecovery {
     }
 }
 
-/// Audio recorder: record audio notes (placeholder - creates a note with recording info).
-pub struct AudioRecorder;
+/// Audio recorder: record microphone input to WAV files in the vault's
+/// attachments folder. Recordings are written as `.wav` files under
+/// `.obsidian/attachments/` and can be embedded in notes like any other
+/// attachment.
+pub struct AudioRecorder {
+    state: Arc<Mutex<RecorderState>>,
+}
+
+impl Default for AudioRecorder {
+    fn default() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(RecorderState {
+                recording: false,
+                stream: None,
+                writer: None,
+                output_path: None,
+            })),
+        }
+    }
+}
+
+struct RecorderState {
+    recording: bool,
+    stream: Option<cpal::Stream>,
+    writer: Option<hound::WavWriter<BufWriter<std::fs::File>>>,
+    output_path: Option<PathBuf>,
+}
 
 impl Plugin for AudioRecorder {
     fn id(&self) -> &'static str {
@@ -740,26 +769,131 @@ impl Plugin for AudioRecorder {
     }
 
     fn commands(&self) -> Vec<NativeCommand> {
-        vec![NativeCommand {
-            id: "audio-recorder:record".into(),
-            name: "Record audio".into(),
-        }]
+        vec![
+            NativeCommand {
+                id: "audio-recorder:start".into(),
+                name: "Record audio".into(),
+            },
+            NativeCommand {
+                id: "audio-recorder:stop".into(),
+                name: "Stop recording audio".into(),
+            },
+        ]
     }
 
     fn run_command(
         &self,
         id: &str,
         _value: Option<&Value>,
-        _ctx: &PluginContext<'_>,
+        ctx: &PluginContext<'_>,
     ) -> Result<(), String> {
         match id {
-            "audio-recorder:record" => {
-                // * Silica has no audio capture: do not fabricate a note that
-                // * pretends a recording happened. The plugin is told plainly.
-                Err("audio recording is not supported by Silica".to_string())
-            }
+            "audio-recorder:start" => self.start_recording(ctx),
+            "audio-recorder:stop" => self.stop_recording(ctx),
             _ => Err(format!("'{id}' is not a command this plugin registered")),
         }
+    }
+}
+
+impl AudioRecorder {
+    fn start_recording(&self, ctx: &PluginContext<'_>) -> Result<(), String> {
+        let mut state = self.state.lock().map_err(|e| format!("{e}"))?;
+
+        if state.recording {
+            return Err("Already recording".to_string());
+        }
+
+        // Determine output path: .obsidian/attachments/recording-<timestamp>.wav
+        let vault_root = ctx.vault_root;
+        let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+        let file_name = format!("recording-{timestamp}.wav");
+        let output_path = vault_root.join(".obsidian").join("attachments").join(&file_name);
+
+        // Ensure the attachments folder exists
+        (ctx.create_folder)(".obsidian/attachments")?;
+
+        // Set up audio input
+        let host = cpal::default_host();
+        let device = host
+            .default_input_device()
+            .ok_or_else(|| "No audio input device available".to_string())?;
+        let config = device
+            .default_input_config()
+            .map_err(|e| format!("No input config: {e}"))?;
+        let sample_rate = config.sample_rate().0;
+        let channels = config.channels();
+
+        let spec = hound::WavSpec {
+            channels,
+            sample_rate,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+
+        let writer = hound::WavWriter::create(&output_path, spec)
+            .map_err(|e| format!("Cannot create WAV file: {e}"))?;
+
+        let state_clone = Arc::clone(&self.state);
+        let stream = device
+            .build_input_stream(
+                &config.into(),
+                move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                    let mut state = state_clone.lock().unwrap();
+                    if let Some(writer) = state.writer.as_mut() {
+                        for &sample in data {
+                            let s = (sample * i16::MAX as f32) as i16;
+                            let _ = writer.write_sample(s);
+                        }
+                    }
+                },
+                move |err| {
+                    eprintln!("Audio input error: {err}");
+                },
+                None,
+            )
+            .map_err(|e| format!("Cannot build input stream: {e}"))?;
+
+        stream.play().map_err(|e| format!("Cannot start stream: {e}"))?;
+
+        state.recording = true;
+        state.stream = Some(stream);
+        state.writer = Some(writer);
+        state.output_path = Some(output_path);
+
+        (ctx.notify)(&format!(
+            "Recording started: {}",
+            state.output_path.as_ref().unwrap().display()
+        ));
+
+        Ok(())
+    }
+
+    fn stop_recording(&self, ctx: &PluginContext<'_>) -> Result<(), String> {
+        let mut state = self.state.lock().map_err(|e| format!("{e}"))?;
+
+        if !state.recording {
+            return Err("Not recording".to_string());
+        }
+
+        // Stop and close the stream
+        if let Some(stream) = state.stream.take() {
+            let _ = stream.pause();
+        }
+
+        // Finalize the WAV writer
+        if let Some(writer) = state.writer.take() {
+            writer.finalize().map_err(|e| format!("Cannot finalize WAV: {e}"))?;
+        }
+
+        let output_path = state.output_path.take().unwrap();
+        state.recording = false;
+
+        (ctx.notify)(&format!(
+            "Recording saved: {}",
+            output_path.display()
+        ));
+
+        Ok(())
     }
 }
 
@@ -1070,7 +1204,7 @@ pub fn register_all() {
     register_native(Box::new(Publish));
     register_native(Box::new(Slides));
     register_native(Box::new(FileRecovery));
-    register_native(Box::new(AudioRecorder));
+    register_native(Box::new(AudioRecorder::default()));
     register_native(Box::new(Bookmarks));
     register_native(Box::new(Footnotes));
     register_native(Box::new(TagPane));
