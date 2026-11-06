@@ -456,6 +456,13 @@ fn read_excerpt(
         return Err(format!("{path} is not a regular file; refuse to read"));
     }
     let len = meta.len();
+    // * A file with no bytes has nothing to summarize, and an `Ok` with an
+    // * empty body would be indistinguishable from a digest whose content
+    // * was dropped by the byte cap. Refuse, as the filter already refuses
+    // * when it matched nothing.
+    if len == 0 {
+        return Err(format!("{path} is empty; nothing to summarize"));
+    }
 
     if tail {
         // Seek to the last `max` bytes of a regular file: bounded disk
@@ -829,6 +836,36 @@ mod tests {
             err.contains("is not a regular file") || err.contains("cannot read"),
             "{err}"
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A file with no bytes at all. Both the head and the tail path used to
+    /// answer `Ok("[…: 0 bytes read, 0 lines kept]")` — an empty summary that
+    /// looks exactly like a successful digest of a file that had content and
+    /// was culled. `contains` mode already refuses with "nothing to
+    /// summarize" when nothing matched, so the same refusal belongs here:
+    /// the caller cannot tell "read it, it was blank" from "read it, it was
+    /// too long and the cap ate everything".
+    #[test]
+    fn digest_of_an_empty_file_is_refused_not_answered_with_an_empty_summary() {
+        let dir = std::env::temp_dir().join(format!("silica-llm-mcp-empty-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("blank.txt");
+        std::fs::write(&path, "").unwrap();
+        let path = path.to_string_lossy().into_owned();
+
+        for (label, contains, tail) in [
+            ("head", None, false),
+            ("tail", None, true),
+            ("contains", Some("anything"), false),
+        ] {
+            let err = read_excerpt(&backend_with(1 << 20), &path, contains, tail)
+                .expect_err(&format!("{label} of a blank file must not answer Ok"));
+            assert!(
+                err.contains("empty") || err.contains("nothing to summarize"),
+                "{label}: {err}"
+            );
+        }
         std::fs::remove_dir_all(&dir).ok();
     }
 
