@@ -2675,6 +2675,10 @@ pub struct Workspace {
     /// has to follow it; [`Workspace::render`] is where it is honoured.
     refocus_main: bool,
     state: Option<Arc<VaultState>>,
+    /// The root of the vault being loaded: the index is filled on a
+    /// background thread, so a real file can exist on disk before the
+    /// index has heard of it.
+    opening_root: Option<PathBuf>,
     vault_name: SharedString,
     /// Whether the vault being loaded goes on the switcher's list: a
     /// sandbox does not.
@@ -3346,6 +3350,7 @@ impl Workspace {
             focus_handle: cx.focus_handle(),
             refocus_main: false,
             state: None,
+            opening_root: None,
             vault_name: "No vault".into(),
             record_vault: true,
             vault_menu_open: false,
@@ -3477,6 +3482,7 @@ impl Workspace {
             .into();
         self.loading = Some(format!("Indexing {}…", root.display()).into());
         self.status = "Indexing vault".into();
+        self.opening_root = Some(root.clone());
         // * Restoring the layout may have to make tab groups, and a group's
         //   editor is made with the window, so the vault comes back in it.
         cx.spawn_in(window, async move |this, cx| {
@@ -3488,6 +3494,7 @@ impl Workspace {
                 Ok(state) => ws.set_state(state, window, cx),
                 Err(err) => {
                     ws.loading = None;
+                    ws.opening_root = None;
                     ws.status = format!("Vault failed to open: {err}").into();
                     cx.notify();
                 }
@@ -3692,6 +3699,7 @@ impl Workspace {
 
     fn set_state(&mut self, state: VaultState, window: &mut Window, cx: &mut Context<Self>) {
         self.loading = None;
+        self.opening_root = None;
         self.status = format!(
             "{} files, {} notes indexed in {:.0} ms",
             state.vault().files().len(),
@@ -12908,13 +12916,29 @@ link to it is rewritten. The current note is deleted."
     /// carries one: that spelling is the key every pane is looked up by, so
     /// the caller's casing is only a request for it.
     pub fn vault_file_path(&self, path: &str) -> Option<String> {
-        let state = self.state.as_ref()?;
-        state
-            .vault()
-            .files()
-            .iter()
-            .find(|f| f.path.eq_ignore_ascii_case(path))
-            .map(|f| f.path.clone())
+        if let Some(state) = self.state.as_ref() {
+            if let Some(found) = state
+                .vault()
+                .files()
+                .iter()
+                .find(|f| f.path.eq_ignore_ascii_case(path))
+            {
+                return Some(found.path.clone());
+            }
+        }
+        // ! The index fills on a background thread; while it loads, a path
+        //   that exists on disk still opens instead of answering as
+        //   missing. `vault_path_in` keeps the path inside the vault, so
+        //   this reads existence, not trust.
+        let root = self
+            .state
+            .as_ref()
+            .map(|s| s.root.clone())
+            .or_else(|| self.opening_root.clone())?;
+        vault_path_in(&root, path)
+            .ok()
+            .filter(|p| p.is_file())
+            .map(|_| path.to_string())
     }
 
     /// The open vault's files, for the socket's `list_files`: the same list
