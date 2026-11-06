@@ -18,3 +18,11 @@ Untitled.base
 Untitled [0-9]*.md
 Untitled [0-9]*.canvas
 Untitled [0-9]*.base
+
+# Local gate/scratch logs
+*.log
+
+# Per-worktree build dirs
+target-s17/
+target-ux/
+target-gap/
