@@ -232,3 +232,4 @@ webviewer:save-to-vault	Web viewer: Save to vault
 silica:export-site	Export vault as site
 quick-capture:open	Quick Capture: New note
 task-dashboard:open	Task Dashboard: Open
+silica:toggle-graph-pane	Toggle graph side pane

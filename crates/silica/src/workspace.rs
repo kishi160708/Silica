@@ -375,6 +375,7 @@ pub const RUNNABLE: &[&str] = &[
     // * Silica's own extension, not an Obsidian id: the `silica:` prefix is
     //   what the repo marks its native additions with.
     "silica:export-site",
+    "silica:toggle-graph-pane",
     "canvas:new-file",
     "canvas:export-as-image",
     "canvas:jump-to-group",
@@ -1386,6 +1387,9 @@ enum RightTab {
     /// All properties: every key in the vault with its type and count.
     Properties,
     Outline,
+    /// The graph, in the right dock: the same view the ribbon opens full
+    /// screen, kept beside the note — Obsidian's graph side pane.
+    Graph,
 }
 
 /// The Outline pane's headings for one note's metadata, whether that
@@ -4605,6 +4609,7 @@ impl Workspace {
             "outline" => RightTab::Outline,
             "tags" => RightTab::Tags,
             "properties" => RightTab::Properties,
+            "graph" => RightTab::Graph,
             _ => RightTab::Backlinks,
         };
         self.select_right_tab(which, cx);
@@ -4616,6 +4621,20 @@ impl Workspace {
         self.right_tab = which;
         self.refresh_outline_from_buffer(cx);
         cx.notify();
+    }
+
+    /// `silica:toggle-graph-pane`: the graph in the right dock, beside the
+    /// note — Obsidian's graph side pane. Asked for with the pane already
+    /// showing it, the dock closes instead. The dock comes back first: a
+    /// pane that is not painted is outside the dispatch tree.
+    fn toggle_graph_pane(&mut self, cx: &mut Context<Self>) {
+        if self.right_tab == RightTab::Graph && self.right_visible {
+            self.right_visible = false;
+            cx.notify();
+        } else {
+            self.right_visible = true;
+            self.select_right_tab(RightTab::Graph, cx);
+        }
     }
 
     pub fn editor(&self) -> &Entity<Editor> {
@@ -5106,6 +5125,7 @@ impl Workspace {
             "switcher:open" => self.open_switcher("", window, cx),
             "global-search:open" => self.open_search_action(&OpenSearch, window, cx),
             "graph:open" => self.open_graph_action(&OpenGraph, window, cx),
+            "silica:toggle-graph-pane" => self.toggle_graph_pane(cx),
             "silica:export-site" => self.start_export_site(window, cx),
             // * Asked for by id with no file open -- the palette does not offer
             //   it, and `can_run` says so -- this opens nothing, which is what
@@ -12306,6 +12326,7 @@ link to it is rewritten. The current note is deleted."
             Some("outline") => self.right_tab = RightTab::Outline,
             Some("tag") => self.right_tab = RightTab::Tags,
             Some("all-properties") => self.right_tab = RightTab::Properties,
+            Some("graph") => self.right_tab = RightTab::Graph,
             _ => {}
         }
         self.layout = Some(layout);
@@ -12823,6 +12844,7 @@ link to it is rewritten. The current note is deleted."
                 RightTab::Outline => "outline",
                 RightTab::Tags => "tags",
                 RightTab::Properties => "properties",
+                RightTab::Graph => "graph",
             }),
         );
         put_capped(
@@ -15222,6 +15244,7 @@ link to it is rewritten. The current note is deleted."
             RightTab::Tags => "tag-pane",
             RightTab::Properties => "properties",
             RightTab::Outline => "outline",
+            RightTab::Graph => "graph",
         };
         self.state
             .as_ref()
@@ -15239,6 +15262,7 @@ link to it is rewritten. The current note is deleted."
                 RightTab::Tags,
                 RightTab::Properties,
                 RightTab::Outline,
+                RightTab::Graph,
             ]
             .into_iter()
             .find(|t| self.pane_enabled(*t))
@@ -15253,6 +15277,24 @@ link to it is rewritten. The current note is deleted."
             RightTab::Outline => self.render_outline_pane(theme, cx),
             RightTab::Tags => self.render_tags_pane(theme, cx),
             RightTab::Properties => self.render_properties_pane(theme, cx),
+            // * The graph side pane: the GraphView entity the ribbon opens
+            // full screen, kept in the dock. While a group's area already
+            // paints it, the dock says so rather than painting it twice.
+            RightTab::Graph if self.graph_group().is_some() => div()
+                .flex()
+                .items_center()
+                .justify_center()
+                .size_full()
+                .min_h_0()
+                .px(px(12.))
+                .py(px(12.))
+                .child("The graph is already open in the main area")
+                .into_any_element(),
+            RightTab::Graph => div()
+                .size_full()
+                .min_h_0()
+                .child(self.graph.clone())
+                .into_any_element(),
         };
         // * A pane whose core plugin is off is not offered: Obsidian takes
         //   the view away with the plugin.
@@ -15323,6 +15365,7 @@ link to it is rewritten. The current note is deleted."
                         cx,
                     ))
                     .children(tab_button(self, "Outline", "list", RightTab::Outline, cx))
+                    .children(tab_button(self, "Graph", "git-fork", RightTab::Graph, cx))
                     .child(window_handle(
                         div().id("right-dock-space").flex_1().h_full(),
                         frameless,
