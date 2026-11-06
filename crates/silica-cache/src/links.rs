@@ -407,6 +407,64 @@ impl MetadataCache {
         }
         out
     }
+
+    /// Plans the rewrites a note merge needs: every link that resolves to the
+    /// source note is regenerated to point at the target note, in the
+    /// `LinkFormat` the vault asks for. The source note itself is *not*
+    /// returned — the caller deletes it after writing the merged text — so
+    /// the plan covers exactly the notes whose bytes change.
+    ///
+    /// This is `Note composer`'s "Merge current file with another file" with
+    /// the default "Update links in merged file" behavior: Obsidian turns
+    /// each backlink of the absorbed note into a link to the survivor.
+    ///
+    /// `resolver_after` must already describe the vault as it will be — the
+    /// source path gone, the target present — so a link can be resolved the
+    /// way it will resolve after the merge. The rewrite reuses the
+    /// rename machinery by planning a rename of `source` to `target` and
+    /// dropping the rewrite of the source note itself.
+    pub fn plan_merge_rewrites(
+        &self,
+        source: &str,
+        target: &str,
+        format: LinkFormat,
+        texts: &dyn Fn(&str) -> Option<String>,
+    ) -> Vec<Rewrite> {
+        if source == target {
+            return Vec::new();
+        }
+        let before = self.resolver();
+        let mut after = before.clone();
+        after.remove(source);
+        let renames = [(source.to_string(), target.to_string())];
+        let map: HashMap<String, String> = renames.iter().cloned().collect();
+        let mut candidates: BTreeSet<String> = BTreeSet::new();
+        candidates.extend(self.sources_linking_to(source).map(str::to_string));
+        candidates.remove(source);
+        let mut out = Vec::new();
+        for old_path in candidates {
+            let Some(meta) = self.file(&old_path) else {
+                continue;
+            };
+            let Some(text) = texts(&old_path) else {
+                continue;
+            };
+            // * `rewrite_note` regenerates a link whenever its target moved,
+            //   which for a merge is every link that resolved to `source`:
+            //   after the merge it must resolve to `target` instead.
+            if let Some((text, links)) = rewrite_note(
+                &text, meta, &old_path, &old_path, &map, before, &after, format,
+            ) {
+                out.push(Rewrite {
+                    old_path: old_path.clone(),
+                    new_path: old_path,
+                    text,
+                    links,
+                });
+            }
+        }
+        out
+    }
 }
 
 #[cfg(test)]
@@ -699,5 +757,81 @@ mod tests {
         assert_eq!(LinkFormat::from_config(None), LinkFormat::Shortest);
         assert_eq!(basename("Sub/Note v1.2.md"), "Note v1.2");
         assert_eq!(basename("pic.png"), "pic");
+    }
+
+    fn run_merge(source: &str, target: &str, format: LinkFormat) -> HashMap<String, String> {
+        let (cache, texts) = vault();
+        let plan = cache.plan_merge_rewrites(source, target, format, &|p| texts.get(p).cloned());
+        plan.into_iter().map(|r| (r.new_path, r.text)).collect()
+    }
+
+    #[test]
+    fn merge_retargets_every_link_form_to_the_target() {
+        let out = run_merge("A.md", "A2.md", LinkFormat::Shortest);
+        // * The same notes rename touches, and none besides: the source note
+        //   itself is the caller's deletion, not a rewrite.
+        assert!(!out.contains_key("A.md"));
+        assert_eq!(
+            out["B.md"].lines().nth(1).unwrap(),
+            "related: \"[[A2]]\"",
+            "frontmatter wikilinks are regenerated"
+        );
+        // * S is in Sub/, but A2 sits in the root, so shortest falls back to
+        //   the bare name only when it still resolves; from Sub/ it does.
+        assert_eq!(
+            out["Sub/S.md"],
+            "[[A2]] [A2](A2.md) [[A2]] [[T]] [T](T.md) [[Sub/T]] [[B]] [B](../B.md) [[Dup]] [[Other/Dup]]\n"
+        );
+        assert_eq!(out["Sub/T.md"], "[[S]] [[Sub/S]] [S](S.md) [[A2]]\n");
+        assert_eq!(out["Other/C.md"], "[[Dup]] [[Other/Dup]] [[A2]] [[S]]\n");
+    }
+
+    #[test]
+    fn merge_leaves_unrelated_notes_and_unresolved_links_alone() {
+        let out = run_merge("A.md", "A2.md", LinkFormat::Shortest);
+        // * B links to S, Dup and Missing too; only its A links may change.
+        let b = &out["B.md"];
+        assert!(b.contains("`[[A]]` and"), "code spans stay source");
+        assert!(b.contains("[[Dup]] [[Other/Dup]]"));
+        assert!(b.contains("[[Missing]]"), "unresolved links untouched");
+        assert!(b.contains("[[Sub/S]] [[S]]"), "other targets untouched");
+        // * B2 links to B, which no merge touches.
+        assert!(
+            out.contains_key("B2.md"),
+            "only backlinks of the source are rewritten"
+        );
+        // * A note that links to nothing the merge absorbs is absent.
+        assert!(!out.contains_key("Other/Dup.md"));
+    }
+
+    #[test]
+    fn merge_is_a_no_op_for_unknown_or_self_targets() {
+        let out = run_merge("A.md", "A.md", LinkFormat::Shortest);
+        assert!(out.is_empty());
+        let (cache, texts) = vault();
+        let plan = cache.plan_merge_rewrites("A.md", "A.md", LinkFormat::Shortest, &|p| {
+            texts.get(p).cloned()
+        });
+        assert!(plan.is_empty());
+    }
+
+    #[test]
+    fn merge_honors_the_link_format() {
+        let out = run_merge("A.md", "Sub/Target.md", LinkFormat::Relative);
+        // * T is in the same folder as the target: no climbing.
+        assert_eq!(
+            out["Sub/T.md"], "[[S]] [[Sub/S]] [S](S.md) [[Target]]\n",
+            "relative format from Sub/T.md"
+        );
+        // * C is in Other/, so the relative path climbs.
+        assert_eq!(
+            out["Other/C.md"],
+            "[[Dup]] [[Other/Dup]] [[../Sub/Target]] [[S]]\n"
+        );
+        let out = run_merge("Sub/S.md", "Sub/T.md", LinkFormat::Shortest);
+        assert_eq!(
+            out["A.md"].lines().nth(4).unwrap(),
+            "self [[A#Top]] [[#Top]] [[A]] rel [T](T.md) [[T]] [[T]] ext [x](https://e.com/A.md)"
+        );
     }
 }
