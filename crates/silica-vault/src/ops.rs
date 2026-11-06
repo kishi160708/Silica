@@ -367,7 +367,16 @@ impl Vault {
         }
         let moved = self.rename_plan(from, to);
         std::fs::rename(&from_abs, &to_abs).map_err(io("rename", &from_abs))?;
-        self.refresh_path(&from_abs);
+        // * The old prefix is gone from disk whatever the filesystem says
+        // * about its spelling, so drop it by name instead of refreshing the
+        // * old path: on a case-insensitive filesystem that path still
+        // * resolves to the renamed entry, and refreshing it would report a
+        // * file that is merely spelled differently rather than a removal.
+        let old_prefix = format!("{from}/");
+        self.files
+            .retain(|f| f.path != from && !f.path.starts_with(&old_prefix));
+        self.folders
+            .retain(|f| *f != from && !f.starts_with(&old_prefix));
         self.refresh_path(&to_abs);
         Ok(moved)
     }
