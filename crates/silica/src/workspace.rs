@@ -18420,6 +18420,114 @@ mod tests {
         );
     }
 
+    /// And the mirror: a folder that appears from outside — a restore, a
+    /// sync client unpacking a tree — is walked and every note in it is
+    /// indexed, with the folder itself in the file list. A restored tree the
+    /// app cannot see until restart is data on disk the user cannot reach.
+    #[test]
+    fn a_folder_that_appears_from_outside_is_walked_and_indexed() {
+        let (dir, state) = vault();
+        assert!(!state.vault().folders().contains(&"Restored".to_string()));
+
+        let restored = dir.path().join("Restored");
+        fs::create_dir_all(restored.join("Deep")).unwrap();
+        fs::write(
+            restored.join("Deep/Note.md"),
+            "# Restored\n\nTalks of [[B]].\n",
+        )
+        .unwrap();
+
+        // * The watcher reports the folder that appeared.
+        let changes = state.apply(std::slice::from_ref(&restored));
+
+        assert!(changes
+            .files
+            .iter()
+            .any(|c| matches!(c, FileChange::Added(p) if p == "Restored/Deep/Note.md")));
+        assert_eq!(changes.removed_notes, Vec::<String>::new(), "nothing went");
+        assert!(
+            state.vault().folders().contains(&"Restored".to_string()),
+            "the folder itself is not listed"
+        );
+        assert!(
+            state
+                .vault()
+                .folders()
+                .contains(&"Restored/Deep".to_string()),
+            "a nested folder is not listed: {:?}",
+            state.vault().folders()
+        );
+        assert!(
+            state.cache().file("Restored/Deep/Note.md").is_some(),
+            "not indexed"
+        );
+        assert!(
+            state.texts().get("Restored/Deep/Note.md").is_some(),
+            "not cached"
+        );
+        assert_eq!(
+            state.cache().backlinks("B.md").len(),
+            3,
+            "A, Sub/S and the restored note"
+        );
+    }
+
+    /// A whole folder disappearing from outside is the same contract as one
+    /// note, one level up: every note under it leaves the index in one batch,
+    /// the folder leaves the file list, and the links that pointed into it
+    /// stop resolving. A folder left behind would keep its notes in search
+    /// and in the explorer long after the disk stopped having them.
+    #[test]
+    fn a_folder_deleted_behind_the_apps_back_takes_every_note_in_it() {
+        let (dir, state) = vault();
+        let sub = dir.path().join("Sub");
+        assert_eq!(
+            state.cache().backlinks("Sub/S.md").len(),
+            1,
+            "A links into it"
+        );
+        assert!(state.vault().folders().contains(&"Sub".to_string()));
+
+        // * The other app removes the folder; the watcher reports its path.
+        fs::remove_dir_all(&sub).unwrap();
+        let changes = state.apply(std::slice::from_ref(&sub));
+
+        assert!(
+            changes
+                .files
+                .iter()
+                .all(|c| matches!(c, FileChange::Removed(_))),
+            "everything that went has to be reported as removed: {:?}",
+            changes.files
+        );
+        assert!(changes.files.iter().any(|c| c.path() == "Sub/S.md"));
+        assert_eq!(changes.removed_notes, vec!["Sub/S.md".to_string()]);
+        assert!(
+            state.cache().file("Sub/S.md").is_none(),
+            "a note that is gone stayed indexed"
+        );
+        assert!(
+            state.texts().get("Sub/S.md").is_none(),
+            "and its text stayed cached"
+        );
+        assert!(
+            state.vault().folders().iter().all(|f| f != "Sub"),
+            "the folder stayed in the file list"
+        );
+        assert!(
+            state
+                .vault()
+                .files()
+                .iter()
+                .all(|f| !f.path.starts_with("Sub/")),
+            "files under a removed folder stayed listed"
+        );
+        assert!(
+            state.cache().backlinks("Sub/S.md").is_empty(),
+            "links still point into a folder that is gone"
+        );
+    }
+
     /// A note deleted behind the app's back — another app, a sync client, a
     /// shell — reaches the index through the watcher's `apply`. The file list,
     /// the metadata cache and the cached text all have to drop it: a ghost
