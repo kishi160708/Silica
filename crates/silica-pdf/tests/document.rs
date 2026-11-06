@@ -325,6 +325,15 @@ fn render_timings() {
             );
         }
     }
+    // A timing harness that cannot fail proves nothing about the text it
+    // times: every page of the fixture carries words, and an empty one means
+    // extraction broke while the clock still ran.
+    assert!(
+        doc_text
+            .iter()
+            .all(|t| t.as_deref().is_some_and(|s| !s.trim().is_empty())),
+        "a page extracted no text: {doc_text:?}"
+    );
     let started = Instant::now();
     let bitmap = doc.render(0, 2.0).unwrap();
     println!(
