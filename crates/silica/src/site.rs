@@ -63,13 +63,7 @@ pub fn export(root: &Path, files: &[VaultFile], out: &Path) -> Result<SiteReport
         let body = rewrite(&render(&text), &map, &assets, depth);
         report.links += body.links;
         report.unresolved += body.unresolved;
-        write_page(
-            out,
-            &page_path(&rel),
-            &title_of(&rel),
-            depth,
-            &body.html,
-        )?;
+        write_page(out, &page_path(&rel), &title_of(&rel), depth, &body.html)?;
         report.notes += 1;
     }
 
@@ -117,7 +111,8 @@ fn write_page(out: &Path, name: &str, title: &str, depth: usize, body: &str) -> 
     );
     let path = out.join(name);
     if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| format!("Cannot create {}: {e}", dir.display()))?;
+        std::fs::create_dir_all(dir)
+            .map_err(|e| format!("Cannot create {}: {e}", dir.display()))?;
     }
     std::fs::write(&path, page).map_err(|e| format!("Cannot write {}: {e}", path.display()))
 }
@@ -133,9 +128,19 @@ fn link_map(notes: &[&VaultFile]) -> HashMap<String, String> {
     for path in sorted {
         let lower = path.to_lowercase();
         let without_ext = lower.strip_suffix(".md").unwrap_or(&lower).to_string();
-        let stem = without_ext.rsplit('/').next().unwrap_or(&without_ext).to_string();
-        for key in [&lower, without_ext.as_str(), stem.as_str(), &format!("{stem}.md")] {
-            map.entry(key.to_string()).or_insert_with(|| path.to_string());
+        let stem = without_ext
+            .rsplit('/')
+            .next()
+            .unwrap_or(&without_ext)
+            .to_string();
+        for key in [
+            &lower,
+            without_ext.as_str(),
+            stem.as_str(),
+            &format!("{stem}.md"),
+        ] {
+            map.entry(key.to_string())
+                .or_insert_with(|| path.to_string());
         }
     }
     map
@@ -147,7 +152,12 @@ fn asset_paths(files: &[VaultFile]) -> HashMap<String, String> {
     files
         .iter()
         .filter(|f| f.kind != FileKind::Markdown)
-        .map(|f| (f.path.replace('\\', "/").to_lowercase(), f.path.replace('\\', "/")))
+        .map(|f| {
+            (
+                f.path.replace('\\', "/").to_lowercase(),
+                f.path.replace('\\', "/"),
+            )
+        })
         .collect()
 }
 
@@ -237,7 +247,15 @@ fn rewrite(
             (Some(_), Some(target)) => {
                 links += if which == "internal-link" { 1 } else { 0 };
                 let tag = &rest[tag_start..tag_end];
-                let tag = replace_attr(tag, if which == "internal-link" { "href" } else { "src" }, &rel_url(depth, &target));
+                let tag = replace_attr(
+                    tag,
+                    if which == "internal-link" {
+                        "href"
+                    } else {
+                        "src"
+                    },
+                    &rel_url(depth, &target),
+                );
                 if which == "internal-link" {
                     tag.replace(" target=\"_blank\" rel=\"noopener nofollow\"", "")
                 } else {
@@ -260,7 +278,11 @@ fn rewrite(
         rest = &rest[tag_end..];
     }
     out.push_str(rest);
-    Rewritten { html: out, links, unresolved }
+    Rewritten {
+        html: out,
+        links,
+        unresolved,
+    }
 }
 
 /// Where the next rewritable tag — an `internal-link` anchor or an
@@ -281,7 +303,10 @@ fn replace_attr(tag: &str, name: &str, value: &str) -> String {
     match tag.find(&needle) {
         Some(at) => {
             let value_at = at + needle.len();
-            let end = tag[value_at..].find('"').map(|i| value_at + i).unwrap_or(value_at);
+            let end = tag[value_at..]
+                .find('"')
+                .map(|i| value_at + i)
+                .unwrap_or(value_at);
             format!("{}{}{}", &tag[..value_at], value, &tag[end..])
         }
         None => tag.to_string(),
@@ -294,7 +319,10 @@ fn remove_attr(tag: &str, name: &str) -> String {
     match tag.find(&needle) {
         Some(at) => {
             let value_at = at + needle.len();
-            let end = tag[value_at..].find('"').map(|i| value_at + i + 1).unwrap_or(value_at);
+            let end = tag[value_at..]
+                .find('"')
+                .map(|i| value_at + i + 1)
+                .unwrap_or(value_at);
             format!("{}{}", &tag[..at], &tag[end..])
         }
         None => tag.to_string(),
@@ -309,13 +337,17 @@ fn copy_assets(root: &Path, files: &[VaultFile], out: &Path) -> Result<(), Strin
             continue;
         }
         let rel = file.path.replace('\\', "/");
-        if SKIPPED_DIRS.iter().any(|d| rel.starts_with(&format!("{d}/"))) {
+        if SKIPPED_DIRS
+            .iter()
+            .any(|d| rel.starts_with(&format!("{d}/")))
+        {
             continue;
         }
         let from = root.join(&rel);
         let to = out.join(&rel);
         if let Some(dir) = to.parent() {
-            std::fs::create_dir_all(dir).map_err(|e| format!("Cannot create {}: {e}", dir.display()))?;
+            std::fs::create_dir_all(dir)
+                .map_err(|e| format!("Cannot create {}: {e}", dir.display()))?;
         }
         std::fs::copy(&from, &to).map_err(|e| format!("Cannot copy {rel}: {e}"))?;
     }
