@@ -855,6 +855,46 @@ mod tests {
         );
     }
 
+    /// A name the extension splitter has to think about. Trashing and
+    /// restoring it must come back to the same file, because a
+    /// stem/extension split that takes the wrong half would restore the note
+    /// under a different name — or leave the user's file in `.trash` under a
+    /// name the restore cannot match.
+    #[test]
+    fn a_trashed_note_with_an_odd_name_comes_back_under_the_same_name() {
+        for name in [
+            "notes",               // * No extension at all: the whole name is the stem.
+            "archive.tar.gz",      // * Two dots: the last one is the extension.
+            "Ω notes ✓.md",        // * Spaces and non-ASCII letters.
+            "name with spaces.md", // * Blanks in the middle are just bytes.
+        ] {
+            let (dir, mut v) = vault();
+            let note = dir.path().join(name);
+            // * Through the vault API, so the note is in the file list the
+            // * way a note the user made is.
+            v.create_note(name, "kept bytes\n").unwrap();
+            assert!(note.is_file(), "{name} was not created");
+            assert_eq!(
+                v.trash(name, TrashOption::Local).unwrap(),
+                vec![name.to_string()],
+                "{name} did not move"
+            );
+            assert!(
+                v.list_trash().unwrap().iter().any(|t| t == name),
+                "{name} is not in .trash: {:?}",
+                v.list_trash().unwrap()
+            );
+            assert!(!note.exists(), "{name} stayed behind");
+
+            v.restore_from_trash(name).unwrap();
+            assert_eq!(
+                fs::read_to_string(&note).unwrap(),
+                "kept bytes\n",
+                "{name} came back different"
+            );
+        }
+    }
+
     #[test]
     fn trash_goes_to_the_local_folder_with_numbered_collisions() {
         let (dir, mut v) = vault();

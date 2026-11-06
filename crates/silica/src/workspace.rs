@@ -18191,6 +18191,59 @@ mod tests {
         );
     }
 
+    /// The vault-side fold of a differently-spelled path reports the
+    /// modification under the spelling the file list already holds, so the
+    /// index never has to rename a key: `texts` and the metadata cache keep
+    /// the one spelling, and the note is not listed twice. A second spelling
+    /// arriving here would leave the index holding one spelling while the
+    /// explorer holds another, and a link would resolve to one while search
+    /// finds the other.
+    #[cfg(windows)]
+    #[test]
+    fn a_respelled_path_keeps_one_index_key_and_one_listing() {
+        let (dir, state) = vault();
+        assert!(state.cache().file("A.md").is_some());
+        assert!(state.texts().get("A.md").is_some());
+        let listed = || {
+            state
+                .vault()
+                .files()
+                .iter()
+                .filter(|f| f.path.eq_ignore_ascii_case("a.md"))
+                .count()
+        };
+        assert_eq!(listed(), 1);
+
+        // * The other side spells the same file differently; the watcher
+        // * hands that spelling to the state.
+        let respelled = dir.path().join("a.md");
+        let changes = state.apply(std::slice::from_ref(&respelled));
+
+        assert!(
+            changes
+                .files
+                .iter()
+                .all(|c| matches!(c, FileChange::Modified(p) if p == "A.md")),
+            "the fold did not report the stored spelling: {:?}",
+            changes.files
+        );
+        assert_eq!(listed(), 1, "the explorer holds two rows for one note");
+        assert!(
+            state.cache().file("A.md").is_some(),
+            "the index dropped the note"
+        );
+        assert!(state.texts().get("A.md").is_some(), "the text was dropped");
+        // * No second key appeared for the same file.
+        assert!(
+            state
+                .cache()
+                .files()
+                .all(|(p, _)| !p.eq_ignore_ascii_case("a.md") || p == "A.md"),
+            "the index holds a second key for one note: {:?}",
+            state.cache().files().map(|(p, _)| p).collect::<Vec<_>>()
+        );
+    }
+
     /// And the mirror: a folder that appears from outside — a restore, a
     /// sync client unpacking a tree — is walked and every note in it is
     /// indexed, with the folder itself in the file list. A restored tree the
