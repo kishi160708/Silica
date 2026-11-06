@@ -679,9 +679,14 @@ impl<'v> Builder<'v> {
                 }
                 // * Drawn when every tag in it is one the renderer knows; a
                 //   fragment that holds anything else keeps its source, which
-                //   is what this block has always shown.
+                //   is what this block has always shown. A raw `<table>` is
+                //   drawn as the table a Markdown one is, with no cell spans:
+                //   Live Preview never edits it in place.
                 None => {
                     let src = content.trim_end();
+                    if let Some(table) = raw_html::parse_table(src) {
+                        return Some(self.html_table(table));
+                    }
                     match raw_html::block(src, self.id()) {
                         Some(rich) => RBlock::Html(rich),
                         None => RBlock::Html(RichText {
@@ -908,6 +913,52 @@ impl<'v> Builder<'v> {
             self.inline(inline, &mut acc);
         }
         acc.finish(self.id())
+    }
+
+    /// A raw `<table>` drawn as the table a Markdown one is: Obsidian gives
+    /// both the same table and the same cell styles. A `<th>` cell in a body
+    /// row is bold, the header's weight; ragged rows are padded to the
+    /// widest; the table has no cell spans, so Live Preview never edits it
+    /// in place — it is not a widget there at all.
+    fn html_table(&mut self, table: raw_html::HtmlTable) -> RBlock {
+        let columns = table
+            .header
+            .len()
+            .max(table.rows.iter().map(Vec::len).max().unwrap_or(0));
+        let row_of = |this: &mut Self, cells: &[raw_html::HtmlCell]| -> Vec<RichText> {
+            let mut row: Vec<RichText> = cells
+                .iter()
+                .map(|c| {
+                    let mut rich = raw_html::rich_cell(&c.html, this.id());
+                    if c.head {
+                        let len = rich.text.len();
+                        rich.runs = raw_html::embolden(std::mem::take(&mut rich.runs), len);
+                    }
+                    rich
+                })
+                .collect();
+            while row.len() < columns {
+                row.push(RichText {
+                    id: this.id(),
+                    ..RichText::default()
+                });
+            }
+            row
+        };
+        let header = if table.header.is_empty() {
+            Vec::new()
+        } else {
+            row_of(self, &table.header)
+        };
+        let rows: Vec<Vec<RichText>> = table.rows.iter().map(|r| row_of(self, r)).collect();
+        let mut alignments = table.alignments;
+        alignments.resize(columns, Alignment::None);
+        RBlock::Table {
+            alignments,
+            header,
+            rows,
+            spans: Vec::new(),
+        }
     }
 
     fn inline(&mut self, inline: &Inline<'_>, acc: &mut RichBuilder) {
@@ -2138,6 +2189,72 @@ mod tests {
                 m.blocks[0]
             );
         }
+    }
+
+    /// A raw `<table>` is drawn as a table in the reading view -- the first
+    /// row of `<th>` (or a `<thead>` row) as the header, Markdown in a cell
+    /// literal, `align` on the first row's cells as the column's alignment,
+    /// a ragged row padded to the widest -- and it is never a Live Preview
+    /// widget, which does not make a raw table editable in place.
+    #[test]
+    fn a_raw_table_is_a_table_in_reading_and_never_a_widget() {
+        let src = "<table>\n<tr><th>H1</th><th align=\"right\">H2</th></tr>\n<tr><td>a</td><td><b>b</b> **md**</td></tr>\n</table>\n";
+        assert!(widgets(src, &stub()).is_empty());
+        let m = build("Self.md", src, &stub());
+        let RBlock::Table {
+            alignments,
+            header,
+            rows,
+            spans,
+        } = &m.blocks[0]
+        else {
+            panic!("{:?}", m.blocks[0]);
+        };
+        let texts = |row: &[RichText]| row.iter().map(|c| c.text.clone()).collect::<Vec<_>>();
+        assert_eq!(texts(header), ["H1", "H2"]);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(texts(&rows[0]), ["a", "b **md**"]);
+        let bold = InlineStyle {
+            bold: true,
+            ..InlineStyle::default()
+        };
+        assert_eq!(rows[0][1].runs, vec![(0..1, bold)]);
+        assert_eq!(alignments, &[Alignment::None, Alignment::Right]);
+        assert!(spans.is_empty(), "a raw table is not edited in place");
+
+        // No `<th>` row: no header, and a ragged row is padded to the widest.
+        let m = build(
+            "Self.md",
+            "<table><tr><td>c</td></tr><tr><td>d</td><td>e</td></tr></table>\n",
+            &stub(),
+        );
+        let RBlock::Table { header, rows, .. } = &m.blocks[0] else {
+            panic!("{:?}", m.blocks[0]);
+        };
+        assert!(header.is_empty());
+        assert_eq!(texts(&rows[0]), ["c", ""]);
+        assert_eq!(texts(&rows[1]), ["d", "e"]);
+
+        // A `<thead>` makes its row the header whatever its cells, and a
+        // `<th>` in the body is bold, the header's weight.
+        let m = build(
+            "Self.md",
+            "<table><thead><tr><td>L</td></tr></thead><tbody><tr><th>x</th></tr></tbody></table>\n",
+            &stub(),
+        );
+        let RBlock::Table { header, rows, .. } = &m.blocks[0] else {
+            panic!("{:?}", m.blocks[0]);
+        };
+        assert_eq!(texts(header), ["L"]);
+        assert_eq!(rows[0][0].runs, vec![(0..1, bold)]);
+
+        // A table in a cell is more than the grid holds: source.
+        let m = build(
+            "Self.md",
+            "<table><tr><td><table><tr><td>x</td></tr></table></td></tr></table>\n",
+            &stub(),
+        );
+        assert!(matches!(&m.blocks[0], RBlock::Html(_)));
     }
 
     #[test]
