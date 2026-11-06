@@ -736,6 +736,26 @@ pub fn watch_loop(root: PathBuf, out: PathBuf, stop: Arc<AtomicBool>) {
     }
 }
 
+/// The `file://` URL of an export's index page — what
+/// "open exported site" hands to the browser. Only the characters that
+/// actually break a URL are encoded: a vault folder called
+/// "my notes" must not open "my%20notes"-less and land nowhere.
+pub fn index_url(out: &Path) -> String {
+    let raw = out.join("index.html").display().to_string();
+    let mut encoded = String::with_capacity(raw.len() + 8);
+    for ch in raw.chars() {
+        match ch {
+            ' ' => encoded.push_str("%20"),
+            '#' => encoded.push_str("%23"),
+            '?' => encoded.push_str("%3F"),
+            '%' => encoded.push_str("%25"),
+            '\\' => encoded.push('/'),
+            other => encoded.push(other),
+        }
+    }
+    format!("file://{encoded}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1043,5 +1063,23 @@ mod tests {
         let _ = std::fs::remove_dir_all(&out);
         assert!(seen, "writing a note inside the vault refreshes the export");
 >>>>>>> theirs
+    }
+
+    #[test]
+    fn an_index_url_encodes_only_what_breaks_a_url() {
+        let plain = std::path::Path::new("/tmp/my-site");
+        assert_eq!(index_url(plain), "file:///tmp/my-site/index.html");
+
+        // A folder with a space, a hash and a percent must reach the
+        // browser as one path, not three fragments.
+        let messy = std::path::Path::new("/tmp/my notes #1 100%");
+        assert_eq!(
+            index_url(messy),
+            "file:///tmp/my%20notes%20%231%20100%25/index.html"
+        );
+
+        // Windows separators become URL separators.
+        let win = std::path::Path::new(r"C:\vaults\my site");
+        assert_eq!(index_url(win), "file://C:/vaults/my%20site/index.html");
     }
 }
