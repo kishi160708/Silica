@@ -890,6 +890,25 @@ mod tests {
         ));
     }
 
+    // * A restore that refuses must not consume the trashed file: the entry
+    //   is the only copy left, so a failed attempt that empties .trash is
+    //   data loss wearing an error's clothes.
+    #[test]
+    fn a_failed_restore_keeps_the_trashed_entry() {
+        let (dir, v) = vault();
+        fs::create_dir_all(dir.path().join(".trash")).unwrap();
+        fs::write(dir.path().join(".trash/Keep.md"), "only copy").unwrap();
+        fs::write(dir.path().join("Keep.md"), "in the way").unwrap();
+        assert!(matches!(
+            v.restore_from_trash("Keep.md"),
+            Err(OpError::DestinationExists)
+        ));
+        assert_eq!(
+            fs::read_to_string(dir.path().join(".trash/Keep.md")).unwrap(),
+            "only copy"
+        );
+    }
+
     #[test]
     fn exists_is_false_for_empty_and_missing_true_for_present() {
         let (_dir, v) = vault();
