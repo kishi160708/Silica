@@ -1122,10 +1122,10 @@ mod tests {
         let out = run_merge("a.md", "A2.md", LinkFormat::Shortest);
         assert_eq!(
             out["B.md"].lines().nth(1).unwrap(),
-            "related: \\\"[[A2]]\\\"",
-            "frontmatter backlink of A.md is rewritten for source \\\"a.md\\\""
+            "related: \"[[A2]]\"",
+            "frontmatter backlink of A.md is rewritten for source \"a.md\""
         );
-        assert_eq!(out["Sub/T.md"], "[[S]] [[Sub/S]] [S](S.md) [[A2]]\\n");
+        assert_eq!(out["Sub/T.md"], "[[S]] [[Sub/S]] [S](S.md) [[A2]]\n");
     }
 
     fn build(notes: &[(&str, &str)]) -> (MetadataCache, HashMap<String, String>) {
