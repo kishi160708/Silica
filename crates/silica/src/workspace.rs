@@ -366,6 +366,9 @@ pub const RUNNABLE: &[&str] = &[
     "global-search:open",
     "graph:open",
     "graph:open-local",
+    // * Silica's own extension, not an Obsidian id: the `silica:` prefix is
+    //   what the repo marks its native additions with.
+    "silica:export-site",
     "canvas:new-file",
     "canvas:jump-to-group",
     "canvas:convert-to-file",
@@ -1575,6 +1578,9 @@ enum PendingOp {
     /// "Edit bookmark" on a note that already has one: Save keeps it,
     /// Remove takes it out.
     EditBookmark(String),
+    /// `silica:export-site`: the folder the site is written to. An empty
+    /// box takes the vault's sibling default.
+    ExportSite,
     /// "Merge entire file with...": the open note takes `other` in.
     Merge {
         file: String,
@@ -4857,6 +4863,7 @@ impl Workspace {
             "switcher:open" => self.open_switcher("", window, cx),
             "global-search:open" => self.open_search_action(&OpenSearch, window, cx),
             "graph:open" => self.open_graph_action(&OpenGraph, window, cx),
+            "silica:export-site" => self.start_export_site(window, cx),
             // * Asked for by id with no file open -- the palette does not offer
             //   it, and `can_run` says so -- this opens nothing, which is what
             //   Obsidian's `checkCallback` does rather than falling back to the
@@ -7650,6 +7657,46 @@ impl Workspace {
         );
     }
 
+    /// `silica:export-site`: asks where the site goes, with the vault's
+    /// sibling folder as the pre-filled answer.
+    fn start_export_site(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // * The default folder is read through the state's borrow, which
+        //   ends before `open_prompt` takes `self` back.
+        let default = match self.state.as_ref() {
+            Some(state) => {
+                let vault = state.vault();
+                let root = vault.root();
+                let name = root
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "vault".into());
+                match root.parent() {
+                    Some(parent) if !parent.as_os_str().is_empty() => parent
+                        .join(format!("{name}-site"))
+                        .to_string_lossy()
+                        .into_owned(),
+                    _ => format!("{name}-site"),
+                }
+            }
+            None => return,
+        };
+        self.open_prompt(
+            PendingOp::ExportSite,
+            PromptSpec {
+                title: "Export vault as site".into(),
+                detail: Some(
+                    "Every note renders to HTML; links and attachments come along.".into(),
+                ),
+                input: Some(default),
+                placeholder: "Folder".into(),
+                confirm: "Export".into(),
+                ..PromptSpec::default()
+            },
+            window,
+            cx,
+        );
+    }
+
     fn start_move(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Some(state) = self.state.clone() else {
             return;
@@ -8180,6 +8227,53 @@ link to it is rewritten. The current note is deleted."
                 self.pending = None;
                 self.close_modal(window, cx);
                 self.delete_now(&path, window, cx);
+            }
+            PendingOp::ExportSite => {
+                self.pending = None;
+                self.close_modal(window, cx);
+                // * The export reads the vault through its own borrow, so
+                //   the file list is cloned out and the state's borrow ends
+                //   before the report takes `self` back.
+                let (vault_root, files) = match self.state.as_ref() {
+                    Some(state) => {
+                        let vault = state.vault();
+                        (vault.root().to_path_buf(), vault.files().to_vec())
+                    }
+                    None => return,
+                };
+                // * An empty box takes the pre-filled sibling folder back,
+                //   and a relative value lands beside the vault.
+                let out = if value.is_empty() {
+                    None
+                } else if Path::new(value).is_absolute() {
+                    Some(PathBuf::from(value))
+                } else {
+                    vault_root.parent().map(|p| p.join(value))
+                };
+                let Some(out) = out.or_else(|| {
+                    let name = vault_root
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "vault".into());
+                    vault_root.parent().map(|p| p.join(format!("{name}-site")))
+                }) else {
+                    self.report("No folder to export into.", cx);
+                    return;
+                };
+                match crate::site::export(&vault_root, &files, &out) {
+                    Ok(done) => self.report(
+                        format!(
+                            "Exported {} note{}, {} link{} to {}",
+                            done.notes,
+                            if done.notes == 1 { "" } else { "s" },
+                            done.links,
+                            if done.links == 1 { "" } else { "s" },
+                            done.output.display()
+                        ),
+                        cx,
+                    ),
+                    Err(err) => self.report(err, cx),
+                }
             }
             PendingOp::NewFolder { parent } => {
                 let path = if parent.is_empty() {
@@ -12465,6 +12559,7 @@ link to it is rewritten. The current note is deleted."
                 Some(PendingOp::MergeCurrent(source)) => {
                     json!({"op": "merge-current", "source": source})
                 }
+                Some(PendingOp::ExportSite) => json!({"op": "export-site"}),
             },
         );
         Value::Object(modal)
