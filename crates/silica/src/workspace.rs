@@ -6123,12 +6123,7 @@ impl Workspace {
                         self.reading.update(cx, |r, cx| {
                             r.set_note(
                                 Some(path.to_string()),
-                                reading::build_with(
-                                    "",
-                                    "",
-                                    state.as_ref(),
-                                    state.build_options(),
-                                ),
+                                reading::build_with("", "", state.as_ref(), state.build_options()),
                                 cx,
                             )
                         });
