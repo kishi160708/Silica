@@ -295,6 +295,7 @@ pub const RUNNABLE: &[&str] = &[
     "editor:toggle-bold",
     "editor:toggle-italics",
     "editor:toggle-strikethrough",
+    "note-composer:merge-file",
     "editor:toggle-highlight",
     "editor:toggle-code",
     "editor:toggle-inline-math",
@@ -1507,6 +1508,9 @@ enum PendingOp {
     /// "Edit bookmark" on a note that already has one: Save keeps it,
     /// Remove takes it out.
     EditBookmark(String),
+    /// Note composer's merge: the value names the note the current one
+    /// is absorbed into.
+    MergeCurrent(String),
 }
 
 /// One tab of the main area: what it shows and where it has been. The
@@ -4546,7 +4550,7 @@ impl Workspace {
             current_note: Box::new(move || current.clone()),
         };
 
-        if let Some((outcome, _notices)) = silica_plugins::live::run(id, &ctx) {
+        if let Some((outcome, _notices)) = silica_plugins::live::run(id, None, &ctx) {
             if let Err(reason) = outcome {
                 self.report(reason, cx);
             }
@@ -5090,6 +5094,14 @@ impl Workspace {
             "app:switch-vault" => self.toggle_vault_menu(cx),
             "app:open-another-vault" => self.open_another_vault(window, cx),
             "app:open-sandbox-vault" => self.open_sandbox_vault(window, cx),
+            // * Note composer's merge: the current note is absorbed into the
+            //   note the prompt names. Obsidian rewrites the links to the
+            //   absorbed note, and so does the plan this runs.
+            "note-composer:merge-file" => {
+                if self.editing_or_report(id, window, cx) {
+                    self.start_merge_current(window, cx);
+                }
+            }
             _ => {
                 let name = self.command_name(id, cx);
                 self.report(format!("{name}: not available in Silica yet"), cx);
@@ -7447,6 +7459,145 @@ impl Workspace {
         }
     }
 
+    /// Note composer's "Merge current file with another file": a prompt for
+    /// the note that absorbs the current one. The prompt validates nothing
+    /// by itself — the target may be a note to create, which is what
+    /// Obsidian's command palette flow offers too.
+    fn start_merge_current(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(source) = self.current.clone() else {
+            return;
+        };
+        self.open_prompt(
+            PendingOp::MergeCurrent(source.clone()),
+            PromptSpec {
+                title: format!("Merge \"{}\" with...", basename(&source)).into(),
+                detail: Some(
+                    "The current note's content is appended to the target and every \
+link to it is rewritten. The current note is deleted."
+                        .into(),
+                ),
+                input: Some(String::new()),
+                placeholder: "Target note name".into(),
+                confirm: "Merge".into(),
+                ..PromptSpec::default()
+            },
+            window,
+            cx,
+        );
+    }
+
+    /// The merge itself: append the source note's text under the target's,
+    /// rewrite every link that resolved to the source to point at the
+    /// target, then delete the source. Obsidian's own order is the same
+    /// (write, rewrite links, remove), and the notice is its wording.
+    fn merge_current(
+        &mut self,
+        source: &str,
+        target_value: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<Option<String>, String> {
+        let Some(state) = self.state.clone() else {
+            return Ok(None);
+        };
+        // * The target is a note name or path as written; `new_note_path`
+        //   turns a bare name into a path under the vault's new-file folder,
+        //   the same place an untitled note from a wikilink would go.
+        let target = if target_value.contains('/') {
+            let path = format!("{target_value}.md");
+            if !state.vault().absolute(&path).exists() {
+                return Err(format!("{target_value} does not exist"));
+            }
+            path
+        } else {
+            let resolved = state
+                .cache()
+                .resolve(target_value, source)
+                .map(str::to_string);
+            resolved
+                .filter(|p| FileKind::from_path(p).is_markdown())
+                .unwrap_or_else(|| state.new_note_path(target_value, Some(source)))
+        };
+        if target == source {
+            return Err("A note cannot merge into itself".to_string());
+        }
+
+        let source_text = state
+            .texts()
+            .get(source)
+            .map(|t| t.to_string())
+            .or_else(|| std::fs::read_to_string(state.vault().absolute(source)).ok())
+            .ok_or_else(|| format!("{source} could not be read"))?;
+        let target_text = std::fs::read_to_string(state.vault().absolute(&target))
+            .map_err(|e| format!("{target} could not be read: {e}"))?;
+        let merged = format!("{target_text}\n\n{source_text}");
+
+        // * The link rewrites are planned against the pre-merge index and
+        //   written before the source disappears, so a failure leaves the
+        //   vault consistent: every note still resolves as it did.
+        let plan = state
+            .cache()
+            .plan_merge_rewrites(source, &target, state.link_format(), &|p| {
+                state.texts().get(p).map(|t| t.to_string())
+            });
+        for rw in &plan {
+            let absolute = state
+                .vault()
+                .write_path(&rw.new_path)
+                .map_err(|e| e.to_string())?;
+            silica_vault::write_no_follow(&absolute, rw.text.as_bytes())
+                .map_err(|e| format!("Could not update links in {}: {e}", rw.new_path))?;
+        }
+
+        // * The target may not exist yet (`create_note` refuses an existing
+        //   path), so an existing one is written through the vault's save
+        //   path and a new one through `create_note`; both index the result.
+        let changes = if state.vault().absolute(&target).exists() {
+            state
+                .vault
+                .write()
+                .unwrap_or_else(|e| e.into_inner())
+                .write_bytes(&target, merged.as_bytes())
+                .map_err(|e| e.to_string())?;
+            self.after_changes(
+                state.absorb(
+                    state
+                        .vault
+                        .write()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .refresh_path(&state.vault().absolute(&target)),
+                ),
+                cx,
+            );
+            None
+        } else {
+            Some(state.create_note(&target, &merged)?)
+        };
+        if let Some(changes) = changes {
+            self.after_changes(changes, cx);
+        }
+
+        let was_current = self.current.as_deref() == Some(source);
+        let changes = state.trash(source)?;
+        if was_current {
+            self.detach_current(false, &state, cx);
+            self.focus_main(window, cx);
+        }
+        self.after_changes(changes, cx);
+        self.open_file(target, None, cx);
+
+        let links: usize = plan.iter().map(|r| r.links).sum();
+        Ok((links > 0).then(|| {
+            format!(
+                "Updated {} link{} in {} file{}.",
+                links,
+                plural(links),
+                plan.len(),
+                plural(plan.len()),
+            )
+        }))
+    }
+
     /// Enter in the prompt: finish the pending operation with `value`.
     fn prompt_submitted(&mut self, value: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Some(op) = self.pending.clone() else {
@@ -7515,6 +7666,22 @@ impl Workspace {
             PendingOp::EditBookmark(_) => {
                 self.pending = None;
                 self.close_modal(window, cx);
+            }
+            PendingOp::MergeCurrent(source) => {
+                self.pending = None;
+                self.close_modal(window, cx);
+                if value.is_empty() {
+                    self.report("Merge needs a target note", cx);
+                    return;
+                }
+                match self.merge_current(&source, value, window, cx) {
+                    Ok(notice) => {
+                        if let Some(notice) = notice {
+                            self.report(notice, cx);
+                        }
+                    }
+                    Err(err) => self.report(err, cx),
+                }
             }
         }
     }
@@ -11685,6 +11852,9 @@ impl Workspace {
                 }
                 Some(PendingOp::EditBookmark(path)) => {
                     json!({"op": "edit-bookmark", "path": path})
+                }
+                Some(PendingOp::MergeCurrent(source)) => {
+                    json!({"op": "merge-current", "source": source})
                 }
             },
         );
