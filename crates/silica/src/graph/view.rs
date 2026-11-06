@@ -1573,6 +1573,7 @@ impl GraphView {
                             .rounded_sm()
                             .cursor_pointer()
                             .bg(color)
+                            .tooltip(tooltip("Change group color"))
                             .on_click(
                                 cx.listener(move |this, _, _, cx| this.cycle_group_color(ix, cx)),
                             ),
