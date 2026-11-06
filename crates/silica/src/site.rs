@@ -102,10 +102,11 @@ fn title_of(rel: &str) -> String {
 
 /// Wraps a rendered body in the one document shape every page shares.
 fn write_page(out: &Path, name: &str, title: &str, depth: usize, body: &str) -> Result<(), String> {
+    let escaped_title = escape_title(title);
     let page = format!(
         "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
-         <title>{title}</title>\n<link rel=\"stylesheet\" href=\"{}style.css\">\n\
+         <title>{escaped_title}</title>\n<link rel=\"stylesheet\" href=\"{}style.css\">\n\
          </head>\n<body>\n{body}\n</body>\n</html>\n",
         "../".repeat(depth),
     );
@@ -179,6 +180,59 @@ fn resolve<'m>(link: &str, map: &'m HashMap<String, String>) -> Option<&'m str> 
     map.get(&lower).map(|p| p.as_str())
 }
 
+/// The three characters that end a title element or start an entity.
+/// `escape_html` in the renderer is crate-private, and a title never
+/// needs more than these three.
+fn escape_title(title: &str) -> String {
+    let mut out = String::with_capacity(title.len());
+    for ch in title.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// The linker's attribute values arrive HTML-escaped (the renderer escapes
+/// the link text), so `A & B.md` reaches here as `A &amp; B.md`. Undoing
+/// the five named references is enough for the vault's legal file-name
+/// characters; anything else is left as written.
+fn unescape_attr(value: &str) -> String {
+    if !value.contains('&') {
+        return value.to_string();
+    }
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(at) = rest.find('&') {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + 1..];
+        let entity = [
+            ("amp;", "&"),
+            ("lt;", "<"),
+            ("gt;", ">"),
+            ("quot;", "\""),
+            ("#39;", "'"),
+        ]
+        .iter()
+        .find(|(name, _)| after.starts_with(name));
+        match entity {
+            Some((name, ch)) => {
+                out.push_str(ch);
+                rest = &after[name.len()..];
+            }
+            None => {
+                out.push('&');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// The URL one exported page or asset is reached by from another: the
 /// relative walk from `from_depth` (the number of folder components above
 /// the page) to the target's path inside the site.
@@ -239,6 +293,9 @@ fn rewrite(
                     .unwrap_or(tag_end - 1);
                 rest[tag_start + at..end].to_string()
             });
+        let raw = value.as_deref().unwrap_or_default();
+        let unescaped = unescape_attr(raw);
+        let value = Some(unescaped);
         let hit = value.as_deref().and_then(|v| match which {
             "internal-link" => resolve(v, map).map(page_path),
             _ => assets.get(&v.to_lowercase()).cloned(),
@@ -453,5 +510,27 @@ mod tests {
         assert!(r.html.contains("src=\"../pic.png\""), "{}", r.html);
         // The note embed resolves to nothing publishable and stays as it was.
         assert!(r.html.contains("src=\"Note\""), "{}", r.html);
+    }
+
+    #[test]
+    fn a_link_named_with_an_ampersand_resolves_through_the_escaped_attr() {
+        let map = link_map(&[&note("A & B.md"), &note("Target.md")]);
+        let empty = HashMap::new();
+        // The renderer escapes the href, so the tag carries the entity.
+        let src = anchor("A &amp; B");
+        let r = rewrite(&src, &map, &empty, 0);
+        assert_eq!((r.links, r.unresolved), (1, 0), "{}", r.html);
+        assert!(r.html.contains("href=\"A & B.html\""), "{}", r.html);
+        assert!(!r.html.contains("_blank"), "{}", r.html);
+    }
+
+    #[test]
+    fn the_page_title_escapes_the_three_hostile_characters() {
+        assert_eq!(escape_title("A & B"), "A &amp; B");
+        assert_eq!(escape_title("<script>"), "&lt;script&gt;");
+        assert_eq!(escape_title("plain"), "plain");
+        assert_eq!(unescape_attr("A &amp; B"), "A & B");
+        assert_eq!(unescape_attr("A & B"), "A & B");
+        assert_eq!(unescape_attr("&#39;q&#39;"), "'q'");
     }
 }
