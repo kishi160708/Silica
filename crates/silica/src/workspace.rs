@@ -2862,6 +2862,7 @@ pub struct Workspace {
     /// Matcher over every note name and alias, rebuilt when files change.
     name_finder: Option<Arc<Finder>>,
     mention_generation: u64,
+    outline_generation: u64,
     /// What the status bar says about the vault and the open file: it is
     /// true until something makes it untrue, so nothing expires it.
     status: SharedString,
@@ -3451,6 +3452,7 @@ impl Workspace {
             property_filter,
             name_finder: None,
             mention_generation: 0,
+            outline_generation: 0,
             status: "Pass a vault folder as the first argument".into(),
             notices: Notices::default(),
             words: 0,
@@ -6651,17 +6653,36 @@ impl Workspace {
         let Some(path) = self.current.clone() else {
             return;
         };
-        let rows = {
+        // Snapshot the dirty buffer text on the UI thread, then parse off the
+        // UI thread so a full `index_markdown` never blocks typing. Stale
+        // results from an older keystroke are dropped via outline_generation,
+        // mirroring compute_mentions.
+        let text = {
             let editor = self.editor.read(cx);
             // * A clean buffer is the file the index read, and a buffer
             //   holding another note says nothing about this one.
             if editor.name.as_ref() != path.as_str() || !editor.is_dirty() {
                 return;
             }
-            outline_headings(&index_markdown(editor.text()))
+            editor.text().to_owned()
         };
-        self.outline = rows;
-        cx.notify();
+        self.outline_generation += 1;
+        let generation = self.outline_generation;
+        cx.spawn(async move |this, cx| {
+            let rows = cx
+                .background_executor()
+                .spawn(async move { outline_headings(&index_markdown(&text)) })
+                .await;
+            this.update(cx, |ws, cx| {
+                if ws.outline_generation != generation || ws.current.as_deref() != Some(&path) {
+                    return;
+                }
+                ws.outline = rows;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Finds unlinked mentions in both directions on the background executor.
