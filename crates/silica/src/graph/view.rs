@@ -19,7 +19,7 @@ use gpui::{
     actions, canvas, div, fill, point, prelude::*, px, size, App, Bounds, Context, DispatchPhase,
     Entity, EventEmitter, FocusHandle, Focusable, HitboxBehavior, Hsla, KeyBinding, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Point, ScrollWheelEvent,
-    SharedString, ShapedLine, Subscription, Task, TextAlign, Window,
+    ShapedLine, SharedString, Subscription, Task, TextAlign, Window,
 };
 use serde_json::{json, Value};
 use silica_formats::config::{GraphColor, GraphColorGroup, GraphConfig};
@@ -2381,8 +2381,7 @@ impl Render for GraphView {
                                     //   paint after the first is a lookup,
                                     //   which is what keeps a large graph
                                     //   off the text rasterizer.
-                                    let run_color =
-                                        if dim { theme.text_faint } else { theme.text };
+                                    let run_color = if dim { theme.text_faint } else { theme.text };
                                     let key = (
                                         node.label.to_string(),
                                         [
@@ -2393,7 +2392,8 @@ impl Render for GraphView {
                                         ],
                                         family.clone(),
                                     );
-                                    let mut cache = label_cache.lock().unwrap_or_else(|e| e.into_inner());
+                                    let mut cache =
+                                        label_cache.lock().unwrap_or_else(|e| e.into_inner());
                                     let line = cache.entry(key).or_insert_with(|| {
                                         let mut run = style.to_run(node.label.len());
                                         run.color = run_color;
