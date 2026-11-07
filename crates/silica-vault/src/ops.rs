@@ -1274,6 +1274,142 @@ mod tests {
         );
     }
 
+    /// The vault's own `.trash` slot can be taken by something that is not a
+    /// folder — another tool drops a file there, or a sync client puts a
+    /// placeholder. The trash then cannot be made, and the move must fail
+    /// with the note exactly where it was: a note half-moved, or worse one
+    /// gone with no copy anywhere, is the shape this has to refuse. The
+    /// failing folder is named in the error so the user can go and look at
+    /// what is squatting on it.
+    #[test]
+    fn a_file_squatting_on_the_trash_folder_fails_and_keeps_the_note() {
+        let (dir, mut v) = vault();
+
+        let squatter = dir.path().join(".trash");
+        std::fs::write(&squatter, "not a folder\n").unwrap();
+        let note = dir.path().join("A.md");
+        let bytes = fs::read_to_string(&note).unwrap();
+
+        // * Local trash, and the fallback of the System option: both have to
+        // * go through the vault's own `.trash`, and both must be refused.
+        for option in [TrashOption::Local, TrashOption::System] {
+            let err = v
+                .trash("A.md", option)
+                .expect_err("a file is squatting on .trash");
+            assert!(
+                matches!(err, OpError::Io { .. }),
+                "the failure is not reported as an io error naming the folder: {err:?}"
+            );
+            // * Nothing moved, and the bytes are the user's.
+            assert!(
+                note.is_file(),
+                "the note moved on a failed trash: {option:?}"
+            );
+            assert_eq!(fs::read_to_string(&note).unwrap(), bytes);
+            assert!(
+                paths(&v).contains(&"A.md"),
+                "the index lost a note that is still on disk"
+            );
+        }
+
+        // * The squatter is untouched: refusing the trash is not a licence to
+        // * delete whatever was in the way.
+        assert_eq!(fs::read_to_string(&squatter).unwrap(), "not a folder\n");
+
+        // * Once the slot is a folder again, the same trash works — the vault
+        // * is not left permanently unable to trash.
+        std::fs::remove_file(&squatter).unwrap();
+        let removed = v.trash("A.md", TrashOption::Local).unwrap();
+        assert_eq!(removed, vec!["A.md".to_string()]);
+        assert!(dir.path().join(".trash/A.md").is_file());
+    }
+
+    /// An empty note is a note, not a hole: a check anywhere that treated
+    /// "no bytes" as "not there" would lose it the moment it was moved —
+    /// trashed, restored or renamed — and the user would have no note where
+    /// they had one. It has to come back with nothing in it and still be
+    /// listed, because that is what a note the user deliberately left blank
+    /// looks like.
+    #[test]
+    fn an_empty_note_survives_a_move_and_stays_a_listed_note() {
+        let (dir, mut v) = vault();
+        let empty = dir.path().join("Blank.md");
+        v.create_note("Blank.md", "").unwrap();
+        assert!(empty.is_file(), "an empty note was not created");
+        assert!(
+            paths(&v).contains(&"Blank.md"),
+            "the empty note is not indexed"
+        );
+
+        // * Trashed and back, with nothing in it and still indexed.
+        v.trash("Blank.md", TrashOption::Local).unwrap();
+        assert!(
+            dir.path().join(".trash/Blank.md").is_file(),
+            "the empty note is not in .trash as a file"
+        );
+        v.restore_from_trash("Blank.md").unwrap();
+        assert!(empty.is_file(), "the empty note did not come back");
+        assert_eq!(fs::read_to_string(&empty).unwrap(), "");
+        assert!(
+            paths(&v).contains(&"Blank.md"),
+            "the restored empty note is not indexed"
+        );
+
+        // * And renamed, which is where a "no bytes, so nothing to keep"
+        // * shortcut would drop it.
+        let moved = dir.path().join("Renamed.md");
+        v.rename("Blank.md", "Renamed.md").unwrap();
+        assert!(moved.is_file(), "the empty note vanished on a rename");
+        assert_eq!(fs::read_to_string(&moved).unwrap(), "");
+        assert!(
+            paths(&v).contains(&"Renamed.md"),
+            "the renamed empty note is not indexed"
+        );
+        assert!(!empty.exists(), "the empty note also stayed behind");
+    }
+
+    /// A note the size of a real journal is the same note: nothing in the
+    /// write, rename or trash path may drop part of it. A truncation would
+    /// look exactly like a note the user had not finished writing, and the
+    /// only trace would be the missing tail. Every byte is checked, in both
+    /// directions of the move.
+    #[test]
+    fn a_large_note_keeps_every_byte_through_rename_and_trash() {
+        let (dir, mut v) = vault();
+        // * A repeating pattern, so a truncation or a repeat cannot pass.
+        let text: String = (0..1_048_576u32)
+            .map(|i| char::from(b'a' + u8::try_from(i % 26).unwrap()))
+            .collect();
+        v.create_note("Big.md", &text).unwrap();
+        assert_eq!(fs::read_to_string(dir.path().join("Big.md")).unwrap(), text);
+
+        v.rename("Big.md", "Moved.md").unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.path().join("Moved.md")).unwrap(),
+            text,
+            "the rename lost part of a large note"
+        );
+
+        v.trash("Moved.md", TrashOption::Local).unwrap();
+        v.restore_from_trash("Moved.md").unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.path().join("Moved.md")).unwrap(),
+            text,
+            "the trash round trip lost part of a large note"
+        );
+
+        // * And overwriting it keeps every byte of the new, larger text: this
+        // * is the save path the app uses for note content.
+        let bigger = format!("{text}{text}");
+        v.write_bytes("Moved.md", bigger.as_bytes())
+            .expect("the overwrite worked");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("Moved.md")).unwrap(),
+            bigger,
+            "an overwrite lost part of a large note"
+        );
+    }
+
     #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn freedesktop_records_are_well_formed() {
