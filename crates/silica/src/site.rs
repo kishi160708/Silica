@@ -967,7 +967,6 @@ mod tests {
     }
 
     #[test]
-#[test]
     fn an_event_handler_attribute_does_not_survive() {
         let html = strip_active("<p>a</p><img src=\"x\" onerror=\"alert(1)\"><p>b</p>");
         assert!(!html.contains("onerror"), "onerror survived: {html}");
