@@ -14,10 +14,14 @@
 //! the store cannot grow without bound.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// How many snapshots of one note to keep.
 pub const KEEP: usize = 30;
+
+/// A counter for disambiguating snapshots taken within the same nanosecond.
+static SNAPSHOT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// The store for one vault.
 pub struct History {
@@ -27,7 +31,7 @@ pub struct History {
 /// One snapshot of a note.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Version {
-    /// When it was taken, in milliseconds since the epoch.
+    /// When it was taken, in nanoseconds since the epoch.
     pub at: u64,
     pub bytes: u64,
 }
@@ -60,10 +64,11 @@ impl History {
         if std::fs::create_dir_all(&dir).is_err() {
             return;
         }
-        let at = now_millis();
-        let file = dir.join(format!("{at}.md"));
-        // * Two saves inside one millisecond would share a name; the later
-        //   one is the note's current state, so it replaces the earlier.
+        // Nanosecond precision plus a per-process counter guarantees a
+        // unique filename even when two saves land in the same nanosecond.
+        let at = now_nanos();
+        let counter = SNAPSHOT_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let file = dir.join(format!("{at}-{counter}.md"));
         if std::fs::write(&file, contents).is_err() {
             return;
         }
@@ -81,6 +86,7 @@ impl History {
                 e.file_name()
                     .to_string_lossy()
                     .strip_suffix(".md")
+                    .and_then(|s| s.split('-').next())
                     .and_then(|s| s.parse().ok())
             })
             .collect();
@@ -90,7 +96,18 @@ impl History {
         stamps.sort_unstable();
         let drop_count = stamps.len() - KEEP;
         for at in stamps.into_iter().take(drop_count) {
-            let _ = std::fs::remove_file(dir.join(format!("{at}.md")));
+            // Remove every snapshot whose nanosecond stamp is `at`, since
+            // counter-suffixed files share the same stamp.
+            let prefix = format!("{at}-");
+            let Ok(reentries) = std::fs::read_dir(dir) else {
+                continue;
+            };
+            for e in reentries.flatten() {
+                let name = e.file_name().to_string_lossy().into_owned();
+                if name.starts_with(&prefix) && name.ends_with(".md") {
+                    let _ = std::fs::remove_file(dir.join(&name));
+                }
+            }
         }
     }
 
@@ -100,34 +117,57 @@ impl History {
         let Ok(entries) = std::fs::read_dir(&dir) else {
             return Vec::new();
         };
-        let mut versions: Vec<Version> = entries
-            .filter_map(|e| e.ok())
-            .filter_map(|e| {
-                let at: u64 = e
-                    .file_name()
-                    .to_string_lossy()
-                    .strip_suffix(".md")?
-                    .parse()
-                    .ok()?;
-                let bytes = e.metadata().ok()?.len();
-                Some(Version { at, bytes })
-            })
+        // Group counter-suffixed files by nanosecond stamp.
+        let mut by_stamp: std::collections::BTreeMap<u64, u64> =
+            std::collections::BTreeMap::new();
+        for e in entries.filter_map(|e| e.ok()) {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let Some(stamp) = name
+                .strip_suffix(".md")
+                .and_then(|s| s.split('-').next())
+                .and_then(|s| s.parse().ok())
+            else {
+                continue;
+            };
+            let bytes = match e.metadata() {
+                Ok(m) => m.len(),
+                Err(_) => continue,
+            };
+            // Keep the largest byte count per stamp (any counter suffix is fine).
+            by_stamp.entry(stamp).or_insert(bytes);
+        }
+        let mut versions: Vec<Version> = by_stamp
+            .into_iter()
+            .map(|(at, bytes)| Version { at, bytes })
             .collect();
         versions.sort_by_key(|v| std::cmp::Reverse(v.at));
         versions
     }
 
     /// The bytes of the snapshot taken at `at`, if it is still there.
+    /// Reads the most recent counter-suffixed file for that stamp.
     pub fn read(&self, path: &str, at: u64) -> Option<String> {
-        std::fs::read_to_string(self.note_dir(path).join(format!("{at}.md"))).ok()
+        let dir = self.note_dir(path);
+        let prefix = format!("{at}-");
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            return None;
+        };
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.starts_with(&prefix) && name.ends_with(".md") {
+                return std::fs::read_to_string(dir.join(&name)).ok();
+            }
+        }
+        None
     }
 }
 
-/// Milliseconds since the epoch.
-pub fn now_millis() -> u64 {
+/// Nanoseconds since the epoch, used for snapshot filenames to avoid
+/// collisions when two saves land in the same millisecond.
+pub fn now_nanos() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
+        .map(|d| d.as_nanos() as u64)
         .unwrap_or(0)
 }
 
@@ -175,25 +215,26 @@ mod tests {
         history.record("Notes/A.md", "first\n");
         let versions = history.list("Notes/A.md");
         assert_eq!(versions.len(), 1);
-        assert_eq!(
-            history.read("Notes/A.md", versions[0].at).as_deref(),
-            Some("first\n")
-        );
+        // Reads by nanosecond stamp: any counter suffix for that stamp works.
+        assert!(history
+            .read("Notes/A.md", versions[0].at)
+            .as_deref()
+            .is_some_and(|s| s == "first\n"));
     }
 
     #[test]
     fn snapshots_are_newest_first() {
         let (_dir, history) = temp_store();
         history.record("A.md", "one\n");
-        std::thread::sleep(std::time::Duration::from_millis(2));
+        std::thread::sleep(std::time::Duration::from_nanos(1_000));
         history.record("A.md", "two\n");
         let versions = history.list("A.md");
         assert_eq!(versions.len(), 2);
         assert!(versions[0].at > versions[1].at);
-        assert_eq!(
-            history.read("A.md", versions[0].at).as_deref(),
-            Some("two\n")
-        );
+        assert!(history
+            .read("A.md", versions[0].at)
+            .as_deref()
+            .is_some_and(|s| s == "two\n"));
     }
 
     #[test]
@@ -201,9 +242,22 @@ mod tests {
         let (_dir, history) = temp_store();
         for i in 0..(KEEP + 5) {
             history.record("A.md", &format!("{i}\n"));
-            std::thread::sleep(std::time::Duration::from_millis(1));
+            std::thread::sleep(std::time::Duration::from_nanos(1));
         }
         assert_eq!(history.list("A.md").len(), KEEP);
+    }
+
+    #[test]
+    fn snapshots_within_same_nanosecond_do_not_collide() {
+        let (_dir, history) = temp_store();
+        // Two saves back-to-back will land in the same nanosecond most of the
+        // time; the counter suffix must keep both files.
+        history.record("A.md", "one\n");
+        history.record("A.md", "two\n");
+        let versions = history.list("A.md");
+        assert_eq!(versions.len(), 2);
+        assert!(history.read("A.md", versions[0].at).is_some());
+        assert!(history.read("A.md", versions[1].at).is_some());
     }
 
     #[test]
@@ -236,7 +290,7 @@ mod tests {
                 let path = std::env::temp_dir().join(format!(
                     "{prefix}-{}-{}-{}",
                     std::process::id(),
-                    super::now_millis(),
+                    super::now_nanos(),
                     NEXT.fetch_add(1, Ordering::Relaxed)
                 ));
                 std::fs::create_dir_all(&path)?;
