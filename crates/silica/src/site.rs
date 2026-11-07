@@ -629,18 +629,17 @@ fn next_tag(rest: &str) -> Option<usize> {
 /// The needle is space-prefixed: a bare `href="` also matches inside
 /// `data-href="`, which would rewrite the wrong attribute.
 fn replace_attr(tag: &str, name: &str, value: &str) -> String {
-    let needle = format!(" {name}=\"");
-    match tag.find(&needle) {
-        Some(at) => {
+    for needle in [format!(" {name}=\""), format!("{name}=\"")] {
+        if let Some(at) = tag.find(&needle) {
             let value_at = at + needle.len();
             let end = tag[value_at..]
                 .find('"')
                 .map(|i| value_at + i)
                 .unwrap_or(value_at);
-            format!("{}{}{}", &tag[..value_at], value, &tag[end..])
+            return format!("{}{}{}", &tag[..value_at], value, &tag[end..]);
         }
-        None => tag.to_string(),
     }
+    tag.to_string()
 }
 
 /// Removes one attribute and its value from a tag.
