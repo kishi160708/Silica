@@ -503,14 +503,16 @@ fn main() {
         })
         // * "Override config folder": the folder is on the vault's entry in
         //   the per-user store, so the vault has to be reopened with it once
-        //   both are known.
+        //   both are known. A vault without the key keeps the folder it was
+        //   opened with.
         .and_then(|v| {
-            let folder = silica_vault::VaultRegistry::open()
+            silica_vault::VaultRegistry::open()
                 .ok()
                 .flatten()
-                .and_then(|r| r.config_folder(v.root()))?;
-            silica_vault::Vault::open_with_config_dir(v.root(), &folder)
-                .ok()
+                .and_then(|r| r.config_folder(v.root()))
+                .and_then(|folder| {
+                    silica_vault::Vault::open_with_config_dir(v.root(), &folder).ok()
+                })
                 .or(Some(v))
         });
     // * A community CSS theme layers its custom properties on top of the base
