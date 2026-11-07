@@ -452,7 +452,14 @@ impl Vault {
 
     /// Restores a trashed entry back to its original vault path.
     /// `name` is the entry's file name as returned by [`list_trash`].
-    pub fn restore_from_trash(&self, name: &str) -> Result<(), OpError> {
+    /// Brings a note back from `.trash` under its own name. The trashed copy
+    /// is moved, not read-and-copied, so there is never a moment where two
+    /// full copies of the user's data exist; and a name the vault already
+    /// holds is refused, so a restore can never trade a newer note for the
+    /// older one. The index is refreshed for the restored path — a note that
+    /// is on disk but not in the file list is invisible to search, links and
+    /// every list in the app, which would look exactly like a lost note.
+    pub fn restore_from_trash(&mut self, name: &str) -> Result<(), OpError> {
         let trash = self.write_path(".trash")?;
         let src = trash.join(name);
         if !src.exists() {
@@ -465,7 +472,9 @@ impl Vault {
         if let Some(parent) = dst.parent() {
             std::fs::create_dir_all(parent).map_err(io("create folder", parent))?;
         }
-        std::fs::rename(&src, dst).map_err(io("restore from trash", &src))
+        std::fs::rename(&src, &dst).map_err(io("restore from trash", &src))?;
+        self.refresh_path(&dst);
+        Ok(())
     }
 }
 
@@ -997,6 +1006,55 @@ mod tests {
         assert!(
             !dir.path().parent().unwrap().join("outside.md").exists(),
             "a restore escaped the vault"
+        );
+    }
+
+    /// The `System` option is a preference, not a promise: on a desktop with
+    /// no system trash (Windows, or a read-only data directory) the vault's
+    /// own `.trash` is the fallback, and the note must land there rather than
+    /// be reported as failed. A user who picked "move to system trash" and
+    /// got an error would think the note was still there — or lose it.
+    #[test]
+    fn a_system_trash_with_no_system_trash_lands_in_the_vaults_own() {
+        let (dir, mut v) = vault();
+        let note = dir.path().join("A.md");
+        let bytes = fs::read_to_string(&note).unwrap();
+
+        let removed = v
+            .trash("A.md", TrashOption::System)
+            .expect("the vault's own trash is the fallback, not an error");
+        assert_eq!(
+            removed,
+            vec!["A.md".to_string()],
+            "the note did not go anywhere"
+        );
+
+        // * It is in the vault's own .trash, under its own name — the fallback
+        // * must not make the user hunt for a numbered copy.
+        let trashed = dir.path().join(".trash/A.md");
+        assert!(trashed.is_file(), "the note is not in .trash: {trashed:?}");
+        assert_eq!(
+            fs::read_to_string(&trashed).unwrap(),
+            bytes,
+            "the bytes were lost"
+        );
+        assert!(!note.exists(), "the original stayed behind");
+        assert!(
+            !paths(&v).contains(&"A.md"),
+            "the index still lists a note that is in .trash"
+        );
+
+        // * And it comes back whole, which is the point of falling back.
+        v.restore_from_trash("A.md")
+            .expect("the fallback copy restores");
+        assert_eq!(
+            fs::read_to_string(&note).unwrap(),
+            bytes,
+            "the restore lost bytes"
+        );
+        assert!(
+            paths(&v).contains(&"A.md"),
+            "the restored note is not in the index"
         );
     }
 
