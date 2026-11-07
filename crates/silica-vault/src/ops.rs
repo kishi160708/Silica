@@ -1606,7 +1606,7 @@ mod tests {
 
     #[test]
     fn restore_from_trash_errors_when_entry_is_missing_or_target_exists() {
-        let (dir, v) = vault();
+        let (dir, mut v) = vault();
         fs::create_dir_all(dir.path().join(".trash")).unwrap();
         assert!(matches!(
             v.restore_from_trash("Gone.md"),
@@ -1624,7 +1624,7 @@ mod tests {
     //   data loss wearing an error's clothes.
     #[test]
     fn a_failed_restore_keeps_the_trashed_entry() {
-        let (dir, v) = vault();
+        let (dir, mut v) = vault();
         fs::create_dir_all(dir.path().join(".trash")).unwrap();
         fs::write(dir.path().join(".trash/Keep.md"), "only copy").unwrap();
         fs::write(dir.path().join("Keep.md"), "in the way").unwrap();
