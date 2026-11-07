@@ -38,17 +38,17 @@ mod palette;
 mod panes;
 mod pdf;
 mod popout;
-mod quick_capture;
-mod task_dashboard;
 mod preview;
 mod prompt;
 mod properties;
+mod quick_capture;
 mod reading;
 mod search;
 mod settings;
 mod site;
 mod suggest;
 mod switcher;
+mod task_dashboard;
 mod text_input;
 mod theme;
 mod title_field;
@@ -478,6 +478,8 @@ pub fn bind_all_keys(cx: &mut App, registry: &CommandRegistry) {
     help::bind_keys(cx);
     vaults::bind_keys(cx);
     prompt::bind_keys(cx);
+    quick_capture::bind_keys(cx);
+    task_dashboard::bind_keys(cx);
     copy_results::bind_keys(cx);
     cx.bind_keys([KeyBinding::new("ctrl-q", Quit, None)]);
 }

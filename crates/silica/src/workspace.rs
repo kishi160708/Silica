@@ -11,7 +11,6 @@
 use crate::assets::{icon, logo};
 use crate::backlinks::{self, Group, Match as PaneMatch, Section};
 use crate::bases::{BasesEvent, BasesView};
-use silica_bases::FileData;
 use crate::bookmarks::{BookmarkEvent, BookmarksPane};
 use crate::canvas::menu::tooltip;
 use crate::canvas::{CanvasEvent, CanvasView};
@@ -29,6 +28,7 @@ use crate::pdf::view::{PdfEvent, PdfView};
 use crate::popout::PopoutWindow;
 use crate::prompt::{Prompt, PromptEvent, PromptSpec};
 use crate::reading::{self, LinkTarget, ReadingEvent, ReadingView, TaskMarker, TaskToggled};
+use silica_bases::FileData;
 
 thread_local! {
     /// Notes a plugin asked to open, waiting for the workspace to act.
@@ -99,9 +99,9 @@ use std::time::{Duration, Instant};
 mod bookmarks;
 mod files;
 mod record;
-mod socket;
-mod right_panes;
 mod render;
+mod right_panes;
+mod socket;
 mod tabs;
 
 actions!(
@@ -160,8 +160,16 @@ fn side_menu_items(target: &SidePaneTarget) -> Vec<SidePaneMenuItem> {
     match target {
         SidePaneTarget::Tag(tag) => vec![
             item("Search for \"#tag\"", "search", A::SearchTag(tag.clone())),
-            item(crate::i18n::t("Rename tag..."), "pen-line", A::RenameTag(tag.clone())),
-            item(crate::i18n::t("Copy tag"), "clipboard", A::CopyTag(tag.clone())),
+            item(
+                crate::i18n::t("Rename tag..."),
+                "pen-line",
+                A::RenameTag(tag.clone()),
+            ),
+            item(
+                crate::i18n::t("Copy tag"),
+                "clipboard",
+                A::CopyTag(tag.clone()),
+            ),
         ],
         SidePaneTarget::Property(key) => vec![
             item(
@@ -169,7 +177,11 @@ fn side_menu_items(target: &SidePaneTarget) -> Vec<SidePaneMenuItem> {
                 "search",
                 A::SearchProperty(key.clone()),
             ),
-            item(crate::i18n::t("Copy property"), "clipboard", A::CopyProperty(key.clone())),
+            item(
+                crate::i18n::t("Copy property"),
+                "clipboard",
+                A::CopyProperty(key.clone()),
+            ),
         ],
         SidePaneTarget::Heading { path, offset } => vec![
             item(
@@ -200,7 +212,11 @@ fn side_menu_items(target: &SidePaneTarget) -> Vec<SidePaneMenuItem> {
                 path.clone()
             };
             vec![
-                item(crate::i18n::t("Open note"), "file-text", A::OpenLink(open.clone())),
+                item(
+                    crate::i18n::t("Open note"),
+                    "file-text",
+                    A::OpenLink(open.clone()),
+                ),
                 item(
                     crate::i18n::t("Open note in new tab"),
                     "file-plus",
@@ -214,7 +230,11 @@ fn side_menu_items(target: &SidePaneTarget) -> Vec<SidePaneMenuItem> {
                 item(
                     crate::i18n::t("Copy path"),
                     "clipboard",
-                    A::CopyLinkPath(if path.is_empty() { link.clone().unwrap_or_default() } else { path.clone() }),
+                    A::CopyLinkPath(if path.is_empty() {
+                        link.clone().unwrap_or_default()
+                    } else {
+                        path.clone()
+                    }),
                 ),
             ]
         }
@@ -1691,7 +1711,9 @@ pub(crate) enum PendingOp {
     /// is absorbed into.
     MergeCurrent(String),
     /// "Rename tag...": the value names the tag the old one becomes.
-    RenameTag { from: String },
+    RenameTag {
+        from: String,
+    },
 }
 
 /// One tab of the main area: what it shows and where it has been. The
@@ -3843,7 +3865,10 @@ impl Workspace {
                 let body = String::from_utf8_lossy(&output.stdout);
                 let latest: Option<String> = serde_json::from_str::<serde_json::Value>(&body)
                     .ok()
-                    .and_then(|v| v.get("tag_name").and_then(|tag| tag.as_str().map(str::to_string)))
+                    .and_then(|v| {
+                        v.get("tag_name")
+                            .and_then(|tag| tag.as_str().map(str::to_string))
+                    })
                     .map(|s| s.trim_start_matches('v').to_string());
                 match latest {
                     Some(latest) if !latest.is_empty() => {
@@ -4307,8 +4332,7 @@ impl Workspace {
             node_text: "#e0e0e0".into(),
             edge: "#888888".into(),
         };
-        let svg_doc =
-            silica_canvas::image::svg(width, height, &placed, &canvas.edges, &palette);
+        let svg_doc = silica_canvas::image::svg(width, height, &placed, &canvas.edges, &palette);
         let png_bytes = match silica_canvas::image::png(&svg_doc, width, height) {
             Ok(b) => b,
             Err(err) => {
@@ -5416,7 +5440,8 @@ impl Workspace {
                     self.report("Task Dashboard: No vault open", cx);
                     return;
                 };
-                match crate::task_dashboard::open(state, window.window_handle(), cx) {
+                let workspace = cx.entity().downgrade();
+                match crate::task_dashboard::open(state, workspace, window.window_handle(), cx) {
                     Ok(_) => {}
                     Err(err) => self.report(format!("Task Dashboard: {err}"), cx),
                 }
@@ -7363,7 +7388,6 @@ impl Workspace {
         window.focus(&self.copy_results.focus_handle(cx), cx);
         cx.notify();
     }
-
 }
 /// and names of other notes mentioned in it (outgoing).
 /// Whether the status bar carries the parse, span and shape numbers.
