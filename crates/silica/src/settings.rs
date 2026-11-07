@@ -180,7 +180,6 @@ macro_rules! flags {
 
         impl $ty {
             /// Every flag of this file, for the test that checks the keys.
-            #[allow(dead_code)]
             const ALL: &'static [$ty] = &[$($name),+];
 
             /// What the control shows, from the config in hand.

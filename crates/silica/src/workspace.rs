@@ -4647,31 +4647,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Shows the vault-wide search pane with replace row open.
-    #[allow(dead_code)]
-    pub fn show_replace(
-        &mut self,
-        query: &str,
-        replace_text: &str,
-        window: Option<&mut Window>,
-        cx: &mut Context<Self>,
-    ) {
-        self.left_visible = true;
-        self.left_tab = LeftTab::Search;
-        self.search.update(cx, |s, cx| {
-            s.set_query(query, cx);
-            s.set_replace_open(true, cx);
-            if !replace_text.is_empty() {
-                s.set_replace_text(replace_text, cx);
-            }
-        });
-        if let Some(window) = window {
-            let handle = self.search.read(cx).replace_focus_handle(cx);
-            window.focus(&handle, cx);
-        }
-        cx.notify();
-    }
-
     /// Opens the quick switcher pre-filled with `query`.
     pub fn open_switcher(&mut self, query: &str, window: &mut Window, cx: &mut Context<Self>) {
         let mut recent: Vec<String> = Vec::new();
