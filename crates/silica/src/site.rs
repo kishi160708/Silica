@@ -1081,5 +1081,4 @@ mod tests {
         let win = std::path::Path::new(r"C:\vaults\my site");
         assert_eq!(index_url(win), "file://C:/vaults/my%20site/index.html");
     }
-    }
 }
