@@ -45,6 +45,14 @@ pub struct Layout {
     /// Simulated annealing temperature; the layout stops when it cools.
     pub alpha: f32,
     pub iterations: u32,
+    /// Scratch force buffers, reused every step so a large simulation does
+    /// not allocate two vectors per step.
+    fx: Vec<f32>,
+    fy: Vec<f32>,
+    /// The repulsion quadtree, whose node pool is rebuilt in place each step.
+    tree: QuadTree,
+    /// Traversal stack for quadtree walks, reused across bodies.
+    stack: Vec<usize>,
 }
 
 const ALPHA_MIN: f32 = 0.003;
@@ -74,6 +82,10 @@ impl Layout {
             forces,
             alpha: 1.0,
             iterations: 0,
+            fx: Vec::with_capacity(n),
+            fy: Vec::with_capacity(n),
+            tree: QuadTree::default(),
+            stack: Vec::with_capacity(32),
         }
     }
 
@@ -95,13 +107,27 @@ impl Layout {
         let alpha = self.alpha;
         let f = self.forces;
 
-        // * Repulsion through a quadtree.
-        let tree = QuadTree::build(&self.bodies);
-        let mut fx = vec![0.0f32; n];
-        let mut fy = vec![0.0f32; n];
+        // * Repulsion through a quadtree. The tree's node pool and the force
+        //   buffers are reused across steps; only their contents change.
+        self.tree.rebuild_in_place(&self.bodies);
+        self.fx.clear();
+        self.fx.resize(n, 0.0);
+        self.fy.clear();
+        self.fy.resize(n, 0.0);
         for i in 0..n {
             let b = &self.bodies[i];
-            tree.apply(b.x, b.y, i, f.repel * 1500.0, &mut fx[i], &mut fy[i]);
+            let query = RepelQuery {
+                px: b.x,
+                py: b.y,
+                me: i,
+                strength: f.repel * 1500.0,
+            };
+            self.tree.apply(
+                &query,
+                &mut self.stack,
+                &mut self.fx[i],
+                &mut self.fy[i],
+            );
         }
         // * Attraction along edges.
         for &(a, b) in &self.edges {
@@ -113,15 +139,15 @@ impl Layout {
             let dy = self.bodies[b].y - self.bodies[a].y;
             let dist = (dx * dx + dy * dy).sqrt().max(1.0);
             let pull = (dist - f.link_distance) / dist * f.link * 0.05;
-            fx[a] += dx * pull;
-            fy[a] += dy * pull;
-            fx[b] -= dx * pull;
-            fy[b] -= dy * pull;
+            self.fx[a] += dx * pull;
+            self.fy[a] += dy * pull;
+            self.fx[b] -= dx * pull;
+            self.fy[b] -= dy * pull;
         }
         // * Centering: weak, so a large graph spreads out and the view fits it.
         for (i, b) in self.bodies.iter().enumerate() {
-            fx[i] -= b.x * f.center * 0.002;
-            fy[i] -= b.y * f.center * 0.002;
+            self.fx[i] -= b.x * f.center * 0.002;
+            self.fy[i] -= b.y * f.center * 0.002;
         }
         for (i, b) in self.bodies.iter_mut().enumerate() {
             if b.pinned {
@@ -130,8 +156,8 @@ impl Layout {
                 continue;
             }
             let inv = 1.0 / b.mass.max(0.1);
-            b.vx = (b.vx + fx[i] * inv * alpha) * VELOCITY_DECAY;
-            b.vy = (b.vy + fy[i] * inv * alpha) * VELOCITY_DECAY;
+            b.vx = (b.vx + self.fx[i] * inv * alpha) * VELOCITY_DECAY;
+            b.vy = (b.vy + self.fy[i] * inv * alpha) * VELOCITY_DECAY;
             let speed = (b.vx * b.vx + b.vy * b.vy).sqrt();
             if speed > 40.0 {
                 b.vx *= 40.0 / speed;
@@ -161,6 +187,7 @@ impl Layout {
     }
 }
 
+#[derive(Debug, Clone)]
 struct Node {
     /// Center of mass.
     cx: f32,
@@ -175,12 +202,33 @@ struct Node {
     children: Option<[usize; 4]>,
 }
 
+#[derive(Debug, Clone)]
 struct QuadTree {
     nodes: Vec<Node>,
 }
 
+/// One body's repulsion query: where it sits, which body it is, and how hard
+/// the pool pushes. Bundled so `QuadTree::apply` stays under clippy's
+/// argument limit.
+struct RepelQuery {
+    px: f32,
+    py: f32,
+    me: usize,
+    strength: f32,
+}
+
+impl Default for QuadTree {
+    fn default() -> QuadTree {
+        QuadTree {
+            nodes: Vec::with_capacity(64),
+        }
+    }
+}
+
 impl QuadTree {
-    fn build(bodies: &[Body]) -> QuadTree {
+    /// Rebuilds the tree for `bodies`, reusing the node pool: truncation to
+    /// the root keeps the capacity, so steady-state steps do not allocate.
+    fn rebuild_in_place(&mut self, bodies: &[Body]) {
         let mut min_x = f32::MAX;
         let mut min_y = f32::MAX;
         let mut max_x = f32::MIN;
@@ -192,8 +240,8 @@ impl QuadTree {
             max_y = max_y.max(b.y);
         }
         let side = (max_x - min_x).max(max_y - min_y).max(1.0) + 1.0;
-        let mut tree = QuadTree {
-            nodes: vec![Node {
+        if self.nodes.is_empty() {
+            self.nodes.push(Node {
                 cx: 0.0,
                 cy: 0.0,
                 mass: 0.0,
@@ -202,12 +250,22 @@ impl QuadTree {
                 side,
                 body: None,
                 children: None,
-            }],
-        };
-        for (i, b) in bodies.iter().enumerate() {
-            tree.insert(0, i, b, bodies, 0);
+            });
+        } else {
+            self.nodes.truncate(1);
+            let root = &mut self.nodes[0];
+            root.cx = 0.0;
+            root.cy = 0.0;
+            root.mass = 0.0;
+            root.x = min_x - 0.5;
+            root.y = min_y - 0.5;
+            root.side = side;
+            root.body = None;
+            root.children = None;
         }
-        tree
+        for (i, b) in bodies.iter().enumerate() {
+            self.insert(0, i, b, bodies, 0);
+        }
     }
 
     fn insert(&mut self, node: usize, ix: usize, b: &Body, bodies: &[Body], depth: usize) {
@@ -286,8 +344,19 @@ impl QuadTree {
         }
     }
 
-    fn apply(&self, px: f32, py: f32, me: usize, strength: f32, fx: &mut f32, fy: &mut f32) {
-        let mut stack = vec![0usize];
+    /// Barnes-Hut repulsion of the node pool onto one body. `stack` is the
+    /// caller's traversal scratch, cleared and reused across bodies so a
+    /// step over a large graph allocates nothing.
+    fn apply(
+        &self,
+        query: &RepelQuery,
+        stack: &mut Vec<usize>,
+        fx: &mut f32,
+        fy: &mut f32,
+    ) {
+        let (px, py, me, strength) = (query.px, query.py, query.me, query.strength);
+        stack.clear();
+        stack.push(0usize);
         while let Some(id) = stack.pop() {
             let n = &self.nodes[id];
             if n.mass == 0.0 {
