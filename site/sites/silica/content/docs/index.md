@@ -1,6 +1,6 @@
 ---
 title: Manual contents
-description: The Silica manual — installing it, opening a vault, the panes and views, every piece of Markdown syntax it understands, the search grammar, the settings it reads, and reference material on Obsidian compatibility.
+description: The Silica manual, covering installing it, opening a vault, the panes and views, every piece of Markdown syntax it understands, the search grammar, the settings it reads, and reference material on Obsidian compatibility.
 ---
 
 # The Silica manual
@@ -41,7 +41,7 @@ so in place, rather than describing Obsidian's behavior and leaving you to find 
 | [Search](/docs/app/search/) | Searching the whole vault, reading the results, explain |
 | [Switcher and palette](/docs/app/switcher/) | The quick switcher and the command palette |
 | [The graph view](/docs/app/graph/) | The global and local graph, filters, color groups, forces |
-| [Managing notes](/docs/app/manage/) | New, rename, move, copy, delete — and the link rewriting |
+| [Managing notes](/docs/app/manage/) | New, rename, move, copy, delete, and the link rewriting |
 
 ## Writing notes
 
@@ -83,7 +83,7 @@ uses, and Obsidian's own syntax. These pages are the syntax reference.
 
 Command ids are written as `editor:toggle-source`, because that is the string your
 `hotkeys.json` uses and the thing you can search for in the command palette. Keys are
-written as Obsidian labels them — `Ctrl + Shift + F` — and on macOS, Ctrl means Cmd unless
+written as Obsidian labels them, so `Ctrl + Shift + F`, and on macOS, Ctrl means Cmd unless
 a page says otherwise. Settings are named as the Settings window names them, with the
 `.obsidian` key in code beside them, because the file is often the faster way to find out
 what a setting actually is.

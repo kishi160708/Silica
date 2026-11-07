@@ -1,6 +1,6 @@
 ---
 title: Switcher and palette
-description: The quick switcher for opening a note by name and the command palette for running anything by name — how each ranks what it offers, and how pinned and recent entries work.
+description: The quick switcher for opening a note by name and the command palette for running anything by name, how each ranks what it offers, and how pinned and recent entries work.
 ---
 
 # Switcher and palette
@@ -14,14 +14,14 @@ Two modal lists, both fuzzy, both opened with a key and dismissed with `Escape`.
 Type part of a note's name and press Enter to open it. The switcher matches against three
 things, so you do not have to remember which one you know:
 
-- **File names** — the usual case.
-- **Aliases** — from the `aliases` property, so a note titled *RFC 8259* also answers to
+- **File names**, the usual case.
+- **Aliases** from the `aliases` property, so a note titled *RFC 8259* also answers to
   *JSON spec* if you said so in its frontmatter.
-- **Paths** — so `arch/dec` finds `architecture/decisions.md`.
+- **Paths**, so `arch/dec` finds `architecture/decisions.md`.
 
 Recently opened files come first. Below the matches, **targets that do not exist yet** are
-listed too — the `[[Names]]` other notes link to where no file has been created. They are
-marked as not created, and pressing Enter on one **creates the note**, which is often the
+listed too, meaning the `[[Names]]` other notes link to where no file has been created. They
+are marked as not created, and pressing Enter on one **creates the note**, which is often the
 quickest way to start the note you have been meaning to write.
 
 Pressing Enter on a name nothing at all matches also creates a note with that name, in your
@@ -46,10 +46,10 @@ Type part of a command's name and press Enter to run it. The order is Obsidian's
 2. **Commands you have run this session**, most recent first.
 3. **Everything else**, in registration order.
 
-Fuzzy matching is over command *names*, the ones you see — *Toggle reading view*, not
+Fuzzy matching is over command *names*, the ones you see, as in *Toggle reading view*, not
 `markdown:toggle-preview`.
 
-> **Note** The palette lists only the commands Silica can actually run — 127 of them today.
+> **Note** The palette lists only the commands Silica can actually run, 127 of them today.
 > This is the same way Obsidian hides a command whose check callback fails, and it means the
 > palette never offers you something that does nothing. Every command id is still listed in
 > Settings' [Hotkeys](/docs/hotkeys/) tab, so you can see and keep bindings for features that

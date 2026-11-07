@@ -10,7 +10,7 @@ what is promised and what is merely intended. The project uses four tiers.
 
 | Tier | Goal | Status |
 |---|---|---|
-| **1** | Vault and format compatibility — no conversion, no data loss | In scope, and first |
+| **1** | Vault and format compatibility: no conversion, no data loss | In scope, and first |
 | **2** | Core feature parity with Obsidian's app and its 35 core plugins | In scope |
 | **3** | Theme compatibility | A variable-level subset of the 1,047 CSS custom properties |
 | **4** | Community plugin compatibility | **Out of scope.** A new native plugin API instead |
@@ -21,7 +21,7 @@ This is the tier that actually matters, because it is the one whose failure lose
 It means: Silica reads your vault without converting anything, and writes it without
 damaging anything.
 
-The evidence for it is two conformance suites, both **ratchets** in CI — they are not
+The evidence for it is two conformance suites, both **ratchets** in CI, meaning they are not
 allowed to go down:
 
 | Suite | Result |
@@ -76,8 +76,8 @@ phase by phase:
 
 Note the shape of those gates: each is a claim about a person using the program, not a
 checklist of features. The phase-2 gate was checked by opening every note of a real vault
-and reading it, which is how two fidelity bugs — equal-width table columns and wrapping code
-blocks — were found and fixed.
+and reading it, which is how two fidelity bugs, equal-width table columns and wrapping code
+blocks, were found and fixed.
 
 What is in and out today is [what differs from
 Obsidian](/docs/reference/differences/).
@@ -86,8 +86,8 @@ Obsidian](/docs/reference/differences/).
 
 Obsidian themes are CSS over 1,047 documented custom properties. Silica is not a browser, so
 a theme's CSS cannot simply be applied. The plan is a **variable-level subset**: implement the
-custom properties that carry the visual identity — colors, fonts, sizes, radii — and read a
-theme's values for them.
+custom properties that carry the visual identity, meaning colors, fonts, sizes and radii,
+and read a theme's values for them.
 
 Today: `appearance.json`'s base theme, accent color and fonts are honored. `cssTheme` is not.
 
@@ -99,7 +99,7 @@ They are JavaScript modules written against an Electron application's API, with 
 Node and the DOM. Silica is a native binary with no JavaScript runtime and no DOM. Embedding
 one to host them would mean rebuilding the thing whose absence is the point.
 
-Instead, tier 4 is a **native plugin API of Silica's own** — the last planned phase. The
+Instead, tier 4 is a **native plugin API of Silica's own**, the last planned phase. The
 35 core plugins are being implemented as part of the application rather than as plugins.
 
 Your `community-plugins.json` and your plugins' manifests are still read and shown in
@@ -107,5 +107,5 @@ Your `community-plugins.json` and your plugins' manifests are still read and sho
 
 ## Next
 
-- [What differs from Obsidian](/docs/reference/differences/) — the current gap list.
+- [What differs from Obsidian](/docs/reference/differences/): the current gap list.
 - [How Silica works](/docs/reference/architecture/)

@@ -1,6 +1,6 @@
 ---
 title: What differs from Obsidian
-description: The honest list — everything Obsidian does that Silica does not do yet, the places Silica deliberately behaves differently, and what is permanently out of scope.
+description: The honest list: everything Obsidian does that Silica does not do yet, the places Silica deliberately behaves differently, and what is permanently out of scope.
 ---
 
 # What differs from Obsidian
@@ -34,7 +34,7 @@ Things Obsidian does that Silica intends to do and does not.
 |---|---|
 | **Bases** | The Bases YAML format is implemented and round-trips; there is no base view. Canvas has one |
 | **A canvas embedded in a note** | `![[Board.canvas]]` is not drawn; the file opens in a view of its own |
-| **Popout windows** | — |
+| **Popout windows** | Do not exist here |
 | **Stacked tabs** | Tabs and split groups are in; stacking them is not |
 | **Multiple vaults in one window** | Run Silica once per vault |
 | **Local graph depth beyond 1**, arrows, timelapse, screenshot export | See [the graph](/docs/app/graph/) |
@@ -48,8 +48,8 @@ Things Obsidian does that Silica intends to do and does not.
 | **Editing properties in reading view** | The reading view's properties table is read-only; Live Preview's is not |
 | **Vim mode** | `vimMode` is read, not implemented |
 | **Line numbers, indent guides, inline title, right-to-left** | Read and shown in Settings, not acted on |
-| **Spellcheck** | — |
-| **`Ctrl + hover` page previews** | — |
+| **Spellcheck** | Not implemented |
+| **`Ctrl + hover` page previews** | Not implemented |
 
 ### Files and settings
 
@@ -77,7 +77,7 @@ link text (which Obsidian splits the link on). See [compatibility](/docs/referen
 Places where Silica does not copy Obsidian, on purpose.
 
 **Frontmatter links are rewritten in place.** When a rename changes a link in your YAML,
-Obsidian re-serialises the whole frontmatter block — which can turn `aliases: [Bee]` into a
+Obsidian re-serialises the whole frontmatter block, which can turn `aliases: [Bee]` into a
 block list, changing bytes you did not touch. Silica replaces the link text and leaves every
 other byte alone. This is a difference in Silica's favor and it is not going to be
 "fixed".
@@ -100,20 +100,20 @@ is the entire point of the project.
 
 What is planned instead is a **native plugin API of Silica's own** (tier 4, the last phase).
 Your `community-plugins.json` and plugin manifests are read and listed in Settings, so you can
-see what your vault has — they are simply not executed.
+see what your vault has; they are simply not executed.
 
 **Obsidian Sync, Publish and the commercial services** are Obsidian's products, not file
-formats. Silica has nothing to do with them. Use any file-level sync — git, Syncthing,
-Dropbox, or Obsidian Sync itself: they all move files, and files are all Silica needs.
+formats. Silica has nothing to do with them. Use any file-level sync, meaning git, Syncthing,
+Dropbox, or Obsidian Sync itself, because they all move files, and files are all Silica needs.
 
 ## Keeping this page honest
 
 This list is maintained against `docs/silica/Development.md` in the repository, which carries
-the per-item status and the gate notes. If you find something missing from it — a difference
-you hit that is not written here — that is worth
+the per-item status and the gate notes. If you find something missing from it, such as a
+difference you hit that is not written here, that is worth
 [reporting](https://github.com/lw-xiong/Silica/issues) in its own right.
 
 ## Next
 
-- [Obsidian compatibility](/docs/reference/compatibility/) — the tiers and the numbers.
+- [Obsidian compatibility](/docs/reference/compatibility/): the tiers and the numbers.
 - [Troubleshooting](/docs/reference/troubleshooting/)

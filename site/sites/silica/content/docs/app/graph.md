@@ -1,6 +1,6 @@
 ---
 title: The graph view
-description: Silica's graph of your vault — what the nodes and edges are, the filters and color groups it reads from graph.json, the force simulation, and how to move around in it.
+description: Silica's graph of your vault: what the nodes and edges are, the filters and color groups it reads from graph.json, the force simulation, and how to move around in it.
 ---
 
 # The graph view
@@ -14,15 +14,15 @@ reading. `graph:open-local` opens the local graph of the open note instead.
 |---|---|
 | A note | Always |
 | An attachment | With `showAttachments` on |
-| An unresolved target | With `hideUnresolved` off — a `[[Name]]` nobody has created |
+| An unresolved target | With `hideUnresolved` off, a `[[Name]]` nobody has created |
 | A tag | With `showTags` on |
-| An orphan | With `showOrphans` on — a note with no links either way |
+| An orphan | With `showOrphans` on, a note with no links either way |
 
 Edges are links, in either direction, including links in frontmatter.
 
 Every one of those switches comes from your vault's `graph.json`, so the graph opens looking
-the way you left it in Obsidian. So do the `search` filter — an arbitrary [search
-query](/docs/reference/search-syntax/) restricting which notes appear — and your
+the way you left it in Obsidian. So do the `search` filter (an arbitrary [search
+query](/docs/reference/search-syntax/) restricting which notes appear) and your
 **color groups**, each a query and a color, evaluated with the same grammar.
 
 The display and force settings in `graph.json` are read too: node size, link thickness, text
@@ -35,14 +35,14 @@ fade threshold, centre force, repel force, link force and link distance, along w
 |---|---|
 | Zoom | Mouse wheel |
 | Pan | Drag the background |
-| Move a node | Drag the node — which reheats the simulation around it |
+| Move a node | Drag the node, which reheats the simulation around it |
 | Open a note | Click its node |
 | Refit the view | `Ctrl + 0` |
 
 The view auto-fits the graph until the first time you zoom or pan, after which it leaves your
 framing alone.
 
-Labels appear once you are zoomed in past a threshold — and that threshold rises with the
+Labels appear once you are zoomed in past a threshold, and that threshold rises with the
 number of nodes, so a 5,000-note graph does not try to paint 5,000 labels at once.
 
 ## The local graph
@@ -73,7 +73,7 @@ a large graph stays smooth.
 - Arrows on the edges.
 - The timelapse animation.
 - Screenshot export.
-- Writing display changes back to `graph.json` — adjust the forces in Obsidian and Silica
+- Writing display changes back to `graph.json`; adjust the forces in Obsidian and Silica
   will read them.
 
 ## Next

@@ -7,7 +7,7 @@ description: What a vault is to Silica, what happens the first time you open one
 
 A vault is a folder. That is the whole definition: Silica takes a path, scans the folder
 below it, and opens. There is no vault file to create, no registration step and no vault
-picker — the path is the argument.
+picker, because the path is the argument.
 
 ```shell
 silica ~/notes
@@ -23,15 +23,15 @@ a vault writes nothing**.
    the window is created, so the first frame already has the right colors and the right key
    bindings rather than flashing a default theme at you.
 2. **The folder is scanned** on a background thread: every file below the root, skipping
-   dot-folders. Each file is classified by extension into a kind — Markdown note, image,
-   audio, video, PDF, Canvas, Base, or unknown.
+   dot-folders. Each file is classified by extension into a kind, whether a Markdown note,
+   image, audio, video, PDF, Canvas, Base, or unknown.
 3. **Every note is read and indexed.** The Markdown is parsed once, and from that one parse
    come the note's links, embeds, tags, headings, sections, list items, blocks and
    frontmatter. Then every link in the vault is resolved to a file, which is what makes
    backlinks, the graph and unresolved-link detection possible.
 4. **The window opens** on the three-pane shell, with the Files tree on the left.
 
-A 20,000-file vault indexes cold in under two seconds on the reference machine — that is one
+A 20,000-file vault indexes cold in under two seconds on the reference machine, which is one
 of the project's gates, not an aspiration. See [performance](/docs/reference/performance/).
 
 ## What gets read from `.obsidian`
@@ -45,7 +45,7 @@ and carried through rather than dropped.
 | `appearance.json` | Base theme, accent color, text and interface fonts, font size |
 | `hotkeys.json` | Your key bindings, replacing the defaults command by command |
 | `core-plugins.json` | Which core plugins are on (both the modern map and the legacy array shape) |
-| `community-plugins.json` | The list, and each plugin's manifest — shown in Settings, not run |
+| `community-plugins.json` | The list, and each plugin's manifest, shown in Settings, not run |
 | `graph.json` | Graph filters, color groups, display settings and forces |
 | `switcher.json` | Quick switcher options |
 | `command-palette.json` | Pinned commands |
@@ -79,8 +79,8 @@ note that was CRLF with a BOM is written back CRLF with a BOM.
 
 ## Files changed underneath you
 
-Silica watches the vault folder. A burst of writes — a git checkout, a sync client landing a
-batch — is collected for 300 ms and applied as one update:
+Silica watches the vault folder. A burst of writes, whether a git checkout or a sync client
+landing a batch, is collected for 300 ms and applied as one update:
 
 - Added, modified, removed and moved files re-index in place.
 - When files appear or vanish, every link in the vault is re-resolved, because a link
@@ -95,11 +95,11 @@ is what Silica itself last wrote.
 ## Several vaults
 
 One Silica process opens one vault. To work in two, run it twice. `app:open-vault` and
-`app:open-another-vault` exist as command ids — your `hotkeys.json` bindings for them are
-honored as bindings — but switching vaults from inside the window is not implemented; the
+`app:open-another-vault` exist as command ids, and your `hotkeys.json` bindings for them are
+honored as bindings, but switching vaults from inside the window is not implemented and the
 command is not offered in the palette.
 
 ## Next
 
-- [Coming from Obsidian](/docs/from-obsidian/) — if the vault is one you use daily.
-- [The window](/docs/app/window/) — what you are looking at.
+- [Coming from Obsidian](/docs/from-obsidian/): if the vault is one you use daily.
+- [The window](/docs/app/window/): what you are looking at.

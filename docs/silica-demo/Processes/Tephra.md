@@ -27,10 +27,10 @@ Tephra is classified by grain size first and composition second, because size is
 
 Bombs are shaped in flight and on landing:
 
-- **Spindle** — twisted into a fusiform shape by spinning in the air.
-- **Bread-crust** — a quenched rind cracked by the still-vesiculating interior.
-- **Cow-pat** — landed too fluid to keep any shape.
-- **Ribbon** — a thread of melt that stayed in one piece.
+- Spindle: twisted into a fusiform shape by spinning in the air.
+- Bread-crust: a quenched rind cracked by the still-vesiculating interior.
+- Cow-pat: landed too fluid to keep any shape.
+- Ribbon: a thread of melt that stayed in one piece.
 
 A bomb from [[Kīlauea]], still glowing where it landed, is in [[Kīlauea#Bombs]].
 

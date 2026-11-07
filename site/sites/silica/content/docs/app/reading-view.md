@@ -1,6 +1,6 @@
 ---
 title: Reading view
-description: How Silica renders a finished note — every construct it draws, how tables lay out their columns, how embeds and footnotes resolve, and what is not drawn yet.
+description: How Silica renders a finished note: every construct it draws, how tables lay out their columns, how embeds and footnotes resolve, and what is not drawn yet.
 ---
 
 # Reading view
@@ -19,10 +19,10 @@ use, so what you read and what the cache believes cannot disagree.
 | | |
 |---|---|
 | Headings | Levels 1–6, scaled |
-| Paragraphs | With soft line breaks — a single newline is a `<br>` unless `strictLineBreaks` is on |
+| Paragraphs | With soft line breaks, where a single newline is a `<br>` unless `strictLineBreaks` is on |
 | Emphasis | `*italic*`, `**bold**`, `~~strike~~`, `==highlight==` |
 | Inline code | With the monospace font |
-| Links | `[[Wikilinks]]`, Markdown links, and bare URLs — all clickable |
+| Links | `[[Wikilinks]]`, Markdown links, and bare URLs, all clickable |
 | Tags | Clickable, and counted in the Tags pane |
 | Images | Local files, with Obsidian's size hints: `![[pic.png\|200x100]]` |
 | Embeds | Whole notes, `#Heading` sections and `#^block` references, nested up to four deep |
@@ -51,11 +51,11 @@ use, so what you read and what the cache believes cannot disagree.
 - **`[[Note#^block-id]]`** opens it scrolled to that block.
 - **A tag** searches the vault for it.
 - **A footnote reference** jumps to the definition.
-- **A task checkbox** toggles it. The edit takes the same path a Live Preview click takes —
-  one undo step, written back by the autosave — and the view rebuilds from that buffer.
+- **A task checkbox** toggles it. The edit takes the same path a Live Preview click takes,
+  one undo step and written back by the autosave, and the view rebuilds from that buffer.
 - **A code block's copy button** copies the block and shows a check for a moment.
-- **A link inside an embedded note** works, and opens the note it points at — not the note
-  the embed is in.
+- **A link inside an embedded note** works, and opens the note it points at rather than the
+  note the embed is in.
 
 ## How tables lay out
 
@@ -81,7 +81,7 @@ ever laid out. A 50,000-line note opens and scrolls like a short one.
 
 ## Not yet
 
-The gaps, honestly — none of these are in reading view today:
+The gaps, honestly. None of these are in reading view today:
 
 | Not drawn | What you see instead |
 |---|---|
@@ -91,12 +91,12 @@ The gaps, honestly — none of these are in reading view today:
 | Bases (`.base`) | The format round-trips on disk, but there is no base view. A `.canvas` does open, in a canvas view of its own |
 | Heading folding | Headings do not collapse |
 | Editing a property | The properties table is read-only here; edit it in [Live Preview](/docs/app/editing/) |
-| PDF export | — |
+| PDF export | Not implemented |
 
 Frontmatter edge cases match Obsidian: a `<script>` in a note is removed, unknown HTML
 elements are unwrapped, and a raw `<a>` gains `target` and `rel`.
 
 ## Next
 
-- [Editing a note](/docs/app/editing/) — Live Preview and Source mode.
-- [Basic formatting](/docs/format/basic/) — the syntax reference starts here.
+- [Editing a note](/docs/app/editing/): Live Preview and Source mode.
+- [Basic formatting](/docs/format/basic/): the syntax reference starts here.

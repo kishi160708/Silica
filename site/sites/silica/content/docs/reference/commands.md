@@ -1,12 +1,12 @@
 ---
 title: Commands and hotkeys
-description: The commands Silica registers — the 244 Obsidian command ids, the 41 with a default hotkey, and the 127 Silica can actually run today, with every id and default key listed.
+description: The commands Silica registers: the 244 Obsidian command ids, the 227 with an observed desktop name, the 41 with a default hotkey, and the 127 Silica can actually run today, with every id and default key listed.
 ---
 
 # Commands and hotkeys
 
-Silica registers **244 command ids** — the exact strings Obsidian registers, so your
-`hotkeys.json` matches them — of which **227 have an observed desktop name**. **41** carry a
+Silica registers **244 command ids**, the exact strings Obsidian registers, so your
+`hotkeys.json` matches them. Of those, **227 have an observed desktop name**. **41** carry a
 default hotkey. **127** do something in Silica today.
 
 Those four numbers are different things and the difference is the point:
@@ -31,14 +31,14 @@ with a throwaway plugin that dumped `app.commands` and the settings tabs.
 
 ## Commands with a default hotkey
 
-`Ctrl` is Cmd on macOS, except where Obsidian itself registers a literal `Ctrl` — the tab
-commands below, which are `Ctrl` everywhere.
+`Ctrl` is Cmd on macOS, except where Obsidian itself registers a literal `Ctrl`, namely the
+tab commands below, which are `Ctrl` everywhere.
 
 | Command | Id | Default key | In Silica |
 |---|---|---|---|
 | Add file property | `markdown:add-metadata-property` | `Ctrl + ;` | Yes |
 | Close current tab | `workspace:close` | `Ctrl + W` | Yes |
-| Close window | `workspace:close-window` | `Ctrl + Shift + W` | — |
+| Close window | `workspace:close-window` | `Ctrl + Shift + W` | No |
 | Command palette: Open command palette | `command-palette:open` | `Ctrl + P` | Yes |
 | Create new note | `file-explorer:new-file` | `Ctrl + N` | Yes |
 | Create note to the right | `file-explorer:new-file-in-new-pane` | `Ctrl + Shift + N` | Yes |
@@ -55,7 +55,7 @@ commands below, which are `Ctrl` everywhere.
 | New tab | `workspace:new-tab` | `Ctrl + T` | Yes |
 | Open help | `app:open-help` | `F1` | Yes |
 | Open link under cursor in new tab | `editor:open-link-in-new-leaf` | `Ctrl + Enter` | Yes |
-| Open link under cursor in new window | `editor:open-link-in-new-window` | `Ctrl + Alt + Shift + Enter` | — |
+| Open link under cursor in new window | `editor:open-link-in-new-window` | `Ctrl + Alt + Shift + Enter` | No |
 | Open link under cursor to the right | `editor:open-link-in-new-split` | `Ctrl + Alt + Enter` | Yes |
 | Open settings | `app:open-settings` | `Ctrl + ,` | Yes |
 | Quick switcher: Open quick switcher | `switcher:open` | `Ctrl + O` | Yes |
@@ -71,12 +71,12 @@ commands below, which are `Ctrl` everywhere.
 | Toggle reading view | `markdown:toggle-preview` | `Ctrl + E` | Yes |
 | Undo close tab | `workspace:undo-close-pane` | `Ctrl + Shift + T` | Yes |
 
-> **Note** The two dashes are the two window commands: a popout window and a second window
-> do not exist here. Their ids are registered and your bindings for them are kept.
+> **Note** The two rows marked No are the two window commands: a popout window and a second
+> window do not exist here. Their ids are registered and your bindings for them are kept.
 
 ## Runnable commands with no default key
 
-These do something, and Obsidian ships no binding for them — so if you want a key, bind one
+These do something, and Obsidian ships no binding for them, so if you want a key, bind one
 in `hotkeys.json`. Several are worth binding on day one: `editor:toggle-source`,
 `graph:open-local`, and the two split commands.
 
@@ -181,7 +181,7 @@ A few keys belong to a widget rather than to the command registry, and are not r
 | `Escape` | A modal or the find panel | Closes it |
 | `Enter`, `↑`, `↓` | The switcher or palette | Choose and move |
 | `Enter`, `↑`, `↓` | The find panel | Next and previous match |
-| `Alt + Enter` | The find panel | *Find all* — a cursor at every match |
+| `Alt + Enter` | The find panel | *Find all*, a cursor at every match |
 | `Alt + click` | The editor | Add or remove a cursor |
 | `Ctrl + click` | Source mode | Follow a link |
 | `Ctrl + 0` | The graph | Refit the view |
@@ -194,5 +194,5 @@ list with your own bindings applied, which is usually the faster way to look one
 
 ## Next
 
-- [Hotkeys](/docs/hotkeys/) — how `hotkeys.json` is applied.
+- [Hotkeys](/docs/hotkeys/): how `hotkeys.json` is applied.
 - [Obsidian compatibility](/docs/reference/compatibility/)

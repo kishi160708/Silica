@@ -13,11 +13,11 @@
   <img alt="v0.5.7" src="https://img.shields.io/badge/status-early%20alpha%20v0.5.7-f2545b?style=flat-square">
 </p>
 
-Silica is a native desktop knowledge base written in Rust on GPUI. It opens an Obsidian vault exactly as it sits on disk: the same folder, the same `.obsidian` configuration, the same Markdown dialect, the same `.canvas` and `.base` files. There is no import step, no conversion, and no second copy of anything. The vault folder is the only source of truth. Silica is an independent, clean-room implementation and is not affiliated with Obsidian.
+Silica is a native desktop knowledge base written in Rust on GPUI. It opens an Obsidian vault exactly as it sits on disk: the same `.obsidian` configuration, the same Markdown dialect, the same `.canvas` and `.base` files. Nothing is imported or converted, and the vault folder is the only source of truth. Silica is an independent, clean-room implementation and is not affiliated with Obsidian.
 
 ## Status
 
-Reader and writer are done. All five development phases have landed, including phase 5 (plugins). `silica-markdown` parses CommonMark — all 652 spec examples — plus the GitHub extensions Obsidian uses, into a single spanned tree with byte spans, and renders reading-view HTML that matches Obsidian on 1007 of 1009 corpus notes.
+Reader and writer are done. All five development phases have landed, including phase 5 (plugins). `silica-markdown` parses CommonMark (all 652 spec examples) plus the GitHub extensions Obsidian uses into a single spanned tree with byte spans, and renders reading-view HTML that matches Obsidian on 1007 of 1009 corpus notes.
 
 The app opens a real vault in a three-pane shell: Files, reading view, and side panes for Backlinks, Outgoing links, Tags, All properties, and Outline. Search supports grouping, sorting, copying results, and vault-wide search & replace. The quick switcher, graph, command palette, and a Settings modal that writes are all present. Notes open in Live Preview or Source mode with find and replace, multiple cursors, auto-pairing, collapsible headings and lists, and autosave. Wikilinks (`[[`, `![[`) and tags (`#`) autocomplete against the vault's files, aliases, headings, tags, and block references. Clipboard images and dropped files save to the vault's attachment folder and insert embeds. Frontmatter is an editable, typed properties table that rewrites only the lines it changes.
 
@@ -37,7 +37,7 @@ Measured on a Lenovo Legion 5 (CachyOS, AMD Ryzen 5 4600H, 12 threads) with `cra
 | 2 | 44 ms | 12 ms | 80 ms | 40 ms | 175 ms |
 | 3 | 44 ms | 11 ms | 71 ms | 39 ms | 166 ms |
 
-Gate: 190 ms cold against a 2.00 s budget — PASS.
+Gate: 190 ms cold against a 2.00 s budget. PASS.
 
 ## Crates
 

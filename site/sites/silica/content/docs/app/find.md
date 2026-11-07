@@ -1,6 +1,6 @@
 ---
 title: Find and replace
-description: Searching inside the open note — the find panel, match case and regex, replacement captures, replace all as one undo step, and Find all for a cursor at every match.
+description: Searching inside the open note: the find panel, match case and regex, replacement captures, replace all as one undo step, and Find all for a cursor at every match.
 ---
 
 # Find and replace
@@ -19,11 +19,11 @@ the query.
 
 ## Finding
 
-Matching is **literal and case-insensitive** by default, with Obsidian's two toggles on the
+Matching is literal and case-insensitive by default, with Obsidian's two toggles on the
 panel, both off to start with:
 
-- **`Aa`** — match case, making the query case-sensitive.
-- **`.*`** — regex, treating the query as a regular expression.
+- **`Aa`**, match case, making the query case-sensitive.
+- **`.*`**, regex, treating the query as a regular expression.
 
 A regex that does not parse yields no results rather than an error, so a half-typed pattern
 just shows nothing until it is valid.
@@ -40,8 +40,8 @@ many there are. Typing selects the first match from the cursor onwards.
 Next and previous wrap around the end of the note. Matches refresh after every edit, so the
 count stays true while you work.
 
-> **Note** Matching is capped at 20,000 matches in one note. A query that hits more than that
-> — a single space, say — stops counting there rather than stalling.
+> **Note** Matching is capped at 20,000 matches in one note. A query that hits more than that,
+> a single space say, stops counting there rather than stalling.
 
 ## Replacing
 
@@ -61,7 +61,7 @@ With **Regex** on, the replacement understands captures:
 
 ## Find all
 
-`Alt + Enter` — or the *Find all* button — selects every match in the note at once and
+`Alt + Enter`, or the *Find all* button, selects every match in the note at once and
 closes the panel. You are left with one cursor per match, which is the fastest way to rename
 a variable, reformat a list, or add a prefix to twenty lines.
 
@@ -71,5 +71,5 @@ back to a single cursor.
 
 ## Next
 
-- [Search](/docs/app/search/) — the whole vault, with a query grammar.
+- [Search](/docs/app/search/): the whole vault, with a query grammar.
 - [Editing a note](/docs/app/editing/)

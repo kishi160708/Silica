@@ -13,10 +13,10 @@ Tuff is consolidated volcanic ash: [[Tephra]] finer than 2 mm that has been comp
 
 ## Kinds
 
-- **Air-fall tuff** — ash that settled from an eruption cloud, well sorted and bedded, thinning away from the vent.
-- **Ignimbrite** — the deposit of a pyroclastic density current: poorly sorted ash and [[Pumice]], often welded where it was emplaced hot.
-- **Welded tuff** — an ignimbrite whose glass shards and pumice were flattened and fused by their own heat into a dense, streaky rock called *eutaxitic*.
-- **Silica tuff** — mafic ash and lapilli near a [[Cinder cone]], cemented by palagonite where it was wet.
+- Air-fall tuff: ash that settled from an eruption cloud, well sorted and bedded, thinning away from the vent.
+- Ignimbrite: the deposit of a pyroclastic density current: poorly sorted ash and [[Pumice]], often welded where it was emplaced hot.
+- Welded tuff: an ignimbrite whose glass shards and pumice were flattened and fused by their own heat into a dense, streaky rock called *eutaxitic*.
+- Silica tuff: mafic ash and lapilli near a [[Cinder cone]], cemented by palagonite where it was wet.
 
 ## Reading a welded tuff
 

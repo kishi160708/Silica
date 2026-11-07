@@ -1,6 +1,6 @@
 ---
 title: Internal links
-description: Wikilinks and Markdown links in Silica — the full link grammar including headings, block references and aliases, and the exact rule that decides which file an ambiguous link means.
+description: Wikilinks and Markdown links in Silica, the full link grammar including headings, block references and aliases, and the exact rule that decides which file an ambiguous link means.
 ---
 
 # Internal links
@@ -18,7 +18,7 @@ A link between notes can be written two ways, and Silica reads both.
 [Text](<Note with spaces.md>) angle brackets for awkward paths
 ```
 
-When Silica **rewrites** an existing link — because you renamed or moved its target — the
+When Silica **rewrites** an existing link, because you renamed or moved its target, the
 link keeps the form you wrote it in, and only its path changes; `newLinkFormat` decides what
 shape that path takes. `useMarkdownLinks` is read and governs the form of links Silica
 *creates*. See [managing notes](/docs/app/manage/).
@@ -32,19 +32,19 @@ A couple of rules are worth knowing because they bite:
 
 - **`[[` needs its `]]` on the same line.** A wikilink does not span lines.
 - **Wikilinks and embeds are not parsed inside code spans.** `` `[[Note]]` `` is text.
-- **`[[Note\|alias]]`** — with a backslash before the pipe, as you must write it inside a
-  table — is the alias form: the target is the text before the first `|`, with a trailing
+- **`[[Note\|alias]]`**, written with a backslash before the pipe as you must do inside a
+  table, is the alias form: the target is the text before the first `|`, with a trailing
   backslash dropped. Inside a code span, `\|` stays literal.
 
 ## How a link finds its file
 
 Most links are unambiguous and this never comes up. When two notes share a basename, the
-order matters, and it is not what you would guess — this was wrong in Silica's own
+order matters, and it is not what you would guess; this was wrong in Silica's own
 specification until a probe against a running Obsidian corrected it.
 
 **Extensions.** A link may name the `.md` or leave it off.
 
-**Paths with a prefix are not searched for:**
+Paths with a prefix are not searched for:
 
 | Written | Resolved |
 |---|---|
@@ -59,7 +59,7 @@ specification until a probe against a running Obsidian corrected it.
 3. The **shortest path**.
 4. Failing all that, path order.
 
-So `[[Zed]]` written in `Long/Way/Down/C.md` resolves to `Zed.md` at the root — *not* to the
+So `[[Zed]]` written in `Long/Way/Down/C.md` resolves to `Zed.md` at the root, *not* to the
 sibling `Long/Way/Down/Zed.md`. But `[[X]]` in the same note resolves to the sibling
 `Long/Way/Down/X.md` over `Mid/X.md`, because neither is at the root and the sibling rule
 applies next.
@@ -99,7 +99,7 @@ related:
 
 These appear in Outgoing links, produce backlinks in the target, and draw edges in the graph.
 When the target is renamed, Silica rewrites the link text in place and leaves the rest of
-the YAML bytes alone — Obsidian re-serialises the whole block, which is a difference in
+the YAML bytes alone, where Obsidian re-serialises the whole block, which is a difference in
 Silica's favor.
 
 ## Display text
@@ -120,8 +120,8 @@ scrolled to that block.
 ## Completing a link as you type
 
 `[[`, `![[` and `#` open a popup over the editor. It offers the vault's files, their
-aliases, a note's headings after a `#`, the vault's tags, and a note's blocks after a `#^` —
-`[[Note#^` lists that note's blocks and `[[#^` the ones in the note you are editing. An
+aliases, a note's headings after a `#`, the vault's tags, and a note's blocks after a `#^`,
+so `[[Note#^` lists that note's blocks and `[[#^` the ones in the note you are editing. An
 empty `[[` lists files and aliases by modification time, newest first.
 
 Three keys accept a row, and they do different things, as in Obsidian:
@@ -133,8 +133,8 @@ Three keys accept a row, and they do different things, as in Obsidian:
 | `Shift + Enter` | The text as you typed it, ignoring the selected row |
 
 An accepted file is reformatted to your `newLinkFormat`, and display text is added exactly
-when the path part carries a `/` and the target is a note — `[[Sub/Alpha|Alpha]]`, but
-`[[../pic.png]]`. A heading or block pick keeps the path as you typed it and never takes
+when the path part carries a `/` and the target is a note, as in `[[Sub/Alpha|Alpha]]`, but
+not `[[../pic.png]]`. A heading or block pick keeps the path as you typed it and never takes
 display text. Accepting a block that has no id yet writes a six-character id into the
 *target* note, in the place Obsidian writes it, after checking that file is still the bytes
 the insertion was planned against.

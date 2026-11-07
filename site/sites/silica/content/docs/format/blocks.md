@@ -1,6 +1,6 @@
 ---
 title: Block ids and footnotes
-description: Block identifiers for linking to a single paragraph, list item, table or code block, and footnotes including the inline form — with the placement rules Silica takes from Obsidian.
+description: Block identifiers for linking to a single paragraph, list item, table or code block, and footnotes including the inline form, with the placement rules Silica takes from Obsidian.
 ---
 
 # Block ids and footnotes
@@ -26,8 +26,8 @@ Then, from anywhere:
 Two placements, and the second one exists because the first cannot work everywhere:
 
 1. **At the end of a paragraph or list item**, after a space: `text ^id`.
-2. **Alone on a line after a block**, for things that have no "end of the text" to append to
-   — a table, a list, or a fenced code block:
+2. **Alone on a line after a block**, for things that have no "end of the text" to append to,
+   as with a table, a list, or a fenced code block:
 
 ```markdown
 | a | b |
@@ -42,7 +42,7 @@ That is how Obsidian ids tables and code blocks, and Silica does the same.
 
 A ` ^id` at the end of a **callout's header line** gives the id to the callout.
 
-Block ids are **hidden** in reading view and in Live Preview — they are machinery, not
+Block ids are **hidden** in reading view and in Live Preview, because they are machinery, not
 content.
 
 ## Footnotes
@@ -77,7 +77,7 @@ referenced definitions, in order of appearance.
 ### Undefined references
 
 A `[^missing]` with no definition renders as the bare label. It is not an error and it does
-not disappear — which is usually what you want while a note is a draft.
+not disappear, which is usually what you want while a note is a draft.
 
 ## Next
 

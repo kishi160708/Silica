@@ -25,9 +25,9 @@ sha256sum -c SHA256SUMS      # against the file in the same release
 > **Warning** Nothing is code signed or notarized. Linux is the platform Silica is developed on
 > and the one that gets the hours; since 0.3.1 the Windows and macOS builds are run on real
 > hardware too, each drawing its own platform's window. On macOS, Gatekeeper
-> will refuse the first launch — open it once with
+> will refuse the first launch, so open it once with
 > *right-click › Open*, or run `xattr -d com.apple.quarantine silica`. On Windows,
-> SmartScreen warns — *More info › Run anyway*.
+> SmartScreen warns; choose *More info › Run anyway*.
 
 ## Requirements
 
@@ -41,7 +41,7 @@ Silica's interface is [GPUI](https://gpui.rs), which renders on the GPU.
 
 Memory follows the size of your vault, not the size of the note you are reading: the
 metadata cache holds every note's links, headings, tags and sections. A 20,000-note vault is
-comfortable on an ordinary machine — see [performance](/docs/reference/performance/) for
+comfortable on an ordinary machine, and [performance](/docs/reference/performance/) has the
 measured numbers.
 
 ## Build from source
@@ -117,5 +117,5 @@ argument is taken as the vault path, or as a note name if a vault was already gi
 
 ## Next
 
-- [Open a vault](/docs/open-a-vault/) — what happens on first launch, and what gets read.
-- [Coming from Obsidian](/docs/from-obsidian/) — if you have a vault already.
+- [Open a vault](/docs/open-a-vault/): what happens on first launch, and what gets read.
+- [Coming from Obsidian](/docs/from-obsidian/): if you have a vault already.

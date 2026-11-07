@@ -27,8 +27,8 @@ deliberate exceptions:
 - `lib/highlight.mjs` highlights `silica` as a shell command, where the other
   copy knows `lapstack`.
 
-The alternative — flattening `sites/silica/` to the repository root and
-editing `build.mjs` to match — would have bought a shorter path at the cost of
+The alternative, flattening `sites/silica/` to the repository root and
+editing `build.mjs` to match, would have bought a shorter path at the cost of
 a permanent diff against the upstream builder. Hence the slightly redundant
 `site/sites/silica/`.
 
@@ -39,7 +39,7 @@ build.mjs              routes, assets, search index, sitemap, link check
 lib/markdown.mjs       front matter, marked renderer (anchors, callouts, TOC)
 lib/highlight.mjs      dependency-free highlighter (shell, rust, json, lua, toml)
 lib/template.mjs       the page shell: top bar, sidebar, on-this-page, pager, footer
-shared/                copied into /assets — site.css, site.js, Fira fonts
+shared/                copied into /assets, site.css, site.js, Fira fonts
 sites/silica/site.json host, nav, sidebar order, footer, the CTA button
 sites/silica/content/  the pages; .md is rendered, .html is passed through
 sites/silica/assets/   logo.svg, favicon.svg, silica.css, platform.js and Inter, over shared/
@@ -60,13 +60,13 @@ Everything that makes silica.cc look like Silica rather than like  is
 in `sites/silica/assets/silica.css`, which the page loads after it: the type,
 the neutral ramp, and the geometry.
 
-The short version of what it does — the long version is the comment at the top
+The short version of what it does, the long version is the comment at the top
 of the file:
 
 - **Inter**, the same faces the application bundles, so the manual and the app
   read as one product. Fira Mono stays, and carries every micro-label: card
   kickers, rail headings, badges, table headers, the code-block language.
-- **A warm neutral ramp** — near-black rather than blue-grey in the dark theme,
+- **A warm neutral ramp**, near-black rather than blue-grey in the dark theme,
   paper rather than white in the light one. The accent hues are untouched; they
   are the ones fixed in `docs/silica/Silica.md`.
 - **Chrome removed.** Cards drop their fill and their box for a single hairline
@@ -82,8 +82,7 @@ of the file:
 
 `assets/fonts/inter-{400,500,600}.woff2` and `inter-400-italic.woff2` are
 subset from the TTFs the app bundles, `crates/silica/assets/fonts` in this
-repository, to Latin plus the punctuation, arrows and marks the content uses —
-about 26 KB a face. 700 maps to 600 on purpose: Inter's SemiBold is already the
+repository, to Latin plus the punctuation, arrows and marks the content uses, about 26 KB a face. 700 maps to 600 on purpose: Inter's SemiBold is already the
 weight the headings want. Inter is under the SIL Open Font License, and
 `assets/fonts/LICENSE-Inter.txt` ships beside the faces, as Fira's does in
 `shared/fonts/`.
@@ -103,7 +102,7 @@ pyftsubset ../crates/silica/assets/fonts/Inter-Regular.ttf --unicodes="$U" \
 
 ## The recordings
 
-`assets/img/app/` is a copy of `docs/img/app/` in this repository — the GIFs and screenshots
+`assets/img/app/` is a copy of `docs/img/app/` in this repository, the GIFs and screenshots
 the README is illustrated with, made by `tools/readme-recording` over the control socket. The
 builder publishes what is under `assets/`, so they have to live here too; `just site-media`
 from the repository root re-cuts the copy, the way the logo's copies are re-cut from the
@@ -119,7 +118,7 @@ nothing reflows when the bytes land. `figure.shot` in `silica.css` is what style
 visitor's platform: it rewrites the `[data-dl-main]` button's href and label, and marks the
 matching `.dl-grid` card `[data-you]`. Every address in the markup is already a working direct
 download and Linux is what ships in the HTML, so with JavaScript off the pages stand as
-written. Android and iOS deliberately match nothing — there is no build for either.
+written. Android and iOS deliberately match nothing, there is no build for either.
 
 ## The marks
 
@@ -135,6 +134,6 @@ all fourteen holes are mud at 16 px.
 and `search-index.json` are generated; search is client-side against that
 index, and there is no server. silica.cc is served by the Hostinger VPS
 (NixOS, `hosts/vps` in `~/bstore2/raga/nix`): nginx from `/var/www/silica.cc`,
-a certificate from Let's Encrypt, DNS-only — no proxy in front, as the privacy
+a certificate from Let's Encrypt, DNS-only, no proxy in front, as the privacy
 page says. From the nix repository, `just deploy-silica` builds and rsyncs
 this site, and `just rebuild-vps` applies the server configuration.

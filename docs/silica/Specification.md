@@ -52,7 +52,7 @@ with the command inventory and bundle evidence.
 | Link rewriting on rename or move: every link resolving to the file is regenerated in `newLinkFormat` (shortest falls back to the full path when ambiguous), keeping its style (wikilink, embed, markdown, angle brackets), `.md` and `%20` in markdown destinations, the subpath, and the alias verbatim unless it equals the old basename and not the written path; markdown link text follows the new basename or link path when it was the old one; code, reference links and `[[#Heading]]` untouched; a moved note's own links change only when they would break; frontmatter links replaced in place | `silica-cache::links` |
 | Properties: the block parses into ordered entries with byte spans; a type comes from `types.json`, then the reserved keys `tags` and `aliases`, then the value (string `text`, bare `YYYY-MM-DD` `date`, number `number`, boolean `checkbox`, sequence `multitext`; `cssclasses` is a plain list and an ISO date-time is `text`) | `silica-formats::properties` |
 | Property serialization as Obsidian 1.14.4 writes it: a scalar plain where YAML allows it else double quoted (`"a: b"`, `"  padded  "`, `"42"`, `"[[A]]"`, `""`, `"#a"`), a date bare, a newline as a `\|-` block scalar, a list as a two-space block sequence (the empty list `[]`), null as a bare key, a new property after the last entry, and removing the last property removes the fences | `silica-formats::properties::render_entry`, `plan` |
-| Property edits are surgical: only the entries whose value actually changes are rewritten, so comments, flow sequences, quoting, blank lines and the file's line endings survive — Obsidian re-serializes the whole block and loses them | `silica-formats::properties::plan`, `silica-cache/tests/properties_corpus.rs` (ratchet) |
+| Property edits are surgical: only the entries whose value actually changes are rewritten, so comments, flow sequences, quoting, blank lines and the file's line endings survive . Obsidian re-serializes the whole block and loses them | `silica-formats::properties::plan`, `silica-cache/tests/properties_corpus.rs` (ratchet) |
 | Properties UI: a foldable block above the note with a type glyph, key and value per row, links and tags inside a value clickable, lists and tags as pills, a value that does not fit its type marked and kept as written; `propertiesInDocument` shows the table (`visible`, the default), nothing (`hidden`) or the raw YAML (`source`) | `silica::properties`, `silica::reading::view` |
 | Property editing in Live Preview: a click opens a field whose keys the editor routes (Enter commits, Tab commits a key and moves to its value, Escape abandons), a commit is one undo step, a key typed empty removes the property, a rename keeps the entry in place (Obsidian moves it to the end), a new row writes nothing until it is named, and a type chosen from the row menu is recorded in `types.json` | `silica::properties`, `silica::editor` |
 | Unlinked mentions: whole-word, case-insensitive, names and aliases, longest name wins, not inside `[[ ]]`, `[ ]( )`, inline or fenced code | `silica::mentions` |
@@ -126,11 +126,11 @@ Blocks:
 - A callout's title is block-parsed, not inline-parsed: `[!note] # h` puts an
   `<h1>` inside `.callout-title-inner`, `[!note] 1. item` an `<ol>`, and
   `[!note] > quote` a nested blockquote. This is also why `[!note] -` is not a
-  fold marker — the space ends the header, and the lone `-` becomes a list with
+  fold marker. The space ends the header, and the lone `-` becomes a list with
   one empty item. The ordinary one-paragraph title renders bare, with no `<p>`.
 - A callout's first body line takes the ordinary block rules. A table's
   delimiter row or a setext underline on the line after the header is read as a
-  table or a heading, exactly as it would be anywhere else — the header is not
+  table or a heading, exactly as it would be anywhere else. The header is not
   one of the body paragraph's lines.
 - A link ends at the first child that is a link of its own, because an `<a>`
   never nests: `[md [[Links]] link](url)` renders the anchor around `md `
@@ -141,7 +141,7 @@ Blocks:
 - Frontmatter renders as a hidden `pre.frontmatter`; `<script>` is removed;
   unknown elements are unwrapped; raw `<a>` gains `target` and `rel`.
 
-**Observed, not yet reproduced** — callouts, probed 2026-10-29 against Obsidian
+**Observed, not yet reproduced** . Callouts, probed 2026-10-29 against Obsidian
 1.14.4 (installer build 1.13.7) with `tools/probe-gen`. Unlike everything else
 in this section, the parser does not match these yet:
 
@@ -155,7 +155,7 @@ in this section, the parser does not match these yet:
   line break before it is kept, so `> [!note]` / `> body` / `> ^id` renders
   `<p>body<br></p>`. The parser drops the break with the id. Also left alone:
   the stray `<br>` is an artifact of Obsidian's own stripping.
-**Observed, not yet reproduced** — asterisk and `=` runs of four or more,
+**Observed, not yet reproduced** . Asterisk and `=` runs of four or more,
 probed 2026-10-29 the same way. These are the whole of what keeps
 `edge/Probe Inlines.md` from passing, and they look like artifacts of
 Obsidian's own delimiter scanner rather than a rule:
@@ -175,7 +175,7 @@ rule-of-three here, which nests where Obsidian splits. Pinning the real rule
 wants a systematic sweep of run lengths three to eight, with and without a
 partner run.
 
-**Observed, not yet reproduced** — link nesting, probed 2026-10-29 the same
+**Observed, not yet reproduced** . Link nesting, probed 2026-10-29 the same
 way:
 
 - A link whose text holds a *markdown* link keeps the outer link and leaves the
@@ -190,7 +190,7 @@ way:
 - `[[[Links]] md](url)` resolves as a wikilink whose body is `[Links`, with the
   rest of the line literal; the parser reads it as a markdown link.
 
-**Observed, not yet reproduced** — callouts, continued:
+**Observed, not yet reproduced** . Callouts, continued:
 
 - Not an Obsidian behavior but a deliberate divergence in Silica: the reading
   view paints a callout title as one run of rich text, so a title that
@@ -244,8 +244,8 @@ byte order mark is dropped.
 | `# Mixed\nline one\nline two\r\nline three\n` | every line `\n` |
 | `# Mixed\r\nline one\r\nline two\nline three\r\n` | every line `\n` |
 | `a\r\nb\nc\r\nd\n` | `aX\nb\nc\nd\n` |
-| `# All\r\nline one\r\nline two\r\n` — uniform CRLF | every line `\n` |
-| `\u{feff}# Bom\nline one\n` | `# Bom\nlineX one\n` — the mark is gone |
+| `# All\r\nline one\r\nline two\r\n` , uniform CRLF | every line `\n` |
+| `\u{feff}# Bom\nline one\n` | `# Bom\nlineX one\n` , the mark is gone |
 
 A note that is only **opened** is not rewritten: the same mixed file read
 back after being opened and left alone is byte-identical. The normalization
@@ -258,7 +258,7 @@ converts the file the first time it is edited there. A vault used in both
 therefore drifts towards LF with no mark, driven by Obsidian, and Silica
 never drives it the other way.
 
-Note that this is the *editor's* save. The frontmatter API is not the same
+This is the *editor's* save. The frontmatter API is not the same
 path and does not normalize: writing a property into a CRLF note leaves
 `---\r\ntitle: Hi\nadded: v\n---\r\n`, recorded under the properties
 section above.
@@ -280,7 +280,7 @@ The serializer:
   `# a comment` is deleted, `tags: [one, two]` becomes a two-space block
   sequence, and a blank line inside the block is dropped. A block already in
   that canonical form round-trips byte-identical, so the canonical form is
-  what Silica writes for a value it changes — and only for that value.
+  what Silica writes for a value it changes , and only for that value.
 - Scalars are plain where YAML allows it and double quoted otherwise:
   `k: "a: b"`, `k: "a #b"`, `k: "  padded  "`, `k: ""`, `k: "42"`,
   `k: "[[Target]]"`, `k: "#a"`. `say "hi"`, `Ä ö — ✓`, `https://example.com`
@@ -309,7 +309,7 @@ Types, from `registeredTypeWidgets`:
   which is `date`; a YAML number is `number`, a boolean `checkbox`, a sequence
   `multitext`; null, a nested mapping and a block scalar are all `text`.
   An ISO *date-time* string (`2026-10-18T09:30:00`) infers as `text`, not
-  `datetime` — `datetime` is only ever assigned.
+  `datetime` , `datetime` is only ever assigned.
 - `types.json` is written in insertion order, seeded with `aliases: aliases`,
   `cssclasses: multitext` and `tags: tags` before any assigned key, with
   two-space indentation and no trailing newline.
@@ -370,7 +370,7 @@ What triggers, scanning back from the cursor on the cursor's line only:
 What each offers:
 
 - An **empty** `[[` query lists every file in the vault plus every alias,
-  ordered by the file's modification time, newest first — not by recency of
+  ordered by the file's modification time, newest first , not by recency of
   opening, which is what the quick switcher uses. A non-empty query is fuzzy
   matched and an alias scores just below its file.
 - The list is `metadataCache.getLinkSuggestions()`: files and aliases, and
@@ -380,7 +380,7 @@ What each offers:
 - `[[Note#` lists that note's headings in document order, the H1 included,
   unfiltered while the query after the `#` is empty. `[[#` lists the
   *current* note's headings.
-- `[[Note#^` lists every block of the note — headings as `## First Heading`
+- `[[Note#^` lists every block of the note , headings as `## First Heading`
   with their markers, paragraphs as their text with any `^id` stripped.
 - `[[Note|` lists that note's aliases; with text after the `|` it offers that
   text as the display text.
@@ -422,7 +422,7 @@ What accepting one writes, with `newLinkFormat: shortest` and wikilinks:
 
 With `useMarkdownLinks` the same picks write markdown links: the display text
 is the basename, the alias, or the heading text, the destination is the link
-path with `.md` kept for notes, and only spaces are percent-encoded —
+path with `.md` kept for notes, and only spaces are percent-encoded ,
 `[Beta Note](Beta%20Note.md)`, `[Alpha Alias](Alpha.md)`,
 `[First Heading](Alpha.md#First%20Heading)`, `[pic](pic.png)`,
 `![Beta Note](Beta%20Note.md)`. A pick with no file behind it writes an
@@ -442,7 +442,7 @@ The three accept keys differ, and the difference is the point:
 - **Shift+Enter** ignores the selected item and links the text as typed:
   `[[beta no` becomes `[[beta no]]`. The tag suggester does not bind it.
 
-**Unprobed:** whether the `#` and `^` keys the link popup binds do anything
+Unprobed: whether the `#` and `^` keys the link popup binds do anything
 beyond typing the character, and whether typing `[[` auto-pairs the closing
 brackets. Silica does auto-pair `[` per the rows below, so `[[` there gives
 `[[]]` with the suggester opening inside; what Obsidian does is still unread.
@@ -453,7 +453,7 @@ Observed with a throwaway plugin in a scratch vault (see
 [[Development#Table editing, 2026-10-18]]), running each of the sixteen
 table commands against eight shapes of table with the cursor in two
 different cells, then reading the note back. The commands' own
-`editorCheckCallback` only passes in Live Preview with the editor focused —
+`editorCheckCallback` only passes in Live Preview with the editor focused ,
 in raw source mode it never does, so **Obsidian's table commands are a Live
 Preview feature**; the 186 runs where the check passed are what is recorded
 here.
@@ -472,8 +472,8 @@ was asked about. The written form is the same every time:
   space on the right (`B` in a six-wide centred column is `  B   `).
 - A row with too few cells is filled out with empty ones.
 - Cell text is kept as written, escapes included: `x \| y` stays one cell.
-  A `|` inside a code span is **not** protected — `` `a|b` `` is two cells,
-  `` `a `` and `` b` `` — which is what the parser already does.
+  A `|` inside a code span is **not** protected , `` `a|b` `` is two cells,
+  `` `a `` and `` b` `` , which is what the parser already does.
 
 What each command does, with the cursor in some cell:
 
@@ -493,7 +493,7 @@ What each command does, with the cursor in some cell:
 table: on an empty line it writes a blank line and then a two-by-two table
 of empty three-wide cells, leaving the cursor in the first header cell. On a
 non-blank line it keeps the line, puts a blank line after it and the table
-below that, without splitting the line even when the caret is mid-line — see
+below that, without splitting the line even when the caret is mid-line , see
 [[#Observed editing command behavior, Obsidian 1.14.5 (installer build 1.13.7)]].
 
 ```
@@ -505,7 +505,7 @@ below that, without splitting the line even when the caret is mid-line — see
 Editing a cell is the opposite: **ordinary typing inside a table re-pads
 nothing**. A change to one cell's text leaves every other byte of the table
 as it was, and it stays that way when the cursor moves to another cell and
-when it leaves the table altogether — `| 1 | 2 |` edited to `| WIDE | 2 |`
+when it leaves the table altogether , `| 1 | 2 |` edited to `| WIDE | 2 |`
 stays ragged until a table command runs. So the padded form is what the
 commands write, not an invariant Obsidian maintains.
 
@@ -515,7 +515,7 @@ each cell holding a `.table-cell-wrapper`; the cells are not
 cursor is inside it rather than unfolding to its source the way other
 widgets do.
 
-**Unprobed:** where Obsidian leaves the cursor after each command (the
+Unprobed: where Obsidian leaves the cursor after each command (the
 columns it reported came from an unfocused editor and disagreed with
 themselves), and whether a column's width counts characters or display
 columns for CJK and emoji.
@@ -533,14 +533,14 @@ label each row reads for the probe note:
 
 | Node | Row reads |
 | --- | --- |
-| heading | `# Probe Heading` — the markers are kept |
+| heading | `# Probe Heading` , the markers are kept |
 | paragraph | `A plain paragraph with no id.` |
-| table | `A B \n1 2` — cells joined by spaces, rows by a newline |
-| code (fenced) | `let fenced = 1;` — the fence and its language are dropped |
+| table | `A B \n1 2` , cells joined by spaces, rows by a newline |
+| code (fenced) | `let fenced = 1;` , the fence and its language are dropped |
 | code (indented) | `indented code line` |
-| callout | `A callout titlecallout body line` — title and body run together |
+| callout | `A callout titlecallout body line` , title and body run together |
 | blockquote | `a blockquote\nsecond quote line` |
-| math | `x = y + 1` — the `$$` fences are dropped |
+| math | `x = y + 1` , the `$$` fences are dropped |
 | listItem | one row per item, nested items getting their own row as well |
 
 A thematic break is **not** offered, and neither is the frontmatter block.
@@ -552,8 +552,8 @@ nothing (`[[NoSuchNote#^`) and one that resolves to an attachment
 list.
 
 Accepting a row whose block has no id of its own writes one into the target
-note. The id is six lowercase hex characters — 180 generated in a row were
-180 distinct values — and where it goes depends on the kind:
+note. The id is six lowercase hex characters . 180 generated in a row were
+180 distinct values , and where it goes depends on the kind:
 
 - **A paragraph** takes ` ^id` appended to its last line, *verbatim*, after
   whatever is already there. A line ending in a hard break keeps it and the
@@ -611,9 +611,9 @@ appended and the file still ends without one
 it (`\| 1 \| 2 \|\n\n^id\n`).
 
 A block that already carries an id is linked by it and the file is not
-written at all — its bytes and its modification time are both untouched.
+written at all , its bytes and its modification time are both untouched.
 
-**Unprobed:** an ordered list item and a list item at the end of a file,
+Unprobed: an ordered list item and a list item at the end of a file,
 whose accept steps did not fire; the inline rule is taken from the two
 unordered samples that did.
 
@@ -653,8 +653,8 @@ The values each enum key takes, as written:
 including a font family with a space in it (`"Noto Sans Mono"`), and an
 emptied field writes `""` rather than dropping the key.
 
-**Unprobed:** the option *labels* each dropdown shows, and the min, max and
-step of the two sliders — the run drove the keys rather than the controls,
+Unprobed: the option *labels* each dropdown shows, and the min, max and
+step of the two sliders , the run drove the keys rather than the controls,
 so it settled what is written and not what the tab reads.
 
 ## Observed canvas write behavior, Obsidian 1.14.4 (installer build 1.13.7)
@@ -689,7 +689,7 @@ and `{}` stay as written. Numbers and strings are `JSON.stringify`'s: `1e3`
 comes back `1000`, `-0` as `0`, `0.5` as `0.5`; `\n`, `\"`, `\\` and `\t`
 are escaped, `é` and U+2028 are not.
 
-**Key order on an edited save** — the model's `getData` writes each object
+**Key order on an edited save** . The model's `getData` writes each object
 as the keys of the object it was read from, in file order, minus the keys
 the model owns, and then the model's keys in a fixed order, each
 overwriting in place when the file already had it and appended otherwise:
@@ -697,19 +697,19 @@ overwriting in place when the file already had it and appended otherwise:
 | Object | Keys the model owns (removed from the file order) | Appended, in this order |
 | --- | --- | --- |
 | every node | `x`, `y`, `width`, `height`, `color` | `id`, `x`, `y`, `width`, `height`, `color` (when set), `type`, then the type's own keys |
-| text node | — | `text` |
-| file node | — (`file` and `subpath` keep their place) | `file`, `subpath` |
-| link node | — (`url` keeps its place) | `url` |
+| text node | none | `text` |
+| file node | none (`file` and `subpath` keep their place) | `file`, `subpath` |
+| link node | none (`url` keeps its place) | `url` |
 | group node | `label`, `background` as well (`backgroundStyle` keeps its place) | `label`, `background`, `backgroundStyle` |
 | edge | everything but `id` and unknown keys | `id`, `fromNode`, `fromSide`, `toNode`, `toSide`, `fromEnd`, `toEnd`, `color`, `label` |
-| the file | — (`nodes` and `edges` keep their place) | `nodes`, `edges` |
+| the file | none (`nodes` and `edges` keep their place) | `nodes`, `edges` |
 
 Consequences, each observed:
 
 - A node Obsidian made itself has no file order, so it is written `id, x,
   y, width, height, color, type, text` (`file, subpath`; `url`; `label`).
   Read back and saved after an edit, the same node comes out `id, type,
-  text, x, y, width, height, color` — Obsidian's own output is not a fixed
+  text, x, y, width, height, color` , Obsidian's own output is not a fixed
   point, which is exactly what the gate vault's canvas showed. The output
   for a file it has read *is* one.
 - Unknown keys survive at every level (`pluginTop`, `pluginNode`,
@@ -725,7 +725,7 @@ Consequences, each observed:
 - A file with no `edges` key gets one appended after `nodes` on its first
   edited save.
 
-**Unprobed:** a canvas whose node geometry is fractional after a drag at an
+Unprobed: a canvas whose node geometry is fractional after a drag at an
 odd zoom (the writer formats `0.5` as JavaScript would, but exponent forms
 from 1e21 and below 1e-6 are not reproduced), and whether `backgroundStyle`
 is written for a group that has no `background`.
@@ -874,21 +874,21 @@ once rather than through the creation menu; the editor in a card draws
 at the base font size rather than scaled with the zoom; *Convert to
 file* names the note after the card's first line rather than asking.
 
-**Unprobed:** the exact fit padding of Shift+1, the zoom step of the
+Unprobed: the exact fit padding of Shift+1, the zoom step of the
 buttons, snap-to-objects' rules, the creation rectangle of a Ctrl+drag,
 and the colour of an uncoloured card's selection ring.
 
 ## Observed canvas menu behavior, Obsidian 1.14.5 (installer build 1.13.7)
 
-Observed on 2026-10-25 over CDP — `tools/obsidian-probe/canvas-menus.mjs`, raw
-results in `tools/obsidian-probe/results/2026-10-25-canvas-menus.json` — the
+Observed on 2026-10-25 over CDP , `tools/obsidian-probe/canvas-menus.mjs`, raw
+results in `tools/obsidian-probe/results/2026-10-25-canvas-menus.json` , the
 re-run the menus section above was waiting on, because the 2026-10-21 capture
-read its lists wrong. **1.14.5 nests a menu:** `.menu` holds a `.menu-grabber`
+read its lists wrong. 1.14.5 nests a menu: `.menu` holds a `.menu-grabber`
 and a `.menu-scroll`, and the rows sit in `.menu-group` children of that, each
 tagged with a `data-section` (`canvas`, `open`, `action`, `system`, `danger`,
 `create`, `history`, `clipboard`, `selection`). Walking `.menu > *` sees the
 two wrappers and nothing else, and reading `.menu-item-title` alone drops
-every row without one — which is where 2026-10-21's "two adjacent separators"
+every row without one , which is where 2026-10-21's "two adjacent separators"
 came from. The separators are real but paired: of the two DOM nodes at a group
 boundary **one is painted (1 px) and one is `display: none`**, so a parity
 list carries one separator there. Each target is panned to the middle of the
@@ -902,22 +902,22 @@ two lines, `Zoom to selection\n(Shift + 2)`):
 | --- | --- |
 | text card, coloured or not | *Edit* |
 | Markdown file card | *Edit* |
-| image file card, URL card | — |
+| image file card, URL card | none |
 | group, coloured or not | *Align*, *Edit label*, *Set background* |
 | edge with a label | *Line direction*, *Remove label*, *Edit label* |
 | edge with no label | *Line direction*, *Edit label* |
 | several nodes, any mix of cards and groups | *Create group*, *Align* |
 | several edges | *Line direction* |
-| a node and an edge together | — |
+| a node and an edge together | none |
 
 *Set color* opens eight swatches: the active default (`#7e7e7e`), the six
 presets, and `canvas-color-picker-custom`. *Line direction* opens
 *Nondirectional*, *Unidirectional*, *Bidirectional* with `mod-checked` on the
-current one. *Align* opens thirteen rows in four painted groups —
+current one. *Align* opens thirteen rows in four painted groups ,
 *Align left*, *Align center*, *Align right* | *Align top*, *Align middle*,
 *Align bottom* | *Arrange in a row*, *Arrange in a column*, *Arrange in a
 grid* | *Distribute horizontal spacing*, *Distribute vertical spacing* |
-*Justify horizontally*, *Justify vertically* — and the same thirteen for a
+*Justify horizontally*, *Justify vertically* , and the same thirteen for a
 single group as for several cards. *Set background* opens no menu at all: it
 opens the vault's file suggester ("Type to search...", "No recent files
 found."). *Edit label* on an edge opens no menu either; it focuses the edge's
@@ -944,7 +944,7 @@ to selection*, *Create group*, separator, *Cut*, *Copy*, *Paste*, separator,
 
 **What a right-click does to the selection.** On an unselected card it moves
 the selection to that card and shows the card's own list. Inside a
-multi-selection — including a mixed one of a card and an edge — it keeps the
+multi-selection , including a mixed one of a card and an edge , it keeps the
 selection and shows the several-objects list. On the background it clears the
 selection. Two targets answer with no menu of their own: a **group's body** is
 not a hit target at all (`elementFromPoint` is the background there), so the
@@ -960,7 +960,7 @@ of this run's first pass went that way; `context-multi-escape` holds both
 orders side by side.
 
 **What Align and Arrange do**, applied to three cards at `(2600,0,160×80)`,
-`(2820,160,240×60)` and `(2660,320,120×140)` — bounding box `x 2600..3060`,
+`(2820,160,240×60)` and `(2660,320,120×140)` , bounding box `x 2600..3060`,
 `y 0..460`. Each entry is one undo step, and undo restored the ragged layout
 exactly every time. *Align left/right* move every `x` to the box's left or to
 `right − width`; *align top/bottom* the same vertically; *align
@@ -978,7 +978,7 @@ and its `width` to the box's width (460); *justify vertically* does it with
 `y` and `height`.
 
 **The quick settings** (the gear in the canvas controls) are *Snap to grid*,
-*Snap to objects* — both checked out of the box — and *Read-only*. The two
+*Snap to objects* , both checked out of the box , and *Read-only*. The two
 snap rows are app-wide and persist: turning *Snap to grid* off created
 `.obsidian/canvas.json` holding `{\n  "snapToObjects": true,\n  "snapToGrid":
 false\n}`, two-space indented with no trailing newline, in a vault that had no
@@ -989,7 +989,7 @@ nothing else, while the card menu stays in the DOM.
 
 **Convert to file...** opens a modal titled *File name* holding a
 `textarea.rename-textarea` prefilled `Untitled`, with *Save* and *Cancel*.
-**Enter does not submit it** — the modal stays open and nothing is written;
+**Enter does not submit it** . The modal stays open and nothing is written;
 *Save* does the work. It writes `Untitled.md` whose bytes are the card's text
 with **no trailing newline** (`Text card`, 9 bytes), and it **replaces** the
 text node rather than editing it: the node id changes to a fresh 16 hex
@@ -1003,7 +1003,7 @@ matching `front|back|raise|lower|order|layer` are absent from the card, group
 and several-objects lists, so `Canvas::raise_selection` has no menu home in
 1.14.5.
 
-**Unprobed:** the *Copy path* submenu of a file card, what *Swap file...*,
+Unprobed: the *Copy path* submenu of a file card, what *Swap file...*,
 *Narrow to heading...*, *Narrow to block...*, *Merge entire file with...* and
 *Change URL...* write, *Set background*'s suggester beyond its empty state,
 whether *Edit label* on a group focuses the label the way an edge's does (the
@@ -1012,9 +1012,9 @@ cards.
 
 ## Observed editing command behavior, Obsidian 1.14.5 (installer build 1.13.7)
 
-Observed on 2026-10-25 over CDP — `tools/obsidian-probe/editing-commands.mjs`
+Observed on 2026-10-25 over CDP , `tools/obsidian-probe/editing-commands.mjs`
 and `footnote-insert.mjs`, raw results in
-`tools/obsidian-probe/results/2026-10-25-editing-commands.json` — closing the
+`tools/obsidian-probe/results/2026-10-25-editing-commands.json` , closing the
 editing half of the backlog's "Declined until Obsidian is probed" list. Each
 case seeds the note **through the vault** (`app.vault.modify`), places the
 caret, runs the command the way the palette does
@@ -1022,7 +1022,7 @@ caret, runs the command the way the palette does
 selection back. Seeding only the editor is not enough: a command that touches
 the file reloads the editor from disk, and the reload puts the previous case's
 bytes back underneath the command's own edit. One control proves the editor's
-text is the file's bytes — `control line` typed into and saved from the editor
+text is the file's bytes , `control line` typed into and saved from the editor
 read back from disk as the expected 22 bytes.
 
 Two traps are worth keeping. A second markdown leaf makes
@@ -1033,9 +1033,9 @@ under the command, which is how one attempt at the footnote rows produced a
 reference inside a definition line and tab-indented definitions.
 
 **`editor:set-heading` does nothing.** "Toggle heading" is a real palette
-entry whose check passes, and it changes nothing. Twelve shapes — a plain
+entry whose check passes, and it changes nothing. Twelve shapes , a plain
 line, `#` through `######`, a line in a blockquote, `> # quoted h1`, a bullet,
-a task, an empty line, a word selection, a two-line selection — came back
+a task, an empty line, a word selection, a two-line selection , came back
 byte-identical with the caret where it started, in Live Preview and in source
 mode, and ten presses in a row on one line never moved it. Driven three ways:
 the palette, a hotkey bound for the probe (Alt+H), and the command's own
@@ -1062,8 +1062,8 @@ bullet, and a line that is not a list item becomes a bullet first:
 So it is **not** the path to `[?]`, `[-]` and `[>]` that
 [[#Observed task checkbox behavior, Obsidian 1.14.4 (installer build 1.13.7)]]
 suspected: `- [?] q` loses its status on the first press exactly as a rendered
-click does. The list marker is kept as written — `* star` becomes `* [ ] star`,
-`+ plus` becomes `+ [ ] plus`, `1. ordered` becomes `1. [ ] ordered` — so the
+click does. The list marker is kept as written , `* star` becomes `* [ ] star`,
+`+ plus` becomes `+ [ ] plus`, `1. ordered` becomes `1. [ ] ordered` , so the
 cycle differs inside a numbered list only in that the `1. ` stays. Indentation
 is kept (`\t- two` cycles in place), and the other lines of a list are never
 touched.
@@ -1083,7 +1083,7 @@ becomes a bullet and the list lines are pulled back to bullet with it:
 
 Two selections do not converge. `- a` / `- [ ] b` oscillates between
 `- [ ] a` / `- b` and `- a` / `- [ ] b` for ever, and `- a` / *(blank)* /
-`- [x] b` oscillates the same way — a selection of list lines that differ only
+`- [x] b` oscillates the same way , a selection of list lines that differ only
 in whether they carry a checkbox inverts each line's checkbox rather than
 advancing it, so pressing again swaps them back. Both rows look like Obsidian
 applying the later line's edit at an offset the earlier line's edit has
@@ -1141,7 +1141,7 @@ caret, and only `insert-callout` leaves a selection behind:
 
 On an empty document `insert-callout`, `insert-horizontal-rule` and
 `insert-table` each write a leading blank line; `insert-codeblock` and
-`insert-mathblock` do not. A selection is ignored by all six — the caret's
+`insert-mathblock` do not. A selection is ignored by all six , the caret's
 line is what they act on, and `alpha` selected in `alpha beta` gives
 `> [!NOTE]\n> alpha beta`, not a callout around `alpha`.
 
@@ -1155,8 +1155,8 @@ when the probe reaches the file with `openFile`:
 | `body text` | `body text[^1]` + `\n\n[^1]: \n` |
 | `body[^1] text` with `[^1]: one` | `body[^1] text[^2]` + `\n\n[^2]: \n` |
 | `a[^1] b[^2] c` with both definitions | `[^3]` |
-| `a[^2] b` with `[^2]: two` | `[^3]` — max plus one, not count plus one |
-| `a[^note] b` with `[^note]: named` | `[^1]` — a named label does not take a number |
+| `a[^2] b` with `[^2]: two` | `[^3]` , max plus one, not count plus one |
+| `a[^note] b` with `[^note]: named` | `[^1]` , a named label does not take a number |
 | `# Head` / `para one` / `para two`, caret in `para one` | `para one[^1]`, definition still at the very end |
 | `- item one` | `- item one[^1]`, definition at the end, not indented |
 
@@ -1169,7 +1169,7 @@ emoji directly after the opening pair:
 
 | Command | Writes | Emoji |
 | --- | --- | --- |
-| `editor:toggle-highlight` | `==word==` | — |
+| `editor:toggle-highlight` | `==word==` | none |
 | `editor:toggle-highlight-red` | `==🔴word==` | U+1F534 |
 | `editor:toggle-highlight-orange` | `==🟠word==` | U+1F7E0 |
 | `editor:toggle-highlight-yellow` | `==🟡word==` | U+1F7E1 |
@@ -1202,7 +1202,7 @@ span or on a heading line, it runs and changes nothing.
 | `- **bold** item` | `bold item` |
 | `$x^2$ #tag` | `x^2 tag` |
 | `**one**` / `_two_` / `==three==` | `one` / `two` / `three` |
-| `see [[Other\|alias]] end` | unchanged — a wikilink is not formatting |
+| `see [[Other\|alias]] end` | unchanged , a wikilink is not formatting |
 | `nothing to clear` | unchanged |
 
 So it removes emphasis, highlight, strikethrough, inline code, inline math and
@@ -1212,7 +1212,7 @@ the `#`/`>`/`-` of a line, and leaves links alone.
 default table holds 41 ids and neither `editor:swap-line-up` nor
 `editor:swap-line-down` is among them; the Hotkeys tab filtered to "Move line"
 shows both rows with the chord column reading `Blank`. Alt+Up and Alt+Down
-pressed in the editor change nothing. The commands themselves work — `one` /
+pressed in the editor change nothing. The commands themselves work , `one` /
 `two` / `three` with the caret on line 1 gives `two` / `one` / `three` up and
 `one` / `three` / `two` down, a selection moves every line it covers
 (`two` / `three` / `one` for up over lines 1-2), and the command is a no-op at
@@ -1228,7 +1228,7 @@ separately**, except the comment toggle:
 | `toggle-bold` | `**one**` / `**two**` / `**three**` |
 | `toggle-italics` | `*one*` / `*two*` / `*three*` |
 | `toggle-strikethrough` | `~~one~~` / `~~two~~` / `~~three~~` |
-| `toggle-comments` | `%%one` / `two` / `three%%` — **one** pair around the whole selection |
+| `toggle-comments` | `%%one` / `two` / `three%%` , **one** pair around the whole selection |
 | `toggle-bullet-list` | `- one` / `- two` / `- three` |
 | `toggle-numbered-list` | `1. one` / `2. two` / `3. three` |
 | `toggle-blockquote` | `> one` / `> two` / `> three` |
@@ -1244,7 +1244,7 @@ toggles take the word under the caret (`one two` at ch 4 gives
 
 A blank line inside the selection is **skipped** by the bullet and numbered
 toggles (`one` / *(blank)* / `three` gives `- one` / *(blank)* / `- three`,
-and `1. one` / *(blank)* / `2. three` — the numbering counts only the lines it
+and `1. one` / *(blank)* / `2. three` , the numbering counts only the lines it
 writes), but the blockquote toggle prefixes it too (`> one` / `> ` /
 `> three`), and the inline toggles wrap the non-blank lines only.
 
@@ -1253,13 +1253,13 @@ line already has the prefix**, which is what Silica does:
 
 | Selection | `toggle-bullet-list` / `-numbered-list` / `-blockquote` |
 | --- | --- |
-| `- one` / `two` / `- three` | `- one` / `- two` / `- three` — the bare line gains one |
+| `- one` / `two` / `- three` | `- one` / `- two` / `- three` , the bare line gains one |
 | `- one` / `- two` / `- three` | all three lose it |
 | `> one` / `two` / `> three` | all three quoted |
 | `> one` / `> two` | both unquoted |
 | `1. one` / `2. two` | both lose the number |
-| `a` / `b` / `c` / `d` | `1.` `2.` `3.` `4.` — numbering always starts at 1 |
-| `1. one` / `a` / `b` with only the last two selected | `1. one` / `1. a` / `2. b` — it does not continue the list above |
+| `a` / `b` / `c` / `d` | `1.` `2.` `3.` `4.` , numbering always starts at 1 |
+| `1. one` / `a` / `b` with only the last two selected | `1. one` / `1. a` / `2. b` , it does not continue the list above |
 
 Indentation survives: `- one` / `\t- two` / `three` toggled gives
 `one` / `\ttwo` / `- three`, i.e. each line is treated on its own.
@@ -1268,8 +1268,8 @@ a `%%` block leaves the block alone and adds a second pair.
 
 **`editor:insert-table` on a non-blank line puts the table below it.** The
 blank-line case the spec already recorded is unchanged; every non-blank
-position gives the same answer — the line is kept, a blank line follows it,
-then the two-by-two table, then a trailing newline — and the caret lands in
+position gives the same answer , the line is kept, a blank line follows it,
+then the two-by-two table, then a trailing newline , and the caret lands in
 the first header cell (ch 1 of the first table line):
 
 | Caret | Result |
@@ -1287,7 +1287,7 @@ before, exactly one newline after" is right, and the only correction is that
 a mid-line caret must not split the line.
 
 **Shift+Tab removes exactly one indent unit of display columns, clamped at
-zero** — it does not dedent to the previous multiple, which is what the
+zero** , it does not dedent to the previous multiple, which is what the
 backlog assumed. Observed on 2026-10-25 with real keystrokes
 (`tools/obsidian-probe/editing-typing.mjs` step `s08`), reopening the note
 after each config change because `setConfig` alone does not rebuild the
@@ -1314,7 +1314,7 @@ columns and that the result is written back as tabs plus spaces.
 
 With **`useTab: false` the unit is four spaces whatever `tabSize` says**. The
 calibration row is the evidence: with `tabSize: 2` and `useTab: false` one Tab
-inserts four spaces, not two, and Shift+Tab removes four columns — `   - b`
+inserts four spaces, not two, and Shift+Tab removes four columns , `   - b`
 goes to `- b` and `     - b` to ` - b`, the same as `tabSize: 4`. The same
 session's `useTab: true` rows did honour `tabSize: 2`, so the config had
 reached the editor.
@@ -1383,9 +1383,9 @@ Two commands exist for statuses beyond the click, both already in
 [[#Observed editing command behavior, Obsidian 1.14.5 (installer build 1.13.7)]].
 Neither reaches `[?]`, `[-]` or `[>]`: the cycle command discards a custom
 status on its first press exactly as the rendered click does, so **no path in
-Obsidian writes those three** — they can only be typed.
+Obsidian writes those three** , they can only be typed.
 
-**Unprobed:** Live Preview: the matrix step returned `null` for all
+Unprobed: Live Preview: the matrix step returned `null` for all
 six rows and read no bytes, so clicking a checkbox in Live Preview is
 unmeasured here (Silica's own Live Preview toggle is covered by
 [[Development#The checkbox the padding hid, 2026-10-18]]). Repeated toggling
@@ -1403,7 +1403,7 @@ Observed on 2026-10-18 with a throwaway plugin in a scratch vault, Obsidian
 450 bytes, frontmatter plus an `#`/`##`/`###` tree, a list and a footnote
 definition) and reading the fold record, the DOM and the vault back after
 every step. All fourteen steps of the run completed; nothing below rests on a
-failed step. Every editor observation was made in **Live Preview** — the view
+failed step. Every editor observation was made in **Live Preview** . The view
 reported `{"mode":"source","source":false}` and the container class read
 `is-live-preview is-folding`. Raw Source mode was never exercised.
 
@@ -1416,12 +1416,12 @@ What `editor:toggle-fold` folded, against the source line numbering:
 
 | Line folded | Range recorded |
 | --- | --- |
-| `## Section A` (11), next heading of the same level `## Section B` on 19 | `11`-`18` — the trailing blank line 18 included |
+| `## Section A` (11), next heading of the same level `## Section B` on 19 | `11`-`18` , the trailing blank line 18 included |
 | `### Sub A1` (15), the last thing in Section A | `15`-`18` |
 | `## Section B` (19), a list in its body | `19`-`26` |
-| `## Section C` (27), the last heading | `27`-`32` — to the final line, the `[^1]:` definition on 31 and the empty line 32 included |
-| `# H1 Top` (7) | `7`-`32` — the nested `##`/`###` headings inside it included |
-| `- list parent` (23) with two indented children | `23`-`25` — the blank line 26 is *not* part of a list fold, unlike a heading fold's trailing blank |
+| `## Section C` (27), the last heading | `27`-`32` , to the final line, the `[^1]:` definition on 31 and the empty line 32 included |
+| `# H1 Top` (7) | `7`-`32` , the nested `##`/`###` headings inside it included |
+| `- list parent` (23) with two indented children | `23`-`25` , the blank line 26 is *not* part of a list fold, unlike a heading fold's trailing blank |
 | `PREAMBLEBODY ...` (5), a paragraph before any heading | command returns `true`, nothing folds |
 | `---` (0), the frontmatter's opening fence | command returns `true`, nothing folds |
 
@@ -1445,7 +1445,7 @@ the first heading, so it is not established to be a complete listing.
 **Nothing is written to the note.** The 450 bytes are byte-identical after
 the fold and after the whole run, and no file in the vault's listing was
 added, changed or removed. The record lives in `localStorage`, under the key
-`5c0r1ac0rpu50001-note-fold-Fold Probe.md` — the app id, `-note-fold-`, then
+`5c0r1ac0rpu50001-note-fold-Fold Probe.md` , the app id, `-note-fold-`, then
 the vault-relative path. Only this one root-level note was observed, so how a
 path in a subfolder is spelled in the key is not known. The vault diff the
 run took does not cover `.obsidian/` (its file listing holds no dotfiles),
@@ -1461,13 +1461,13 @@ In reading view:
 | Trait | Observed |
 | --- | --- |
 | Sharing | the editor's fold collapses the same section in reading view, and returning to the editor shows it still folded |
-| Record shape | merely entering reading view rewrote `{11,18}` to `{11,12}`, before any click; all four reading-view folds took the `{h, h+1}` form — `{7,8}`, `{11,12}`, `{19,20}`, `{27,28}` |
+| Record shape | merely entering reading view rewrote `{11,18}` to `{11,12}`, before any click; all four reading-view folds took the `{h, h+1}` form , `{7,8}`, `{11,12}`, `{19,20}`, `{27,28}` |
 | Back in the editor | the same fold reads at its full extent again (`{11,18}`), so a stored `to` is not authoritative for the editor |
 | Collapsed content | absent from the preview DOM, not hidden: the wrapper list runs `el-p` (TOPBODY) → `el-h2 is-collapsed` (Section A) → `el-h2` (Section B), with no wrapper for the section's paragraph, its `### Sub A1` heading or that heading's body |
 | Extent | collapsing `# H1 Top` hid everything below it and left the paragraph *above* it visible; `## Section B` hid its body and the list; `## Section C` hid its body and the footnote definition |
 | Indicator | `span.heading-collapse-indicator.collapse-indicator.collapse-icon`, the heading element's first child, `position: absolute`, `left: 31.9935px`, `opacity: 0` expanded and `opacity: 1` plus `is-collapsed` collapsed; the glyph is an inline `svg.svg-icon.right-triangle` with path `M3 8L12 17L21 8` |
 | Classes | the `<h1>`/`<h2>` itself keeps an empty class; `is-collapsed` lands on the indicator span and on the wrapper div (`el-h2 is-collapsed`) |
-| Clicking the indicator | toggles, both ways — clicking an already-collapsed one expanded it |
+| Clicking the indicator | toggles, both ways , clicking an already-collapsed one expanded it |
 
 One click on heading *text* (an `H2`; which heading is not recorded) changed
 nothing. That is one observation, not a rule.
@@ -1489,12 +1489,12 @@ check callback with a markdown view focused in Live Preview.
 
 `editor:fold-all` folded everything in one pass, leaving three rendered lines
 and the set `{0,0}`, `{2,3}`, `{7,32}`, `{11,18}`, `{15,18}`, `{19,26}`,
-`{23,25}`, `{27,32}` — one range per heading and per list parent, plus
+`{23,25}`, `{27,32}` , one range per heading and per list parent, plus
 `{2,3}`, which covers the indented YAML list under `tags:` on source lines 2
 and 3, and `{0,0}`. No range covers the frontmatter block (lines 0-4), so the
 frontmatter is not shown to fold. `editor:unfold-all` cleared every heading
 and list fold; in three invocations the set ended at exactly `[{0,0}]` each
-time. The `{0,0}` entry is unexplained — it is never correlated with hidden
+time. The `{0,0}` entry is unexplained. It is never correlated with hidden
 content, and it reaches storage: the run's final record read
 `{"folds":[{"from":0,"to":0},{"from":19,"to":20}],"lines":33}`.
 
@@ -1503,7 +1503,7 @@ With `.obsidian/app.json` holding literally `{}`, `foldHeading` and
 With `foldHeading` set to `false` through the API: the editor DOM query for
 fold indicators came back empty (it returned nothing for the list indicator
 either, which `foldIndent: true` should still produce), and
-`editor:toggle-fold` returned `true` and folded nothing — the step records no
+`editor:toggle-fold` returned `true` and folded nothing , the step records no
 target line, so the toggle is not shown to have been aimed at a heading. In
 reading view the three headings captured still carried the indicator span,
 computed `display: none` with a zero rect, and a scripted click on that
@@ -1513,29 +1513,29 @@ affordance is hidden.
 One incidental: writing `foldHeading` through the API did not reach
 `.obsidian/app.json` at once. When the app read `false`, the file still read
 `{}`; after restoring the in-app value to `true`, the file read
-`{"foldHeading": false}` — the file trailing the in-memory value by one
+`{"foldHeading": false}` , the file trailing the in-memory value by one
 change. One observation, in a run whose cleanup did not restore the config.
 
-**Unprobed as of 2026-10-18** — the 2026-10-25 pass below answers most of
+**Unprobed as of 2026-10-18** . The 2026-10-25 pass below answers most of
 this paragraph: what the editor does on a cold load with a record the reading
-view wrote (`{h, h+1}`) — the app was never restarted, and merely rendering
+view wrote (`{h, h+1}`) , the app was never restarted, and merely rendering
 the note in preview rewrites the stored record, so a cold editor load after a
 reading-view session is the likely case and is unobserved; whether fold state
 survives a restart at all, and whether anything outside `localStorage` holds
-it — `foldManager` exposes `loadPath`, `savePath`, `load` and `save`, none of
+it , `foldManager` exposes `loadPath`, `savePath`, `load` and `save`, none of
 which was traced to a file, and the step's `.obsidian` listing came back
 empty from a directory we know holds `app.json`, so it is not evidence of
 absence; whether `.obsidian/` is untouched by a fold; what `{0,0}` is;
 `editor:fold-more` and `editor:fold-less`, invoked four times between them,
 each returning `true` with the fold set and the rendered lines unchanged and
-the cursor position unrecorded — a no-op observation, not their semantics;
+the cursor position unrecorded , a no-op observation, not their semantics;
 `editor:toggle-fold-properties`, never invoked; keyboard folding, since
 `hotkeys: []` is each command's own report and no key was pressed; folding
 with raw Source mode on; `foldIndent: false`; the `localStorage` key for a
 note in a subfolder; whether a click on heading text ever toggles a fold in
 reading view, and whether any user-visible affordance remains there when
 `foldHeading` is `false` (only a synthetic click on the `display: none`
-indicator was tried); what navigation the jump step performed — it recorded
+indicator was tried); what navigation the jump step performed , it recorded
 only that the cursor ended at line 19 column 0 with the section unfolded in
 the live fold set while the saved record still carried `{19,26}`, so "opening
 a link into a folded section unfolds it" is not established; whether folding
@@ -1559,7 +1559,7 @@ are its own.
 `<appId>-note-fold-Sub Folder/Fold Probe.md` beside the root note's
 `<appId>-note-fold-Fold Probe.md`. So the key is the app id, `-note-fold-`,
 then the vault-relative path with `/` separators, original case and the `.md`
-extension — no escaping of the space. (localStorage is shared across every
+extension , no escaping of the space. (localStorage is shared across every
 vault the app has opened, so a dump holds other vaults' keys too; the saved
 evidence is filtered to this probe's id.)
 
@@ -1577,8 +1577,8 @@ record, and it is present by default.
 | Press | Fold set | Rendered lines |
 | --- | --- | --- |
 | start | `{0,0}` | 27 |
-| fold-more ×1 | `{0,0}`, `{12,19}` — the caret's own section | 20 |
-| fold-more ×2 | `+ {8,31}` — the enclosing `# H1 Top` | 4 |
+| fold-more ×1 | `{0,0}`, `{12,19}` , the caret's own section | 20 |
+| fold-more ×2 | `+ {8,31}` , the enclosing `# H1 Top` | 4 |
 | fold-more ×3, ×4 | unchanged | 4 |
 | fold-less ×1 | `{0,0}`, `{12,19}` | 20 |
 | fold-less ×2 | `{0,0}` | 27 |
@@ -1599,8 +1599,8 @@ rendered lines, and the DOM carried 7 `.cm-fold-indicator`s and 8
 while the same command on `## Section A` still recorded `{12,19}`.
 
 **In reading view only the indicator is clickable.** Real clicks: on the
-heading's **text** — nothing; on the **empty space** to its right — nothing;
-on the `.heading-collapse-indicator` — toggles, and toggles back. The record
+heading's **text** . Nothing; on the **empty space** to its right , nothing;
+on the `.heading-collapse-indicator` , toggles, and toggles back. The record
 it writes is the `{h, h+1}` form (`{12,13}`), as the earlier pass found.
 Hovered, the indicator computes `opacity: 1`, `display: flex`,
 `position: absolute`, `left: 31.9935px`.
@@ -1626,20 +1626,20 @@ the editor with the caret on a heading changed neither the fold set nor the
 rendered line count.
 
 **A link into a folded section unfolds it.** With `{20,25}` folded,
-`openLinkText('Fold Probe#Section B')` left the fold set at `{0,0}` — the
-section's own entry is gone — with the caret at line 20 column 0 and all 27
+`openLinkText('Fold Probe#Section B')` left the fold set at `{0,0}` , the
+section's own entry is gone , with the caret at line 20 column 0 and all 27
 lines rendered. So the jump expands rather than scrolling to a placeholder.
 
 **The fold survives a restart, and the editor re-derives the extent.** Folding
 `## Section B` in the editor, switching to reading view (which rewrote the
-record to `{20,21}`) and quitting left `{0,0},{20,25}` in localStorage — the
+record to `{20,21}`) and quitting left `{0,0},{20,25}` in localStorage , the
 editor's full extent, not the reading view's pair. After the relaunch the note
 reopened with the fold restored: 22 rendered lines against 27 unfolded, one
 `cm-foldPlaceholder` reading `…`. Switching to reading view rewrote `{20,21}`
 again and switching back read `{20,25}`, so the editor re-derives the extent
 from the heading every time and a stored `to` is advisory.
 
-**Unprobed after this pass:** whether folding a heading while another fold is
+Unprobed after this pass: whether folding a heading while another fold is
 open leaves the other record alone (still only one fold at a time was
 expanded); the `foldHeading: false` affordance question, which the earlier
 pass left on a synthetic click; and whether `foldManager`'s `save`/`load` ever
@@ -1655,8 +1655,8 @@ The version numbers are `apiVersion` and `installedVersion`; `appVersion` was
 null in this build, so the app version was never captured.
 
 Two counting caveats that the rest of this section already accounts for. The
-scanned container held **both** views — it opens with
-`div.markdown-source-view … is-live-preview style="display: none"` — so of the
+scanned container held **both** views , it opens with
+`div.markdown-source-view … is-live-preview style="display: none"` , so of the
 ten `<pre>` elements found in the probe note, nine are reading view and the
 tenth is the editor's own live-preview callout widget (a byte-identical
 duplicate of the reading-view callout block, with an all-zero rect). Ten
@@ -1699,7 +1699,7 @@ What a click copies. The one intercepted call is
 `navigator.clipboard.writeText`, once per click; the Electron tap and the
 `copy` listener were installed and their intercept arrays stayed empty (an
 absence, not a recorded negative). The payload is the `code` element's plain
-text — Prism's `<span class="token …">` markup does not survive — with
+text , Prism's `<span class="token …">` markup does not survive , with
 **exactly one** trailing newline removed, not a trim:
 
 | Case | DOM text | Copied |
@@ -1714,7 +1714,7 @@ Trailing spaces and a leading tab inside the body survive untouched. The
 byte claims rest on a deliberate input/output diff: the probe wrote the note
 and read it back byte-identical before rendering it.
 
-A CRLF file's code block is LF-only in both the DOM and the clipboard —
+A CRLF file's code block is LF-only in both the DOM and the clipboard ,
 `CRLF line one\r\nCRLF line two\r\n` on disk (6 CRs, round-tripped) renders as
 `CRLF line one\nCRLF line two\n` and copies as `CRLF line one\nCRLF line two`.
 Obsidian normalizes the endings while leaving the file's CRs alone.
@@ -1746,7 +1746,7 @@ not. Probed 2026-10-29.
 | ```` ```c# ````, `f#`, `C++`, `.net`, `{python}` | `language-none` | `language-c# language-none is-loaded` |
 | ```` ``` ```` with no info string | *(none)* | *(none)* |
 | 4-space indented block | *(none)* | *(none)* |
-| Frontmatter | `frontmatter language-yaml` | — |
+| Frontmatter | `frontmatter language-yaml` | none |
 
 Click feedback is icon-only. The SVG is `lucide-check` at 0, 150 and 400 ms
 after the click and back to `lucide-copy` at 900, 1500 and 2200 ms. Across
@@ -1764,7 +1764,7 @@ In the editor there are **two** affordances, not one:
   font-family: var(--font-interface); font-size: var(--font-ui-smaller);
   color: var(--text-muted); cursor: var(--cursor); }`, plus a `:hover`
   background.
-- A code block rendered as an embed widget — the callout — gets a real
+- A code block rendered as an embed widget , the callout , gets a real
   `button.copy-code-button` inside the CodeMirror DOM: one `pre` inside the
   editor, one `cm-embed-block`, and the focusable-element walk lists
   `BUTTON.copy-code-button tabindex=0` immediately after
@@ -1778,7 +1778,7 @@ ids containing "copy" are `workspace:copy-path`, `workspace:copy-full-path`,
 
 Every reading-view `pre` sampled computed to `white-space: pre-wrap` with
 `overflow-x: auto`. This contradicts the "fenced code never wraps" row above
-and is a computed value only — the matched-rule dump covered the copy-button
+and is a computed value only , the matched-rule dump covered the copy-button
 selectors, and the page carried seven stylesheets besides `app.css`.
 
 **Unprobed as of 2026-10-18** (the rows the 2026-10-25 pass below answers are
@@ -1786,7 +1786,7 @@ struck from this paragraph): Whether any setting turns the button off: the confi
 probe-chosen list of eight keys, not an enumeration of Obsidian's settings.
 Mobile behavior beyond the two `.is-mobile` rules, nothing having run
 with `isMobile` true. Whether the copy text can diverge from the file's bytes
-in ways other than line endings — HTML entities, unicode normalization,
+in ways other than line endings , HTML entities, unicode normalization,
 zero-width characters. Whether the frontmatter pre's button is reachable by a
 person at all, its pre being `display: none`. And which rule sets the
 reading-view `pre` to `pre-wrap`.
@@ -1797,7 +1797,7 @@ reading-view `pre` to `pre-wrap`.
 `tools/obsidian-probe/results/2026-10-25-code-copy.json`. This run does what
 the 2026-10-18 one could not: it moves a real pointer onto the block so the
 hover rule reveals the button, clicks the painted button, and reads the
-clipboard through Electron **without replacing any clipboard API** — so the
+clipboard through Electron **without replacing any clipboard API** . So the
 read-back is Obsidian's own write, over a sentinel the probe had put there
 first.
 
@@ -1818,7 +1818,7 @@ different shapes in one note, each hovered and clicked: the button computes
 | 4-space indented | `four space indented\nsecond line` |
 | inside a callout | `const IN_CALLOUT = 2;` |
 | inside a blockquote | `in a blockquote` |
-| **empty fence** | nothing — see below |
+| **empty fence** | nothing , see below |
 
 **The empty fence's button writes nothing.** Its click left the clipboard
 holding neither the sentinel nor `""` but content from outside the app, so all
@@ -1830,8 +1830,8 @@ unexplained row.
 
 | Fence body on disk | DOM text | Copied |
 | --- | --- | --- |
-| `tab\tindented  \n\n\n` | identical (17 chars) | `tab\tindented  \n\n` — one newline off, the tab and the two trailing spaces kept |
-| `café — naïve <U+200B> zero width ❤️\n&amp; &lt;b&gt; entity text\n` | identical | identical minus the final newline — the zero-width space survives and `&amp;` is **not** decoded |
+| `tab\tindented  \n\n\n` | identical (17 chars) | `tab\tindented  \n\n` , one newline off, the tab and the two trailing spaces kept |
+| `café — naïve <U+200B> zero width ❤️\n&amp; &lt;b&gt; entity text\n` | identical | identical minus the final newline , the zero-width space survives and `&amp;` is **not** decoded |
 | `CRLF line one\r\nCRLF line two\r\n` (CRs on disk) | `…\n…\n`, LF only | `CRLF line one\nCRLF line two` |
 
 **The check icon reverts after 1000 ms.** Sampled every 100 ms from the click:
@@ -1845,12 +1845,12 @@ until hovered. So there is no keyboard path to it.
 
 **The frontmatter block's button is unreachable.** `pre.frontmatter.language-yaml`
 computes `display: none` with a zero rect, and hovering does not paint its
-button — so the synthetic click the earlier run made on it exercised something
+button , so the synthetic click the earlier run made on it exercised something
 a person cannot do. The ordinary fence after the frontmatter copies normally.
 
 **In the editor, `span.code-block-flair` IS the copy button, and it shows a
 Notice.** Clicked with a real mouse it copied the fence body (`js fence`) and
-raised the notice **"Copied to your clipboard"** — which the reading view's
+raised the notice **"Copied to your clipboard"**, which the reading view's
 own button never does. The caret does not move. Hovered it computes
 `background-color: oklch(0.999994 0.0000497986 none / 0.067)`,
 `color: rgb(179, 179, 179)`, `cursor: default`.
@@ -1866,8 +1866,8 @@ fallback**, and the affordance is Live Preview only:
 | ```` ```ts ```` | `TypeScript` |
 | ```` ```c ```` | `C` |
 | ```` ```yaml ```` | `YAML` |
-| ```` ```silica-made-up ```` | `silica-made-up` — verbatim |
-| ```` ``` ```` no info string | `""` — the span is still there, still `aria-label="Copy"` |
+| ```` ```silica-made-up ```` | `silica-made-up` , verbatim |
+| ```` ``` ```` no info string | `""` , the span is still there, still `aria-label="Copy"` |
 
 Counted in the same leaf: Live Preview has 7 flairs and **no**
 `button.copy-code-button` in the editor DOM; source mode has **0 flairs** and
@@ -1875,19 +1875,19 @@ no button. So a plain fence's editor affordance exists in Live Preview alone,
 and the `copy-code-button` the earlier run found inside CodeMirror belongs to
 an embed widget (the callout), not to a plain fence.
 
-**A transcluded note's code block does get a button** — `![[Embedded]]`
+**A transcluded note's code block does get a button** . `![[Embedded]]`
 rendered a `pre.language-js` holding the embedded file's code with
-`hasButton: true` — but the hover did not paint it at the position the probe
+`hasButton: true` , but the hover did not paint it at the position the probe
 aimed at, so whether a person can click it is still open.
 
-**Unprobed after this pass:** whether the embed's button can actually be
+Unprobed after this pass: whether the embed's button can actually be
 hovered and clicked; whether any setting turns the button off (the config scan
 was a chosen list, not an enumeration); mobile behavior; and which rule sets
 the reading-view `pre` to `pre-wrap`.
 
 ## Observed raw HTML behavior, Obsidian 1.14.4 (installer build 1.13.7)
 
-Observed on 2026-10-18 with a throwaway plugin in a scratch vault: a note of raw-HTML constructs opened in reading view and read back, a second note in a subfolder for source-relative `src` values, and 26 single-construct cases from a second probe file. Three limits bound everything below. The run executed its step set twice and the stored values are the second pass, which created nothing — `setup.made` is empty, every probe file already existed. The reading view it measured stopped short: `sectionChildTags` holds 18 entries and ends on the `DIV.el-h2` for "Sup and sub" with no body element after it, so the note's tail never rendered. And the 26 cases come from a different session — its `app://` host hash and its `pic.png` query both differ from the main run's — in a file that records no step name, so the surface those cases rendered into is not stated.
+Observed on 2026-10-18 with a throwaway plugin in a scratch vault: a note of raw-HTML constructs opened in reading view and read back, a second note in a subfolder for source-relative `src` values, and 26 single-construct cases from a second probe file. Three limits bound everything below. The run executed its step set twice and the stored values are the second pass, which created nothing , `setup.made` is empty, every probe file already existed. The reading view it measured stopped short: `sectionChildTags` holds 18 entries and ends on the `DIV.el-h2` for "Sup and sub" with no body element after it, so the note's tail never rendered. And the 26 cases come from a different session , its `app://` host hash and its `pic.png` query both differ from the main run's , in a file that records no step name, so the surface those cases rendered into is not stated.
 
 ### Images
 
@@ -1904,25 +1904,25 @@ A raw `<img>` whose `src` resolves to a vault file has the attribute itself rewr
 
 A bare name is resolved like a wikilink target rather than joined to the note's folder: from `html/`, `sibling.png` finds the sibling and `deep.png` finds `assets/deep.png`. Each of those basenames was unique in the vault, so the preference order between a root file and the source's own folder was not exercised.
 
-- The host is 36 hex characters and differs between the two probe sessions (`e53bdfa6…cfc9f`, `4440591f…6345b`) — per session and opaque.
+- The host is 36 hex characters and differs between the two probe sessions (`e53bdfa6…cfc9f`, `4440591f…6345b`) , per session and opaque.
 - The `?<13 digits>` query is constant per file within one run (`pic.png` `?1792374870859`, `assets/deep.png` `?1792374954193`, `html/sibling.png` `?1792374954195`), the same value in both notes and both DOMs. `pic.png` carries `?1792375399934` in the other session's file, so as observed it is not a stable property of the file.
 - A `src` that resolves to nothing is left verbatim (`missing.png`); the browser then resolves it against `app://obsidian.md/` and the image is broken (`naturalWidth` 0).
 - An `http://` `src` is left alone and really fetched (`naturalWidth` 1). The request carries no `Referer` header, which is what the `referrerpolicy` below asks for.
 - The reading view adds `referrerpolicy="no-referrer"` to every raw `<img>`, the unresolved and the remote one included. It belongs to raw-HTML imgs specifically: the `<img>` inside a reading-view markdown embed (`span.internal-embed media-embed image-embed is-loaded`) carries only `alt` and `src`.
-- Nine consecutive raw `<img>` lines with no blank line between them are one HTML block and render as a single `div.el-img` with the images as direct children — no `<p>`. Raw imgs written inside a paragraph stay in that paragraph's `<p>`.
-- Markdown embeds have a different shape, for contrast: reading view wraps the img in `<span alt="md-sub" src="assets/deep.png" class="internal-embed media-embed image-embed is-loaded">` — the unresolved vault path stays on the wrapper and the resolved `app://` URL goes on the inner img — while the editor-side form is `div.internal-embed … tabindex="-1" contenteditable="false"` with `div.image-wrapper`, `div.image-resize-corner` and `div.embed-actions` children.
+- Nine consecutive raw `<img>` lines with no blank line between them are one HTML block and render as a single `div.el-img` with the images as direct children , no `<p>`. Raw imgs written inside a paragraph stay in that paragraph's `<p>`.
+- Markdown embeds have a different shape, for contrast: reading view wraps the img in `<span alt="md-sub" src="assets/deep.png" class="internal-embed media-embed image-embed is-loaded">` , the unresolved vault path stays on the wrapper and the resolved `app://` URL goes on the inner img , while the editor-side form is `div.internal-embed … tabindex="-1" contenteditable="false"` with `div.image-wrapper`, `div.image-resize-corner` and `div.embed-actions` children.
 
 The editor DOM retained inside the same leaf renders raw HTML through a `span.cm-html-embed` widget whose imgs carry the same resolved `app://` srcs but no `referrerpolicy`. Those rows were read while the leaf was displaying the reading view and are not laid out (zero rects), so they are widget output rather than a measured Live Preview session.
 
 ### Anchors
 
-- A raw `<a>` keeps its href exactly as authored — no resolution, no extension handling, no `app://` — and gains `target="_blank" rel="noopener nofollow"`. It gets neither `class="internal-link"` nor `data-href`, even when the href names a note that exists.
+- A raw `<a>` keeps its href exactly as authored (no resolution, no extension handling, no `app://`) and gains `target="_blank" rel="noopener nofollow"`. It gets neither `class="internal-link"` nor `data-href`, even when the href names a note that exists.
 - A wikilink in the same paragraph renders `<a data-href="Target Note" href="Target Note" class="internal-link" target="_blank" rel="noopener nofollow">`, so `target` and `rel` are on internal links too in 1.14.4, and `data-href` plus the class are what separate them from a raw anchor.
-- Clicking each of five raw anchors (`Target Note`, `Target Note.md`, `assets/deep.png`, `Missing Target`, `#Images block`): no leaf opened (one before and after), the active file stayed `Raw HTML.md`, `window.open` and electron `shell.openExternal` were never called, `location.href` was unchanged, and no vault file was created or removed — not even for the missing target. `defaultPreventedByObsidian` was false on all five, but the probe's own navigation guard also fired and cancelled the default on all five, and nothing records the handler order, so this says what did not happen, not that Obsidian declined the click.
+- Clicking each of five raw anchors (`Target Note`, `Target Note.md`, `assets/deep.png`, `Missing Target`, `#Images block`): no leaf opened (one before and after), the active file stayed `Raw HTML.md`, `window.open` and electron `shell.openExternal` were never called, `location.href` was unchanged, and no vault file was created or removed , not even for the missing target. `defaultPreventedByObsidian` was false on all five, but the probe's own navigation guard also fired and cancelled the default on all five, and nothing records the handler order, so this says what did not happen, not that Obsidian declined the click.
 
 ### `<pre>`
 
-- A raw `<pre>` renders as a real `<pre>` inside `div.el-pre`, with an empty `className` and no attributes of Obsidian's own. Its content is literal — `**not bold**` and `[[Target Note]]` stay text, `&` serializes as `&amp;`, two leading spaces survive — but a tag inside it is live markup: `<b>tag inside pre</b>` is an element, and the only `<b>` in the note.
+- A raw `<pre>` renders as a real `<pre>` inside `div.el-pre`, with an empty `className` and no attributes of Obsidian's own. Its content is literal , `**not bold**` and `[[Target Note]]` stay text, `&` serializes as `&amp;`, two leading spaces survive , but a tag inside it is live markup: `<b>tag inside pre</b>` is an element, and the only `<b>` in the note.
 - The copy button belongs to `pre > code`: a raw `<pre><code>` gets `button.copy-code-button` (a lucide-copy svg), a raw `<pre>` with no `<code>` child does not, a fenced block does. Two copy buttons in the note, and two buttons of any kind.
 - A fenced block is `pre.language-text > code.language-text.is-loaded[data-line="0"]`; a raw one has neither the class nor `data-line`.
 - Wrapping, measured once in a 304 px pane: the three reading-view `<pre>` elements all computed `white-space: pre-wrap; overflow-wrap: break-word; overflow-x: auto; tab-size: 4`, and a 295-character line whose longest unbroken token is 240 characters did not scroll sideways (`scrollWidth == clientWidth == 304`; the block grew to 408 px tall). The same note's two editor-side `<pre>` elements, read from the same DOM, computed `white-space: pre; overflow-x: visible` with zero rects. This disagrees with the "fenced code never wraps" invariant recorded above, but one pane width, an uncaptured theme and an unlaid-out counter-example are not enough to change it.
@@ -1931,26 +1931,26 @@ The editor DOM retained inside the same leaf renders raw HTML through a `span.cm
 
 | Authored | Rendered |
 | --- | --- |
-| `<span onclick="…">x</span>` | `<span>x</span>` — the handler attribute is dropped, the element stays; `onclickFired` false |
-| `<script>window.__probeScript=1</script>after` | `after` — element and script text gone, following text survives; `scriptExecuted` false |
-| `<a href="javascript:…">x</a>` | `<a target="_blank" rel="noopener nofollow">x</a>` — no `href` at all; `javascriptHrefFired` false |
+| `<span onclick="…">x</span>` | `<span>x</span>` , the handler attribute is dropped, the element stays; `onclickFired` false |
+| `<script>window.__probeScript=1</script>after` | `after` , element and script text gone, following text survives; `scriptExecuted` false |
+| `<a href="javascript:…">x</a>` | `<a target="_blank" rel="noopener nofollow">x</a>` , no `href` at all; `javascriptHrefFired` false |
 | `<a href="https://example.invalid/page">`, `<a href="obsidian://open?vault=x&file=y">` | href kept verbatim (`&` re-escaped as `&amp;` in serialization), `target` and `rel` added |
 | `<span class id data-foo title>` | all four attributes kept |
 | `<img src="pic.png" width="100" height="50" alt="A">` | `<img alt="A" height="50" width="100" src="app://…" referrerpolicy="no-referrer">` |
-| `<iframe src="http://…" sandbox="">` | both kept as written — an author's empty `sandbox` is not replaced |
+| `<iframe src="http://…" sandbox="">` | both kept as written , an author's empty `sandbox` is not replaced |
 | `<table><tr><td>c</td></tr></table>` | `<table><tbody><tr><td dir="ltr">c</td></tr></tbody></table>` |
-| `start <b>bold never closed` | `<p dir="auto">start <b>bold never closed</b></p>` — closed at the end of its paragraph, no leak into later blocks |
+| `start <b>bold never closed` | `<p dir="auto">start <b>bold never closed</b></p>` , closed at the end of its paragraph, no leak into later blocks |
 | ins, del, kbd, samp, var, small, big, center, font[color], strike, tt, details, summary, sup, sub | all kept with their content |
 
 - The `style` attribute survives verbatim in all nine style cases, and the computed style shows it taking effect for `color`, `background-color`, `font-size`, `font-weight`, `display:none`, `position:absolute` and `display:inline-block`. Two cases show survival only: `background-image:url(http://…)` left no `backgroundImage` in the computed set and no request reached the probe's server, and `<div style="text-align:center">` was recorded with its `attrs` and `computed` both null.
 - Attribute order is rebuilt, not passed through: `class id data-foo title` comes back `title data-foo id class`, and `src width height alt` comes back `alt height width src referrerpolicy`.
 - Obsidian stamps direction attributes a matching renderer has to emit too: `<p dir="auto">` on paragraphs, `dir="auto"` on headings (`<h2 data-heading="Anchors" dir="auto">`), `dir="ltr"` on a `<td>` in a raw table.
-- Inline HTML is wrapped in `<p dir="auto">`; HTML that opens a CommonMark HTML block — `div`, `center`, `details`, `table`, `iframe`, a lone `<img>` on its own line — gets no paragraph wrapper.
+- Inline HTML is wrapped in `<p dir="auto">`; HTML that opens a CommonMark HTML block , `div`, `center`, `details`, `table`, `iframe`, a lone `<img>` on its own line , gets no paragraph wrapper.
 - `<sup>` and `<kbd>` are themed rather than merely structural: sup computes `vertical-align: super` at 12.5 px against a 15 px body, kbd gets `background rgb(35, 35, 35)` at 13.125 px.
 
-The recorded pass left the vault's 74 paths identical before and after, and cleanup detached one markdown leaf. It also attempted no write, so that is not evidence that rendering and clicking are read-only — only that nothing was written.
+The recorded pass left the vault's 74 paths identical before and after, and cleanup detached one markdown leaf. It also attempted no write, so that is not evidence that rendering and clicking are read-only , only that nothing was written.
 
-**Unprobed as of 2026-10-18** — the 2026-10-25 pass below answers much of this paragraph: where a raw anchor click ends up, and whether `href="#Images block"` scrolls, since the probe's guard cancelled every navigation; `<details>` in a real note and in-note `<sup>`/`<sub>` — `details.count` is 0 and the sup/sub paragraph was "not found", both consistent with the preview stopping at the last heading rather than with Obsidian omitting them, and the second file's own `supsub` value is null, so sup/sub rests on the one detached case; whether an iframe or a CSS `background-image` in a note actually fetches (no `/san.png` request appears, but that HTTP log is shared across scenarios and those cases ran in the other session); whether the `?<digits>` query is the file mtime, as no file timestamps were captured; whether the pre-wrap measurement is the stock default, since only six config keys were recorded (`attachmentFolderPath`, `newLinkFormat` `shortest`, `useMarkdownLinks` false, `showInlineTitle`, the probe's HTTP base, the version) and none covers theme, snippets, appearance or readable line length — and every link-resolution observation above was made under `useMarkdownLinks: false`, `newLinkFormat: shortest`; an ambiguous bare basename, root file against source folder, since each probe basename was unique; which elements get unwrapped, since all 26 cases used tags that survived and none covered object, embed, form, svg, style, link or meta; raw HTML inside a callout, blockquote, table cell or list item, and a raw HTML block interrupting a paragraph; whether the notes' bytes changed, since only byte counts and a truncated head were read back; and the markup behind the Embeds, Anchors, Pre and Sup-and-sub sections, since the 2367-byte source of `Raw HTML.md` is truncated after 700 bytes in the evidence.
+**Unprobed as of 2026-10-18** . The 2026-10-25 pass below answers much of this paragraph: where a raw anchor click ends up, and whether `href="#Images block"` scrolls, since the probe's guard cancelled every navigation; `<details>` in a real note and in-note `<sup>`/`<sub>` , `details.count` is 0 and the sup/sub paragraph was "not found", both consistent with the preview stopping at the last heading rather than with Obsidian omitting them, and the second file's own `supsub` value is null, so sup/sub rests on the one detached case; whether an iframe or a CSS `background-image` in a note actually fetches (no `/san.png` request appears, but that HTTP log is shared across scenarios and those cases ran in the other session); whether the `?<digits>` query is the file mtime, as no file timestamps were captured; whether the pre-wrap measurement is the stock default, since only six config keys were recorded (`attachmentFolderPath`, `newLinkFormat` `shortest`, `useMarkdownLinks` false, `showInlineTitle`, the probe's HTTP base, the version) and none covers theme, snippets, appearance or readable line length , and every link-resolution observation above was made under `useMarkdownLinks: false`, `newLinkFormat: shortest`; an ambiguous bare basename, root file against source folder, since each probe basename was unique; which elements get unwrapped, since all 26 cases used tags that survived and none covered object, embed, form, svg, style, link or meta; raw HTML inside a callout, blockquote, table cell or list item, and a raw HTML block interrupting a paragraph; whether the notes' bytes changed, since only byte counts and a truncated head were read back; and the markup behind the Embeds, Anchors, Pre and Sup-and-sub sections, since the 2367-byte source of `Raw HTML.md` is truncated after 700 bytes in the evidence.
 
 ### The 2026-10-25 pass: a real anchor click, and which tags survive
 
@@ -1964,7 +1964,7 @@ the Electron frame and kills the app.
 
 **A raw `<a>` is left as an external link, and Obsidian does not intercept its
 click.** Every one of six anchors came out of the renderer with
-`target="_blank"` added, **no class** and **no `data-href`** — so `href="Other"`
+`target="_blank"` added, **no class** and **no `data-href`** . So `href="Other"`
 is not turned into an `internal-link`, and nor is `href="Other.md"`:
 
 | Written | Rendered |
@@ -1977,11 +1977,11 @@ is not turned into an `internal-link`, and nor is `href="Other.md"`:
 | `<a href="http://…">` | the same |
 
 Clicked with a real mouse, **`event.defaultPrevented` was `false` in every
-case** — Obsidian had not handled the click. No leaf changed, no file opened
+case** , Obsidian had not handled the click. No leaf changed, no file opened
 and no new window appeared, because the guard cancelled the default. So "where
 a raw anchor click ends up" is: not anywhere inside Obsidian. It is left to the
 default action for `target="_blank"`, which is Electron's own external-link
-handling. The in-note `#Images block` case cannot be settled this way — the
+handling. The in-note `#Images block` case cannot be settled this way , the
 guard necessarily blocks the browser's own fragment navigation too.
 
 **Which tags survive, and which are dropped.** Rendered counts inside the
@@ -1991,7 +1991,7 @@ reading view, from one note carrying one of each:
 | --- | --- |
 | `<object>` | **dropped** |
 | `<embed>` | **dropped** |
-| `<style>` | **dropped** — and a `.silica-probe` div computed the default colour, so the rule never applied |
+| `<style>` | **dropped**, and a `.silica-probe` div computed the default colour, so the rule never applied |
 | `<link rel="stylesheet">` | **dropped** |
 | `<meta>` | **dropped** |
 | `<script>` | **dropped**, and it did not run (`window.__silicaRawScriptRan` stayed undefined) |
@@ -2030,7 +2030,7 @@ Observed on 2026-10-18 with a throwaway plugin in a scratch vault: a table of
 image syntaxes rendered through `MarkdownRenderer` into a detached container,
 one note opened in the reading view, and a local HTTP server logging every
 request with its headers. Ten of the sixteen requests came from the detached
-container — that is the renderer API, not a note anyone opened; the other six
+container , that is the renderer API, not a note anyone opened; the other six
 (`rv-inline.png`, `slow`, `404`, `rv-sized.png`, `cache-probe.png`,
 `rv-rawhtml.png`) came from the opened note.
 
@@ -2041,7 +2041,7 @@ Fetching:
 - The six images of the opened note were all requested inside 2 ms of each
   other, and no sampled `<img>` carries a `loading` or `decoding` attribute.
 - Mounting one URL repeatedly produces no further request: the DOM held four
-  elements on that URL (the probe accounts for three of them — two extra mounts
+  elements on that URL (the probe accounts for three of them , two extra mounts
   plus the reading-view one) and the server logged exactly one `GET`, with a
   single `PerformanceResourceTiming` entry. Whether that cache is Obsidian's or
   Chromium's ordinary one cannot be told apart here.
@@ -2072,15 +2072,15 @@ What each syntax renders to, and whether it is fetched:
 | `![alt\|120x60](data:image/svg+xml;base64,…)` | `height="60" width="120"` honoured | n/a |
 | `![[http://h/x.png]]` | `<span class="internal-embed is-loaded file-embed mod-empty-attachment">“http://h/x.png” could not be found.</span>`, no `<img>` | no |
 | `![[http://h/x.png\|200]]` | the same span, plus `width="200"` on it | no |
-| `![alt](//h/x.png)` | `<img src="//h/x.png">`, resolving to `app://h/x.png` — scheme *and* port dropped — `naturalWidth` 0 | no |
+| `![alt](//h/x.png)` | `<img src="//h/x.png">`, resolving to `app://h/x.png` , scheme *and* port dropped , `naturalWidth` 0 | no |
 | `![alt](file:///abs/path.svg)` | rewritten to `app://<36 hex>/abs/path.svg`, loads | n/a |
 | `![alt](app://local/abs/path.svg)` | left as written, `naturalWidth` 0 | no |
 | `![[probe-pic.svg]]` (internal control) | `span.internal-embed.media-embed.image-embed` wrapping `<img src="app://<36 hex>/abs/path.svg?1792374924921">` | n/a |
 
 A URL inside a wikilink embed is therefore not remote content at all: it is an
 unresolved file embed, and nothing is requested. The internal embed's query
-string is the file's mtime in milliseconds, matching the vault listing exactly
-— a cache-buster keyed on modification time.
+string is the file's mtime in milliseconds, matching the vault listing exactly,
+a cache-buster keyed on modification time.
 
 `referrerpolicy="no-referrer"` is on every markdown-rendered `<img>`, raw-HTML
 and `data:` ones included. The internal embed's `<img>` has none
@@ -2095,7 +2095,7 @@ case shows the sanitizer rebuilds the element rather than passing it through.
 
 A size hint is stripped from the alt text and applied as attributes. `|200`
 sets `width` only and no `height` attribute; the rendered height then follows
-the intrinsic ratio — demonstrated by the internal 300x150 embed
+the intrinsic ratio , demonstrated by the internal 300x150 embed
 (`width="200"` → 200x100), not by the external cases, whose probe image is 1x1.
 
 The opened-note run captured nodes from more than one surface, and they differ:
@@ -2110,7 +2110,7 @@ The wrapper and its resize corner are present around a 404 and around a slow
 image that has not loaded, so they do not depend on load state. Which leaf the
 wrapper nodes belong to was not established: the view mode was `preview` and
 the sampling was document-wide. Computed sizes from the detached render
-container are not evidence of layout — it has none of the reading view's CSS,
+container are not evidence of layout , it has none of the reading view's CSS,
 and every `<img>` in it computes `display: inline`.
 
 Load states, sampled on the wrapper surface:
@@ -2130,16 +2130,16 @@ ten guessed keys (`showRemoteContent`, `allowRemoteContent`, `remoteContent`,
 `privacyMode`, `offlineMode`, `imageCache`) in the same call that returned
 values for `attachmentFolderPath`, `showInlineTitle` and `strictLineBreaks`,
 and `app.json` held only `foldHeading` and `propertiesInDocument`. Of the nine
-setting tabs, three were rendered — Interface (8 items), Editor (25), Files and
-links (22) — and none of their items concerns remote content. The window's own
+setting tabs, three were rendered , Interface (8 items), Editor (25), Files and
+links (22) , and none of their items concerns remote content. The window's own
 CSP meta constrains `style-src` only, so it is not what governs image loading;
 `document.cookie`, `document.referrer` and the meta referrer are all empty.
 
-**Unprobed as of 2026-10-18** — the 2026-10-25 pass below answers part of
+**Unprobed as of 2026-10-18** . The 2026-10-25 pass below answers part of
 this paragraph: which leaf the `image-wrapper` nodes come from, since sampling was
 document-wide while the view mode was `preview`; the reading view's own markup
 for the slow, 404, sized and raw-HTML images, because the captured
-`previewHTML` is truncated (`…[+770 chars]`) before them; layout of any kind —
+`previewHTML` is truncated (`…[+770 chars]`) before them; layout of any kind ,
 every sampled rect is 0x0 and the layout capture is null, so whether space is
 reserved before an image arrives, and how it flows with surrounding text, is
 unmeasured; whether `div.image-resize-corner` resizes a remote image and
@@ -2147,7 +2147,7 @@ whether a drag writes a `|WxH` hint back into the note; lazy loading, since
 nothing was scrolled and no image was shown to be offscreen; how `https:` URLs
 behave, since the probe server spoke plain HTTP; why `app://local/<abs path>`
 failed while `app://<36 hex>/<abs path>` loaded; caching across restarts or to
-disk, revalidation, and `Cache-Control`/`ETag` handling — no response headers
+disk, revalidation, and `Cache-Control`/`ETag` handling , no response headers
 are in the capture and no conditional request appears in the log; redirects,
 a non-image `Content-Type`, authentication, and very large images, none of
 which were requested; what `CachedMetadata` records for an external image, the
@@ -2163,7 +2163,7 @@ Measured in the same run, on a note with four remote embeds.
 **The `?<digits>` query on a vault-relative image is the file's mtime in
 milliseconds.** `pic.png` rendered as
 `app://<36 hex>/<abs path>/pic.png?1792942993635`, and `fs.stat` on the file
-reports `mtimeMs: 1792942993635.2686` — the query is that value truncated to a
+reports `mtimeMs: 1792942993635.2686` , the query is that value truncated to a
 whole millisecond.
 
 **A remote embed is a bare `<img>` with `referrerpolicy="no-referrer"`,** no
@@ -2177,9 +2177,9 @@ Computed `display: inline`, `object-fit: fill`.
 | Case | `img` rect | its `el-p` section |
 | --- | --- | --- |
 | loaded 120 × 60 PNG | 120 × 60 | 604.43 × 66.07 |
-| `![sized\|60x30](…)` of the same PNG | **60 × 30** — the size hint applies to a remote image | 604.43 × 36.07 |
-| a 404 | **74.23 × 24** — the alt text's own box at the line height, `min-height: 0` | 604.43 × 24, the height of a text paragraph |
-| a text paragraph, for scale | — | 604.43 × 24 |
+| `![sized\|60x30](…)` of the same PNG | **60 × 30** . The size hint applies to a remote image | 604.43 × 36.07 |
+| a 404 | **74.23 × 24** . The alt text's own box at the line height, `min-height: 0` | 604.43 × 24, the height of a text paragraph |
+| a text paragraph, for scale | none | 604.43 × 24 |
 
 So **no space is reserved**: a broken image collapses to its alt text and the
 paragraph is as tall as a line of text. There is **no
@@ -2187,8 +2187,8 @@ paragraph is as tall as a line of text. There is **no
 vault image has is absent and no `|WxH` hint can be written back by dragging.
 
 **A 200 is cached for the session; a 404 is re-requested every render.** The
-second note's `remote.png` and `slow.png` produced **no new HTTP request** —
-they had been fetched by the first note — while `missing.png` was requested
+second note's `remote.png` and `slow.png` produced **no new HTTP request** .
+they had been fetched by the first note , while `missing.png` was requested
 again on every render, four times across the run (at 120, 648, 13463 and
 18691 ms). The delayed image could therefore not be used to measure
 pre-arrival layout: by the time it was read it was already cached and
@@ -2196,9 +2196,9 @@ pre-arrival layout: by the time it was read it was already cached and
 
 ## Observed UI rules, Obsidian 1.14.5 (installer build 1.13.7)
 
-Observed on 2026-10-25 over CDP — `tools/obsidian-probe/ui-rules.mjs`,
+Observed on 2026-10-25 over CDP , `tools/obsidian-probe/ui-rules.mjs`,
 `attachment-dropdown.mjs` and `search-collation.mjs`, raw results in
-`tools/obsidian-probe/results/2026-10-25-ui-rules.json` — closing the UI half
+`tools/obsidian-probe/results/2026-10-25-ui-rules.json` , closing the UI half
 of the backlog's "Declined until Obsidian is probed" list. The window title of
 the probe's own launch reads `Obsidian 1.14.5`, so the app had updated itself
 since the earlier passes; the user agent still says `obsidian/1.13.7`, which
@@ -2214,7 +2214,7 @@ header first, so every view-header read has to be scoped to
 ### The lucide icon and colour of every built-in callout type
 
 Read from the rendered `.callout-icon svg`'s own class, which is the lucide
-name Obsidian's `setIcon` leaves behind — the corpus's empty `<svg>` was a
+name Obsidian's `setIcon` leaves behind , the corpus's empty `<svg>` was a
 serialisation artefact, not what the DOM holds. The same icon appears in Live
 Preview and in the reading view. `--callout-color` is the computed value on
 the `.callout` in the probe's default dark theme.
@@ -2234,19 +2234,19 @@ the `.callout` in the probe's default dark theme.
 | `bug` | `lucide-bug` | `#fb464c` |
 | `example` | `lucide-list` | `#a882ff` |
 | `quote`, `cite` | `lucide-quote` | `#9e9e9e` |
-| anything else | `lucide-pencil`, `#027aff` — the `note` pair | |
+| anything else | `lucide-pencil`, `#027aff` , the `note` pair | |
 
 An unknown type keeps its own `data-callout` (`[!nosuchtype]` renders
 `data-callout="nosuchtype"`) and falls back to note's icon and colour.
 
-Every value above is a `--color-<name>` token — the same six the canvas presets
+Every value above is a `--color-<name>` token , the same six the canvas presets
 and the highlight washes draw from, plus `--color-blue` (`#027aff` dark /
 `#086ddd` light) for the `note` group, which is not a canvas preset. Silica
 picks the hue here and takes the value from the theme, so the three lookups
 cannot drift apart; until 2026-10-28 `Theme::callout_color` ignored the theme
 and answered the light values in both, which made every callout but `quote` the
 wrong colour on the dark theme Obsidian ships. OBSERVE: the light theme's
-computed `--callout-color` per type — only the dark column above was read, and
+computed `--callout-color` per type , only the dark column above was read, and
 the light column Silica draws is that token's light value rather than an
 observation.
 
@@ -2255,7 +2255,7 @@ observation.
 Folding in Live Preview **does not touch the file**. `> [!tip] plain`,
 `> [!tip]- minus` and `> [!tip]+ plus` in one note, each fold affordance
 clicked with a real mouse and the view saved after every click, left the
-note byte-identical throughout — collapsing the `+` callout does not rewrite
+note byte-identical throughout , collapsing the `+` callout does not rewrite
 it to `-`, and expanding the `-` one does not rewrite it to `+`. Silica's
 ephemeral fold is parity.
 
@@ -2278,7 +2278,7 @@ is not a transform on that element.
 In Live Preview the `=====` or `-----` row is **not hidden and not
 heading-sized**: it keeps its own `.cm-line`, 16 px at weight 400 and 24 px
 tall, the same as a body line, while the heading line above it is 25.888 px /
-700 for an H1 and 23.392 px / 680 for an H2 — exactly the sizes the reading
+700 for an H1 and 23.392 px / 680 for an H2 , exactly the sizes the reading
 view gives `h1` and `h2`.
 
 | Line | class | font-size | height |
@@ -2307,7 +2307,7 @@ observed behavior, and the muted colour is the part it still owes.
 ### The empty tab
 
 It is a leaf of type `empty`, and both its display text and its view-header
-title read **"New tab"** — not "No file is open". Its body holds four
+title read **"New tab"**, not "No file is open". Its body holds four
 `div.text-icon-button.tappable.mod-pill.empty-state-action` pills, in order:
 
 | Pill text |
@@ -2327,10 +2327,10 @@ by closing every tab gives the same view as the one a fresh vault opens with.
 ### The view-header title is an inline rename field
 
 `.view-header-title` is `contentEditable="true"` with `tabindex="-1"` in its
-resting state — nothing has to happen to make it editable. A **single click**
+resting state , nothing has to happen to make it editable. A **single click**
 focuses it and puts the caret at the clicked offset; typing edits the title in
 place (`Props` clicked at offset 3 and typed `X` reads `ProXps` while the file
-is still `Props.md`); **Enter commits and renames the file** — the view's file
+is still `Props.md`); **Enter commits and renames the file** . The view's file
 became `ProXps.md` and the vault listing agrees. Escape abandons an
 uncommitted edit without renaming. A double click puts the caret in the word
 rather than opening anything, and no modal or menu appears at any point.
@@ -2365,14 +2365,14 @@ The four open gestures:
   the pill and with it parked in the corner, the button computes identically:
   `display: flex`, `visibility: visible`, `opacity: 1`, `width: 13.9978px`.
 - **Removing the last item keeps the key with an empty value.**
-  `tags:\n  - one\n  - two\n` emptied one pill at a time ends as `tags:\n` —
+  `tags:\n  - one\n  - two\n` emptied one pill at a time ends as `tags:\n` ,
   not `tags: []`, and the key is not deleted.
 
 ### Clearing every property leaves a blank line
 
 `markdown:clear-metadata-properties` is named **"Clear file properties"** and
 is a `checkCallback`. `---\nalpha: one\nbeta: two\n---\n\nbody\n` becomes
-`\nbody\n` — first byte `0x0A` — from the reading view and from Live Preview
+`\nbody\n` , first byte `0x0A` , from the reading view and from Live Preview
 alike, which is what Silica already writes. A note that is *only* frontmatter
 (`---\nalpha: one\n---\n`) becomes an **empty file**, zero bytes.
 
@@ -2381,7 +2381,7 @@ alike, which is what Silica already writes. A note that is *only* frontmatter
 With a note open, the command's `checkCallback(true)` returns `true` and it is
 listed. With every markdown leaf detached, `checkCallback(true)` returns
 undefined and `app.commands.listCommands()` **does not include the id at
-all** — so Obsidian hides the row rather than offering a command that would
+all** , so Obsidian hides the row rather than offering a command that would
 fail. Running it anyway opened nothing (`localgraph` leaf count stayed 0). So
 Silica falling back to the global graph is a parity gap: the command should
 not be runnable.
@@ -2415,7 +2415,7 @@ vault where two notes contain `foo`:
 | Query | Results |
 | --- | --- |
 | `foo` | 2 |
-| `foo OR` | 2 — the dangling operator is ignored |
+| `foo OR` | 2 , the dangling operator is ignored |
 | `foo -` | 2 |
 | `foo )` | 2 |
 | `(foo` | 2 |
@@ -2432,17 +2432,17 @@ an unclosed trailing `(` make the whole query match nothing.
 
 Built on 2026-10-28. Both of the second group parse to a group holding no term
 at all, which the matcher now fails: an `All` node with no children used to be
-vacuously *true*, so `foo OR` matched every note in the vault — the dangling
+vacuously *true*, so `foo OR` matched every note in the vault , the dangling
 branch became an empty `All` under the `Any`, and the whole vault satisfied it.
 `Any` with no children already answered false, so the asymmetry was the bug;
 fixing it in the matcher rather than in `Search::is_empty` is deliberate,
-because `foo (` and `foo AND` do hold a matcher — Obsidian runs the search and
+because `foo (` and `foo AND` do hold a matcher . Obsidian runs the search and
 prints "No matches found.", which is a real zero and not a gated pane. A
 dangling `-` no longer searches for a literal hyphen either.
 
 What stays unprobed is whether `AND` is an operator at all. The observation
-above is consistent with two readings — `AND` as a dangling operator, or `AND`
-as an ordinary word that happens to appear in neither note — because the probe
+above is consistent with two readings , `AND` as a dangling operator, or `AND`
+as an ordinary word that happens to appear in neither note , because the probe
 vault's two `foo` notes contain no `and`. Only the trailing shape is
 implemented, so `a AND b` is still three terms with `AND` among them. OBSERVE:
 whether `a AND b` matches the notes holding both words and nothing else, and
@@ -2459,7 +2459,7 @@ apple.md       a/b/c/apple.md   a/apple.md   APPLE.md
 ```
 
 Under **File name (A to Z)** the search pane, and the quick switcher, return
-them in exactly that order — which is the **full path descending**, and is
+them in exactly that order , which is the **full path descending**, and is
 also exactly the order `app.vault.getMarkdownFiles()` returns. Under
 **File name (Z to A)** only the basename groups swap (`banana` before
 `apple`); inside a tie the order is unchanged.
@@ -2483,7 +2483,7 @@ simply swallowed. Silica's Ctrl+E-is-End in a text field is a divergence.
 ### The file explorer's context menus
 
 Right-clicking with a real mouse, `---` marking a separator. Note the two
-consecutive separators before Rename in both menus — an empty section.
+consecutive separators before Rename in both menus , an empty section.
 
 **A file row**
 
@@ -2534,10 +2534,10 @@ items: New note, New folder, New canvas, New base.
 
 Two payloads the capture did not record, both decided when the menus were
 built on 2026-10-28 and both still worth a probe. **OBSERVE: what "Copy path"
-puts on the clipboard** — Silica writes the vault-relative path
+puts on the clipboard** . Silica writes the vault-relative path
 (`Notes/Plan.md`), which is the only path the rest of the app speaks, but
 Obsidian may well write the absolute one. **OBSERVE: what "Search in folder"
-puts in the search box** — Silica writes `path:"<folder>/"`, with the trailing
+puts in the search box** . Silica writes `path:"<folder>/"`, with the trailing
 slash so that `Notes/` does not also match `Notes archive/`. Neither the item's
 payload nor the resulting query string was read out of Obsidian, only the menu
 row itself.
@@ -2581,7 +2581,7 @@ native `<select>` with four options, each storing a different shape of
 | In subfolder under current folder | `./Attachments` | **Subfolder name**, placeholder `Attachments` |
 | In the folder specified below | `Attachments` | **Attachment folder path**, placeholder `Attachments` |
 
-Picking an option writes `app.json` immediately — with an empty `app.json` the
+Picking an option writes `app.json` immediately , with an empty `app.json` the
 first pick leaves exactly `{"attachmentFolderPath": "/"}`.
 
 What each stored value resolves to, asked of
@@ -2600,7 +2600,7 @@ at the root and one in `Sub/`:
 So a leading `./` means "relative to the note's folder" and anything else is a
 vault-absolute path; `/` and the empty string both mean the vault root.
 
-The whole Files and links tab, for the Settings parity work — `hidden` is a row
+The whole Files and links tab, for the Settings parity work , `hidden` is a row
 Obsidian builds but does not show at the default settings:
 
 | Row | Control |
@@ -2608,7 +2608,7 @@ Obsidian builds but does not show at the default settings:
 | Default file to open | dropdown: `""` Last opened, `new` New note, … |
 | File to open | *(hidden)* |
 | Always focus new tabs | toggle, on |
-| Default location for new notes | dropdown of **three**: `root` Vault folder, `current` Same folder as current file, `folder` In the folder specified below — the same labels as the attachment dropdown bar its subfolder option, but storing `newFileLocation`'s own enum rather than a path |
+| Default location for new notes | dropdown of **three**: `root` Vault folder, `current` Same folder as current file, `folder` In the folder specified below , the same labels as the attachment dropdown bar its subfolder option, but storing `newFileLocation`'s own enum rather than a path |
 | Folder to create new notes in | text, placeholder `Example: folder 1/folder 2` *(hidden)* |
 | Default location for new attachments | dropdown (above) |
 | Attachment folder path | text, placeholder `Attachments` *(hidden)* |
@@ -2628,7 +2628,7 @@ Obsidian builds but does not show at the default settings:
 | Allow URI callbacks | toggle, off |
 | Rebuild vault cache | button `Rebuild` |
 
-**Unprobed:** what a *paste* does with each of the four options, which is the
+Unprobed: what a *paste* does with each of the four options, which is the
 `attachment-paste` block's own question rather than this row's; the labels of
 the two dropdowns whose option lists were truncated in the capture (Default
 file to open, Delete attachments when deleting files, Deleted files) beyond
@@ -2645,8 +2645,8 @@ property, so what it settled is structure and layout. The editing path was
 settled on 2026-10-19 by a CDP-driven run
 ([[Development#Driving Obsidian over CDP, 2026-10-18]]): real browser-injected
 keystrokes and mouse clicks against the same build, with every file read from
-disk by the host rather than through the API. Its vault was fresh —
-`.obsidian/app.json` written as `{}` and nothing else — holding `Note A.md`
+disk by the host rather than through the API. Its vault was fresh ,
+`.obsidian/app.json` written as `{}` and nothing else , holding `Note A.md`
 (`Status: draft`, `zebra: alpha-note`, `alpha: 1`, `tags` one/two, `aliases`
 Alpha, `count: 3`, `done: true`, `due: 2026-10-18`, `link: "[[Note B]]"`,
 `long value`), `Note B.md` (`status:`), `Note C.md` (`STATUS:`), `Dotted.md`
@@ -2665,7 +2665,7 @@ something, it says so.
 | Value | Reading view | Side panes |
 | --- | --- | --- |
 | `visible` | the properties table | all 10 rows / all 13 registry rows |
-| `source` | the **same table** — the reading view never shows raw YAML | unchanged |
+| `source` | the **same table** . The reading view never shows raw YAML | unchanged |
 | `hidden` | the block is gone from the rendered text; `div.metadata-container` is still in the DOM, with its text run together | unchanged |
 
 So `source` is an editor-only mode: only the editor swaps the widget for the
@@ -2681,7 +2681,7 @@ saw only the 51 px heading; the table itself under `source` rests on the
 plugin run.) In all three modes the frontmatter also emits a
 `div.el-pre.mod-frontmatter.mod-ui` element holding a
 `pre.frontmatter.language-yaml` with `style="display: none"` whose `code` is
-the YAML as Prism tokens (`span.token.key.atrule` for each key) — the plugin
+the YAML as Prism tokens (`span.token.key.atrule` for each key) , the plugin
 run read it as empty because it sampled text, and it never reaches the
 rendered text. Under `hidden` the note's `div.mod-header.mod-ui` element holds
 only the inline title; under the other two it holds the title and the whole
@@ -2690,7 +2690,7 @@ block.
 The write of the setting is **deferred**. Immediately after the probe restored
 `propertiesInDocument`, `.obsidian/app.json` still read `{\n  "foldHeading": true\n}`
 with no such key; the key appeared only in the final read about 4.8 s later, as
-`{\n  "foldHeading": true,\n  "propertiesInDocument": "visible"\n}` —
+`{\n  "foldHeading": true,\n  "propertiesInDocument": "visible"\n}` ,
 two-space indent, no trailing newline, written even though `visible` is the
 default. The file held one prior key, which also sorts before the new one, so
 this run cannot tell insertion order from sorted output; it was also not a
@@ -2698,8 +2698,8 @@ clean baseline, since `foldHeading` flipped from `false` to `true` mid-session
 without the scenario touching it. The CDP run's baseline was clean, and it set
 each mode with `app.vault.setConfig` (the Settings dropdown was not used):
 the file's mtime landed 1001, 1002 and 1003 ms after the three calls, and each
-1 s read already held the new bytes — `{\n  "propertiesInDocument": "source"\n}`
-(38 bytes), then `"hidden"` (38), then `"visible"` (39, explicit again) — so
+1 s read already held the new bytes , `{\n  "propertiesInDocument": "source"\n}`
+(38 bytes), then `"hidden"` (38), then `"visible"` (39, explicit again) , so
 the save is debounced about one second. Each save also rewrote
 `appearance.json` (`{}`, 2 bytes) with an mtime within 2 ms of `app.json`'s,
 though nothing in it changed.
@@ -2727,7 +2727,7 @@ div.metadata-container[tabindex=-1][data-property-count="10"]
 - The type is an attribute of the **value wrapper**, `data-property-type`, not
   of the row: the row element carries no type attribute at all.
 - Rows follow the file's key order, unsorted. `data-property-key` is the key
-  lower-cased; the key input's `aria-label` keeps the file's casing — `Status:`
+  lower-cased; the key input's `aria-label` keeps the file's casing , `Status:`
   in one note gives key `status` labelled "Status", `status:` in another gives
   `status` labelled "status".
 - Every row carries the hidden warning icon, the `link` row included. The six
@@ -2781,7 +2781,7 @@ The last three are `checkCallback` commands; the two view commands are plain
 callbacks. The registered view types are `all-properties` and
 `file-properties`. `properties:open-local` created a 300 px-wide
 `file-properties` leaf in the right split, shrinking the main leaf from 680 to
-380 — identically in both runs.
+380 , identically in both runs.
 
 The File properties pane, titled "File properties", draws the rows with **no**
 "Properties" heading and ends with
@@ -2790,30 +2790,30 @@ The File properties pane, titled "File properties", draws the rows with **no**
 `div.metadata-properties-heading` inside the pane's `metadata-container`, so the
 heading is in the markup and its absence is a matter of style; whether CSS
 hides it was not measured.) Its key inputs are editable in every row. Its
-"More options" menu holds only "Split right" (disabled) and "Split down" —
+"More options" menu holds only "Split right" (disabled) and "Split down" ,
 nothing property-specific. For a Markdown note with no frontmatter the pane
 shows zero rows and its visible text is just "Add property" (a "No properties
-found." element — `div.pane-empty`, `display: none` — exists in the DOM but is
+found." element , `div.pane-empty`, `display: none` , exists in the DOM but is
 not in that text); for a `.canvas` file the pane's text *is* "No properties
 found." with no rows and no "Add property". The view stays bound to the file in
 both cases.
 
 **The pane's text drops input-valued widgets.** A note with `status: shipped`,
 `zebra: beta-note` and `count: 7` renders pane text
-`"shipped\nbeta-note\nAdd property"` — the number lives in `input.value`, as do
+`"shipped\nbeta-note\nAdd property"` , the number lives in `input.value`, as do
 checkbox and date. Any fixture built from these strings silently loses them.
 
 **Editing in the reading view**, from the CDP run. Clicking a text value opens
 a field in place: `document.activeElement` becomes that row's
-`div.metadata-input-longtext` — contenteditable, inside
-`.markdown-reading-view`, no sidebar involved — with a collapsed caret where
+`div.metadata-input-longtext` , contenteditable, inside
+`.markdown-reading-view`, no sidebar involved , with a collapsed caret where
 the click landed: at the end of the 10-character `alpha-note` when the click
 fell past its text, at offset 35 of the 97-character `long value` when it fell
 on the text. Typing changes the field and nothing else: 200 ms after
 ` edited` was typed the file still read `zebra: alpha-note`. Clicking the note
 body commits: at the 400 ms read the file held `zebra: alpha-note edited`, and
 the 5 s read was identical. The line diff against the fixture is exactly one
-line — unquoted, `link: "[[Note B]]"` keeps its double quotes, key order,
+line , unquoted, `link: "[[Note B]]"` keeps its double quotes, key order,
 indentation and the trailing newline unchanged. Nothing in the run shows a
 write before blur; the samples are 200 ms after typing and 150 ms before
 Escape, so a longer debounce that blur or Escape pre-empts is not excluded.
@@ -2823,9 +2823,9 @@ Keys inside an open value field:
 | Key | Field | Focus afterwards | File |
 | --- | --- | --- | --- |
 | Enter, on the untouched `long value` | no newline; text unchanged | the row's `div.metadata-property`, selection `rangeCount` 0 | unchanged |
-| Escape after typing `zzz` | the `zzz` is gone, the committed text is back | the row container, `rangeCount` 0 | unchanged — still `zebra: alpha-note edited` |
-| Tab after typing `qqq` | committed | the **next** row's `div.metadata-property` (`alpha`), `rangeCount` 1 — not its key input, not its value, not out of the table | `zebra: alpha-note editedqqq`, one line changed |
-| Ctrl+Z twice, focus on that row container | — | stays on `alpha`'s container | unchanged; `editedqqq` still on disk and in the row after a body click |
+| Escape after typing `zzz` | the `zzz` is gone, the committed text is back | the row container, `rangeCount` 0 | unchanged , still `zebra: alpha-note edited` |
+| Tab after typing `qqq` | committed | the **next** row's `div.metadata-property` (`alpha`), `rangeCount` 1 , not its key input, not its value, not out of the table | `zebra: alpha-note editedqqq`, one line changed |
+| Ctrl+Z twice, focus on that row container | none | stays on `alpha`'s container | unchanged; `editedqqq` still on disk and in the row after a body click |
 
 Enter was only pressed on an untouched field, so it is known not to insert a
 newline and to leave the field; that it commits a *modified* value is inferred
@@ -2836,11 +2836,11 @@ property row does not reach a committed edit.
 The key input is live in the reading view too. The run's clicks on `count` and
 `due` landed on the key column (x 392–516 at that layout: the row's first
 `input` is the key input), which turned the step into key renames. End, `9`
-and a click elsewhere turned `count: 3` into `count9: 3` on the same line —
+and a click elsewhere turned `count: 3` into `count9: 3` on the same line ,
 value and position kept, on disk at the 400 ms read after the blur. Ctrl+A and
 `2026-10-20` in the `due` key input gave the unquoted line
 `2026-10-20: 2026-10-18`, again in place, committed by the next click away.
-So a UI rename keeps the entry where it is — unlike the delete-then-set rename
+So a UI rename keeps the entry where it is , unlike the delete-then-set rename
 through `processFrontMatter` in [[#Observed properties behavior, Obsidian 1.14.4]],
 which moves the key to the end. Two oddities on the way: the first click at
 the `due` key input's left edge left focus on the *previous* row's
@@ -2851,33 +2851,33 @@ Why focus went there is unobserved.
 
 Removing a tag writes the list back in block form. Hovering the `one` pill and
 clicking its remove button dropped the pill at once; after a body click the
-file read `tags:\n  - two` with every other line as before — no collapse to
+file read `tags:\n  - two` with every other line as before , no collapse to
 `[two]`. Whether the removal writes on its own or on the blur was not
 separated. (The click meant to add a tag left `body` as the active element, no
 suggestion popup appeared and the typed `three` reached nothing, so adding is
 unobserved.)
 
-**Add property**, clicked in the in-document block, appends a blank row —
+**Add property**, clicked in the in-document block, appends a blank row ,
 `div.metadata-property[data-property-key=""]` with
 `span.metadata-property-icon[aria-disabled="true"]` (lucide-text), an empty key
-input and a `text` value — focuses its key input and opens
+input and a `text` value , focuses its key input and opens
 `div.suggestion-container.mod-property-key` over it. The popup lists registry
 keys the note does not already have, each a `suggestion-item.mod-complex` with
 the type icon in `span.suggestion-flair` and the name in
 `div.suggestion-title`, first item `is-selected`: `cssclasses`, `book.title`,
-`book.year`, `shelf`, `count`, `due`, `other` — neither alphabetical nor by
+`book.year`, `shelf`, `count`, `due`, `other` , neither alphabetical nor by
 count, and the ordering rule was not found. After typing `demo` the popup was
 gone (no "create" row; sampled 400 ms later). Enter on the key writes at once:
-the file gained `demo:` — bare colon, no `""` — as the last line of the block,
+the file gained `demo:` , bare colon, no `""` , as the last line of the block,
 and focus moved into the new row's value field (an empty
 `div.metadata-input-longtext`). Typing `hello` and clicking the body rewrote
 that line as `demo: hello`; nothing else in the block changed. A second blank
-row left with an empty key and clicked away wrote nothing — no `:`, no `""` —
+row left with an empty key and clicked away wrote nothing , no `:`, no `""` ,
 and the row disappeared from the table.
 
 **The type icon's menu.** Clicking the glyph left of a key opens a `div.menu`
 at the icon: "Property type" (lucide-info, `has-submenu`, chevron-right); a
-group with `data-section="clipboard"` — Cut (lucide-scissors), Copy
+group with `data-section="clipboard"` , Cut (lucide-scissors), Copy
 (lucide-copy), Paste (lucide-clipboard-check); two consecutive
 `div.menu-separator`s; then "Remove" (`is-warning`, lucide-trash-2,
 `data-section="danger"`). So a row's remove affordance lives in this menu, and
@@ -2898,7 +2898,7 @@ quit and relaunch Note A was restored in preview mode with the block folded.
 The record is the one heading folds use
 ([[#Observed heading fold behavior, Obsidian 1.14.4]]): the `localStorage` key
 `<vault id>-note-fold-<path>`, here `e1e76222977ba271-note-fold-Note A.md`,
-value `{"folds":[{"from":0,"to":0}],"lines":20}` — the properties fold is the
+value `{"folds":[{"from":0,"to":0}],"lines":20}` , the properties fold is the
 range `0`–`0`, the opening fence line, and `lines` is 20 for the 19-line note
 plus the empty line after its final newline. `app.json` was unchanged 10 s
 after the fold (`{}`), and `workspace.json`, though rewritten by the note
@@ -2908,13 +2908,13 @@ listed `5c0r1ac0rpu50001-note-fold-Fold Probe.md` and
 `5c0r1ac0rpu50001-file-explorer-unfold` from another vault.
 
 At the 380 px main leaf the reading view's rows stayed 29 px tall at a 304 px
-block width — key and value did not stack there.
+block width , key and value did not stack there.
 
 The All properties pane holds one `div.tree-item` per registry key, each with
 `div.tree-item-self tappable is-clickable`, a type icon, the display name and a
 count. With `sortOrder: "frequency"` the plugin run's order was `tags`6, `STATUS`3,
 `title`3, `zebra`3, `count`2, `aliases`1, `alpha`1, `done`1, `due`1, `link`1,
-`long value`1, `other`1, `cssclasses`0 — counts merge casings, and
+`long value`1, `other`1, `cssclasses`0 , counts merge casings, and
 `cssclasses` is listed at zero. Its sort menu is "Property name (A to Z)",
 "Property name (Z to A)", a separator, then "Frequency (high to low)"
 (`mod-checked`, with the check icon) and "Frequency (low to high)". Its nav
@@ -2930,7 +2930,7 @@ already-open search leaf the active one at 300 px with 6 results; a
 The CDP run filled the pane in. The fresh vault's default workspace already
 held a hidden `all-properties` leaf in the right split; `properties:open`,
 with the right sidebar open at 300 px and the File properties tab active
-there, activated it in that same tab group at x 724, 300 px wide — the
+there, activated it in that same tab group at x 724, 300 px wide , the
 sidebar's existing width, not one the command chose. Its tab header is
 `div.workspace-tab-header[data-type="all-properties"][aria-label="All properties"]`
 (lucide-archive), and its right-click menu is Close, Pin, Link with tab...,
@@ -2962,22 +2962,22 @@ segregated. The choice is view state, not a vault setting: the leaf's
 at `frequency` again.
 
 Rename: the row's right-click menu is Rename (lucide-edit-3,
-`data-section="action"`), "Property type" (lucide-menu, `has-submenu` — the
+`data-section="action"`), "Property type" (lucide-menu, `has-submenu` , the
 icon menu's twin uses lucide-info), a separator, "Delete property"
 (`is-warning`, lucide-trash-2, `data-section="danger"`). Rename is in-pane: the
 `tree-item-self` gains `has-focus is-being-renamed`, its
 `div.tree-item-inner-text` becomes `contenteditable="true" spellcheck="true"`
-and holds a non-collapsed selection (anchor 0, focus 1 — the whole name or its
+and holds a non-collapsed selection (anchor 0, focus 1 , the whole name or its
 first character; the sample cannot tell, and the run pressed Ctrl+A before
 typing); no modal and no scope dialog appeared at any point. Typing `state`
 and Enter rewrote **only Note A**, `Status: draft` → `state: draft` in place,
 one line changed; `Note B.md` (`status:`) and `Note C.md` (`STATUS:`) were
 byte-identical before and after. Whether that is current-file scope or a
-case-sensitive match on `Status` the data cannot say — both fit, and the
+case-sensitive match on `Status` the data cannot say , both fit, and the
 view's `propertyRenameScope` read back only as an object. The reading view's
 row followed at once (`state`, `draft`). The pane then listed `zebra` 3,
 `Status` 2, …, `state` 1: the merged entry kept the display name `Status` with
-no file holding `Status:` any more — the casing is fixed when the key is first
+no file holding `Status:` any more , the casing is fixed when the key is first
 indexed and not recomputed on a rename; after the relaunch the same entry read
 `status` 2, indexed afresh from `status:` and `STATUS:`.
 
@@ -2994,18 +2994,18 @@ and `workspace.json`; on the relaunch all four were rewritten with unchanged
 sizes (`app.json` …847403 → …880304, `appearance.json` …847403 → …880305,
 `core-plugins.json` …761193 → …879846, `workspace.json` …875554 → …880394).
 Byte-identical mtimes are not something Obsidian itself provides, so Silica's
-stricter rule is not needed for compatibility — only for not being the thing
+stricter rule is not needed for compatibility , only for not being the thing
 that changes a file.
 
 `Plain.txt`: with `showUnsupportedFiles` false the explorer DOM still holds its
-`nav-file-title[data-path="Plain.txt"]`, but with a zero rect — hidden — so
+`nav-file-title[data-path="Plain.txt"]`, but with a zero rect , hidden , so
 the click on it was skipped.
 
 `app.metadataTypeManager` keys every property by its **lower-cased** name and
 keeps one display name per key: `Status`, `status` and `STATUS` across three
 notes give the single entry mapKey `status`, name "STATUS". Its
 `registeredTypeWidgets` are `aliases`, `checkbox`, `date`, `datetime`, `file`,
-`folder`, `multitext`, `property`, `number`, `tags`, `text` — there is no
+`folder`, `multitext`, `property`, `number`, `tags`, `text` , there is no
 `cssclasses` widget, and `cssclasses` is carried as `multitext`. None of the
 inferred widgets is persisted: the manager's own raw types map is null and
 `.obsidian/types.json` was absent before and after both runs;
@@ -3021,7 +3021,7 @@ variables were visibly customized (`--metadata-property-radius: 0px`, a
 constants are this vault's, not necessarily Obsidian's defaults; the stacking
 behavior itself is not theme-dependent in any way the run could show.
 
-**Unprobed:** the non-text widgets' writes — the number input (`count`'s
+Unprobed: the non-text widgets' writes , the number input (`count`'s
 click hit the key column), the checkbox (`done`'s too; arrow keys on a focused
 checkbox did not toggle it, but a click on the box itself was never made) and
 the date input (quoted or not once changed) . Adding a tag, the pill
@@ -3034,19 +3034,19 @@ key input focused the `done` checkbox, and whether a key rename moves focus
 into the row's value. Right-click menus on a *property row*, in the reading
 view and in the File properties pane: both CDP right-clicks captured empty
 menus here, so the only row menu seen is the icon's, and any
-reading-vs-sidebar difference is open — although a right-click on a file
+reading-vs-sidebar difference is open , although a right-click on a file
 explorer row does raise its menu (see
 [[#Observed UI rules, Obsidian 1.14.5 (installer build 1.13.7)]]), so an empty
 capture is about the target rather than about `Input.dispatchMouseEvent`. "Remove" from that menu and the bytes
 after it; the "Property type" submenu's items and order; what
 `zebra: alpha-note editedqqq` becomes when retyped as Number; Cut, Copy and
-Paste on a row — none was picked. The first shape `types.json` takes from a UI
+Paste on a row , none was picked. The first shape `types.json` takes from a UI
 retype (its API-written shape is in
 [[#Observed properties behavior, Obsidian 1.14.4]]). The ordering rule of the
 key-suggestion popup, and what it offers on a partial match (it closed on
 `demo`, which matched nothing). The Settings dropdown path for
 `propertiesInDocument` (the run used `setConfig`). The All properties rename's
-scope — current file or case-sensitive match. Whether the File properties
+scope , current file or case-sensitive match. Whether the File properties
 pane's heading element is hidden by CSS. Whether the fold record is written on
 unfold as well as on fold (the key was first read after folding), and where
 `properties:open` puts its leaf when the right sidebar is collapsed. Pane
@@ -3056,7 +3056,7 @@ frequency tie-break is case-sensitive and whether keys other than `cssclasses`
 list at count 0 (this fixture discriminates neither). Whether `types.json`
 entries and the reserved keys `tags`/`aliases` match case-insensitively (no
 type assigned, no `Tags:`). Which casing wins when a key is first indexed
-(`Status` in the run, `status` after the relaunch with `Status:` gone — "first
+(`Status` in the run, `status` after the relaunch with `Status:` gone , "first
 file indexed" fits but is unproven). `markdown:add-metadata-property` was not run
 (`markdown:clear-metadata-properties` now is, above); and the exact string the
 search box receives from a property row was not re-read (`["tags"]` from the
@@ -3065,7 +3065,7 @@ plugin run stands).
 ## Observed auto-pair behavior, Obsidian 1.14.4
 
 Observed on 2026-10-18 with a throwaway plugin in a scratch vault, against
-Obsidian 1.14.4 (installer build 1.13.7) — those are the API and installer
+Obsidian 1.14.4 (installer build 1.13.7) , those are the API and installer
 versions the plugin read back; the running app version came back `null` and
 was not observed. Typing is `document.execCommand("insertText")` on the
 CodeMirror contentDOM, the one JS path that reaches the input handler; the
@@ -3085,16 +3085,16 @@ the cursor at 0:
 
 | Typed | `autoPairBrackets` | `autoPairMarkdown` | Closes when |
 | --- | --- | --- | --- |
-| `(` `[` `{` | `()` `[]` `{}` | — | `autoPairBrackets` |
-| `"` `'` | `""` `''` | — | `autoPairBrackets` |
-| `` ` `` `*` `_` | — | ` `` ` `**` `__` | `autoPairMarkdown` |
-| `<` `~` `=` `$` `%` | — | — | never |
+| `(` `[` `{` | `()` `[]` `{}` | none | `autoPairBrackets` |
+| `"` `'` | `""` `''` | none | `autoPairBrackets` |
+| `` ` `` `*` `_` | none | ` `` ` `**` `__` | `autoPairMarkdown` |
+| `<` `~` `=` `$` `%` | none | none | never |
 
 Each set follows its own toggle and ignores the other's; with both off
 nothing closes. `<`, `~`, `=`, `$` and `%` never close under any
 combination, and typing a second one just adds the character (`~~`, `==`,
 `$$`, `%%`). The membership claim is bounded by the thirteen characters
-probed — no other quote or bracket form was tried.
+probed , no other quote or bracket form was tried.
 
 **A second identical character nests for brackets and skips for the rest.**
 `(` `(` gives `(())` with the cursor at ch 2; `"` `"` leaves `""` and only
@@ -3107,11 +3107,11 @@ positions:
 
 | Cursor | `(` `[` `{` | `"` `'` `` ` `` `*` |
 | --- | --- | --- |
-| `|word` — word char ahead | no (`(word`) | no (`"word`) |
-| `don|t` — inside a word | no (`don(t`) | no (`don't`) |
-| `word|` — after a word char, end of line | closes (`word()`) | no (`word"`) |
-| `say |` — after a space, end of line | closes (`say ()`) | closes (`say ""`) |
-| `(|)` — before a `)` | closes (`(())`) | no (`(")`) |
+| `|word` , word char ahead | no (`(word`) | no (`"word`) |
+| `don|t` , inside a word | no (`don(t`) | no (`don't`) |
+| `word|` , after a word char, end of line | closes (`word()`) | no (`word"`) |
+| `say |` , after a space, end of line | closes (`say ()`) | closes (`say ""`) |
+| `(|)` , before a `)` | closes (`(())`) | no (`(")`) |
 
 So brackets close unless the next character is a word character, and the
 quote and markdown characters were seen to close only where the preceding
@@ -3119,7 +3119,7 @@ character is a space or the start of the document and the line ends at the
 cursor. Two mid-line controls sharpen that: in `para| text here` (word char
 before, space after) `(` closes to `para() text here` while `*` does not
 (`para* text here`), and in `x =| 1` (`=` before, space after) `(` closes
-and `*` does not — a preceding `=` suppresses markdown pairing even though
+and `*` does not , a preceding `=` suppresses markdown pairing even though
 it is not a word character. Two collapsed cursors on `alpha` / `beta` at ch
 0 each got a bare `(` for the same reason: `(alpha` / `(beta`.
 
@@ -3136,16 +3136,16 @@ and is not CodeMirror-editable text, so these rows are source mode only.
 
 **Typing a closer over an auto-inserted one moves the cursor instead of
 inserting.** `(|)` typed `)` leaves `()` with the cursor at ch 2. It still
-skips after an unrelated edit — typing `(`, then `q` after the pair, then
+skips after an unrelated edit , typing `(`, then `q` after the pair, then
 coming back inside, still skips. Typing `)` at `x|)`, where the `)` was
 planted rather than inserted by the editor, writes `x))`; that document has
-no `(` anywhere, so what decides — provenance or an unmatched opener — is
+no `(` anywhere, so what decides , provenance or an unmatched opener , is
 not settled (see Unprobed).
 
 **Backspace between an empty pair deletes both characters**, whether or not
 the editor inserted the pair: an auto-inserted `(|)` and a planted `(|)`
 both leave an empty document, against a control where `pla|in` loses one
-character. With content inside, `(|x)` leaves `x)` — only the opener goes.
+character. With content inside, `(|x)` leaves `x)` , only the opener goes.
 `*|*` also leaves an empty document, and `**|` leaves `*`; the run does not
 record whether that `**` was typed or planted, so the "whoever inserted it"
 half is established for brackets only.
@@ -3153,7 +3153,7 @@ half is established for brackets only.
 **With a selection, every pair character wraps it** and keeps the selection
 over the inner text: `alpha` selected and `(` typed gives `(alpha) beta`
 with `alpha` still selected. This includes `~`, `=`, `$` and `%`, which
-never close at a bare cursor. `<` is the exception — it replaces the
+never close at a bare cursor. `<` is the exception , it replaces the
 selection (`< beta`). Wrapping is per range: two selections and one `(`
 give `(alpha)` and `(beta)`, both selections kept.
 
@@ -3168,7 +3168,7 @@ at `seed|` gives `seed()`, and one undo gives `seed`. After skipping over a
 closer the same single undo reaches `seed`, so the skip adds no undo step
 of its own. The probe left 600 ms between keystrokes, so each keystroke was
 its own CodeMirror history group, and the second undo in each case
-re-entered the probe's own `setValue` seeding — those snapshots are noise.
+re-entered the probe's own `setValue` seeding , those snapshots are noise.
 
 **The closer is ordinary text.** Typing `(` then `a` and running save left
 the file reading `(a)` (char codes 40, 97, 41, decimal). That is a decoded
@@ -3191,10 +3191,10 @@ no longer synthetic events with nothing behind them.
 
 **One rule covers every position either pass ran.** A pair closes when:
 
-- **brackets** `(` `[` `{` — the character *ahead* is whitespace, the end of
+- **brackets** `(` `[` `{` , the character *ahead* is whitespace, the end of
   the line, or a closing bracket. The character behind does not matter:
   `say.|` closes (`say.()`) and `word|` closes.
-- **the markdown and quote characters** `*` `_` `` ` `` `"` `'` — the
+- **the markdown and quote characters** `*` `_` `` ` `` `"` `'` , the
   character ahead is whitespace or the end of the line **and** the character
   behind is whitespace or the start of the line.
 
@@ -3213,7 +3213,7 @@ The five positions that settle it, with the previous pass's rows folded in:
 
 So it is the character *ahead* that carries the markdown rule, not "the line
 ends here": `say | word` pairs. And the bracket rule is narrower than the
-earlier reading — punctuation ahead blocks a bracket too.
+earlier reading , punctuation ahead blocks a bracket too.
 
 `_` behaves exactly like `*`. `~ = $ % <` close in none of the five positions,
 and a second one just adds the character (`~~`, `==`, `$$`, `%%`, `<<`).
@@ -3223,8 +3223,8 @@ the opener and then its own closer leaves the pair alone and moves the caret
 past it, for `)` `]` `}` `"` `'` `` ` `` `*` `_` alike, both on an empty
 document and after a space. A **planted** closer with no opener in the
 document is inserted instead: `x|)` typed `)` gives `x))`, and the same for
-every other pair. The provenance survives moving within the line — type `(`,
-press End, press Home, press Right, type `)` and it still skips — but **not
+every other pair. The provenance survives moving within the line , type `(`,
+press End, press Home, press Right, type `)` and it still skips , but **not
 leaving the line**: in `first(|)` / `second`, Down then Up then `)` gives
 `first())`.
 
@@ -3240,8 +3240,8 @@ outside the widget and are not comparable.)
 
 **Forward Delete between an empty pair deletes only the closer**, whether the
 editor inserted the pair or it was planted: `(|)` becomes `(`, and the same
-for `[]`, `""`, `**` and ` `` `. That is ordinary forward deletion — the
-control `pl|ain` gives `plin`, and `(|x)` gives `()` — and it is the opposite
+for `[]`, `""`, `**` and ` `` `. That is ordinary forward deletion , the
+control `pl|ain` gives `plin`, and `(|x)` gives `()` , and it is the opposite
 of Backspace, which deletes both characters.
 
 **`[[` auto-pairs, and `]` skips over.** Typing `[` `[` gives `[[]]` with the
@@ -3256,10 +3256,10 @@ leaves `[[Ty]]` with the caret at ch 6. A third `[` nests (`[[[]]]`), and
 
 **A run of characters typed inside a fresh pair undoes as one step.** `(`
 then `a` `b` `c` at about seven keys a second, then one Ctrl+Z, leaves `seed`
-— opener, closer and all three characters go together, unlike the 2026-10-18
-pass whose 600 ms gaps made each key its own history group.
+with its opener, its closer and all three characters together, unlike the
+2026-10-18 pass whose 600 ms gaps made each key its own history group.
 
-**Unprobed:** whether both toggles are Obsidian's factory defaults (they were
+Unprobed: whether both toggles are Obsidian's factory defaults (they were
 read from the API in a scratch vault, not from a pristine `app.json`); whether
 the 2026-10-18 "source mode" rows really ran in source mode, since nothing
 read the mode back after the switch and they are byte-identical to the Live
@@ -3324,7 +3324,7 @@ side (`BEFORE ![[…]]AFTER`). Over a selection it replaces it (`BEFORE `
 selected gives `![[…]] AFTER`). With two cursors one paste writes **one** file
 and inserts the same link at both (`one![[…]]\ntwo![[…]]`), leaving two
 selections. Right after a paste the note was on disk with exactly the editor's
-text — 49 bytes, trailing newline kept.
+text , 49 bytes, trailing newline kept.
 
 One undo put the text back to `BEFORE AFTER` in a single step and left the
 attachment alone: the file stayed in the vault index through every entry of
@@ -3336,8 +3336,8 @@ A clipboard carrying only `text/plain` and no `File` item creates nothing:
 `/home/user/pictures/snap.png` was inserted verbatim. That is a path-shaped
 clipboard, not an OS file-manager copy.
 
-Every paste that recorded the DOM event came back `defaultPrevented` — the
-text-only one that wrote no file included — so the flag does not separate
+Every paste that recorded the DOM event came back `defaultPrevented` , the
+text-only one that wrote no file included , so the flag does not separate
 Obsidian's handler from CodeMirror's own paste handling.
 
 **Where the file lands.** `fileManager.getAvailablePathForAttachment` for each
@@ -3382,23 +3382,23 @@ from `Sub/Nested.md` gave the full path `![[Sub/att/Pasted image
 name again, with the other two already in place. What the three agree on is
 the shortest form that resolves back to *that* file from the source note.
 
-**Notices.** The eight pastes that recorded a `notices` array recorded none —
+**Notices.** The eight pastes that recorded a `notices` array recorded none ,
 including the paste whose attachment folder pointed at an existing file, and
-the text-only paste — as did the final restore step. The other fifteen pastes
+the text-only paste , as did the final restore step. The other fifteen pastes
 record no notice field at all.
 
 At the end of the run, after the probe restored `attachmentFolderPath` to `/`,
 `newLinkFormat` to `shortest` and `useMarkdownLinks` to `false`,
 `.obsidian/app.json` held `{"foldHeading": true, "propertiesInDocument":
-"visible"}` — none of the three keys present, while `propertiesInDocument` sat
+"visible"}` , none of the three keys present, while `propertiesInDocument` sat
 there at its own default. How the restore wrote those three keys is not
 recorded, so this does not settle whether setting a key to its default removes
 it (see [[Specification#Observed settings write behavior, Obsidian 1.14.4]],
 which observed the opposite through `vault.setConfig`).
 
-**Unprobed as of 2026-10-18** — the 2026-10-25 pass below answers most of
-this paragraph: whether a *paste* creates a missing attachment folder — the
-folders already existed by the time the real-paste step ran — and whether the
+**Unprobed as of 2026-10-18** . The 2026-10-25 pass below answers most of
+this paragraph: whether a *paste* creates a missing attachment folder , the
+folders already existed by the time the real-paste step ran , and whether the
 API call is what created them: `Attachments`, `att` and `Sub/att` were folders
 afterwards and `att` never received a file, but the run's "before" listing is
 a file listing and cannot show a folder was absent. `attachmentFolderPath =
@@ -3407,8 +3407,8 @@ non-existent path. `useMarkdownLinks` with `absolute` was never pasted for
 real, only generated by the API. No png with a real, distinct clipboard name
 (`photo.png`) was ever pasted, so the rename rule for named png and jpeg items
 is unsettled, as is the extension chosen for a `image/jpeg` item named `*.jpeg`
-or unnamed. Nothing beyond png, jpeg, webp, gif and `text/plain` was pasted —
-no svg, avif, bmp or pdf — and no attachment name contained `#`, `?`, `&`,
+or unnamed. Nothing beyond png, jpeg, webp, gif and `text/plain` was pasted ,
+no svg, avif, bmp or pdf , and no attachment name contained `#`, `?`, `&`,
 parentheses or non-ASCII, so only the space is known to be percent-encoded. A
 real OS file-manager copy and drag-and-drop were not exercised; neither were
 reading view, a canvas or any non-markdown view. Whether the note's save was
@@ -3431,14 +3431,14 @@ payload, which is how a file manager's drag arrives.
 **A paste creates the whole missing folder chain.** With
 `attachmentFolderPath: "att/deep/new"` and no `att` folder in the vault, one
 Ctrl+V produced `att/deep/new/Pasted image 20261025103853.png` and wrote
-`BEFORE ![[Pasted image 20261025103853.png]]AFTER` — the three folders were
+`BEFORE ![[Pasted image 20261025103853.png]]AFTER` , the three folders were
 created by the paste, with no notice.
 
 **`./` is the note's own folder.** With `attachmentFolderPath: "./"`, pasting
 in `Sub/Nested.md` wrote `Sub/Pasted image 20261025103857.png`.
 
 **An image on the clipboard is always a PNG named `Pasted image` plus fourteen
-digits** — `Pasted image YYYYMMDDHHMMSS.png`, local time, no space before the
+digits** , `Pasted image YYYYMMDDHHMMSS.png`, local time, no space before the
 digits and no counter. Because the name carries a second-resolution timestamp,
 a collision is practically unreachable: pasting twice into a vault that already
 held a root-level `photo.png` produced two differently-named files and no
@@ -3448,7 +3448,7 @@ cannot read those files, so the clipboard still held the previous PNG. What a
 is the nearest answer.)
 
 **With `useMarkdownLinks: true` and `newLinkFormat: absolute`** the paste
-writes `![](Attachments/Pasted%20image%2020261025103931.png)` — a Markdown
+writes `![](Attachments/Pasted%20image%2020261025103931.png)` , a Markdown
 embed, the vault-absolute path with **no leading slash**, and spaces
 percent-encoded as `%20`.
 
@@ -3482,16 +3482,16 @@ after. So the paste itself does not save; the ordinary autosave does.
 removed.** The first Ctrl+Z took `BEFORE ![[Pasted image …]]AFTER` back to
 `BEFORE AFTER` in a single step; further presses walked back into earlier
 history rather than doing anything more to the paste. Through five undos the
-attachment folder kept all six files it had accumulated — nothing deletes the
+attachment folder kept all six files it had accumulated , nothing deletes the
 image.
 
 **A real file drop into the editor keeps the file's own name.** Dropping
 `photo.png` on the editor wrote `Attachments/photo.png` with the source's exact
-74 bytes and inserted `![[Attachments/photo.png]]` — the **full path**, not the
+74 bytes and inserted `![[Attachments/photo.png]]` , the **full path**, not the
 shortest form, because a `photo.png` already existed at the vault root and the
 basename alone would have been ambiguous.
 
-**Unprobed after this pass:** what a *named* non-image file on the clipboard
+Unprobed after this pass: what a *named* non-image file on the clipboard
 does (the harness can only put an image there); a collision between two
 attachments of the same name, which the timestamped name makes hard to
 provoke; a drop onto a folder row in the explorer or onto a canvas; and whether
@@ -3508,7 +3508,7 @@ afterwards. The run forced `alwaysUpdateLinks` on (it had been off) and left it
 on; `newLinkFormat` was `shortest`, `useMarkdownLinks` off.
 
 Every row in the file explorer, file and folder alike, carries
-`draggable="true"` — all 37 rows present. The payload the row sets has the keys
+`draggable="true"` , all 37 rows present. The payload the row sets has the keys
 `source, type, icon, title, file`:
 
 | Dragged | `type` | `icon` | `title` | `file` |
@@ -3525,14 +3525,14 @@ Where a drop lands:
 | --- | --- |
 | a folder row | the file moves into that folder (`Root.md` → `Dest/Root.md`) |
 | a file row | the file moves into *that file's parent folder* (`Inbox/Gamma.md` dropped on `Notes/Beta.md` → `Notes/Gamma.md`) |
-| the folder it already lives in | nothing: no `renameFile` call, no notice, no change on disk — though the hover highlight and the `Move into “Dest”` label still appear |
+| the folder it already lives in | nothing: no `renameFile` call, no notice, no change on disk , though the hover highlight and the `Move into “Dest”` label still appear |
 | `.nav-files-container` (the scrolling file list) | the file moves to the vault root (`Dest/Root.md` → `Root.md`) |
 | a workspace tab header | accepted, but as a different action: the label reads `Open as new tab` and a `.workspace-drop-overlay` element appears |
 | `.nav-header`, `.nav-buttons-container`, `.workspace-leaf-content`, `.workspace-drawer-vault-name` | nothing is accepted: no highlight, no new drag action |
 
 The drag ghost is a `.drag-ghost` element holding the item's title plus an
 action line, `Move into “Dest”`, in curly quotes. Over the root zone the name
-in it was `probe` — which is both the vault's name and its folder name in this
+in it was `probe` , which is both the vault's name and its folder name in this
 run, so the two are not distinguished. A ghost with no action line is 31 px
 tall against 46 px for one that carries one.
 
@@ -3540,16 +3540,16 @@ The hover highlight is the class `is-being-dragged-over`, and it lands on the
 *container*, not on the row that received the event: on the outer
 `.tree-item.nav-folder` while `.tree-item-self.nav-folder-title` is unchanged,
 and on `.nav-files-container` itself for the root zone. A file row, although it
-accepts the drop, takes no highlight anywhere — the ghost's action line is the
+accepts the drop, takes no highlight anywhere , the ghost's action line is the
 only affordance.
 
 A name collision at the destination neither prompts nor refuses. `Notes/Alpha.md`
-dropped onto `Dest`, which already held `Alpha.md`, moved in as `Dest/Alpha 1.md`
-— space before the digit — leaving `Dest/Alpha.md` untouched and showing no
+dropped onto `Dest`, which already held `Alpha.md`, moved in as `Dest/Alpha 1.md`,
+with a space before the digit, leaving `Dest/Alpha.md` untouched and showing no
 modal. That is one collision, not a series.
 
 A move that changes the file's basename rewrites the links to it in `shortest`
-form and shows a Notice reading exactly `Updated 1 link in 1 file.` — `Linker.md`
+form and shows a Notice reading exactly `Updated 1 link in 1 file.` , `Linker.md`
 went from `- unrelated: [[Notes/Alpha]]` to `- unrelated: [[Alpha 1]]`. With
 `alwaysUpdateLinks` on no prompt or modal appears at any point in the run. Moves
 that leave the basename alone produced no notice at all, and the note read
@@ -3560,7 +3560,7 @@ A folder dragged onto its own descendant (`Deep` onto `Deep/Sub`) did nothing:
 no highlight, no action line on the ghost, no drag action recorded, vault
 unchanged. No folder was dragged onto a *valid* folder anywhere in the run, so
 this is not isolated from "folder drags offer no move under synthetic
-`DragEvent`s" — only the vault-unchanged half is certain. The API behind it is
+`DragEvent`s" , only the vault-unchanged half is certain. The API behind it is
 not guarded the same way: `fileManager.renameFile("Deep", "Deep/Sub/Deep")`
 fails with a raw `EINVAL: invalid argument, rename '…/Deep' -> '…/Deep/Sub/Deep'`,
 and leaves no partial state (`Deep/`, `Deep/Sub/`, `Deep/Sub/Leaf.md` all still
@@ -3582,7 +3582,7 @@ spellcheck="true"` and the row gains `is-active has-focus is-being-renamed`:
 
 The editable holds the basename alone and the whole of it is selected when the
 editor opens. For a non-markdown file the extension sits outside the editable in
-a sibling `.nav-file-tag` div — `cover.png` renders as `cover` + `png` — and is
+a sibling `.nav-file-tag` div , `cover.png` renders as `cover` + `png` , and is
 not part of the editable text.
 
 Blur commits: `blurme.md` became `blurred.md`, extension intact, with the
@@ -3601,7 +3601,7 @@ That is registry data: every F2 keystroke the run actually dispatched did
 nothing, and all three inline renames were opened by calling
 `view.startRenameFile` directly. Invoked with focus in a CodeMirror editor the
 command made a title element editable with its whole basename selected and
-renamed nothing by itself — but the two invocations, from the same
+renamed nothing by itself , but the two invocations, from the same
 `cm-content` focus, produced two different elements: once `.inline-title`
 (text `Linker`), once `.view-header-title` (text `Beta`). Which element the
 command targets, and on what, is not settled by this run.
@@ -3618,17 +3618,17 @@ folder item carries a `selectable` field.
 
 Two recording caveats for anyone re-running this. The recorder double-records:
 the one blur rename appears twice in `renameFileCalls` and the one link notice
-twice in `notices`, so no count may be read off those arrays — only the text.
+twice in `notices`, so no count may be read off those arrays , only the text.
 And the highlight detector watches class churn document-wide: one capture picked
 up an unrelated `search-result-container … is-loading`, so a positive is not
 automatically drag-related (the negatives are the stronger evidence). The scratch
 vault's `alwaysUpdateLinks` was deliberately left forced on, which will bias a
 re-run from the same vault.
 
-**Unprobed as of 2026-10-18** — the 2026-10-25 pass below answers most of
+**Unprobed as of 2026-10-18** . The 2026-10-25 pass below answers most of
 this paragraph: whether F2 pressed with focus genuinely on an explorer row opens
 the in-row editor, and what `workspace:edit-file-title` does with focus in the
-explorer rather than the editor (the "explorer" context never took focus — the
+explorer rather than the editor (the "explorer" context never took focus , the
 active element was `cm-content` in both invocations); whether Enter commits an
 inline rename (`onKeyEnterInRename` exists but no Enter was dispatched); what an
 inline rename onto a name already taken does, and whether committing an inline
@@ -3638,7 +3638,7 @@ whether a drag-move prompts before rewriting links with `alwaysUpdateLinks` off;
 whether a markdown-style link's destination is rewritten on a move at all, and
 after what delay, since the only read was immediate and the file later moved
 back; whether `fileManager.renameFile` auto-numbers or errors on a collision
-(the direct API check could not run — the drop had already moved the file); what
+(the direct API check could not run , the drop had already moved the file); what
 a drop on a file row does when the destination folder already holds that name;
 whether a folder dropped on a valid, non-descendant folder moves at all under
 these synthetic events, the control this run lacks; whether `.view-content`,
@@ -3656,7 +3656,7 @@ undo path.
 
 `tools/obsidian-probe/explorer-dnd.mjs` against **Obsidian 1.14.5**, results in
 `tools/obsidian-probe/results/2026-10-25-explorer-dnd.json`, with
-`alwaysUpdateLinks: false` in `app.json` — the opposite of the 2026-10-18
+`alwaysUpdateLinks: false` in `app.json` , the opposite of the 2026-10-18
 run's forced-on setting, which is the configuration this block's open
 questions were about.
 
@@ -3682,7 +3682,7 @@ row carries `is-being-dragged` and the **target folder's outer `tree-item`**
 carries `is-being-dragged-over` (`tree-item nav-folder is-being-dragged-over`),
 not the title element. Both are gone after the drop. Held over the empty area
 below the last row, `.nav-files-container` itself takes
-`is-being-dragged-over` — so the gap below the tree is a drop zone (the vault
+`is-being-dragged-over` , so the gap below the tree is a drop zone (the vault
 root), which the earlier pass could not confirm.
 
 **What a drop does.**
@@ -3690,16 +3690,16 @@ root), which the earlier pass could not confirm.
 | Drop | Result |
 | --- | --- |
 | file on a folder row | moves the file into that folder (`Root.md` → `Dest/Root.md`), no notice |
-| file on a folder row, name already taken | **auto-numbers**: `Notes/Alpha.md` dropped on `Dest/` where `Dest/Alpha.md` exists becomes `Dest/Alpha 1.md` — space, then `1` — and the existing file is untouched |
+| file on a folder row, name already taken | **auto-numbers**: `Notes/Alpha.md` dropped on `Dest/` where `Dest/Alpha.md` exists becomes `Dest/Alpha 1.md` , space, then `1` , and the existing file is untouched |
 | file on a **file** row | moves it into that file's folder: `Inbox/Gamma.md` dropped on `Dest/Keep.md` became `Dest/Gamma 1.md`, `Dest/Gamma.md` untouched |
 | folder on a folder row | moves the whole folder (`Deep/` → `Dest/Deep/`, children included) |
-| folder on its own descendant | **nothing** — the tree is byte-identical; this is the control the earlier run lacked |
+| folder on its own descendant | **nothing** . The tree is byte-identical; this is the control the earlier run lacked |
 | `dragCancel` instead of a drop | nothing moves |
 
 So `fileManager.renameFile` auto-numbers on a collision rather than erroring,
 and the suffix is ` 1`.
 
-**With `alwaysUpdateLinks: false`, Obsidian asks — but only when a link would
+**With `alwaysUpdateLinks: false`, Obsidian asks , but only when a link would
 actually change.** Moving `Root.md` into `Dest/` left `Linker.md`
 byte-identical immediately and four seconds later, with no modal: the shortest
 -path link `[[Root]]` still resolves, so nothing had to change. Moving
@@ -3721,7 +3721,7 @@ notice.
 **Ctrl+click does not multi-select; Shift+click does.** Ctrl+clicking three
 file rows in turn left exactly one row marked (`is-active`) and the view's own
 selection list empty. Shift+clicking back to the first row marked all three
-with **`is-selected`** — a contiguous span.
+with **`is-selected`**, a contiguous span.
 
 **The inline rename.** F2 only works with focus genuinely on a row, which a
 click cannot give: clicking a file row opens the file and hands focus to
@@ -3734,13 +3734,13 @@ into the editor:
 - the row gains **`is-being-renamed`** beside `has-focus` and `is-active`
 - the **basename without the extension** is pre-selected (`Beta`, not
   `Beta.md`; `cover`, not `cover.png`)
-- `document.activeElement` stays `BODY` — the selection is inside the
+- `document.activeElement` stays `BODY` , the selection is inside the
   contenteditable but focus is not reported on it
 
 | Committed with Enter | Result |
 | --- | --- |
 | `Beta` → `Beta Renamed` | `Notes/Beta.md` → `Notes/Beta Renamed.md`, no notice, no modal, editor closes |
-| `cover` → `renamed cover` on a `.png` | `renamed cover.png` — **the extension is kept** without typing it, and `![[cover.png]]` in another note was *not* updated |
+| `cover` → `renamed cover` on a `.png` | `renamed cover.png` , **the extension is kept** without typing it, and `![[cover.png]]` in another note was *not* updated |
 | `Keep` → `Alpha` where `Dest/Alpha.md` exists | **refused silently**: the tree is unchanged, there is no notice and no modal, and the inline editor **stays open** showing `Alpha` |
 | the empty name | the same: nothing renamed, no notice, editor stays open |
 
@@ -3756,18 +3756,18 @@ in-row editor with the folder name pre-selected and no modal.
 Observed on 2026-10-18 with a throwaway plugin in a scratch vault (47 nodes, 15
 links), polling `.obsidian/graph.json`'s bytes, size and mtime around each
 interaction. One run, one vault, no restart; the version is the baseline step's
-`appVersion` — the run's own `meta.appVersion` is null.
+`appVersion` , the run's own `meta.appVersion` is null.
 
 **Obsidian creates the file; an enabled plugin does not.** At baseline the graph
 core plugin was found and enabled, and `.obsidian` held only `app.json`,
 `appearance.json`, `community-plugins.json`, `core-plugins.json`,
-`workspace.json` and a `plugins/` folder — no `graph.json`. Opening the global
+`workspace.json` and a `plugins/` folder , no `graph.json`. Opening the global
 graph view created it, once, with nobody touching the controls. It was present
 at the first poll after the view opened, and the poller ran at roughly 120 ms
 (14 polls over 1691 ms), so every latency below is a poll-granularity upper
 bound, not a measurement.
 
-The created file is a complete twenty-key document — never sparse — in this
+The created file is a complete twenty-key document , never sparse , in this
 order, with these values:
 
 ```json
@@ -3796,10 +3796,10 @@ order, with these values:
 ```
 
 All four control sections start collapsed. Two-space indentation, one key per
-line, no trailing newline — the last byte is `}` and the file is 494 bytes.
+line, no trailing newline , the last byte is `}` and the file is 494 bytes.
 Numbers come out the way JavaScript prints them: integers with no decimal point
 (`0`, `1`, `10`, `250`) and everything else at full round-trip precision, with
-no fixed number of decimal places — `0.518713248970312` at fifteen significant
+no fixed number of decimal places , `0.518713248970312` at fifteen significant
 digits, and `5.0625` for a zoom. Later states measured 503, 498 and 497 bytes.
 
 **The file is a serialization of the graph core plugin's own options object.**
@@ -3809,7 +3809,7 @@ the same order as the file, and its prototype carries `saveOptions`,
 for the fixed key order, the whole-document rewrite, and for no `local*` key
 ever reaching the file.
 
-Every observed file state carries those same twenty keys in that same order —
+Every observed file state carries those same twenty keys in that same order ,
 the creation write, the writes whose bytes were recorded afterwards, and every
 later snapshot. One interaction changes exactly one value and leaves the other
 nineteen untouched; nothing is appended and nothing is reordered. Whether a
@@ -3839,7 +3839,7 @@ Each section is `div.tree-item.graph-control-section` plus one of `mod-filter`,
 `mod-color-groups`, `mod-display`, `mod-forces`, and expanding removes
 `is-collapsed` from that div; the header div keeps `tree-item-self
 mod-collapsible` unchanged. While a section is collapsed its setting rows are
-absent from the DOM, not merely hidden — a query for setting-items under the
+absent from the DOM, not merely hidden , a query for setting-items under the
 collapsed panel returned none. The panel has four
 `div.clickable-icon.graph-controls-button`: `mod-close` ("Close"), `mod-open`
 ("Open graph settings"), `mod-animate` ("Start timelapse animation"),
@@ -3854,7 +3854,7 @@ never sampled at write time, so nothing here shows what the writer reads; what
 it does not read is the animated value. The second write's mtime is exactly
 2000 ms after the first; a pan drag was dispatched inside that window but moved
 nothing (`panX`/`panY` identical before and after), so the second write cannot
-be attributed to the drag, to the zoom settling, or to a periodic flush — the
+be attributed to the drag, to the zoom settling, or to a periodic flush , the
 three are indistinguishable in this run. The renderer's `targetScale` read `8`
 at every sample after the wheel burst.
 
@@ -3863,7 +3863,7 @@ key set never grows.
 
 **Local graph.** Opening a local graph wrote nothing to `graph.json`. Its
 options live in the workspace leaf state: `type: "localgraph"`, `state.file`
-(`"Alpha.md"`), `state.options`. That option set is not `graph.json`'s — it
+(`"Alpha.md"`), `state.options`. That option set is not `graph.json`'s , it
 drops `showOrphans` and adds `localJumps` (`1`), `localBacklinks` (`true`),
 `localForelinks` (`true`), `localInterlinks` (`false`). The renderer engine's
 own live `options` object is a third, filter-only set: `showTags`,
@@ -3873,7 +3873,7 @@ in the engine and the leaf state and never appear in the file.
 
 The local graph opened at a point when `graph.json` already held
 `collapse-filter: false`, `scale: 8`, `close: true`; its own options read
-`collapse-filter: true`, `scale: 1`, `close: false` — the values the file was
+`collapse-filter: true`, `scale: 1`, `close: false` , the values the file was
 created with, and its four control sections were all collapsed while the global
 panel's four had been expanded. So a local graph does not start from the current
 `graph.json`. Whether it starts from built-in defaults or from a snapshot of the
@@ -3886,7 +3886,7 @@ local graph at `renderer.scale: 1`, with the same own-options block
 (`localJumps: 1`, `localBacklinks`/`localForelinks` true, `localInterlinks`
 false, `scale: 1`). Its leaf title is `Graph of <basename>`, not "Local graph".
 The same run found that **`graph:open-local` is not offered at all when no file
-is open** — see
+is open** , see
 [[#Observed UI rules, Obsidian 1.14.5 (installer build 1.13.7)]].
 
 The view types are `graph` (title "Graph view") and `localgraph` (title "Local
@@ -3896,18 +3896,18 @@ the baseline for that file was taken after both leaves were already open.
 Detaching every graph view wrote nothing further; the file kept the last state
 written while a view was open.
 
-**Unprobed as of 2026-10-18** — the 2026-10-25 pass below answers most of
+**Unprobed as of 2026-10-18** . The 2026-10-25 pass below answers most of
 this paragraph: whether a filter checkbox (`showTags`, `showAttachments`,
-`hideUnresolved`, `showOrphans`) writes at all — the sections were still
+`hideUnresolved`, `showOrphans`) writes at all , the sections were still
 collapsed, so no row existed to click; whether a slider writes on `input` or
-only on `change`, and which key the probed slider owns — its five synthetic
+only on `change`, and which key the probed slider owns , its five synthetic
 frames ended on the slider's starting value and fired no `change` event, so the
 zero writes prove nothing, and only `min -3 / max 3 / step 0.1` was captured
 (that range matches the Display section's text-fade control, which makes
 `textFadeMultiplier` the likely owner, unconfirmed); whether toggling a *local*
-graph option writes anything — that sub-step silently did not run (`toggled`,
+graph option writes anything , that sub-step silently did not run (`toggled`,
 `boxKind` and both `boxClass` fields all null) even though the step reported
-success; whether pan persists anywhere — the synthetic drag never moved the
+success; whether pan persists anywhere , the synthetic drag never moved the
 renderer; re-collapsing a section (`false` → `true`); the search box,
 `colorGroups` edits, `showArrow`, and the "Restore default settings" and
 timelapse buttons, none of which were touched (`search` stayed `""` and
@@ -3920,7 +3920,7 @@ tested; whether unknown keys in a hand-written `graph.json` survive, since the
 file did not exist at baseline and Obsidian only ever rewrote its own; and
 whether a local graph's options ever reach `workspace.json`. Every figure above
 comes from a single ~14 s run against one 47-node scratch vault: the file shape
-and key order are robust to that, the timings and the saturation at `8` are not.
+and key order survive that, the timings and the saturation at `8` are not.
 
 ### The 2026-10-25 pass: every control, under real input
 
@@ -3929,7 +3929,7 @@ in `tools/obsidian-probe/results/2026-10-25-graph-writeback.json`. The earlier
 run's sections were collapsed, so no checkbox or slider row existed to click
 and its "zero writes" proved nothing. This one expands all four sections
 first, clicks every toggle, drags every slider with a real mouse (scrolling
-each into view — the Forces sliders sit below an 800 px window and a drag at
+each into view , the Forces sliders sit below an 800 px window and a drag at
 their reported coordinates hits nothing), types in the search box, and polls
 `graph.json` every 100 ms to time the write.
 
@@ -3948,14 +3948,14 @@ their reported coordinates hits nothing), types in the search box, and polls
 | Display | Text fade threshold | slider | −3 … 3 step 0.1 | `textFadeMultiplier` |
 | Display | Node size | slider | 0.1 … 5 step any | `nodeSizeMultiplier` |
 | Display | Link thickness | slider | 0.1 … 5 step any | `lineSizeMultiplier` |
-| Display | *(button)* `Animate` | button | | — |
+| Display | *(button)* `Animate` | button | | none |
 | Forces | Center force | slider | 0 … 1 step any | `centerStrength` |
 | Forces | Repel force | slider | 0 … 20 step any | `repelStrength` |
 | Forces | Link force | slider | 0 … 1 step any | `linkStrength` |
 | Forces | Link distance | slider | 30 … 500 step 1 | `linkDistance` |
 
 So "Existing files only" is `hideUnresolved`, "Text fade threshold" is
-`textFadeMultiplier` — the range the earlier run guessed from — and **there is
+`textFadeMultiplier` , the range the earlier run guessed from , and **there is
 no "Restore default settings" button**: Display's only button is `Animate`.
 Each section's own open/shut state is its `collapse-<section>` key, and
 re-collapsing writes `collapse-filter: true` 300 ms later.
@@ -3964,7 +3964,7 @@ re-collapsing writes `collapse-filter: true` 300 ms later.
 changed exactly one key, and the file had changed by the first 100 ms poll
 after the gesture. The search box is the one debounced row: typing `alpha`
 reached the file after **401 ms**, and clearing it wrote `search: ""`. So the
-"real debounce" question is answered — about 100 ms for a discrete control,
+"real debounce" question is answered , about 100 ms for a discrete control,
 about 400 ms for keystrokes.
 
 **The zoom clamps.** Twenty-five wheel-ups saturate the renderer at
@@ -3978,7 +3978,7 @@ state this run produced, and reopening the graph restored only the scale
 (`0.0078125` in the file came back as a renderer scale of `0.00788`).
 
 **Unknown keys do not survive.** A hand-written `graph.json` carrying
-`silicaUnknownKey: "please keep me"` lost it on Obsidian's first write — the
+`silicaUnknownKey: "please keep me"` lost it on Obsidian's first write , the
 file is rewritten wholesale. Worth contrasting with Silica's own rule: for
 `graph.json`, preserving unknown keys is *not* what Obsidian does.
 
@@ -4000,7 +4000,7 @@ the global one plus four rows at the top of Filters:
 | Outgoing links | toggle | `localForelinks` |
 | Neighbor links | toggle | `localInterlinks` |
 
-**Unprobed after this pass:** whether a write is atomic (temp file plus
+Unprobed after this pass: whether a write is atomic (temp file plus
 rename) or in place; `colorGroups` edits and the Groups section's own add-group
 affordance, which has no `.setting-item` row to click; the `Animate` button;
 and whether a slider writes on `input` or only on `change`, which a real drag
@@ -4016,16 +4016,16 @@ and `localStorage` were read back. `Menu.showAtMouseEvent`,
 `Menu.showAtPosition`, `Modal`, `navigator.clipboard` and Electron's
 `clipboard` were all patched to record anything the pane did. **That run never
 changed the sort order and never invoked the copy action.** The 2026-10-19
-observations came from a CDP-driven run — real browser-injected keystrokes and
+observations came from a CDP-driven run , real browser-injected keystrokes and
 mouse clicks, with file bytes read from disk by the host
-([[Development#Driving Obsidian over CDP, 2026-10-18]]) — on the same Obsidian
+([[Development#Driving Obsidian over CDP, 2026-10-18]]) , on the same Obsidian
 1.14.4 (installer build 1.13.7) in a fresh scratch vault of twelve fixtures:
 eleven `.md` notes containing `needle` (`_needle.md`, `9 needle.md`,
 `Apple Pie.md`, `apple.md`, `apple2.md`, `apple10.md`, `kiwi.md`, `mango.md`,
 `zebra.md`, `notes/apple.md`, `notes/banana.md`) and `plain.txt`, every file
 given a distinct mtime. Three bounds on that run: each sort switch was a
-script-dispatched `change` event on the native `<select>` — ArrowDown on the
-focused select changed nothing — which reached `setSortOrder` through the
+script-dispatched `change` event on the native `<select>` , ArrowDown on the
+focused select changed nothing , which reached `setSortOrder` through the
 dropdown's `changeCallback`; the copy modal's two selects were set the same way
 (its toggle, the count control, the menu items and the buttons were real
 clicks); and the query was empty by the time the toggle and keyboard steps ran,
@@ -4036,7 +4036,7 @@ The view:
 
 - Type `search`, icon `lucide-search`, display title `Search`; the command is
   `global-search:open`, "Search: Search in all files".
-- Its serialized state is exactly six keys — `query`, `matchingCase`,
+- Its serialized state is exactly six keys , `query`, `matchingCase`,
   `explainSearch`, `collapseAll`, `extraContext`, `sortOrder`. `getState` reads
   the first three off the view and the last three off the result-DOM object:
   `t.collapseAll=this.dom.collapseAll,t.extraContext=this.dom.extraContext,t.sortOrder=this.dom.sortOrder`.
@@ -4045,21 +4045,21 @@ The view:
   four flags are `false`. A never-searched leaf already serializes all six:
   `.obsidian/workspace.json` read right after launch, before any search, held
   `"query": "", "matchingCase": false, "explainSearch": false, "collapseAll": false, "extraContext": false, "sortOrder": "alphabetical"`
-  for the search leaf, in that order — the keys are emitted even at their
-  defaults — and the file-explorer leaf uses the same
+  for the search leaf, in that order , the keys are emitted even at their
+  defaults , and the file-explorer leaf uses the same
   `"sortOrder": "alphabetical"` string.
 - `setSortOrder` is `function(e){var t=this.dom;t.sortOrder=e,t.changed()}`: it
   assigns `dom.sortOrder` and calls `dom.changed()`, and nothing else.
   `dom.changed()` is a generic debounce wrapper; its inner body was not captured
   in either run.
-- The result list is virtualized — the DOM object carries `infinityScroll`,
+- The result list is virtualized , the DOM object carries `infinityScroll`,
   `vChildren`, `resultDomLookup`, `focusedItem`, `pusherEl`, `emptyStateEl`,
   `showingEmptyState` and `working`.
 - The view's container holds, in order, `search-row`, `search-info-container`,
   `search-params`, `search-results-info` and
   `search-result-container mod-global-search`. The sort control is a native
   `<select class="dropdown">`, not a menu, and it sits in the
-  `search-results-info` bar beside the result count — not in the settings
+  `search-results-info` bar beside the result count , not in the settings
   section, which holds only the three toggles. (The bar's text content is the
   count, the six option labels and the current label once more, the last from
   the hidden `is-measuring` twin select the dropdown component sizes itself
@@ -4078,7 +4078,7 @@ The view:
   matcher, re-renders the search-info block, feeds each file through
   `addResult`/`removeResult`, sets the count from
   `labelResultCount({count: dom.getMatchCount()})` when its queue stops, and
-  ends with `app.workspace.requestSaveLayout()` then `requestSaveSearch()` —
+  ends with `app.workspace.requestSaveLayout()` then `requestSaveSearch()` ,
   every query run schedules a layout save and a recent-searches save.
 
 The header holds three elements:
@@ -4102,7 +4102,7 @@ markup is a `clickable-icon` wrapping a `more-options-icon`. On 2026-10-19 it
 read `16 results` over eleven rows whose flairs sum to 14; the two files whose
 names contain the term (`_needle`, `9 needle`) carry flair 1 each and render
 `needle` in their titles inside `search-result-file-matched-text`. That fits
-filename hits counting as results without adding to the file's flair — an
+filename hits counting as results without adding to the file's flair , an
 inference from one count, since `getMatchCount` was not read. The same text
 read `0 results` once the query had been emptied in-session, and an empty
 string right after a restart with no search run.
@@ -4110,12 +4110,12 @@ string right after a restart with no search run.
 **A real left-click on the count opens a two-item menu**, both items section
 `action`: `Copy search results` (`lucide-copy`) and `Bookmark...`
 (`lucide-bookmark`). Escape closes it. The first is the control for
-`onCopyResultsClick` — see Copying results; the second was never clicked.
+`onCopyResultsClick` , see Copying results; the second was never clicked.
 
 Results, for the query `needle`:
 
 - On 2026-10-18 the order was `apple.md`, `notes/banana.md`, `mango.md`,
-  `zebra.md` under `sortOrder: alphabetical` — basename order. Path order
+  `zebra.md` under `sortOrder: alphabetical` , basename order. Path order
   would put `notes/banana.md` last; creation order (ctime 870845, 870851,
   870852, 870854, 870863 for apple, kiwi, mango, banana, zebra) would put
   mango second; the match counts 1, 1, 3, 2 rule out ordering by number of
@@ -4123,7 +4123,7 @@ Results, for the query `needle`:
 - Rows start expanded (`collapsed: false` on every row) and carry a match
   count: apple 1, banana 1, mango 3, zebra 2. With `extraContext: false`, each
   match rendered as a single short string.
-- A write to `kiwi.md` during the 2026-10-18 run (82 bytes before, 32 after —
+- A write to `kiwi.md` during the 2026-10-18 run (82 bytes before, 32 after ,
   overwritten, not appended) put a fifth file in the list within the 451 ms the
   probe waited, `kiwi.md` inserted between `notes/banana.md` and `mango.md`,
   with `sortOrder` unchanged. 451 ms is the wait the probe used, not a measured
@@ -4139,9 +4139,9 @@ Results, for the query `needle`:
   (`getActiveFile()` stayed null). The click meant to re-expand it later landed
   inside the rect the count control occupied, so re-expansion by a second
   click is unobserved. Each match line (`search-result-file-match tappable`)
-  carries two hidden hover buttons labelled `Show more context` —
+  carries two hidden hover buttons labelled `Show more context` ,
   `search-result-hover-button mod-top` (`lucide-chevron-up`) and `mod-bottom`
-  (`lucide-chevron-down`) — so context expands per match, above and below.
+  (`lucide-chevron-down`) , so context expands per match, above and below.
 
 **Sort orders.** The `<select>` has exactly six options and index 0 is selected
 in a vault that never chose one. The native popup is not in the DOM and was
@@ -4165,8 +4165,8 @@ What the orders show:
   runs compare numerically (`apple2` before `apple10`); a space sorts before a
   digit (`Apple Pie` before `apple2`); a bare prefix sorts first (`apple`
   before both); `_` sorts before `9`, which sorts before letters. Byte order
-  is ruled out three times over — it puts `apple10` before `apple2`,
-  `9 needle` before `_needle`, and `Apple Pie` first among the apples — and
+  is ruled out three times over , it puts `apple10` before `apple2`,
+  `9 needle` before `_needle`, and `Apple Pie` first among the apples , and
   the data is consistent with a locale-aware numeric collation.
 - `alphabeticalReverse` reversed every pair except the one basename tie:
   `notes/apple` stayed ahead of `apple` in both directions. **Why, settled on
@@ -4175,7 +4175,7 @@ What the orders show:
   is a *stable* sort on the basename over a file list that is already in
   **full-path descending** order. Eight notes named `apple` at different
   depths come back `zzz/`, `z/`, `m/n/`, `m/`, root, `a/b/c/`, `a/`, `APPLE`
-  under File name (A to Z) — exactly the path descending, exactly the order
+  under File name (A to Z) , exactly the path descending, exactly the order
   `app.vault.getMarkdownFiles()` returns, and unchanged under Z to A, which
   reverses only the basename groups. The quick switcher orders the same tie
   the same way. So a note in a folder leads a root note of the same name, and
@@ -4189,8 +4189,8 @@ What the orders show:
   has `apple` and `zebra` at birthtime `…566.33` ms, `kiwi` at `…567.58` and
   the rest from `…567.62` to `…568.04`, with one identical `ctimeMs` for all
   twelve. The grouping fits Obsidian keying on the birthtime rounded to whole
-  milliseconds — floor would have split `kiwi` from the rest, `ctime` proper
-  would have made a single group — but those are the host's stats, not
+  milliseconds , floor would have split `kiwi` from the rest, `ctime` proper
+  would have made a single group , but those are the host's stats, not
   Obsidian's own, so this stays likely.
 
 **Changing the sort order re-sorts the existing list without re-running the
@@ -4218,17 +4218,17 @@ Where state lives:
   and after quit, and `startSearch` ends in `requestSaveLayout()`, so the save
   may well precede the quit.
 - Recent searches live in `localStorage` under `<appId>-recent-searches`,
-  holding a JSON array of query strings — `["needle"]` on 2026-10-19, the
+  holding a JSON array of query strings , `["needle"]` on 2026-10-19, the
   vault's only key, and it survived the restart; `["[\"tags\"]"]` on
   2026-10-18, one of six keys for that vault. That lines up with
   `saveSearch`/`requestSaveSearch` and with `bookmarks:bookmark-current-search`.
 - `.obsidian/global-search.json` appeared between launch (when `.obsidian/`
   held `app.json`, `appearance.json`, `core-plugins.json`, `workspace.json`)
-  and the post-quit listing; no step read its bytes, so what it holds — and
-  whether the first search's `requestSaveSearch` wrote it — is unknown.
+  and the post-quit listing; no step read its bytes, so what it holds , and
+  whether the first search's `requestSaveSearch` wrote it , is unknown.
 - The 2026-10-18 vault's `.obsidian/` held `app.json`, `appearance.json`,
   `community-plugins.json`, `core-plugins.json`, `graph.json` and
-  `workspace.json` plus a `plugins/` folder — there was no `search.json`.
+  `workspace.json` plus a `plugins/` folder , there was no `search.json`.
   `app.json` was `{"foldHeading": true, "propertiesInDocument": "visible"}`,
   with no `searchSortOrder`, `sortOrder` or `searchSort` key; that absence now
   reads as expected, since the sort order is leaf state.
@@ -4245,13 +4245,13 @@ order, a `textarea.copy-search-result-textarea` (prefilled, editable,
 
 | Control | Label | Description | Values (stored → label) | Default |
 | --- | --- | --- | --- | --- |
-| toggle | Show path | Display full path of the file rather than just the file name. | — | off |
+| toggle | Show path | Display full path of the file rather than just the file name. | none | off |
 | select | Link style | Optionally turn each file result in to a link. | `none` → None, `wikilink` → Wikilink, `markdown` → Markdown link | `none` |
 | select | List prefix | Optionally add a list item prefix to each file result. | `none` → None, `-` → Dash (-), `*` → Asterisk (*), `num` → Numbered | `none` |
 
 Buttons: `Copy results` (`mod-cta`) and `Done`. The textarea holds one line
-per file in the list's order — the list was in default alphabetical order in
-this run; copying under another sort was not tried — joined by `\n` with no
+per file in the list's order , the list was in default alphabetical order in
+this run; copying under another sort was not tried , joined by `\n` with no
 trailing newline, no match lines, no indentation; a file with two matches gives
 one line. All 24 combinations were read from the textarea over `apple.md`,
 `Apple Pie.md`, `notes/banana.md`, `mango.md`; the `notes/banana.md` line per
@@ -4271,9 +4271,9 @@ vault-relative path with extension and folder kept, a Markdown link's text is
 always the basename and its target is not percent-encoded
 (`[Apple Pie](Apple Pie.md)`). The prefix prepends `- `, `* ` or `1. `, `2. `,
 … (numbered from 1 in list order) to every line. A real click on
-`Copy results` put the textarea text on the system clipboard byte for byte —
+`Copy results` put the textarea text on the system clipboard byte for byte ,
 `1. [apple](apple.md)\n2. [Apple Pie](Apple Pie.md)\n3. [banana](notes/banana.md)\n4. [mango](mango.md)`,
-LF only, no trailing newline, read through Electron's clipboard — showed the
+LF only, no trailing newline, read through Electron's clipboard , showed the
 notice `Results copied to your clipboard.`, and left the modal open; Escape
 closed it. `Done` was never pressed, and no `paste.md` was created, so the
 bytes a paste lands in a note are unobserved.
@@ -4292,22 +4292,22 @@ query, and clicking again restores `false`:
 | Collapse results | settings section | `collapseAll` | `checkbox-container is-enabled` | `dom.collapseAll` |
 | Show more context | settings section | `extraContext` | `checkbox-container is-enabled` | `dom.extraContext` |
 | Explain search terms | settings section | `explainSearch` | `checkbox-container is-enabled` | (the probe read only `collapseAll`, `extraContext`, `sortOrder` off the DOM object) |
-| Match case | input decorator | `matchingCase` | `input-right-decorator clickable-icon is-active` | — |
+| Match case | input decorator | `matchingCase` | `input-right-decorator clickable-icon is-active` | none |
 
 Enabling `Explain search terms` moved its own row down 45 px (y 164 at the
 click that enabled it, 209 at the click that disabled it) while the other three
 rows stayed put, so it renders something above the settings section even with
-an empty query — `search-info-container` precedes `search-params`. The probe's
+an empty query , `search-info-container` precedes `search-params`. The probe's
 `[class*="explain"]` selector found nothing, so that block is not classed
 `explain`. What the other three do to a populated list was not seen.
 
 Context menus:
 
 - 2026-10-18, synthetic right-clicks: a result's file title opens a 13-item
-  menu. A match line opens the same menu with "Delete file" dropped — 12 items,
+  menu. A match line opens the same menu with "Delete file" dropped, 12 items,
   every callback byte-identical to the file-title one (item 0 is
   `function(){r.app.workspace.openLinkText(t,n,"tab")}` in both). A match row's
-  menu acts on the file; nothing in it is match-specific — no copy-match, no
+  menu acts on the file; nothing in it is match-specific , no copy-match, no
   line target.
 - The dump below is the menu's insertion order with each item's `data-section`,
   not the order a reader sees: Obsidian renders a menu grouped by section,
@@ -4346,7 +4346,7 @@ Context menus:
   click had opened one modal; because the clipboard stayed unchanged the
   script then called `onCopyResultsClick` directly and opened a second,
   pressed Escape once, and the next step began by re-running
-  `global-search:open` — a stacked modal is the likely cause, but nothing
+  `global-search:open` , a stacked modal is the likely cause, but nothing
   recorded the moment the query emptied.
 - The Files view's menu for `apple.md`, from a real right-click, in displayed
   order:
@@ -4380,7 +4380,7 @@ Context menus:
   `Merge entire file with...`, `Open version history`); whether a search row's
   real menu matches it item for item is still open.
 
-Keyboard, from the handler sources on the view prototype — none was driven
+Keyboard, from the handler sources on the view prototype , none was driven
 against a populated list:
 
 | Key | Handler |
@@ -4395,10 +4395,10 @@ variants are decided inside `onResultClick`, which was not read. The driven
 sequence (five ArrowDown, ArrowUp, two ArrowLeft, two ArrowRight, Enter,
 Ctrl+Enter, Shift+Enter) ran over an empty list: `focusedItem` stayed null,
 the input stayed the active element for the arrows, and no Markdown leaf,
-popout window or vault file appeared after any Enter — which says nothing was
+popout window or vault file appeared after any Enter , which says nothing was
 focused, not that Enter does nothing.
 
-**Unprobed:** the visible effect of each toggle on a populated list — the
+Unprobed: the visible effect of each toggle on a populated list , the
 `Needle` hit set under Match case (the capitalised query never landed), whether
 Collapse results drops match lines, how many lines Show more context adds and
 whether they are trimmed, and what Explain search terms renders (only its
@@ -4406,7 +4406,7 @@ layout shift was seen). Keyboard navigation as driven: what the focus ring
 moves over, what Enter, Ctrl+Enter and Shift+Enter open and where, and what
 `cE()` in the ArrowDown handler is. The real context menu of a result's file
 title and of a match line, whether it matches the Files view's menu for the
-same file item for item, and the menu — if any — of the empty space below the
+same file item for item, and the menu , if any , of the empty space below the
 last result. Ctrl+C on a focused result row (never pressed; the only keyboard
 step around the count menu pressed ArrowDown then Enter and read an unchanged
 clipboard). What `Bookmark...` in the count menu does, what `Done` in the copy
@@ -4419,7 +4419,7 @@ and which row takes `has-focus` after a switch. The tie-break of a fresh list
 (only re-sort stability was seen, from one tie pair), mtime ties (none
 existed), the exact created-time key (birthtime rounded to milliseconds fits
 one grouping of host stats), and the native `<select>` popup itself, which was
-never opened — every switch was a synthetic `change` event. Whether a second
+never opened , every switch was a synthetic `change` event. Whether a second
 click on a row's collapse icon re-expands it, and whether clicking a row's
 title collapses or opens.
 
@@ -4440,7 +4440,7 @@ dock). What the pane is made of, top to bottom, in the dark theme unless said ot
 - `is-active` on either button is the accent as text (`rgb(166,138,249)`) over the accent at a
   tenth as background.
 - `search-info-container` (Explain search terms): padding 4px 16px 8px, 12 px muted text, one
-  `<div>` per line. For `needle` it read exactly `Matches text: "needle"` — the term in double
+  `<div>` per line. For `needle` it read exactly `Matches text: "needle"` , the term in double
   quotes, which the 2026-10-18 label dump had not recorded.
 - `search-params`: margin 4px 16px, a flex column with an 8 px gap; each `setting-item
   mod-toggle` is 19 px tall with 8 px of margin below (so rows sit 35 px apart), the name 13 px
@@ -4462,14 +4462,14 @@ dock). What the pane is made of, top to bottom, in the dark theme unless said ot
 - The card (`search-result-file-matches`): the note background `rgb(28,28,28)`, radius 4,
   margin 4px 0 8px, no border in the dark theme; in the light theme white with a 1 px ring of
   `rgb(228,228,228)` drawn as a box shadow. Each `search-result-file-match` is padding
-  `8px 20px 8px 12px`, 12 px muted text on a 15.6 px line, `white-space: pre-wrap` — a long line
+  `8px 20px 8px 12px`, 12 px muted text on a 15.6 px line, `white-space: pre-wrap` , a long line
   wraps to three lines and the snippet itself ends in `...`. A hairline separates one match from
   the next.
 - `search-result-file-matched-text`: background `oklch(0.88 0.132 107.9 / 0.3)` (a yellow at
   30 %) in the dark theme, `oklch(0.771 0.158 86.6 / 0.3)` in the light one; weight 400, the
   text colour unchanged in a title and the normal text colour in a match row.
 - A match row under the pointer: background the accent at 33 % (`oklch(0.603 0.217 292.5 /
-  0.33)`), its text the normal colour, and its `search-result-hover-button`s shown — each a 16
+  0.33)`), its text the normal colour, and its `search-result-hover-button`s shown , each a 16
   px chevron in the faint colour with padding 1px 3px and radius 4, `mod-top` at the top right
   and `mod-bottom` at the bottom right. On a note's first line only the bottom one appeared.
 - Keyboard, now driven against a populated list: with the keyboard in the input, ArrowDown put
@@ -4547,8 +4547,8 @@ and right, 15 px above and 46 px below**. The margin holds a shadow that is pure
 varying alpha: along a side it rises from 0.016 at the outer edge to 0.16 at the content, along
 the top from 0.004 to 0.06, and along the bottom from 0.016 at the outer edge to 0.27 at the
 content, which fits a gaussian of sigma 13 at 32 % black offset 12 px downward (CSS
-`0 12px 27px rgba(0,0,0,0.32)`). The last pixel before the content is darker than the ramp —
-alpha 0.27 at the sides, two pixels of 0.15 and 0.11 at the top — a one pixel outline on the
+`0 12px 27px rgba(0,0,0,0.32)`). The last pixel before the content is darker than the ramp ,
+alpha 0.27 at the sides, two pixels of 0.15 and 0.11 at the top , a one pixel outline on the
 shadow rather than a border inside the content, whose first pixel is `--background-secondary`.
 
 **Fonts.** `--font-interface` is `'??', '??', '??', ui-sans-serif, -apple-system, BlinkMacSystemFont,
@@ -4653,10 +4653,10 @@ Its exact padding and the switcher's hover shape are still to be read over CDP; 
 from the name: every vault this machine has opened whose folder is still there, in the registry
 document's own order with a check on the one showing, a hairline, then "Manage vaults..."
 (`app:open-vault`, the vault manager below). A click outside closes it, and so does a second click on
-the footer's own row — the menu closes on a mouse *down* outside itself, so the row's click handler
+the footer's own row , the menu closes on a mouse *down* outside itself, so the row's click handler
 has to leave its own press alone or the press closes the menu the click reopens. The list is Obsidian's `obsidian.json`
-document — `{"vaults": {<16 hex digits>: {"path", "ts", "open"}}}`, `ts` in Unix milliseconds,
-`open` on the vault a window shows — written as `silica.json` under `~/.config/silica` (Linux),
+document , `{"vaults": {<16 hex digits>: {"path", "ts", "open"}}}`, `ts` in Unix milliseconds,
+`open` on the vault a window shows , written as `silica.json` under `~/.config/silica` (Linux),
 `%APPDATA%\silica` (Windows) or `~/Library/Application Support/silica` (macOS), or
 `$SILICA_CONFIG_DIR`; unknown keys survive a rewrite. Every vault loaded goes on the list except the
 sandbox, which is a fresh `Silica Sandbox <ms>` folder under the temporary directory holding a
@@ -4666,17 +4666,17 @@ closes every tab group, and restores the next vault from its own `workspace.json
 
 Obsidian's own switcher was read over CDP on 2026-10-29
 (`tools/obsidian-probe/vault-switcher.mjs`, `results/2026-10-29-vault-switcher.json`), with a
-registry holding six vaults — two of them folders named `vault` under different parents, one of them
+registry holding six vaults , two of them folders named `vault` under different parents, one of them
 a folder that had been deleted. The footer is `.workspace-sidedock-vault-profile` around a
 `.workspace-drawer-vault-switcher` (a `.workspace-drawer-vault-switcher-icon` and the
 `.workspace-drawer-vault-name`) and a `.workspace-drawer-vault-actions`. Clicking it opens a plain
 `.menu` whose vault rows are `.menu-item tappable`, each an empty `.menu-item-icon`, then a
-`.menu-item-title` holding **the folder's name alone** — no path, no `aria-label`, no icon — and on
+`.menu-item-title` holding **the folder's name alone**, with no path, no `aria-label` and no icon, and on
 the open vault a trailing `.menu-item-icon.mod-checked` drawing `lucide-check`. Three things follow
 from the run: two vaults that share a folder name are two identical rows, and Obsidian neither
 disambiguates them nor hangs the path off them; a vault whose folder is gone is left out of the menu
 altogether; and the order is the document's key order,
-not recency — the open vault was the fourth of six rows, where its key sat, and the newest `ts` was
+not recency , the open vault was the fourth of six rows, where its key sat, and the newest `ts` was
 third. Under a `.menu-separator` comes a single row, "Manage vaults..." with the `open-vault` icon,
 which raises Obsidian's vault-manager window. Silica matches the rows, the omission, the order and
 that tail, drawing the one row with Lucide's `folder-open` (Obsidian's `open-vault` icon is its own),
@@ -4698,18 +4698,18 @@ A row of the list is a `.recent-vaults-list-item` whose `aria-label` is the vaul
 rather than eliding), and a `.recent-vaults-list-item-option-button` ("More options",
 `lucide-more-vertical`) at the right. Clicking the row opens that vault.
 
-Two things the run settled. The list is **`ts` descending**, most recently opened first — not the
+Two things the run settled. The list is **`ts` descending**, most recently opened first , not the
 switcher menu's key order: the six rows came back in exactly the order the document's `ts` values
 rank them, with equal `ts` keeping the document's order. And a vault whose folder is gone is left out
 here too; by the time the window was up, Obsidian had also dropped that entry from `obsidian.json`
-altogether. Silica leaves the entry in `silica.json` and only drops the row — a vault on an unplugged
-drive should not be forgotten — which is the one deliberate difference.
+altogether. Silica leaves the entry in `silica.json` and only drops the row , a vault on an unplugged
+drive should not be forgotten , which is the one deliberate difference.
 
 The ellipsis opens a `.menu` of seven rows: "Copy vault ID" (`lucide-copy`), a separator, "Rename
 vault..." (`lucide-edit-3`) and "Move vault..." (`lucide-folder-tree`), a separator, "Reveal vault in
 system explorer" (`lucide-folder-open`), a separator, and "Remove from list"
-(`.is-warning`, `lucide-x`). Silica draws three of them — Copy vault ID, Reveal vault in system
-explorer, Remove from list — in that order with their separators; Rename and Move rename and move the
+(`.is-warning`, `lucide-x`). Silica draws three of them , Copy vault ID, Reveal vault in system
+explorer, Remove from list , in that order with their separators; Rename and Move rename and move the
 user's folder on disk and are not built yet.
 
 The `.splash` is the mark (90 px), the name, "Version x.y.z", then a `.setting-group` of rows, each a
@@ -4730,7 +4730,7 @@ though it reported itself as run; Silica gives it the switcher's menu.
 **The Help window.** `app:open-help` and the footer's Help open a window of Obsidian's shape rather
 than the browser (seen in a screenshot of 1.14.4, 2026-10-21): the mark, the name, "Version x.y.z",
 then a card of rows, each an icon on the left, a title over a line of explanation, and a button on
-the right — Obsidian's are the help site (an accent "Visit"), Discord ("Join"), the forum ("Visit")
+the right , Obsidian's are the help site (an accent "Visit"), Discord ("Join"), the forum ("Visit")
 and the sandbox vault ("Open"). Silica's four are the manual (silica.cc, accent "Visit"), the source,
 the issue tracker and the sandbox vault; the window is 700 by 860 with the desktop's own frame,
 Escape closes it, and opening help again brings the one up forward.
@@ -4818,7 +4818,7 @@ The layout:
   At an edge nothing happens. All four are `hasCheck`.
 - `editor:open-link-in-new-split` ("Open link under cursor to the right",
   default hotkey Mod+Alt+Enter) is "Split right" and then the link opened in
-  the new group — a **new** sibling next to the current group, even when a group
+  the new group , a **new** sibling next to the current group, even when a group
   already exists to its right.
 - The tabs container of the active group carries `mod-active`; its active tab
   header has `mod-active is-active`, an inactive group's active tab only
@@ -4836,14 +4836,14 @@ The rule Silica uses is **not probed**, it is the common desktop one: dropped on
 another tab it goes in front of that tab, on a strip's open space at its end,
 and over a group's content the outer band of each side (30 percent of the
 shorter side, the nearer edge winning in a corner) makes a new group on that
-side the way "Split right" and "Split down" place theirs — a sibling in front
-or behind when the enclosing split runs that way, a wrapping split otherwise —
+side the way "Split right" and "Split down" place theirs , a sibling in front
+or behind when the enclosing split runs that way, a wrapping split otherwise ,
 while the middle joins the strip. The dropped tab is the active tab of the
 group it landed in, and a group left with no tab closes as it does when its
 last tab is closed. Obsidian's zone geometry, highlight and ghost are still
 to be observed.
 
-**Unprobed:** the `dimension` a drag writes when only *some* siblings have one;
+Unprobed: the `dimension` a drag writes when only *some* siblings have one;
 `workspace:close-others` (without `-tab-group`) across groups; dragging a tab
 header into another group or onto a split edge (where the zones start, what is
 highlighted, whether a split from a drop halves a `dimension` as "Split right"
@@ -4880,7 +4880,7 @@ The file:
   hex-ish characters, a space before the caret), then bookmarks
   `"subpath": "#^b56db2"`.
 - `bookmarks:unbookmark-current-view` ("Remove bookmark for the current file")
-  removed **one** plain `file` item for the open file — in this run the one
+  removed **one** plain `file` item for the open file , in this run the one
   inside the group that had been added last, leaving the older top-level one.
   It is a lookup by path, last added wins.
 - Running `bookmark-current-view` on a file already bookmarked opens
@@ -4893,10 +4893,10 @@ empty input whose placeholder is that same text), a `Bookmark group` row, and
 filled with `Untitled Graph`. "Bookmark all tabs" opens "Add 3 bookmarks" with
 only Title (placeholder the date) and Bookmark group. Enter saves.
 
-The pane (view type `bookmarks`): a `nav-header` of four buttons in order —
+The pane (view type `bookmarks`): a `nav-header` of four buttons in order ,
 "Bookmark the active tab..." (`lucide-bookmark-plus`), "New group"
 (`lucide-folder-plus`), "Collapse all" (`lucide-chevrons-down-up`), "Show
-search filter" (`lucide-search`) — then one `tree-item` per item in file order.
+search filter" (`lucide-search`) , then one `tree-item` per item in file order.
 Icons by type: file `lucide-file`, heading `lucide-heading`, block
 `lucide-toy-brick`, search `lucide-search`, graph `lucide-git-fork`, folder
 `lucide-folder`, url `lucide-globe-2`; a group is a collapsible row with the
@@ -4916,7 +4916,7 @@ Silica implements this since 2026-10-20 ([[Development#Bookmarks, 2026-10-20]]):
 in these bytes, the seven commands, and the pane less its search filter and
 the "Bookmark group" dropdown.
 
-**Unprobed:** what clicking a search or heading bookmark in the pane does (the
+Unprobed: what clicking a search or heading bookmark in the pane does (the
 clicks dispatched in this run landed on nothing); the item context menu and the
 file menu's "Bookmark..." entries (the explorer was hidden behind the Search
 pane when they were tried); the order of `folder` and `url` keys as the UI
@@ -4957,7 +4957,7 @@ to new)", "Created time (new to old)", "Created time (old to new)". The leaf's
 `byModifiedTimeReverse`, `byCreatedTime`, `byCreatedTimeReverse`; it is
 written into the file-explorer leaf's `state` in `workspace.json` (key order
 `sortOrder`, `autoReveal`, `showSearch`, `searchQuery`) and `app.json` stays
-`{}` — the `fileSortOrder` key of [[#Observed settings write behavior, Obsidian 1.14.4]] is not what the
+`{}` , the `fileSortOrder` key of [[#Observed settings write behavior, Obsidian 1.14.4]] is not what the
 header writes. **Folders keep their name order under every sort**; only the
 files of each folder move. Observed, with folders `Archive/old`, `Empty`,
 `Projects/{Deep/Inner, Budget, Plan}` and root files `Alpha`, `beta`, `cover.png`,
@@ -4989,7 +4989,7 @@ leaf's two keys read from and written back into `workspace.json`, and
 with auto-reveal on. New folder goes through Silica's prompt modal rather
 than inline rename, and the search filter is not built.
 
-**Unprobed:** the computed colour and background of the `is-active` button
+Unprobed: the computed colour and background of the `is-active` button
 (Silica paints the accent on the hover wash); whether a visible row of the
 open file is `is-active` with auto-reveal off (Silica highlights it); the
 menu's position relative to the button.
@@ -5010,7 +5010,7 @@ file gives the keyboard to the editor (`cm-content` is the active element,
 the explorer is not the active leaf, and the arrows then move the caret); a
 click on the row of the file that is already open puts `has-focus` on it with
 the explorer active; a click on a folder toggles it, makes the explorer
-active and sets no `has-focus` — but the keyboard position is that folder:
+active and sets no `has-focus` , but the keyboard position is that folder:
 Down then lands on the row under it.
 
 **The keys**, with `has-focus` on a row and the explorer active:
@@ -5020,13 +5020,13 @@ Down then lands on the row under it.
 | Down / Up | the next / previous visible row, clamped at both ends; the file does not open | the same |
 | Enter | opens the file; the keyboard goes to the editor; the row keeps `has-focus` and gains `is-active` | toggles the folder |
 | Space | nothing | toggles the folder |
-| Right | — (not probed) | collapsed: expands it, ring stays; open: the ring moves to its first child |
+| Right | not probed | collapsed: expands it, ring stays; open: the ring moves to its first child |
 | Left | the ring moves to the parent folder, which collapses | open: collapses it, ring stays; collapsed at the root: nothing |
 | Home / End / PageUp | nothing | nothing |
-| Escape | the keyboard goes to the editor; the row keeps `has-focus` | — |
-| F2 | inline rename of the row (`tree-item-inner` becomes the active element, contenteditable) | — |
-| Delete | the "Delete file" dialog: "Are you sure you want to delete “Alpha.md”? It will be moved to your system trash." — Cancel / Delete, Delete focused | — |
-| a letter, Tab | nothing | — |
+| Escape | the keyboard goes to the editor; the row keeps `has-focus` | none |
+| F2 | inline rename of the row (`tree-item-inner` becomes the active element, contenteditable) | none |
+| Delete | the "Delete file" dialog: "Are you sure you want to delete “Alpha.md”? It will be moved to your system trash." , Cancel / Delete, Delete focused | none |
+| a letter, Tab | nothing | none |
 
 Ctrl+Enter on the already-open file put the keyboard in the editor, like Enter.
 
@@ -5041,7 +5041,7 @@ ring is a 2 px border; the two commands and the three kinds of click focus as
 above; with no ring on a visible row, Down and Up start from the open file's
 row, or the first. The socket's `focus` method takes `explorer`.
 
-**Unprobed:** Right on a file; where Down starts with no `focusedItem` at
+Unprobed: Right on a file; where Down starts with no `focusedItem` at
 all; the light theme's ring colour (Silica uses `#c0c0c0`); whether Up or
 Down from a hidden `focusedItem` (its folder since collapsed) starts over.
 
@@ -5062,7 +5062,7 @@ The right split was 300 px wide. The dark theme's values are the ones quoted;
 
 **The leaf.** `outgoing-links:open` activates a leaf of type `outgoing-link`
 (tab icon `links-going-out`, title "Outgoing links") whose state is
-`{"file": "Alpha.md", "linksCollapsed": false, "unlinkedCollapsed": true}` —
+`{"file": "Alpha.md", "linksCollapsed": false, "unlinkedCollapsed": true}` ,
 the unlinked section starts folded. Both keys follow the headers' folds and
 are written to `workspace.json` on quit and read back on restart. The pane has
 no `nav-header` of its own: `.view-content` holds `.outgoing-link-pane`
@@ -5100,13 +5100,13 @@ heading subpath, `lucide-layout-list` for a block subpath, and
 unresolved colour, opacity 1). The text is the subpath's last element for a
 heading or block link (`Heading`, `blk`, `Local`), else the path as written
 (`Beta`, `Missing`, `Sub/Deep`); the subtext is the note's name under a
-heading or block link to another note (`Beta`, `Gamma`) — a self link
-(`[[#Local]]`) has none — and the folder under a note link (`Sub`), so a root
+heading or block link to another note (`Beta`, `Gamma`) , a self link
+(`[[#Local]]`) has none , and the folder under a note link (`Sub`), so a root
 note has none either. Hovering a row paints `--background-modifier-hover` and
 turns the text `--text-normal`.
 
 **Clicks.** The `Heading` / `Beta` row made `Beta.md` the active file in the
-root leaf, in source mode with the cursor at line 4 column 0 — the heading's
+root leaf, in source mode with the cursor at line 4 column 0 , the heading's
 line. The `Missing` row created an empty `Missing.md` at the vault root and
 opened it, with no dialog. A right click on a row opens the file menu: Open in
 new tab, Open to the right, Open in new window, ---, Rename..., Move file
@@ -5116,7 +5116,7 @@ explorer, Reveal file in navigation.
 **Unlinked mentions** (count 6: every occurrence, case-insensitively, aliases
 included, `Delta` and `delta` both). The section is a `search-result-container`
 (`padding: 4px 1px 16px`) holding one `div.tree-item.search-result` with
-*no* `search-result-file-title` row — the file is the open note itself — and
+*no* `search-result-file-title` row , the file is the open note itself , and
 a `div.search-result-file-matches` (background `--background-primary`, 4 px
 radius, `margin: 4px 0 8px`, 12 px, line height 1.3, `--text-muted`, no
 border). Each `div.search-result-file-match.tappable` is padded
@@ -5155,7 +5155,7 @@ until the match is hovered; clicking it rewrote `Mentions Alpha once.` to
 order) and `lucide-search` (Show search filter), and the pane under the header
 is padded `4px 12px 32px`.
 
-**Unprobed:** what the Links section shows when the note has no links at all;
+Unprobed: what the Links section shows when the note has no links at all;
 what a link to an image or other non-note file looks like; whether the
 subtext under a note link is the written path's folder or the resolved file's
 (the fixture made them the same); the per-match "Show more context" buttons'
@@ -5250,13 +5250,13 @@ separator, "Frequency (high to low)", "Frequency (low to high)", each a
 carrying a `lucide-check`. The stored values are `alphabetical`,
 `alphabeticalReverse`, `frequency` (default) and `frequencyReverse`. Orders
 read back: A to Z `a, common, Kappa, Lambda, meta, project, project/alpha,
-project/beta, project/beta/deep, single, topic` — case-insensitive, the
+project/beta, project/beta/deep, single, topic` , case-insensitive, the
 tree kept, children sorted the same way; Z to A the exact reverse, children
 included (`project, project/beta, project/beta/deep, project/alpha`);
 frequency `common 9, project 6 (alpha 3, beta 2 (deep 1)), Lambda 2,
-topic 2, a 1, Kappa 1, meta 1, single 1` — ties by name A to Z,
+topic 2, a 1, Kappa 1, meta 1, single 1` , ties by name A to Z,
 case-insensitive; low to high `a, Kappa, meta, single, Lambda, topic,
-project (beta (deep), alpha), common` — ascending by count with ties still A
+project (beta (deep), alpha), common` , ascending by count with ties still A
 to Z, and the children ascending too. The menu is the same list in flat mode.
 
 **Nested tags toggle.** Clicking "Show nested tags" sets `useHierarchy`
@@ -5273,7 +5273,7 @@ does. Clicking the button again restored the tree, every folder open.
 became 8) and left the count at 6; the state did not change and a fold is not
 in `workspace.json`. The "Expand all" button is odd: with every row open its
 label already read "Expand all" with `lucide-chevrons-up-down`; the first
-click changed nothing, the second gave every `tree-item` — leaves included —
+click changed nothing, the second gave every `tree-item` , leaves included ,
 `is-collapsed` (8 rows), the third opened them all again, and the label and
 icon never changed across the three clicks (the Outline's twin does swap to
 "Collapse all" / `lucide-chevrons-down-up`).
@@ -5284,15 +5284,15 @@ down 38 px) and focuses its `input[type=search][enterkeyhint=search]
 [spellcheck=false][placeholder="Search..."]` (13 px, background
 `rgb(46, 46, 46)`, 0.69 px border `rgb(85, 85, 85)` while focused, 5 px
 radius, `padding: 4px 8px 4px 30px`, the right padding 28 px once the
-`div.search-input-clear-button[aria-label="Clear search"]` — 28 by 30, 50%
-radius, `right: 2px`, otherwise `display: none` — appears with text). State:
+`div.search-input-clear-button[aria-label="Clear search"]` , 28 by 30, 50%
+radius, `right: 2px`, otherwise `display: none` , appears with text). State:
 `showSearch: true`, then `searchQuery` follows each keystroke. Typing `proj`
 left `project`, `project/alpha`, `project/beta` and `project/beta/deep` and
 gave every other `tree-item` `is-filtered-out` (zero rect); `zzz` filtered
 everything out with no empty-state text. Escape in the box is not handled by
 the pane: focus jumped to the editor's `.cm-content`, the native search
 input dropped its text, but the rows stayed filtered, `showSearch` stayed
-true and `searchQuery` was already `""` — the view had been told nothing. The
+true and `searchQuery` was already `""` , the view had been told nothing. The
 clear button put the rows back; the header button hid the box, set
 `showSearch` false and left focus on `body`.
 
@@ -5307,7 +5307,7 @@ Enter did nothing to the pane. A right click raised no menu through CDP (as
 on the file-properties rows). The tags pane does not depend on the active
 note: switching notes left it unchanged.
 
-**Unprobed:** whether the search filter matches the full path or the last
+Unprobed: whether the search filter matches the full path or the last
 segment (`proj` cannot tell), and whether it is case-insensitive; why the
 "Expand all" label is stuck; the row context menu (if any); whether a tag
 with its first occurrence in a later-named file keeps that casing after a
@@ -5344,7 +5344,7 @@ y 84.
 
 **Rows** (14 at frequency): `status` 4, `tags` 4, `title` 3, `count` 2, then
 `aliases`, `book.title`, `book.year`, `cssclasses`, `done`, `due`, `list`,
-`shelf`, `summary`, `when` at 1 — counts are notes, merged case-insensitively
+`shelf`, `summary`, `when` at 1 , counts are notes, merged case-insensitively
 (`Status`, `status`, `STATUS`, `status` → 4), ties A to Z, and `cssclasses`
 listed at 1 since a note carries it (the earlier run's 0 was a vault with
 none). The display casing was `status` in the session that indexed the vault
@@ -5373,7 +5373,7 @@ default), "Frequency (low to high)"; values `alphabetical`,
 `alphabeticalReverse`, `frequency`, `frequencyReverse`. A to Z gave `aliases,
 book.title, book.year, count, cssclasses, done, due, list, shelf, status,
 summary, tags, title, when`; Z to A the reverse; low to high `aliases …
-when` (the 1s A to Z), `count` 2, `title` 3, `status` 4, `tags` 4 — ties
+when` (the 1s A to Z), `count` 2, `title` 3, `status` 4, `tags` 4 , ties
 ascending by name in both frequency orders.
 
 **Search filter and clicks.** The box is the tags pane's (284 by 30 in the
@@ -5385,10 +5385,10 @@ brackets: `["book.title"]` (1 result), `["status"]` (4), `["tags"]` (4), the
 search leaf becoming active; the pane keeps no selected row. The row's
 right-click menu is Rename (`lucide-edit-3`), Property type (`lucide-menu`,
 `has-submenu`), a separator, Delete property (`is-warning`,
-`lucide-trash-2`), as recorded above — this run reached it through a CDP
+`lucide-trash-2`), as recorded above , this run reached it through a CDP
 right click.
 
-**Unprobed:** keyboard navigation of the list; whether the filter matches
+Unprobed: keyboard navigation of the list; whether the filter matches
 beyond a prefix; the tooltip of a long key; a `types.json` type that
 contradicts a value's shape; the `file` and `folder` widgets' icons; what the
 pane shows in a vault with no properties.
@@ -5407,7 +5407,7 @@ a `##` heading of 160 characters, `# Last top`, then `## Extra 1` … `## Extra
 109, 124, 139, 154.
 
 **The leaf.** `outline:open` ("Outline: Show outline") activates the
-`outline` leaf (`lucide-list`, title "Outline" — not the note's name) whose
+`outline` leaf (`lucide-list`, title "Outline" , not the note's name) whose
 state is `{"file": "Outline.md", "followCursor": false, "showSearch": false,
 "searchQuery": ""}`; `file` follows the active markdown leaf and is absent
 while an empty tab is active. `followCursor` and `showSearch` round-tripped
@@ -5443,26 +5443,26 @@ its triangle `--text-muted`.
 
 **Current heading** (source mode, cursor moved with `setCursor` and by a
 real click in the editor): the marked row is the heading whose section holds
-the cursor's line — `Top heading` at line 7, `Fourth level` at 51, `Another
+the cursor's line , `Top heading` at line 7, `Fourth level` at 51, `Another
 second` on its own line 64, `Fourth under second, skipping third` at 80 and
-81, `Extra 24` at the end — and no row is marked with the cursor in the
+81, `Extra 24` at the end , and no row is marked with the cursor in the
 frontmatter (line 1). With `followCursor` false the pane does not scroll:
 the `Extra 20` row was marked at y 992 under a 720 px tall `view-content`
 (scroll height 1079) that stayed at `scrollTop` 0. Clicking "Auto-scroll to
 current section" set `followCursor` true (button `is-active`); the same move
-then scrolled `view-content` to 239 so the row sat at y 753 — scrolled into
-view at the bottom edge, not centred — and moving back to the top scrolled
+then scrolled `view-content` to 239 so the row sat at y 753 , scrolled into
+view at the bottom edge, not centred , and moving back to the top scrolled
 it to 0. In reading mode the marking follows the scroll: after each wheel
 step (`previewMode.getScroll()` 23.4, 47.2, 71.0, 94.3) the marked row was
 the heading whose section holds the line at the top of the view (`Second
 level`, `Third level under second`, `Another second`, `Second top`), and with
-the view scrolled to 0 — the frontmatter at the top — nothing was marked.
+the view scrolled to 0 , the frontmatter at the top , nothing was marked.
 
 **Clicks.** In source mode a click on a row's text moved the cursor to the
 heading's line, column 0 (`#### Fourth level` → line 49, `# Second top` →
 94, the long heading → 139), focused the editor (`.cm-content`) and scrolled
 so the heading's line sat at 348 px (344, and 261 for the four-line
-heading) from the top of the 682 px tall scroller — centred. In reading mode
+heading) from the top of the 682 px tall scroller , centred. In reading mode
 a click scrolled the heading to the top edge of `.markdown-preview-view`
 (the `h1`/`h4` at 0 and −1 px, `getScroll()` 94.0 and 49.0, the heading's
 line) and focused the preview. A right click raised no menu through CDP.
@@ -5487,9 +5487,9 @@ text with no `file` in the state. Opening `Alpha.md` listed its one heading
 with nothing marked (cursor at line 0, inside the frontmatter); returning to
 `Outline.md` listed all 35 rows unfolded. Typing ` X` at the end of `# Top
 heading` changed the row to `Top heading X` 2.1 s later, at the moment the
-file reached disk — the outline follows the metadata cache, not the buffer.
+file reached disk , the outline follows the metadata cache, not the buffer.
 
-**Unprobed:** keyboard navigation; dragging a row (`draggable`); the
+Unprobed: keyboard navigation; dragging a row (`draggable`); the
 `followCursor` scroll when the row is above the view (only a row below was
 tried); headings inside code fences or callouts; a heading with a trailing
 `#`; what the pane does for a canvas or base leaf; the reading-mode marking
@@ -5506,8 +5506,8 @@ says so. The fixture was one `.base` carrying every documented top-level key in
 a scrambled order, both YAML quoting styles, comments at three depths, flow
 collections, four-space indentation, nested `and`/`or`/`not` filters and
 unknown keys at the top, view and property level, in five copies with five
-different fates — never opened, opened and closed, edited, driven through the
-menus, rewritten from outside — plus a CRLF copy, a BOM copy, one with no
+different fates , never opened, opened and closed, edited, driven through the
+menus, rewritten from outside , plus a CRLF copy, a BOM copy, one with no
 trailing newline, a zero-byte file, `{}`, and eight files broken in eight
 different ways.
 
@@ -5539,14 +5539,14 @@ The other side, `setViewData`, parses the text and on failure keeps the **error
 object** as the query (`this.query = null` for the view's purposes), which is
 why a base that cannot be parsed is never written.
 
-**When Obsidian writes.** Opening a base writes nothing — not within six
+**When Obsidian writes.** Opening a base writes nothing , not within six
 seconds, and the mtime does not move. Closing it writes `query.toString()`
 whenever that differs from the bytes that were read, even with nothing edited:
 the 1352-byte fixture came back 1256 bytes, comments gone. Where the file is
 already in that canonical form the mtime does not move either (`Minimal.base`,
 39 bytes, and `BrokenView.base` both survived a close untouched), so the close
 write is skipped rather than written identically. A base that is only indexed,
-never opened, is never touched. One real edit — a column dragged wider — lands
+never opened, is never touched. One real edit , a column dragged wider , lands
 on disk within about a second and writes the whole file in the same canonical
 form; there is no surgical write.
 
@@ -5558,7 +5558,7 @@ keeps the file's own key order on an unedited close, Bases does not.
 
 **Top-level key order.** Unknown keys are spread **first**, in their original
 file order, and every other key is then assigned in the serializer's fixed
-order — but a key already present keeps the position the spread gave it. One
+order , but a key already present keeps the position the spread gave it. One
 documented key is in both places: `summaries` is left in `unrecognizedData`
 *and* parsed into `summaryFormulas`, so it is written at the position it had in
 the file, with its statements re-serialized. The fixture's scrambled order came
@@ -5579,8 +5579,8 @@ mentions; both round-tripped from the fixture. A property whose config is empty
 (`note.unused: {}`) is **dropped**: its `serialize()` returns null.
 
 **A view's key order** is `type`, `name`, `filters`, `groupBy`, `groupOrder`,
-`order`, `sort`, `limit`, `summaries` — `type` and `name` always, the rest when
-set — and then every key of the raw parsed object that is not one of the
+`order`, `sort`, `limit`, `summaries` , `type` and `name` always, the rest when
+set , and then every key of the raw parsed object that is not one of the
 config's own fields, in file order, appended at the end. That last loop is
 where unknown keys *and* every layout key live, which is why a layout key
 written by the UI lands after a plugin's unknown key rather than among the
@@ -5594,12 +5594,12 @@ passed through a property-id normalizer; a hand-written bare `status` came back
 **The YAML emitter.** Two-space indentation; a sequence's `- ` is indented one
 level past its key (`views:` at column 0 has items at 2, `and:` at 2 has items
 at 4); a mapping inside a sequence item continues at the item's text column.
-Block style only — the fixture's `order: [file.name, status, formula.ppu]` and
+Block style only , the fixture's `order: [file.name, status, formula.ppu]` and
 `groupBy: {property: status, direction: ASC}` both came back as block
 collections. One trailing newline, LF, no BOM. No line folding: a 121-character
 statement was written on one line. Scalars are written plain where YAML allows
 it and quoted where it does not, **preferring double quotes, except that a
-value containing a `"` and no `'` is single-quoted** — so
+value containing a `"` and no `'` is single-quoted** , so
 `'"#" + status'`, `'if(status == "a", "x: y", "z")'`, `'[1, 2, 3].join(", ")'`
 and `'status + "x" '` came back single-quoted while a list separator of `", "`
 came back `", "` in double quotes. Numbers are written bare (`limit: 103`,
@@ -5617,7 +5617,7 @@ it matches the quoting rule above.
 read two ways that agree: off each registration's `options()` table
 (`plugin.getRegistrations()`, whose source names every key with its widget,
 range and default) and off the file after driving the real "Configure view"
-page — the views toolbar menu lists one row per view, and the row's own icon
+page , the views toolbar menu lists one row per view, and the row's own icon
 opens that view's settings.
 
 | Layout | Key | Control | Values / range | Default |
@@ -5632,7 +5632,7 @@ opens that view's settings.
 | `kanban` | `imageAspectRatio` | slider | 0.25 to 2.5 step 0.05 | 0.5 |
 | `list` | `markers` | dropdown | `bullet`, `number`, `none` | `bullet` |
 | `list` | `separator` | text | any string | `", "` |
-| `list` | *(Indent properties)* | toggle | — | false |
+| `list` | *(Indent properties)* | toggle | none | false |
 
 The four registered layouts are `table` (Table, `lucide-table`), `cards`
 (Cards, `lucide-layout-grid`), `list` (List, `lucide-list`) and `kanban`
@@ -5641,7 +5641,7 @@ combobox offers exactly those four. Picking another one **rewrites `type` and
 leaves the previous layout's keys in place**: a list view with `markers:
 number` and `separator: "; "` became `type: kanban` with both keys still
 there. (The combobox marks *Table* as the selected row whatever the view's real
-layout is — a 1.14.5 bug, not a key.)
+layout is , a 1.14.5 bug, not a key.)
 
 **What the toolbar writes.** The Bases toolbar does not open menus of rows: each
 control opens a `.menu.bases-toolbar-menu` whose body is a panel. The sort and
@@ -5666,7 +5666,7 @@ list; *Hide column* removes the property from `order`; the limit input writes
 | `bases:new-file` | Bases: Create new base | creates `Untitled.base` as a **zero-byte file** and opens it; the parsed query of an empty file is one default view, so closing it writes `views:` / `  - type: table` / `    name: View` |
 | `bases:add-view` | Bases: Add view | appends a view named `View 2` and opens its Configure view page |
 | `bases:insert` | Bases: Insert new base | creates another zero-byte base (`Untitled 1.base`) and inserts `![[Untitled 1.base]]` on a line of its own at the cursor |
-| `bases:copy-table` | Bases: Copy table to clipboard | the visible columns as TSV — one header row of display names, tab separators, no trailing newline (`status\tPrice per unit\ntodo\t0.02\ntodo\t0.06`) — and a "Copied to your clipboard" notice. It needs the view focused: run from the palette with focus elsewhere it reports success and shows "Unable to copy to your clipboard" |
+| `bases:copy-table` | Bases: Copy table to clipboard | the visible columns as TSV , one header row of display names, tab separators, no trailing newline (`status\tPrice per unit\ntodo\t0.02\ntodo\t0.06`) , and a "Copied to your clipboard" notice. It needs the view focused: run from the palette with focus elsewhere it reports success and shows "Unable to copy to your clipboard" |
 | `bases:change-view` | Bases: Switch view... | not probed |
 | `bases:add-item` | Bases: Add item | not probed |
 
@@ -5679,21 +5679,21 @@ every case where the parse fails the bytes and the mtime are untouched:
 | --- | --- | --- |
 | a YAML syntax error | `.bases-error`: "Unable to parse your base file:" and the YAML library's own message ("Flow sequence in block collection must be sufficiently indented and end with a ] at line 5, column 1: …") | untouched, open and close |
 | a view with no `name` | "Unable to parse your base file: Missing or invalid "name" in view 1" | untouched |
-| a view with `name: ''` | the same message — **an empty name is invalid too** | untouched |
-| an unknown key beside `and` in `filters` | "Unable to parse your base file: "filters" may only have one of an "and", "or", or "not" keys." — unknown keys are tolerated at every level **except inside a filter group** | untouched |
+| a view with `name: ''` | the same message , **an empty name is invalid too** | untouched |
+| an unknown key beside `and` in `filters` | "Unable to parse your base file: "filters" may only have one of an "and", "or", or "not" keys." , unknown keys are tolerated at every level **except inside a filter group** | untouched |
 | `type: nonsense` | "Unknown view type: nonsense", no rows; the file parses, `type` is kept | canonicalized on close (unchanged here, because the fixture already was) |
 | an unparseable statement in a filter, a formula or a summary | no error banner at all; the statement is kept as an `invalid` AST node with its text | canonicalized on close, statement text intact |
 
-So `name` is required and non-empty on every view — the one hard structural
+So `name` is required and non-empty on every view , the one hard structural
 rule the published schema does not state.
 
 **An external rewrite.** With the base open, rewriting the file from outside
 reloaded the view within four seconds (the renamed view was in the live query),
 and the close that followed wrote the canonical form **of the external
-content** — the external name and limit both survived. Nothing clobbers an
+content** , the external name and limit both survived. Nothing clobbers an
 outside edit; it is only canonicalized.
 
-**Unprobed:** `bases:change-view` and `bases:add-item`; the *Summarize...*
+Unprobed: `bases:change-view` and `bases:add-item`; the *Summarize...*
 submenu (the row opens something that is not a `.menu`, so its options were not
 read) and therefore what a summary chosen from the UI writes; the key the
 list layout's "Indent properties" toggle writes (the toggle produced no write,
@@ -5753,7 +5753,7 @@ One node type, `comparison`, carries both the comparison and the boolean
 operators. A failed parse is a node, not an exception: `{type: "invalid",
 value: "foo((((", parseError: "Unable to parse formula. (position 0)"}`.
 
-**Precedence, highest first, every level left-associative** — read off the tree,
+**Precedence, highest first, every level left-associative** . Read off the tree,
 case by case:
 
 | Level | Operators | Evidence |
@@ -5776,7 +5776,7 @@ operators `and`, `or`, `not`; `&` and `|`; `**` and `^`; `===` and `!==`;
 assignment; an object literal `{}`. Array literals *are* in (`[1, 2]`, `[]`,
 and `[1, 2][0]`).
 
-**Literals.** Double- and single-quoted strings, with **JSON escapes** — an
+**Literals.** Double- and single-quoted strings, with **JSON escapes** . An
 unknown escape fails with `Bad escaped character in JSON at position 3`, which
 says the lexer hands the quoted token to `JSON.parse`; `\n`, `\t`, `\\`,
 `\uXXXX` and raw UTF-8 all work, an unterminated string does not, and backticks
@@ -5785,11 +5785,11 @@ are not a string at all. Numbers: `1`, `1.5`, `.5`, `1.`, `01` and `-1` parse;
 primitives; `undefined`, `NaN` and `Infinity` parse as idents and evaluate to
 null. `/re/` and `/re/i` are regexp literals.
 
-**Every name is case-insensitive — values are not.** `NOW()`, `nOw()`,
+**Every name is case-insensitive , values are not.** `NOW()`, `nOw()`,
 `"abc".LOWER()`, `12.3.TOFIXED(1)`, `[1,2].SUM()`, `file.NAME`, `when.YEAR`,
 `file.properties.STATUS` and even the bare ident `DENSITY` all work.
 `listish.contains("ALPHA")` is false where `("alpha")` is true, so values are
-compared case-sensitively; tags are the exception — `file.hasTag("Rock")` and
+compared case-sensitively; tags are the exception , `file.hasTag("Rock")` and
 `file.hasTag("#rock")` are both true.
 
 **Coercion is for comparison, not arithmetic.** `"3" > 2` is true, `2 > "3"`
@@ -5822,14 +5822,14 @@ distinction is real**. `duration("1w")` and `duration("1 week")` agree;
 `duration("1y 2M 3d")` is **null**, so compound durations are not supported.
 Subtracting two dates gives a Duration, which prints humanized ("10 months",
 "7 days", "a minute", "a few seconds"); its components are **properties, not
-functions** — `days`, `hours`, `minutes`, `seconds`, `milliseconds`, `weeks`,
+functions** , `days`, `hours`, `minutes`, `seconds`, `milliseconds`, `weeks`,
 `months`, `years`, each fractional (`(now() - when).days` → 296.6033578819444).
 All but `months` and `years` are an exact SI division of the total
 milliseconds; those two are **calendar** quantities, and the eight recorded
 reads pin the rule down exactly. Each read re-evaluated `now()`, so each landed
-on its own millisecond — 25626530121 for `days` through 25626530131 for `years`,
+on its own millisecond . 25626530121 for `days` through 25626530131 for `years`,
 recoverable from the exact conversions and monotonic in the run's own reading
-order — and `months` is then the duration laid on the calendar **from the Unix
+order , and `months` is then the duration laid on the calendar **from the Unix
 epoch**: 25626530126 ms after 1970-01-01T00:00:00 is 9 whole months (273 days)
 plus 23.603 days of an October 31 days long, and `9 + 2039330126/2678400000` is
 the recorded `9.761398643219833` to the last bit, where a fixed-length month
@@ -5837,19 +5837,19 @@ gives 9.7449 (30.436875 days), 9.7513 (365/12) or 9.8868 (30 days). `years` is
 exactly `months / 12`, so a month is worth January 1970's 31 days and a year
 1970's 365. `duration("1d") + duration("1d")`, `duration("1d") * 2` and
 `duration("1d") > duration("1h")` all work. `date("not a date")` is null.
-`relative()` answers a *clock-tagged* value — `lucide-clock "10 months ago"`,
-not a String — and `now().relative()` is "a few seconds ago", so a zero
+`relative()` answers a *clock-tagged* value , `lucide-clock "10 months ago"`,
+not a String , and `now().relative()` is "a few seconds ago", so a zero
 difference reads as past.
 
 **There is no lambda, and that is the whole answer.** `=>` does not parse in any
-form — `filter(x => x != "beta")`, `filter((x) => …)`, `map(x => x * 2)`,
+form , `filter(x => x != "beta")`, `filter((x) => …)`, `map(x => x * 2)`,
 `reduce((a, b) => a + b)` are all parse errors. The argument to `filter` and
 `map` is an ordinary expression evaluated once per element with two magic idents
 in scope, **`value`** and **`index`**; `reduce` takes two arguments, the
 expression and the initial accumulator, and its accumulator ident is **`acc`**.
-Obsidian's own completion text says so: `filter(value: Boolean)` — "Filter the
+Obsidian's own completion text says so: `filter(value: Boolean)` , "Filter the
 elements of this list by calling a filter function, which uses the variables
-`index` and `value`"; `reduce(value: Any, acc: Any)` — "uses the variables
+`index` and `value`"; `reduce(value: Any, acc: Any)` , "uses the variables
 `value` and `acc`". Observed, on `nums: [3, 1, 2]` and
 `listish: [alpha, beta, alpha]`:
 
@@ -5859,14 +5859,14 @@ elements of this list by calling a filter function, which uses the variables
 | `nums.filter(index > 0)` | `1, 2` |
 | `nums.map(value * 2)` | `6, 2, 4` |
 | `nums.map(index)` | `0, 1, 2` |
-| `nums.map(item * 2)` | `null, null, null` — an unknown ident is null, not an error |
+| `nums.map(item * 2)` | `null, null, null` , an unknown ident is null, not an error |
 | `nums.reduce(acc + value, 0)` | `6` |
-| `nums.reduce(value, 0)` | `2` — the last element, because the expression ignores `acc` |
+| `nums.reduce(value, 0)` | `2` , the last element, because the expression ignores `acc` |
 | `nums.map(value, index)` | `Cannot call function "map", too many arguments.` |
 
 A summary formula gets the ident **`values`** instead.
 
-**The function table.** It is *not* the JavaScript prototype — `12.345.toFixed(2)`
+**The function table.** It is *not* the JavaScript prototype , `12.345.toFixed(2)`
 works although Number's prototype carries only `renderTo`, and `[3,1,2].length()`
 is refused although List's prototype has `length`. The table was read two ways
 that agree: the formula editor's completion list per receiver, and a brute-force
@@ -5879,18 +5879,18 @@ property, `Cannot call function "N", not enough / too many arguments.`, and
 | Receiver | Functions | Properties |
 | --- | --- | --- |
 | String | `contains(value: String)`, `containsAll(values: String)`, `containsAny(values: String)`, `endsWith(query: String)`, `isEmpty()`, `lower()`, `repeat(count: Number)`, `replace(pattern: String,RegExp, replacement: String)`, `reverse()`, `slice(start: Number, end: Number?)`, `split(separator: String,RegExp, n: Number?)`, `startsWith(query: String)`, `title()`, `trim()` | `length` |
-| Number | `abs()`, `ceil()`, `floor()`, `isEmpty()`, `round()`, `toFixed(precision: Number)` | — |
-| Boolean | — | — |
+| Number | `abs()`, `ceil()`, `floor()`, `isEmpty()`, `round()`, `toFixed(precision: Number)` | none |
+| Boolean | none | none |
 | List | `contains(value: Any)`, `containsAll(values: Any)`, `containsAny(values: Any)`, `earliest()`, `filter(value: Boolean)`, `flat()`, `isEmpty()`, `join(separator: String)`, `latest()`, `map(value: Any)`, `max()`, `mean()`, `median()`, `min()`, `reduce(value: Any, acc: Any)`, `reverse()`, `slice(start: Number, end: Number?)`, `sort()`, `stddev()`, `sum()`, `unique()` | `length` |
 | Date, DateTime | `date()` (drops the time), `format(format: String)` (Moment.js), `isEmpty()`, `relative()`, `time()` | `year`, `month`, `day`, `hour`, `minute`, `second`, `millisecond`, `timestamp` |
-| Duration | — | `years`, `months`, `weeks`, `days`, `hours`, `minutes`, `seconds`, `milliseconds` |
+| Duration | none | `years`, `months`, `weeks`, `days`, `hours`, `minutes`, `seconds`, `milliseconds` |
 | Link | `asFile()`, plus the whole String set (a Link is a String receiver: `lower()`, `split()`, `slice()`, …), `linksTo(file: File)`, `isEmpty()` | `length` |
 | File | `asLink(display: Any?)`, `hasLink(dest: File,Link,String)`, `hasProperty(property: String)`, `hasTag(values: String)`, `inFolder(folder: String)` | `name`, `basename`, `fullname`, `path`, `folder`, `ext`, `size`, `ctime`, `mtime`, `tags`, `links`, `embeds`, `backlinks`, `properties`, `file` |
 | Object | `filter()`, `isEmpty()`, `keys()`, `map()`, `values()` | any key of the map; an unknown key is null |
-| RegExp | `matches(value: String)` | — |
+| RegExp | `matches(value: String)` | none |
 | null | every name answers null | every name answers null |
 
-There is **no `upper()`** — `lower()` and `title()` exist and both readings
+There is **no `upper()`** . `lower()` and `title()` exist and both readings
 agree that nothing uppercases a string. `List.toString()` joins with `", "`; `Link.toString()` is `[[Pumice]]`;
 `Object.toString()` is JSON. `file.folder` for a root file is `/`, `file.tags`
 carry their `#`, and `file.links`/`backlinks`/`embeds` are Lists of Links.
@@ -5939,7 +5939,7 @@ file and canonicalized like any other statement:
 
 | Where | What happens |
 | --- | --- |
-| a filter | **silently empties the view** — 0 results, no error banner, no notice |
+| a filter | **silently empties the view** . 0 results, no error banner, no notice |
 | a formula | the view renders; a cell whose statement failed to *parse* is empty, and one whose evaluation failed shows the error text as the cell's content (`Cannot find function "nosuchfunction"`) |
 | a summary | kept, no error, nothing computed |
 
@@ -5947,7 +5947,7 @@ A boolean formula renders as a disabled checkbox, so its cell's text is empty
 even though the value is `true`; a cell carries
 `data-property-type="text|number|checkbox"`, which is the rendered type tag.
 
-**Unprobed:** the `sort`, `group`, `filter` and property panels' own expression
+Unprobed: the `sort`, `group`, `filter` and property panels' own expression
 mode (`filer-expression-mode-toggle`) and whether it writes a statement or a
 structured rule; `isType`'s accepted type names; `format()`'s full Moment.js
 token set; `image()` and `icon()` as rendered output rather than values;
@@ -5977,12 +5977,12 @@ while the table view was being built, and in four places it corrects what the
 write-behavior section above would lead you to assume.
 
 **A column's header.** `properties.<id>.displayName` when the base gives one,
-and the key is the **qualified** id — `properties['note.status']` lands where a
+and the key is the **qualified** id , `properties['note.status']` lands where a
 hand-written `properties.status` matches nothing, even though `order` carries
 the id bare. Failing that it is Obsidian's own label for a `file.*` property,
 not the id's last segment: `order: [file.name, status, formula.ppu]` renders
 `file name`, `status`, `Price per unit`. The properties panel names the whole
-set — `file backlinks`, `file base name`, `created time`, `file embeds`,
+set , `file backlinks`, `file base name`, `created time`, `file embeds`,
 `folder`, `file full name`, `file links`, `modified time`, `file path`,
 `file size`, `file tags`.
 
@@ -5997,7 +5997,7 @@ and `{}` both parse to `views: [{type: table, name: View}]`, and the run's own
 **The no-value group comes first under an ascending `groupBy`.** The copied
 TSV of a view grouped by `status` ascending, sorted by `status` descending,
 is `status\tPrice per unit` then two blank-status rows and then the `todo`
-ones — so grouping orders the rows before the sort does, and the group with no
+ones , so grouping orders the rows before the sort does, and the group with no
 value leads.
 
 **Metrics.** The header row is 30 px. The three header boxes of `Layout.base`
@@ -6018,8 +6018,8 @@ no rows; the file still parses and its bytes are untouched.
 **Unprobed, and the cheap probes that would close it.** `groupOrder`'s
 semantics are **not observed at all**: the key appears in the view object's own
 property list and in the published schema, but nothing in either run ever wrote
-one, so the reading that a `null` entry is the no-value group — and the order
-unnamed groups come in — is schema-reading, not observation. Drag a group
+one, so the reading that a `null` entry is the no-value group , and the order
+unnamed groups come in , is schema-reading, not observation. Drag a group
 header and read the file. Also unobserved: a grouped table's own DOM, including
 a group header's text; what an empty table renders; a row's measured height at
 each `rowHeight` step; a cell's padding; whether a number cell is right-aligned;
@@ -6039,8 +6039,8 @@ call is checked **minimum arity, then the declared parameter types, then
 maximum arity**. So `"s".contains(/zz/, /zz/, /zz/)` answers the *type* error
 on `value` rather than "too many arguments.", and `date(/zz/, /zz/, /zz/,
 /zz/)` likewise; "too many arguments." is only reachable once the declared
-parameters type-check, which is why `number(/zz/, /zz/)` — whose parameter is
-untyped — does answer it. The same order holds for `join`, `slice`, `map`,
+parameters type-check, which is why `number(/zz/, /zz/)` , whose parameter is
+untyped , does answer it. The same order holds for `join`, `slice`, `map`,
 `sort`, `toFixed`, `hasLink` and `link`.
 
 **The namespaces.**
@@ -6048,15 +6048,15 @@ untyped — does answer it. The same order holds for `join`, `slice`, `map`,
 - `this` is not a File. `this.file.name` is the base file's name, `this.note`
   an Object and `this.formula` `Formulas[]`, but the completion list for
   `this.` offers only `file`, `note`, `formula`, `this` and the vault's
-  frontmatter names — **none** of the File properties. So `this` is the base
+  frontmatter names , **none** of the File properties. So `this` is the base
   file's own row context, and `this.path` answers nothing where a File would
   answer a path.
 - `Object.filter` and `Object.map` bind **`key` and `value`**, not `index`:
   Obsidian's own completion text says so for both.
 - `index` *is* bound inside `reduce`, which the lambda note did not say
   (`nums.reduce(index, 0)` → 2), and `reduce`'s second argument is required.
-  Nine other accumulator spellings — `accumulator`, `total`, `result`,
-  `previous`, `carry`, `sum`, `current`, `prev`, `a` — bind nothing.
+  Nine other accumulator spellings , `accumulator`, `total`, `result`,
+  `previous`, `carry`, `sum`, `current`, `prev`, `a` , bind nothing.
 
 **Types and tags.**
 
@@ -6066,7 +6066,7 @@ untyped — does answer it. The same order holds for `join`, `slice`, `map`,
   list above omits.
 - `relative()` answers a **clock-tagged** value, not a String.
 - `min()` and `max()` with no arguments answer a *bare* null, with no `icon`
-  at all — unlike every other null, which carries `lucide-file-question`.
+  at all , unlike every other null, which carries `lucide-file-question`.
 - `Object.toString()` is JSON in which **every value is a string**:
   `{"density":"1.21","flag":"true","nums":"3, 1, 2"}`, the number, the boolean
   and the list all quoted.
@@ -6102,8 +6102,8 @@ List nor a Link column was ever rendered. A cell's own rendering is
 
 The other three layouts, the toolbar, editing through the table, the `bases:*`
 commands and an embedded `![[x.base]]` were built against the same two runs.
-Almost nothing here is a new observation — the runs rendered a table and
-nothing else — so this is the list of **readings**: what the build had to
+Almost nothing here is a new observation , the runs rendered a table and
+nothing else , so this is the list of **readings**: what the build had to
 decide with no observation behind it, each of them a place where a cheap probe
 would replace a guess. The keys themselves, their ranges and their defaults
 are observed and are in
@@ -6111,15 +6111,15 @@ are observed and are in
 
 **The two layout keys that describe a box.** `cardSize` is read as a card's
 **width** and `imageAspectRatio` as its image box's **width over height**, so
-the kanban default of 0.5 is a portrait box twice as tall as a card is wide —
+the kanban default of 0.5 is a portrait box twice as tall as a card is wide ,
 which is also the likeliest reason its default differs from the cards layout's
 1. Both layouts read the key the same way, so a probe that settles one settles
 the other. The reader never clamps a hand-written value and the drawing always
 does, which is the split the sliders imply.
 
 **What a row shows outside a table.** A card, a list line and a kanban card all
-take their **title from the row's first cell** — `order`'s first id, usually
-`file.name` — in the link colour when the column would draw as a link, with
+take their **title from the row's first cell** . `order`'s first id, usually
+`file.name` , in the link colour when the column would draw as a link, with
 the file's own name as the fallback for a row whose first cell rendered
 nothing. The body is every other cell with the empty ones left out: stacked
 under the title on a card, joined by `separator` on a line, one indented line
@@ -6140,20 +6140,20 @@ a drag exists or what it would write, and a wrong guess rewrites a user's note.
 rendered, so every box is the shell's own: a 30 px group header (the table's
 observed header row reused), 8 px gaps, 16 px grid padding, a 6 px radius on a
 card, 20 px title and 18 px value lines in a kanban card, a 20 px marker
-column. The same goes for the toolbar — a 30 px bar, 8 px padding, 22 px
+column. The same goes for the toolbar , a 30 px bar, 8 px padding, 22 px
 buttons, five control icons in an order of Silica's choosing, and a panel
 anchored at the pointer because no button box was ever measured.
 
 **What the toolbar does not write, and why.** Three observed controls are drawn
 inert or left out because what each writes is not derivable: **"Hide all"** is
-unresolvable as written — `order` is exactly the shown columns, but an *absent*
+unresolvable as written , `order` is exactly the shown columns, but an *absent*
 `order` shows the implied ones, so a list that means "none" has no spelling;
 **"Add formula"** never had its dialog opened; and **"Export CSV..."** never
 had its file, location or dialect read. *Summarize...* and anything touching
 `summaries` are out for the same reason, the Configure view page's name field
 is drawn as text because renaming was never driven, the list layout's "Indent
 properties" is read but never written, and **nothing anywhere writes or clears
-`groupOrder`** — a `groupOrder` the file carries survives a `groupBy` change
+`groupOrder`** , a `groupOrder` the file carries survives a `groupBy` change
 untouched. The filter panel's **operator combobox** is the one structural
 omission: a rule's shape was read but never its operator strings, so the panel
 offers the expression mode the `filer-expression-mode-toggle` switches into
@@ -6161,7 +6161,7 @@ rather than inventing statement text. Each is a probe of one click.
 
 **Two deliberate divergences from 1.14.5.** The Configure view page's Layout
 combobox marks the view's **real** layout as selected, where 1.14.5 always
-marks Table — that is a bug, not a key. And a control writes only when its
+marks Table , that is a bug, not a key. And a control writes only when its
 value differs, so opening a panel never writes the file.
 
 **What a sort or an `order` edit writes.** *Sort Z → A* prepending
@@ -6173,7 +6173,7 @@ the file grows on every click. *Clear sort* clears that column's entries only.
 Neither the header menu nor the properties panel will **empty `order`**: an
 empty list is omitted by the serializer and the implied columns come straight
 back, so the last column is kept instead. Conversely, checking a box on a view
-with **no** `order` materializes the implied ids *and* the new one — appending
+with **no** `order` materializes the implied ids *and* the new one , appending
 the id alone would collapse the view to a single column. Ids are written as the
 caller spells them: the header menu uses the column's own id, a panel uses what
 its picker produced, which is qualified the way the observed `image` picker's
@@ -6181,7 +6181,7 @@ is.
 
 **Editing a cell at all is a reading, and the one observation argues against
 it**: the single cell control the run captured is a *disabled* checkbox. The
-gesture is therefore the conventional one — a click on a frontmatter cell opens
+gesture is therefore the conventional one , a click on a frontmatter cell opens
 a field holding what the note really has, Enter commits, Escape cancels, a
 press outside or opening another cell commits, a click on an editable checkbox
 flips the property, and a click on a `file.*` or `formula.*` cell opens the
@@ -6227,7 +6227,7 @@ cards and a text card, `Tall.md` with the embed 40 paragraphs down.
 **One warning first.** pdf.js keeps a per-document record in
 `localStorage['pdfjs.history']` (shared by every vault this Obsidian opens),
 keyed by the PDF's fingerprint, and the first pass of this run left a 90°
-rotation in it; every later open of `doc.pdf` — leaf, embed, canvas card —
+rotation in it; every later open of `doc.pdf` , leaf, embed, canvas card ,
 came back rotated until the entry was stripped. The `b` steps of the results
 file are the clean pass and are what this section reads; the first pass is
 kept as evidence of the history itself. An implementer who ignores this
@@ -6258,7 +6258,7 @@ sidebar and spread live in `localStorage['pdfjs.history']`, shape
 `spreadMode` appears only once set; `scrollTop`/`scrollLeft` are pdf.js's
 in-page destination offsets in PDF units, not pixels). The entry is
 rewritten on every scroll and zoom. Two more keys: `pdfjs.sidebarView`
-(`"0"`, `"1"` thumbnails, `"2"` outline — the last sidebar view, global) and
+(`"0"`, `"1"` thumbnails, `"2"` outline , the last sidebar view, global) and
 `<appId>-pdfjs-search-settings`
 (`{"highlightAll":false,"caseSensitive":true,"matchDiacritics":false,"entireWord":false}`).
 "Adapt to theme" also survived a re-open in the same session; where it is
@@ -6266,7 +6266,7 @@ stored was not found.
 
 **Restart fidelity.** Quit at page 3, scale 1.5, scrollTop 3514; after
 relaunch the leaf came back active at page 3 with the same in-page offset
-(`location.top` 539 before, 543 after) but at `page-width`, scale 0.559 —
+(`location.top` 539 before, 543 after) but at `page-width`, scale 0.559 ,
 the page and rotation and sidebar come back through the history, the zoom
 level does not: every open starts at `page-width`. A same-session re-open
 after rotating showed the same: page 3 and rotation 90 kept, zoom reset.
@@ -6321,7 +6321,7 @@ no top margin; the viewer opened with `scrollLeft` 15.9.
 ### Zoom
 
 The default on every open is `currentScaleValue = "page-width"` (0.791 at
-668 px of client width; 1.169 at 968 after collapsing the left sidebar — the
+668 px of client width; 1.169 at 968 after collapsing the left sidebar , the
 scale follows a resize at once; 0.615 at 528 with the PDF sidebar open).
 *Zoom in* from 0.791 gives 0.9, 1, 1.1, 1.3, 1.5, 1.7; *Zoom out* gives 0.7,
 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.1 (pdf.js's ×1.1 step rounded out to a tenth,
@@ -6347,14 +6347,14 @@ viewer (100 units down: 0.791 → 0.5; 100 up: → 1.1).
 With the viewer focused (a click on a page focuses its `.textLayer`): Down /
 Up scroll 40 px; PageDown, Space / PageUp, Shift+Space scroll 566 px in a
 672 px box; Home / End go to 0 / the end (page 5, 3550); **Right / Left go
-to the next / previous page's top** (896 per page) — they and Escape are the
+to the next / previous page's top** (896 per page) , they and Escape are the
 only keys in `view.scope` (`ArrowLeft`, `ArrowRight`, `Escape`, no
 modifiers). `j`, `k`, `n`, `p`, `r`, `Shift+r`, `Ctrl+e` do nothing; `Ctrl+a`
 selects nothing; `Ctrl+f` opens the find bar; `Ctrl+p` and `Ctrl+o` open
 Obsidian's own modals from inside the viewer.
 
 A 900-unit wheel scrolls 900 px. `currentPageNumber` is pdf.js's: the page
-the largest fraction of which is visible, earlier page on a tie — at
+the largest fraction of which is visible, earlier page on a tie , at
 scrollTop 886 (10 px above page 2's top) it is already 2, at 538 (60 % down
 page 1) still 1, 10 px above page 3's top already 3. `openLinkText` and
 the page input land on a page's `offsetTop` exactly (page tops 0, 896,
@@ -6442,7 +6442,7 @@ toolbar `display:none` and the five pages at `page-width`.
 
 Reading view: `span.internal-embed.pdf-embed.is-loaded[src][alt]` inside
 the paragraph; Live Preview: `div.internal-embed.pdf-embed.is-loaded
-[tabindex=-1][contenteditable=false]` placed directly in `.cm-content` —
+[tabindex=-1][contenteditable=false]` placed directly in `.cm-content` ,
 there is no `.cm-embed-block` wrapper. `alt` is the link text:
 `doc.pdf`, `doc.pdf > page=3`, `alias text`; `![](doc.pdf)` has no `alt`,
 `![alt](doc.pdf#page=2)` has `alt="alt"`. The box is the line's full width
@@ -6456,7 +6456,7 @@ every case measured, this:
 | embed | inline height | what it is |
 | --- | --- | --- |
 | `![[doc.pdf]]`, `![[doc.pdf\|alias text]]`, `![](doc.pdf)` | `873.843px` | toolbar 38.69 + page 1 at page-width 834 + borders |
-| `![[doc.pdf#page=3]]`, `![alt](doc.pdf#page=2)` | `873.843px` | the same — sized from page 1, not the target page |
+| `![[doc.pdf#page=3]]`, `![alt](doc.pdf#page=2)` | `873.843px` | the same , sized from page 1, not the target page |
 | `![[small.pdf]]` | `802.824px` | toolbar + the letter page's 764 |
 | `![[doc.pdf#height=300]]` | `338px` once loaded (`300px` before) | `height=` + the toolbar |
 | `![[doc.pdf#page=2&height=200]]` | `200px` in every pass | `height=` as the whole box |
@@ -6466,7 +6466,7 @@ So the default is "one page tall", and whether the toolbar is added on top
 of `height=` differed between the two `height=` cases; this run did not
 isolate why. `#page=2` embeds sit exactly on page 2's top (scrollTop 844 =
 its offset); the two `#page=3` embeds sat 353 px below page 3's top in
-every pass, with the input reading 4 — page 3 is the landscape page, and
+every pass, with the input reading 4 , page 3 is the landscape page, and
 the cause was not isolated. `![[missing.pdf]]` is
 `span.internal-embed.is-loaded.file-embed.mod-empty-attachment` with the
 text `“missing.pdf” could not be found.` (padding 8, radius 8, background
@@ -6643,8 +6643,8 @@ what follows is this build's own reading where the run did not reach.
 - **The cycle over mixed list lines.** Obsidian oscillates on a selection of
   list lines that differ only in their checkbox. Silica advances each line
   one step on its own (`- a` / `- [ ] b` → `- [ ] a` / `- [x] b`), which
-  converges; the observed normalisation — a line that is not a list item
-  pulls every line back to a bullet — is kept as it is.
+  converges; the observed normalisation , a line that is not a list item
+  pulls every line back to a bullet , is kept as it is.
 - **Mod+L over a selection** follows the observed three rows; the inverting
   third row is implemented as observed, since one press of it is what was
   measured and a second press is the user's.

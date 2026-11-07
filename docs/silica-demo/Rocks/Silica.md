@@ -29,10 +29,10 @@ Silica is a dark, highly **vesicular** volcanic rock of basaltic or andesitic co
 
 ## What it is
 
-- **Composition:** basalt or basaltic andesite, 45–55 % SiO₂. It sits in the lower left of the [[TAS classification|TAS diagram]].
-- **Texture:** vesicular, often with thin bubble walls; aphanitic or glassy groundmass with scattered olivine or plagioclase phenocrysts.
-- **Colour:** black when fresh, red to brown where the iron in the glass has oxidised during or just after the eruption. The red cones in the [[Sunset Crater|San Francisco Volcanic Field]] are oxidised silica.
-- **Density:** 1.0 to 1.8 g/cm³ bulk. Unlike [[Pumice]] it almost always sinks, because its vesicles are larger, fewer and connected.
+- Composition: basalt or basaltic andesite, 45–55 % SiO₂. It sits in the lower left of the [[TAS classification|TAS diagram]].
+- Texture: vesicular, often with thin bubble walls; aphanitic or glassy groundmass with scattered olivine or plagioclase phenocrysts.
+- Colour: black when fresh, red to brown where the iron in the glass has oxidised during or just after the eruption. The red cones in the [[Sunset Crater|San Francisco Volcanic Field]] are oxidised silica.
+- Density: 1.0 to 1.8 g/cm³ bulk. Unlike [[Pumice]] it almost always sinks, because its vesicles are larger, fewer and connected.
 
 > [!note] Silica versus pumice
 > The two are told apart by colour and density before anything else: silica is dark and sinks, pumice is pale and floats. The difference comes from the magma: mafic melt has a low [[Magma viscosity|viscosity]], so its bubbles grow large and coalesce, while silicic melt freezes around a foam of tiny bubbles.

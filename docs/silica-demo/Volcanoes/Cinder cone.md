@@ -48,6 +48,6 @@ A fresh cone is sharp-rimmed and bare. Erosion rounds the rim, gullies the flank
 
 ## Not to be confused with
 
-- **Spatter cone** — built of clots that landed molten and welded; steeper and smaller.
-- **Tuff cone** — magma met water; fine ash, wide low profile. See [[Tuff]].
-- **Stratovolcano** — many eruptions over many thousands of years, layered lava and tephra, e.g. [[Mount Etna]].
+- Spatter cone: built of clots that landed molten and welded; steeper and smaller.
+- Tuff cone: magma met water; fine ash, wide low profile. See [[Tuff]].
+- Stratovolcano: many eruptions over many thousands of years, layered lava and tephra, e.g. [[Mount Etna]].

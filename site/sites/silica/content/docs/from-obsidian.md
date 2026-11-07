@@ -9,8 +9,6 @@ There is no migration. Silica opens the folder Obsidian already opens, reads the
 `.obsidian` configuration, and leaves everything where it is. You can open a vault in
 Silica this afternoon and in Obsidian this evening, and neither will notice.
 
-What follows is what to expect.
-
 ## What carries over, with no work
 
 | Your | In Silica |
@@ -24,7 +22,7 @@ What follows is what to expect.
 | `appearance.json` | Base theme, accent color, fonts and font size are read before the window opens |
 | `graph.json` | Filters, color groups, display settings and forces drive the graph view |
 | `core-plugins.json`, `community-plugins.json` | Read and shown in Settings (community plugins are listed, not run) |
-| `app.json` settings | The editor and files settings are honored, and Settings writes them back — see [settings](/docs/settings/) |
+| `app.json` settings | The editor and files settings are honored, and Settings writes them back; see [settings](/docs/settings/) |
 | `bookmarks.json` | Read into the Bookmarks pane and written back in Obsidian's bytes |
 | `workspace.json` | The `main` tree of tab groups and the panes' own leaf state are read at restore and written back in place |
 | Canvas files | Opened in a canvas view and saved in Obsidian's bytes |
@@ -77,14 +75,14 @@ The safe order, in increasing commitment:
 
 ## Running both on one folder
 
-This works, and it is how the project itself is developed — Silica's own specification
-vault is edited in both apps. Two things to know:
+This works, and it is how the project itself is developed, because Silica's own
+specification vault is edited in both apps. Two things to know:
 
 - **Silica watches the folder.** A save in Obsidian re-indexes in Silica within a moment,
   and the open note reloads keeping its scroll position. You do not need to reopen anything.
 - **Do not have the same note unsaved in both.** Obsidian and Silica both autosave, and
   whichever writes last wins. Silica will not overwrite a note that changed on disk while
-  you have unsaved edits in it — it leaves your buffer alone — but then you have two
+  you have unsaved edits in it, since it leaves your buffer alone, but then you have two
   versions and have to pick. The habit that avoids it is the ordinary one: edit a note in
   one place at a time.
 
@@ -108,6 +106,6 @@ Not bugs, just differences you will notice in the first ten minutes:
 
 ## Next
 
-- [The window](/docs/app/window/) — a tour of what you are looking at.
-- [Reading view](/docs/app/reading-view/) — what is drawn and what is not.
-- [Obsidian compatibility](/docs/reference/compatibility/) — the tiers and the numbers.
+- [The window](/docs/app/window/): a tour of what you are looking at.
+- [Reading view](/docs/app/reading-view/): what is drawn and what is not.
+- [Obsidian compatibility](/docs/reference/compatibility/): the tiers and the numbers.

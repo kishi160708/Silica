@@ -2,7 +2,7 @@
 
 Drives a real Obsidian over the Chrome DevTools Protocol to observe behavior
 the specification needs. CDP input events are injected by the browser, so they
-carry focus and take the same path a person's keyboard and mouse do — unlike
+carry focus and take the same path a person's keyboard and mouse do, unlike
 `el.dispatchEvent`, which does not and which is why the earlier
 throwaway-plugin probes could not settle interaction.
 
@@ -22,8 +22,8 @@ tools/obsidian-probe/run-block.sh tools/obsidian-probe/search.mjs /tmp/search-re
 
 `run-block.sh` creates a fresh scratch vault, registers it in
 `~/.config/obsidian/obsidian.json` under a fresh id, calls the script in
-phases — `fixtures` (Obsidian not running: write the notes), `run` (Obsidian
-up), and `after-restart` if `run` ended with `c.quit()` — and restores
+phases, `fixtures` (Obsidian not running: write the notes), `run` (Obsidian
+up), and `after-restart` if `run` ended with `c.quit()`, and restores
 `obsidian.json` byte-identical on exit. It refuses to start while an Obsidian
 is already running. Never point it at a real vault: not the gate vault
 (`~/bstore2/raga/plmcrzy/PLMCRZY`) while a byte-level gate run is open, and
@@ -51,9 +51,9 @@ Scripts, each one checklist block of `docs/silica/Interaction probes.md`:
 | `dock-panes.mjs` | the right dock's Tags, All properties and Outline panes: each pane's markup, computed sizes and colours, header buttons and tooltips, the sort menu and the row order under every entry, the in-pane search filter (and how each pane treats Escape), hover, what a row click opens, the Tags pane's nested-tags toggle, counts and folds, the Outline's current-heading mark in source and reading mode and its auto-scroll toggle, the empty state, and every state key's round trip through `workspace.json` | fixtures, run, after-restart |
 | `editing-commands.mjs` | the editing commands the backlog waited on: the bare `set-heading`, `cycle-list-checklist`, `toggle-checklist-status`, the six insert-block commands, the highlight colours, `clear-formatting`, Move line's hotkey, the formatting toggles across a multi-line selection, `insert-table` on a non-blank line | fixtures, run |
 | `editing-typing.mjs` | the same block's keystroke rows: auto-pairing's open questions (skip-over per closer, the word-boundary rule, context suppression, forward Delete, `[[`), and Shift+Tab on ragged indentation | fixtures, run |
-| `footnote-insert.mjs` | `editor:insert-footnote`'s number and where the definition lands, read from disk with the fixture written before launch — one case per run (`FN_CASE`), because the command only lands once per launch when the probe reaches the file with `openFile` | fixtures, run |
+| `footnote-insert.mjs` | `editor:insert-footnote`'s number and where the definition lands, read from disk with the fixture written before launch, one case per run (`FN_CASE`), because the command only lands once per launch when the probe reaches the file with `openFile` | fixtures, run |
 | `ui-rules.mjs` | the UI rows: the empty tab, the lucide icon per callout type, the callout fold chevron, the setext underline, the done-task decoration, the view-header title, the property pills, clearing every property, `graph:open-local` with no file, the local graph's camera, a half-typed query, Ctrl+E in a field, the explorer's context menus and the modal backdrop | fixtures, run |
-| `attachment-dropdown.mjs` | Settings → Files and links: the attachment-location dropdown's option labels, the string each stores, the dependent rows, and what each stored value resolves to — on its own because the Settings modal has hung this endpoint before | fixtures, run |
+| `attachment-dropdown.mjs` | Settings → Files and links: the attachment-location dropdown's option labels, the string each stores, the dependent rows, and what each stored value resolves to, on its own because the Settings modal has hung this endpoint before | fixtures, run |
 | `search-collation.mjs` | the basename tie in the search pane's sort: several same-basename files at different depths, under every sort order, plus the quick switcher's own order | fixtures, run |
 | `code-copy.mjs` | block 6: hover, real click, clipboard read back; trailing newlines, unicode and CRLF; the icon's revert delay; Tab; the editor's `code-block-flair`; an embedded block; the frontmatter pre | fixtures, run |
 | `heading-fold.mjs` | block 7: the subfolder key, what `{0,0}` is, fold-more/fold-less, source mode, `foldIndent: false`, the reading-view clicks, the edge headings, the link jump, and the cold restart | fixtures, run, after-restart |
@@ -61,13 +61,13 @@ Scripts, each one checklist block of `docs/silica/Interaction probes.md`:
 | `graph-writeback.mjs` | block 9: every control section expanded, every toggle clicked and slider dragged, the write timing polled, the zoom clamps, unknown keys, an external rewrite, and the local graph's own options | fixtures, run |
 | `attachment-paste.mjs` | block 4: a real clipboard image through `nativeImage`, folder creation, `./`, Markdown links, reading view and a canvas, the disk timeline and undo depth, and a real file drop (`FIXTURES` names a directory of source files) | fixtures, run |
 | `canvas-menus.mjs` | the canvas's menus for #48: the card menu, the floating row per kind of selection, the right-click list per verified target (card, Markdown and image file cards, URL card, group label and body, edge on and off its label, background, several objects), the Set color, Line direction and Align submenus, Align and Arrange applied so the geometry is recorded, the quick settings and where they persist, Read-only, and what Convert to file writes | fixtures, run |
-| `raw-html-remote.mjs` | blocks 8 and 10: real anchor clicks (guarded so the frame cannot navigate), which tags survive, the iframe and CSS-background fetches, raw HTML in every container, and the remote-image layout — runs its own HTTP server (`HTTP_PORT`) | fixtures, run |
-| `bases.mjs` | Bases: the `.base` format and its write-back — whether opening or closing writes, what one real edit writes, key order at every level, the YAML emitter's quoting and indentation, comments, trailing newline, CRLF and BOM, where a new key lands, the unpublished layout keys of all four layouts (driven through "Configure view"), `bases:new-file`, `bases:insert` and `bases:copy-table`, unknown keys at every level, the five ways a base can be broken, and an external rewrite | fixtures, run |
-| `bases-expr.mjs` | Bases: the expression language — precedence and associativity read off the parse tree (the private parser is turned into an oracle by patching `mockContext.evaluateFormula`), the lambda form of `list.filter`/`map`/`reduce`, literals and escapes, coercion, null propagation, durations, every method reachable from a value, the global functions, `this`, and an invalid statement in a filter, a formula and a summary | fixtures, run |
+| `raw-html-remote.mjs` | blocks 8 and 10: real anchor clicks (guarded so the frame cannot navigate), which tags survive, the iframe and CSS-background fetches, raw HTML in every container, and the remote-image layout, runs its own HTTP server (`HTTP_PORT`) | fixtures, run |
+| `bases.mjs` | Bases: the `.base` format and its write-back, whether opening or closing writes, what one real edit writes, key order at every level, the YAML emitter's quoting and indentation, comments, trailing newline, CRLF and BOM, where a new key lands, the unpublished layout keys of all four layouts (driven through "Configure view"), `bases:new-file`, `bases:insert` and `bases:copy-table`, unknown keys at every level, the five ways a base can be broken, and an external rewrite | fixtures, run |
+| `bases-expr.mjs` | Bases: the expression language, precedence and associativity read off the parse tree (the private parser is turned into an oracle by patching `mockContext.evaluateFormula`), the lambda form of `list.filter`/`map`/`reduce`, literals and escapes, coercion, null propagation, durations, every method reachable from a value, the global functions, `this`, and an invalid statement in a filter, a formula and a summary | fixtures, run |
 | `pdf.mjs` | the PDF view: where pdf.js's `PDFViewer` hangs off the leaf, the leaf's `workspace.json` record against the `pdfjs.history` localStorage entry that really carries page, zoom, rotation and sidebar, the toolbar, sidebar, find bar and Display options menu with their styles in both themes, the zoom ladder, keys, the page-number rule, `#page=`/`#height=` on links and embeds, every embed of `Embeds.md` in reading view and Live Preview, the canvas file card, menus, the three copy strings, the panes, `broken.pdf`, and restart fidelity; the `b` steps are the clean pass after the first pass polluted the history with a rotation (`SHOTS` names the folder) | fixtures, run, after-restart |
 | `vault-switcher.mjs` | the left sidebar's vault profile and the switcher it opens: the footer's parts, the menu's rows against a registry holding two vaults that share a folder name and one whose folder is gone, the check on the open vault, the order the rows come in, and what the row under the separator opens; writes `vault-switcher-menu.png` to `SHOTS` | fixtures, run |
 | `vault-manager.mjs` | the vault-manager window "Manage vaults..." raises (`starter.html`, a CDP target of its own with no `app` in it): the list's rows and their order against the registry on disk, the ellipsis menu, the panel on the right, and what `app:open-vault` and `app:switch-vault` each do; writes `vault-manager.png` and `vault-manager-row-menu.png` to `SHOTS` | fixtures, run |
-| `autopair.mjs` | auto-pairing (predates the runner: start Obsidian yourself with `--remote-debugging-port=9222` on a scratch vault and run it directly) | — |
+| `autopair.mjs` | auto-pairing (predates the runner: start Obsidian yourself with `--remote-debugging-port=9222` on a scratch vault and run it directly) |, |
 
 `results/` keeps the raw JSON of the runs the specification cites, named by
 date. A run is evidence; the interpretation of it lives in
@@ -78,7 +78,7 @@ late step gets fixed without paying for the whole block again.
 
 ## cdp.mjs
 
-No dependencies — Node 24 has a built-in `WebSocket`. `connect()` waits for a
+No dependencies, Node 24 has a built-in `WebSocket`. `connect()` waits for a
 page target whose `app.workspace.layoutReady` is true (the endpoint answers
 before the vault window boots, and the first page target can be the launcher)
 and returns:
@@ -88,12 +88,12 @@ and returns:
 | `evaluate(body)` | run a function body in the renderer, `app` in scope, returns its value |
 | `typeText`, `typeChar`, `pressKey(name, {ctrl,shift,alt,meta})` | real keystrokes |
 | `rect`, `clickElement`, `rightClickElement`, `dblClickElement`, `hover`, `clickAt`, `drag`, `mouseMove` | real mouse |
-| `dragAndDrop`, `dragOverOnly` | a real HTML5 drag, through `Input.setInterceptDrags` plus `Input.dispatchDragEvent` — `dispatchMouseEvent` never raises `dragstart`, which is why the synthetic passes could not establish a drop. Returns the intercepted payload; `dragOverOnly` hands back a `finish(x, y)` so the hover state over a target can be read before the drop, or `dragCancel`ed |
+| `dragAndDrop`, `dragOverOnly` | a real HTML5 drag, through `Input.setInterceptDrags` plus `Input.dispatchDragEvent`, `dispatchMouseEvent` never raises `dragstart`, which is why the synthetic passes could not establish a drop. Returns the intercepted payload; `dragOverOnly` hands back a `finish(x, y)` so the hover state over a target can be read before the drop, or `dragCancel`ed |
 | `on`, `once` | protocol *events* by method name, which drag interception needs |
 | `openMenuItems()` | every open `.menu` as labels in order, `---` for separators |
 | `selectInfo`, `selectSet` | a native `<select>`'s options, and setting it with a `change` event |
 | `readClipboard`, `writeClipboard` | the system clipboard via Electron |
-| `vaultPath()` | which vault this window has open — check it, never assume |
+| `vaultPath()` | which vault this window has open, check it, never assume |
 | `quit()` | close the window cleanly and wait for the process to go |
 
 ## Traps
@@ -118,7 +118,7 @@ and returns:
 - `cp` is aliased to `cp -i` on this machine; the runner uses `command cp -f`.
 - **Seed a note through the vault, not through the editor.** `editor.setValue`
   leaves the file and the editor disagreeing, and a command that touches the
-  file reloads the editor from disk — which puts the previous case's bytes back
+  file reloads the editor from disk, which puts the previous case's bytes back
   underneath the command's own edit. `app.vault.modify` plus a settle, then the
   caret, then a `seedOk` check that the editor really holds the seed.
 - **A second markdown leaf is poison.** `executeCommandById` acts on the
@@ -162,7 +162,7 @@ and returns:
   records nothing. `bases.mjs`'s `openBase` detaches every bases and markdown
   leaf first.
 - **The Bases toolbar does not open `.menu-item` lists.** Each control opens a
-  `.menu.bases-toolbar-menu` whose body is a panel — `.bases-toolbar-section`s
+  `.menu.bases-toolbar-menu` whose body is a panel, `.bases-toolbar-section`s
   of comboboxes, native `<select>`s, range sliders and `.suggestion-item` rows,
   or a `.view-config-menu` form. A probe that reads `.menu-item` titles sees an
   empty menu and reports "no such row". A combobox's options open in a

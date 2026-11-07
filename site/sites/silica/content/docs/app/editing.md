@@ -1,6 +1,6 @@
 ---
 title: Editing a note
-description: Silica's editor — Live Preview and Source mode, what each hides and shows, smart lists, multiple cursors, undo grouping, and exactly when and what Silica saves.
+description: Silica's editor, in Live Preview and Source mode: what each hides and shows, smart lists, multiple cursors, undo grouping, and exactly when and what Silica saves.
 ---
 
 # Editing a note
@@ -46,7 +46,7 @@ its source so you can edit it.
 ### Block widgets
 
 A top-level table, math block, or a paragraph that is nothing but an embed is rendered in
-place of its source lines, through the same renderer reading view uses — so an embedded note
+place of its source lines, through the same renderer reading view uses. An embedded note
 appears inline while you write around it. The widget shows its source again when your cursor
 enters the block: with the arrow keys, or by clicking a table or math widget, which puts the
 cursor at the row you clicked.
@@ -55,8 +55,9 @@ Links inside an embed widget are clickable, and follow.
 
 ### Clicking links while editing
 
-In Live Preview, a click on a rendered link follows it. In Source mode, `Ctrl + click` does
-— a plain click puts the cursor there, which is what you want when the markers are showing.
+In Live Preview, a click on a rendered link follows it. In Source mode, `Ctrl + click` does,
+while a plain click puts the cursor there, which is what you want when the markers are
+showing.
 
 ## Source mode
 
@@ -64,8 +65,8 @@ Every character of the file, with syntax highlighting and nothing hidden. This i
 for fixing a mangled table, seeing exactly where a stray `%%` is, or editing a note whose
 formatting is itself the subject.
 
-Decorations come from the parser, recomputed on a background thread after each edit — one
-parse in flight and one queued — and swapped in when ready. Typing never waits for the
+Decorations come from the parser, recomputed on a background thread after each edit (one
+parse in flight and one queued) and swapped in when ready. Typing never waits for the
 parser, which is why a very large note still types smoothly. The status bar shows the
 current parse time and span count.
 
@@ -89,14 +90,14 @@ anchor.
 | Select a line | Triple-click |
 | Select everything | `Ctrl + A` |
 | Move or delete by word | `Ctrl + ←` / `→`, `Ctrl + Backspace` / `Delete` |
-| Copy, cut, paste | `Ctrl + C`, `Ctrl + X`, `Ctrl + V` — cut and copy take the whole line when nothing is selected |
+| Copy, cut, paste | `Ctrl + C`, `Ctrl + X`, `Ctrl + V`; cut and copy take the whole line when nothing is selected |
 
 ## Smart lists
 
 With `smartIndentList` on (the default), pressing Enter continues what the line started:
 
 - Its quote markers (`>`, `> >`).
-- Its bullet, or the next number in an ordered list — and the siblings after it renumber.
+- Its bullet, or the next number in an ordered list, and the siblings after it renumber.
 - An empty checkbox, after a task item.
 
 `Shift + Enter` is always a plain newline, whatever the line started. An empty item is
@@ -110,9 +111,9 @@ previous sibling at its own depth, and one with no previous sibling restarts at 
 `autoPairBrackets` brings a closer along with `(`, `[`, `{`, `"` and `'`; `autoPairMarkdown`
 does the same for the backtick, `*` and `_`. Typing the closer where one is already waiting
 steps over it instead of doubling it, a `Backspace` between a fresh pair takes both away, and
-with text selected the pair wraps the selection — `~`, `=`, `$` and `%` only ever wrap. Both
-toggles default to on, and changing one in [Settings](/docs/settings/) takes effect on the
-next keystroke without reopening the note.
+with text selected the pair wraps the selection. The characters `~`, `=`, `$` and `%` only
+ever wrap. Both toggles default to on, and changing one in [Settings](/docs/settings/) takes
+effect on the next keystroke without reopening the note.
 
 Every rule here is one that was observed against Obsidian. The characters and positions the
 probe left open are deliberately inert: pairing writes bytes you did not type, so a guessed
@@ -141,7 +142,7 @@ Three keys accept a row, and the difference between them is the point:
 | `Tab` | The same link with the cursor left inside the brackets, so a `#heading` can follow |
 | `Shift + Enter` | The query as you typed it, ignoring the highlighted row |
 
-`↑` and `↓` — or `Ctrl + N` and `Ctrl + P` — move through the list, and `Escape` closes it.
+`↑` and `↓`, or `Ctrl + N` and `Ctrl + P`, move through the list, and `Escape` closes it.
 The link itself is written in your vault's own style: `newLinkFormat` decides how much of the
 path appears, and `useMarkdownLinks` decides whether you get `[[wiki]]` or `[markdown](…)`.
 
@@ -150,7 +151,7 @@ path appears, and `useMarkdownLinks` decides whether you get `[[wiki]]` or `[mar
 | To add a cursor | |
 |---|---|
 | Above or below | `editor:add-cursor-above`, `editor:add-cursor-below` |
-| At every match of a search | *Find all* — `Alt + Enter` in the [find panel](/docs/app/find/) |
+| At every match of a search | *Find all* (`Alt + Enter` in the [find panel](/docs/app/find/)) |
 | Anywhere | `Alt + click` (again on an existing cursor removes it) |
 
 Typing, deleting, Enter, Tab, cut, copy and paste all apply at every cursor as a single undo
@@ -184,7 +185,7 @@ bytes you actually edited.
 
 **When the file changes underneath you.** If the note on disk is what Silica itself last
 wrote, the watcher's reload is skipped. If the note changed underneath an unedited buffer,
-it reloads and keeps your cursor. If you have unsaved edits, they are left alone — Silica
+it reloads and keeps your cursor. If you have unsaved edits, they are left alone; Silica
 will not throw away your typing to take the disk's version.
 
 ## Not yet

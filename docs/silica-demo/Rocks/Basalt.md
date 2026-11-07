@@ -45,9 +45,9 @@ K2O: 0.2
 
 ## Flow textures
 
-- **Pāhoehoe** — smooth, ropy, billowy surfaces on fluid, gas-poor flows.
-- **ʻAʻā** — a rubble of [[Silica|silicaceous]] clinker over a massive core, on cooler and faster flows.
-- **Pillow** — bulbous lobes with glassy rinds, from flows that entered water.
+- Pāhoehoe: smooth, ropy, billowy surfaces on fluid, gas-poor flows.
+- ʻAʻā: a rubble of [[Silica|silicaceous]] clinker over a massive core, on cooler and faster flows.
+- Pillow: bulbous lobes with glassy rinds, from flows that entered water.
 
 ![[Glossary#^pahoehoe]]
 

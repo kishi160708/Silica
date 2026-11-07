@@ -51,10 +51,10 @@ for sid, rho in samples.items():
 
 ## Vesicle shapes
 
-- **Spherical** — the clast was at rest when it quenched.
-- **Elongate** — sheared in the conduit or stretched in flight; the tube vesicles of [[Pumice#Tube pumice|tube pumice]].
-- **Coalesced and irregular** — late coalescence, typical of the cores of large silica bombs.
-- **Collapsed** — the foam degassed and sagged before it froze; dense obsidian-like rinds on silica.
+- Spherical: the clast was at rest when it quenched.
+- Elongate: sheared in the conduit or stretched in flight; the tube vesicles of [[Pumice#Tube pumice|tube pumice]].
+- Coalesced and irregular: late coalescence, typical of the cores of large silica bombs.
+- Collapsed: the foam degassed and sagged before it froze; dense obsidian-like rinds on silica.
 
 ## See also
 

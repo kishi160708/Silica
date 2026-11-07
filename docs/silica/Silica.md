@@ -12,11 +12,11 @@ browse a vault, open it in Silica too. Anything the two apps disagree on here is
 
 ## Notes
 
-- [[Specification]] — what the app implements and where the full specification lives.
-- [[Development]] — machine setup, build commands, pinned dependencies, and benchmark results.
-- [[Interaction probes]] — the hands-on Obsidian observations the automated probe could not make.
-- [[Plugins]] — phase 5: how far a vault's Obsidian plugins can run here, and the tier line.
-- [[GPUI Kit]] — the component framework Silica does not use, and when adopting part of it would pay.
+- [[Specification]]: what the app implements and where the full specification lives.
+- [[Development]]: machine setup, build commands, pinned dependencies, and benchmark results.
+- [[Interaction probes]]: the hands-on Obsidian observations the automated probe could not make.
+- [[Plugins]]: phase 5, how far a vault's Obsidian plugins can run here, and the tier line.
+- [[GPUI Kit]]: the component framework Silica does not use, and when adopting part of it would pay.
 
 ## Brand colors
 
@@ -24,11 +24,11 @@ The logo (`bitmap.svg` at the repository root, a silica rock) is filled with the
 Picked on 2026-10-17 for an ember look that holds on both base themes and stays apart from
 Obsidian's purple accent.
 
-| Role | Hex |
-| --- | --- |
-| Brand, logo fill, large marks | `#E8590C` |
-| Text and links on light backgrounds (5.2:1 on white) | `#C2410C` |
-| Accent on dark backgrounds, hover states (5.4:1 on the dark theme) | `#F2691F` |
+|| Role | Hex |
+|| --- | --- |
+|| Brand, logo fill, large marks | `#E8590C` |
+|| Text and links on light backgrounds (5.2:1 on white) | `#C2410C` |
+|| Accent on dark backgrounds, hover states (5.4:1 on the dark theme) | `#F2691F` |
 
 ## Rules for this vault
 

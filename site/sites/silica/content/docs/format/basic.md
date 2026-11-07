@@ -1,6 +1,6 @@
 ---
 title: Basic formatting
-description: The Markdown Silica understands — headings, emphasis, lists, task items, quotes, horizontal rules and line breaks — including the places where Obsidian departs from CommonMark and Silica follows it.
+description: The Markdown Silica understands, covering headings, emphasis, lists, task items, quotes, horizontal rules and line breaks, including the places where Obsidian departs from CommonMark and Silica follows it.
 ---
 
 # Basic formatting
@@ -26,7 +26,7 @@ This page is the ordinary syntax. The pages after it cover
 A heading is `#` through `######` followed by a space. Headings appear in the
 [Outline](/docs/app/panes/) pane and are link targets: `[[Note#Heading 2]]`.
 
-Setext headings work too — a line of text underlined with `===` or `---`:
+Setext headings work too, with a line of text underlined by `===` or `---`:
 
 ```markdown
 Heading 1
@@ -57,7 +57,7 @@ Several details here are Obsidian's rather than CommonMark's, and Silica reprodu
   the `b`.
 - **A backtick run with no closer retries one backtick shorter**, so a stray triple backtick
   in a line does not swallow the rest of it.
-- **Legacy HTML entities decode without a semicolon** — `&copy` is ©.
+- **Legacy HTML entities decode without a semicolon**; `&copy` is ©.
 
 ## Lists
 
@@ -75,8 +75,8 @@ Several details here are Obsidian's rather than CommonMark's, and Silica reprodu
 - [-] a task with any single character in the box
 ```
 
-A task item takes **any single character** between the brackets, not just a space or an `x`
-— Obsidian uses that for cancelled and deferred states, and the character is preserved.
+A task item takes **any single character** between the brackets, not just a space or an `x`.
+Obsidian uses that for cancelled and deferred states, and the character is preserved.
 
 > **Note** `- [ ]` with *nothing* after the bracket is plain text, not a task.
 
@@ -87,7 +87,7 @@ Two indentation details differ from CommonMark, in Obsidian's favor:
 - **A `>` line directly after a list item's text stays inside that item.**
 
 While editing, Enter continues a list for you and `Tab` reindents it, renumbering what needs
-renumbering — see [smart lists](/docs/app/editing/).
+renumbering; see [smart lists](/docs/app/editing/).
 
 ## Quotes
 
@@ -105,8 +105,8 @@ Three or more `---`, `***` or `___` on a line of their own.
 
 ## Line breaks
 
-A **single newline inside a paragraph renders as a line break** — Obsidian's default, which
-is CommonMark's "soft break" rendered hard. Turn `strictLineBreaks` on in `app.json` and a
+A **single newline inside a paragraph renders as a line break**, which is Obsidian's default
+and CommonMark's "soft break" rendered hard. Turn `strictLineBreaks` on in `app.json` and a
 single newline becomes a space instead, as CommonMark specifies; Silica honors the setting
 either way.
 
@@ -125,7 +125,7 @@ should, and match Obsidian:
 
 ## HTML in notes
 
-Raw HTML is parsed as Obsidian parses it, but **not rendered** — the tags show as literal
+Raw HTML is parsed as Obsidian parses it, but **not rendered**; the tags show as literal
 text in reading view. The one place it has an effect is frontmatter sanitising, where a
 `<script>` is removed, unknown elements are unwrapped, and a raw `<a>` gains `target` and
 `rel`. Rendering HTML is a later phase.
@@ -133,7 +133,7 @@ text in reading view. The one place it has an effect is frontmatter sanitising, 
 ## Escaping
 
 A backslash escapes a Markdown character: `\*not italic\*`. Inside a code span, a backslash
-is literal — notably `\|`, which stays `\|` in code even though it escapes a cell boundary in
+is literal, notably `\|`, which stays `\|` in code even though it escapes a cell boundary in
 a [table](/docs/format/code-math/).
 
 ## Next
