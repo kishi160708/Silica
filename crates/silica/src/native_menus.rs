@@ -14,6 +14,7 @@
 //! not.
 
 use crate::workspace::{RunCommand, VaultState};
+use crate::i18n::t;
 
 /// Whether the application menu bar should be the OS's own: `nativeMenus`
 /// in `appearance.json`, off by default as Obsidian has it.
@@ -73,7 +74,7 @@ pub fn build(registry: &silica_commands::CommandRegistry) -> Vec<gpui::Menu> {
     let mut bars = Vec::new();
     for (name, ids) in [
         (
-            "File",
+            t("File"),
             &[
                 "file-explorer:new-file",
                 "file-explorer:new-folder",
@@ -81,7 +82,7 @@ pub fn build(registry: &silica_commands::CommandRegistry) -> Vec<gpui::Menu> {
             ][..],
         ),
         (
-            "Edit",
+            t("Edit"),
             &[
                 "editor:undo",
                 "editor:redo",
@@ -90,10 +91,10 @@ pub fn build(registry: &silica_commands::CommandRegistry) -> Vec<gpui::Menu> {
             ][..],
         ),
         (
-            "View",
+            t("View"),
             &["graph:open", "app:reload", "markdown:toggle-preview"][..],
         ),
-        ("Navigate", &["app:go-back", "app:go-forward"][..]),
+        (t("Navigate"), &["app:go-back", "app:go-forward"][..]),
     ] {
         let items = group(ids);
         if !items.is_empty() {

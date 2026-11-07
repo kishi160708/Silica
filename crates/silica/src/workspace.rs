@@ -148,30 +148,30 @@ fn side_menu_items(target: &SidePaneTarget) -> Vec<SidePaneMenuItem> {
     match target {
         SidePaneTarget::Tag(tag) => vec![
             item("Search for \"#tag\"", "search", A::SearchTag(tag.clone())),
-            item("Rename tag...", "pen-line", A::RenameTag(tag.clone())),
-            item("Copy tag", "clipboard", A::CopyTag(tag.clone())),
+            item(crate::i18n::t("Rename tag..."), "pen-line", A::RenameTag(tag.clone())),
+            item(crate::i18n::t("Copy tag"), "clipboard", A::CopyTag(tag.clone())),
         ],
         SidePaneTarget::Property(key) => vec![
             item(
-                "Search for property",
+                crate::i18n::t("Search for property"),
                 "search",
                 A::SearchProperty(key.clone()),
             ),
-            item("Copy property", "clipboard", A::CopyProperty(key.clone())),
+            item(crate::i18n::t("Copy property"), "clipboard", A::CopyProperty(key.clone())),
         ],
         SidePaneTarget::Heading { path, offset } => vec![
             item(
-                "Open heading",
+                crate::i18n::t("Open heading"),
                 "file-text",
                 A::OpenHeading(path.clone(), *offset),
             ),
             item(
-                "Open note in new tab",
+                crate::i18n::t("Open note in new tab"),
                 "file-plus",
                 A::OpenHeadingInNewTab(path.clone()),
             ),
             item(
-                "Open note to the right",
+                crate::i18n::t("Open note to the right"),
                 "separator-vertical",
                 A::OpenHeadingToRight(path.clone()),
             ),
