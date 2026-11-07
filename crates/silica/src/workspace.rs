@@ -92,6 +92,7 @@ use silica_vault::{FileChange, TrashOption, Vault, VaultError, VaultRegistry};
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 use std::time::{Duration, Instant};
 
@@ -371,9 +372,13 @@ pub const RUNNABLE: &[&str] = &[
     "global-search:open",
     "graph:open",
     "graph:open-local",
+    "graph:animate",
     // * Silica's own extension, not an Obsidian id: the `silica:` prefix is
     //   what the repo marks its native additions with.
     "silica:export-site",
+    "silica:export-site-watch",
+    "silica:open-exported-site",
+    "silica:toggle-graph-pane",
     "canvas:new-file",
     "canvas:export-as-image",
     "canvas:jump-to-group",
@@ -1360,6 +1365,9 @@ enum RightTab {
     /// All properties: every key in the vault with its type and count.
     Properties,
     Outline,
+    /// The graph, in the right dock: the same view the ribbon opens full
+    /// screen, kept beside the note — Obsidian's graph side pane.
+    Graph,
 }
 
 /// The Outline pane's headings for one note's metadata, whether that
@@ -1596,6 +1604,7 @@ enum PendingOp {
     /// `silica:export-site`: the folder the site is written to. An empty
     /// box takes the vault's sibling default.
     ExportSite,
+    ExportSiteWatch,
     /// "Merge entire file with...": the open note takes `other` in.
     Merge {
         file: String,
@@ -2921,6 +2930,12 @@ pub struct Workspace {
     words: usize,
     chars: usize,
     _watcher: Option<watch::Watcher>,
+    /// The site-export watch, while one runs: the flag its thread checks,
+    /// so a second "export (watching)" run stops it. `None` = not watching.
+    site_watch: Option<Arc<AtomicBool>>,
+    /// The folder of the last site export, so "open exported site" has a
+    /// target without re-exporting. `None` until the first export lands.
+    last_site_export: Option<PathBuf>,
     /// Pending autosave, two seconds after the last edit.
     save_task: Option<Task<()>>,
     /// Whether the startup flags have been applied. A client driving the
@@ -3514,6 +3529,8 @@ impl Workspace {
             words: 0,
             chars: 0,
             _watcher: None,
+            site_watch: None,
+            last_site_export: None,
             save_task: None,
             started: false,
             _subscriptions: subscriptions,
@@ -4579,6 +4596,7 @@ impl Workspace {
             "outline" => RightTab::Outline,
             "tags" => RightTab::Tags,
             "properties" => RightTab::Properties,
+            "graph" => RightTab::Graph,
             _ => RightTab::Backlinks,
         };
         self.select_right_tab(which, cx);
@@ -4590,6 +4608,20 @@ impl Workspace {
         self.right_tab = which;
         self.refresh_outline_from_buffer(cx);
         cx.notify();
+    }
+
+    /// `silica:toggle-graph-pane`: the graph in the right dock, beside the
+    /// note — Obsidian's graph side pane. Asked for with the pane already
+    /// showing it, the dock closes instead. The dock comes back first: a
+    /// pane that is not painted is outside the dispatch tree.
+    fn toggle_graph_pane(&mut self, cx: &mut Context<Self>) {
+        if self.right_tab == RightTab::Graph && self.right_visible {
+            self.right_visible = false;
+            cx.notify();
+        } else {
+            self.right_visible = true;
+            self.select_right_tab(RightTab::Graph, cx);
+        }
     }
 
     pub fn editor(&self) -> &Entity<Editor> {
@@ -5080,7 +5112,10 @@ impl Workspace {
             "switcher:open" => self.open_switcher("", window, cx),
             "global-search:open" => self.open_search_action(&OpenSearch, window, cx),
             "graph:open" => self.open_graph_action(&OpenGraph, window, cx),
-            "silica:export-site" => self.start_export_site(window, cx),
+            "silica:toggle-graph-pane" => self.toggle_graph_pane(cx),
+            "silica:export-site" => self.start_export_site(window, cx, false),
+            "silica:export-site-watch" => self.start_export_site(window, cx, true),
+            "silica:open-exported-site" => self.open_exported_site(cx),
             // * Asked for by id with no file open -- the palette does not offer
             //   it, and `can_run` says so -- this opens nothing, which is what
             //   Obsidian's `checkCallback` does rather than falling back to the
@@ -6002,6 +6037,45 @@ impl Workspace {
     fn request_focus_main(&mut self, cx: &mut Context<Self>) {
         self.refocus_main = true;
         cx.notify();
+    }
+
+    /// The watching export: a first run starts a background pass over the
+    /// vault, a second stops it. The thread owns its watcher, so the flag
+    /// is all a stop needs; taking the `Arc` out of `site_watch` is what
+    /// makes the command a toggle.
+    fn toggle_site_watch(&mut self, root: PathBuf, out: PathBuf, cx: &mut Context<Self>) {
+        if let Some(stop) = self.site_watch.take() {
+            stop.store(true, Ordering::Relaxed);
+            self.report("Stopped watching the site export.", cx);
+            return;
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        self.site_watch = Some(stop.clone());
+        std::thread::spawn(move || crate::site::watch_loop(root, out, stop));
+        self.report("Watching the vault — the site re-exports on change.", cx);
+    }
+
+    /// `silica:open-exported-site`: the last export's index.html in the
+    /// default browser — the "preview" half of the site export, with no
+    /// re-export and no temp server to leave running.
+    fn open_exported_site(&mut self, cx: &mut Context<Self>) {
+        let Some(out) = self.last_site_export.clone() else {
+            self.report(
+                "No export to open yet — run Export vault as site first.",
+                cx,
+            );
+            return;
+        };
+        let index = out.join("index.html");
+        if !index.exists() {
+            self.report(
+                format!("No index.html in {} — export it again.", out.display()),
+                cx,
+            );
+            return;
+        }
+        cx.open_url(&crate::site::index_url(&out));
+        self.report(format!("Opening {} in the browser.", index.display()), cx);
     }
 
     /// Whether the keyboard is somewhere nothing can use it: on the
@@ -7991,7 +8065,7 @@ impl Workspace {
 
     /// `silica:export-site`: asks where the site goes, with the vault's
     /// sibling folder as the pre-filled answer.
-    fn start_export_site(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn start_export_site(&mut self, window: &mut Window, cx: &mut Context<Self>, watch: bool) {
         // * The default folder is read through the state's borrow, which
         //   ends before `open_prompt` takes `self` back.
         let default = match self.state.as_ref() {
@@ -8013,11 +8087,24 @@ impl Workspace {
             None => return,
         };
         self.open_prompt(
-            PendingOp::ExportSite,
+            if watch {
+                PendingOp::ExportSiteWatch
+            } else {
+                PendingOp::ExportSite
+            },
             PromptSpec {
-                title: "Export vault as site".into(),
+                title: if watch {
+                    "Export vault as site (watching)".into()
+                } else {
+                    "Export vault as site".into()
+                },
                 detail: Some(
-                    "Every note renders to HTML; links and attachments come along.".into(),
+                    if watch {
+                        "Every note renders to HTML; links and attachments come along. The folder refreshes as the vault changes — run this again to stop."
+                    } else {
+                        "Every note renders to HTML; links and attachments come along."
+                    }
+                    .into(),
                 ),
                 input: Some(default),
                 placeholder: "Folder".into(),
@@ -8531,6 +8618,7 @@ link to it is rewritten. The current note is deleted."
             return;
         };
         let value = value.trim();
+        let watch = matches!(op, PendingOp::ExportSiteWatch);
         match op {
             PendingOp::Rename(from) => {
                 // * The box holds the stem, which is what `renamed_path`
@@ -8560,7 +8648,7 @@ link to it is rewritten. The current note is deleted."
                 self.close_modal(window, cx);
                 self.delete_now(&path, window, cx);
             }
-            PendingOp::ExportSite => {
+            PendingOp::ExportSite | PendingOp::ExportSiteWatch => {
                 self.pending = None;
                 self.close_modal(window, cx);
                 // * The export reads the vault through its own borrow, so
@@ -8593,17 +8681,23 @@ link to it is rewritten. The current note is deleted."
                     return;
                 };
                 match crate::site::export(&vault_root, &files, &out) {
-                    Ok(done) => self.report(
-                        format!(
-                            "Exported {} note{}, {} link{} to {}",
-                            done.notes,
-                            if done.notes == 1 { "" } else { "s" },
-                            done.links,
-                            if done.links == 1 { "" } else { "s" },
-                            done.output.display()
-                        ),
-                        cx,
-                    ),
+                    Ok(done) => {
+                        self.last_site_export = Some(done.output.clone());
+                        self.report(
+                            format!(
+                                "Exported {} note{}, {} link{} to {}",
+                                done.notes,
+                                if done.notes == 1 { "" } else { "s" },
+                                done.links,
+                                if done.links == 1 { "" } else { "s" },
+                                done.output.display()
+                            ),
+                            cx,
+                        );
+                        if watch {
+                            self.toggle_site_watch(vault_root, out, cx);
+                        }
+                    }
                     Err(err) => self.report(err, cx),
                 }
             }
@@ -12260,6 +12354,7 @@ link to it is rewritten. The current note is deleted."
             Some("outline") => self.right_tab = RightTab::Outline,
             Some("tag") => self.right_tab = RightTab::Tags,
             Some("all-properties") => self.right_tab = RightTab::Properties,
+            Some("graph") => self.right_tab = RightTab::Graph,
             _ => {}
         }
         self.layout = Some(layout);
@@ -12777,6 +12872,7 @@ link to it is rewritten. The current note is deleted."
                 RightTab::Outline => "outline",
                 RightTab::Tags => "tags",
                 RightTab::Properties => "properties",
+                RightTab::Graph => "graph",
             }),
         );
         put_capped(
@@ -12990,6 +13086,7 @@ link to it is rewritten. The current note is deleted."
                     json!({"op": "rename-tag", "from": from})
                 }
                 Some(PendingOp::ExportSite) => json!({"op": "export-site"}),
+                Some(PendingOp::ExportSiteWatch) => json!({"op": "export-site-watch"}),
             },
         );
         Value::Object(modal)
@@ -15176,6 +15273,7 @@ link to it is rewritten. The current note is deleted."
             RightTab::Tags => "tag-pane",
             RightTab::Properties => "properties",
             RightTab::Outline => "outline",
+            RightTab::Graph => "graph",
         };
         self.state
             .as_ref()
@@ -15193,6 +15291,7 @@ link to it is rewritten. The current note is deleted."
                 RightTab::Tags,
                 RightTab::Properties,
                 RightTab::Outline,
+                RightTab::Graph,
             ]
             .into_iter()
             .find(|t| self.pane_enabled(*t))
@@ -15207,6 +15306,24 @@ link to it is rewritten. The current note is deleted."
             RightTab::Outline => self.render_outline_pane(theme, cx),
             RightTab::Tags => self.render_tags_pane(theme, cx),
             RightTab::Properties => self.render_properties_pane(theme, cx),
+            // * The graph side pane: the GraphView entity the ribbon opens
+            // full screen, kept in the dock. While a group's area already
+            // paints it, the dock says so rather than painting it twice.
+            RightTab::Graph if self.graph_group().is_some() => div()
+                .flex()
+                .items_center()
+                .justify_center()
+                .size_full()
+                .min_h_0()
+                .px(px(12.))
+                .py(px(12.))
+                .child("The graph is already open in the main area")
+                .into_any_element(),
+            RightTab::Graph => div()
+                .size_full()
+                .min_h_0()
+                .child(self.graph.clone())
+                .into_any_element(),
         };
         // * A pane whose core plugin is off is not offered: Obsidian takes
         //   the view away with the plugin.
@@ -15277,6 +15394,7 @@ link to it is rewritten. The current note is deleted."
                         cx,
                     ))
                     .children(tab_button(self, "Outline", "list", RightTab::Outline, cx))
+                    .children(tab_button(self, "Graph", "git-fork", RightTab::Graph, cx))
                     .child(window_handle(
                         div().id("right-dock-space").flex_1().h_full(),
                         frameless,
