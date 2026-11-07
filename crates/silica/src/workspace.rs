@@ -415,6 +415,7 @@ pub const RUNNABLE: &[&str] = &[
     "app:reload",
     "audio-recorder:start",
     "audio-recorder:stop",
+    "quick-capture:open",
     "app:open-settings",
     "app:open-help",
     "app:open-vault",
@@ -5338,6 +5339,16 @@ impl Workspace {
                 }
             }
             "app:open-settings" => self.open_settings(None, window, cx),
+            "quick-capture:open" => {
+                let Some(state) = self.state.clone() else {
+                    self.report("Quick Capture: No vault open", cx);
+                    return;
+                };
+                match crate::quick_capture::open(state, window.window_handle(), cx) {
+                    Ok(_) => {}
+                    Err(err) => self.report(format!("Quick Capture: {err}"), cx),
+                }
+            }
             "app:toggle-left-sidebar" => {
                 self.left_visible = !self.left_visible;
                 if !self.left_visible {

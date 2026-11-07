@@ -38,6 +38,7 @@ mod palette;
 mod panes;
 mod pdf;
 mod popout;
+mod quick_capture;
 mod preview;
 mod prompt;
 mod properties;
