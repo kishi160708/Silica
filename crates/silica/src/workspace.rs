@@ -416,6 +416,7 @@ pub const RUNNABLE: &[&str] = &[
     "audio-recorder:start",
     "audio-recorder:stop",
     "quick-capture:open",
+    "task-dashboard:open",
     "app:open-settings",
     "app:open-help",
     "app:open-vault",
@@ -5347,6 +5348,16 @@ impl Workspace {
                 match crate::quick_capture::open(state, window.window_handle(), cx) {
                     Ok(_) => {}
                     Err(err) => self.report(format!("Quick Capture: {err}"), cx),
+                }
+            }
+            "task-dashboard:open" => {
+                let Some(state) = self.state.clone() else {
+                    self.report("Task Dashboard: No vault open", cx);
+                    return;
+                };
+                match crate::task_dashboard::open(state, window.window_handle(), cx) {
+                    Ok(_) => {}
+                    Err(err) => self.report(format!("Task Dashboard: {err}"), cx),
                 }
             }
             "app:toggle-left-sidebar" => {

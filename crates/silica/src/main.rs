@@ -39,6 +39,7 @@ mod panes;
 mod pdf;
 mod popout;
 mod quick_capture;
+mod task_dashboard;
 mod preview;
 mod prompt;
 mod properties;

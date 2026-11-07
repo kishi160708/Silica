@@ -3,16 +3,15 @@
 //! it into the vault's default new-note folder, Escape to close without
 //! saving.
 
-use crate::text_input::TextInput;
 use crate::workspace::VaultState;
 use gpui::{
-    actions, div, prelude::*, px, size, App, Bounds, Context, Entity, FocusHandle, Focusable,
+    div, prelude::*, px, size, App, Bounds, Context, Entity, FocusHandle, Focusable,
     Render, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowDecorations,
     WindowHandle, WindowOptions,
 };
+use crate::text_input::{InputEvent, TextInput};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-
-actions!(quick_capture, [SaveNote, CloseCapture]);
 
 /// Open a Quick Capture window next to `main`, bringing it forward if it is
 /// already open.
@@ -23,6 +22,9 @@ pub fn open(
 ) -> anyhow::Result<WindowHandle<QuickCaptureWindow>> {
     let (w, h) = WINDOW_SIZE;
     let bounds = Bounds::centered(None, size(px(w), px(h)), cx);
+    let state_for_sub = state.clone();
+    let saved = Arc::new(AtomicBool::new(false));
+    let saved_for_sub = saved.clone();
     cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -37,17 +39,46 @@ pub fn open(
             ..Default::default()
         },
         move |window, cx| {
-            cx.bind_keys([
-                gpui::KeyBinding::new("enter", SaveNote, Some("Quick Capture")),
-                gpui::KeyBinding::new("escape", CloseCapture, Some("Quick Capture")),
-            ]);
+            let input = cx.new(|cx| TextInput::new("Type a note...", cx));
             let view = cx.new(|cx| QuickCaptureWindow {
                 focus_handle: cx.focus_handle(),
-                input: cx.new(|cx| TextInput::new("Type a note...", cx)),
-                state: state.clone(),
-                saved: false,
+                input: input.clone(),
+                saved: saved.clone(),
             });
             let handle = view.read(cx).focus_handle.clone();
+            let _subscription = cx.subscribe(&input, move |this: Entity<TextInput>, event: &InputEvent, cx: &mut App| {
+                if let InputEvent::Submit = event {
+                    let text = this.read(cx).text();
+                    let text = text.trim();
+                    if text.is_empty() {
+                        return;
+                    }
+                    let title = text
+                        .lines()
+                        .find(|l| !l.trim().is_empty())
+                        .unwrap_or(text)
+                        .trim();
+                    let folder = state_for_sub
+                        .app()
+                        .new_file_folder_path
+                        .clone()
+                        .unwrap_or_default();
+                    let path = state_for_sub.vault().available_path(&folder, title, "md");
+                    let body = if text.lines().count() > 1 {
+                        text.to_string()
+                    } else {
+                        format!("# {title}\n")
+                    };
+                    match state_for_sub.create_note(&path, &body) {
+                        Ok(_) => {
+                            saved_for_sub.store(true, Ordering::Relaxed);
+                        }
+                        Err(err) => {
+                            eprintln!("Quick Capture save failed: {err}");
+                        }
+                    }
+                }
+            });
             window.focus(&handle, cx);
             view
         },
@@ -58,8 +89,7 @@ pub fn open(
 pub struct QuickCaptureWindow {
     focus_handle: FocusHandle,
     input: Entity<TextInput>,
-    state: Arc<VaultState>,
-    saved: bool,
+    saved: Arc<AtomicBool>,
 }
 
 impl Focusable for QuickCaptureWindow {
@@ -68,11 +98,10 @@ impl Focusable for QuickCaptureWindow {
     }
 }
 
-impl gpui::EventEmitter<CloseCapture> for QuickCaptureWindow {}
-
 impl Render for QuickCaptureWindow {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.global::<crate::theme::Theme>();
+        let saved = self.saved.load(Ordering::Relaxed);
         div()
             .id("quick-capture")
             .flex()
@@ -106,7 +135,11 @@ impl Render for QuickCaptureWindow {
                             .text_size(px(11.))
                             .text_color(theme.text_faint)
                             .mt(px(8.))
-                            .child("Enter saves · Escape closes"),
+                            .child(if saved {
+                                "Saved. Close this window."
+                            } else {
+                                "Enter saves · Escape closes"
+                            }),
                     ),
             )
     }
@@ -114,68 +147,3 @@ impl Render for QuickCaptureWindow {
 
 /// Window size.
 const WINDOW_SIZE: (f32, f32) = (620., 420.);
-
-impl QuickCaptureWindow {
-    /// Save the typed text as a new note in the vault.
-    #[allow(dead_code)]
-    fn save_note(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        if self.saved {
-            return;
-        }
-        let text = self.input.read(cx).text();
-        let text = text.trim();
-        if text.is_empty() {
-            return;
-        }
-        // First non-empty line is the title.
-        let title = text
-            .lines()
-            .find(|l| !l.trim().is_empty())
-            .unwrap_or(text)
-            .trim();
-        let folder = self
-            .state
-            .app()
-            .new_file_folder_path
-            .clone()
-            .unwrap_or_default();
-        let path = self
-            .state
-            .vault()
-            .available_path(&folder, title, "md");
-        let body = if text.lines().count() > 1 {
-            text.to_string()
-        } else {
-            format!("# {title}\n")
-        };
-        match self.state.create_note(&path, &body) {
-            Ok(_changes) => {
-                self.saved = true;
-                cx.emit(crate::quick_capture::CloseCapture);
-            }
-            Err(err) => {
-                eprintln!("Quick Capture save failed: {err}");
-            }
-        }
-    }
-
-    #[allow(dead_code)]
-    fn save_note_action(
-        &mut self,
-        _: &SaveNote,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.save_note(_window, cx);
-    }
-
-    #[allow(dead_code)]
-    fn close_capture_action(
-        &mut self,
-        _: &CloseCapture,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
-    ) {
-        // Window close is handled by the window manager's close button.
-    }
-}

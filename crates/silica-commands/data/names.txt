@@ -231,3 +231,4 @@ webviewer:search	Web viewer: Search the web
 webviewer:save-to-vault	Web viewer: Save to vault
 silica:export-site	Export vault as site
 quick-capture:open	Quick Capture: New note
+task-dashboard:open	Task Dashboard: Open

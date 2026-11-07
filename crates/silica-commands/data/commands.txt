@@ -249,3 +249,4 @@ random-note
 # Silica ids that are not Obsidian commands (marked by the `silica:` prefix).
 silica:export-site
 quick-capture:open
+task-dashboard:open
