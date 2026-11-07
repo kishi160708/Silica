@@ -3341,6 +3341,11 @@ impl Workspace {
                     SettingsEvent::Changed(change) => {
                         this.change_setting(change.as_ref().clone(), window, cx)
                     }
+                    SettingsEvent::ButtonClicked(label) => {
+                        if label == "Check for updates" {
+                            this.check_for_updates(window, cx);
+                        }
+                    }
                 },
             ),
             cx.subscribe_in(
@@ -3729,6 +3734,50 @@ impl Workspace {
         self.apply_app_config(&state, cx);
         self.refresh_vault_views(cx);
         cx.notify();
+    }
+
+    /// `Check for updates` in Settings > General: queries the GitHub API for
+    /// the latest release and tells the user whether this build is current.
+    /// Uses curl (already on every supported OS) so no new dependency is
+    /// needed, and only reads the public releases endpoint — no auth, no
+    /// private data is sent.
+    fn check_for_updates(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let current = env!("CARGO_PKG_VERSION");
+        let output = std::process::Command::new("curl")
+            .arg("-s")
+            .arg("--max-time")
+            .arg("15")
+            .arg("https://api.github.com/repos/lw-xiong/Silica/releases/latest")
+            .output();
+
+        let result = match output {
+            Ok(output) if output.status.success() => {
+                let body = String::from_utf8_lossy(&output.stdout);
+                let latest: Option<String> = serde_json::from_str::<serde_json::Value>(&body)
+                    .ok()
+                    .and_then(|v| v.get("tag_name").and_then(|tag| tag.as_str().map(str::to_string)))
+                    .map(|s| s.trim_start_matches('v').to_string());
+                match latest {
+                    Some(latest) if !latest.is_empty() => {
+                        if latest == current {
+                            format!("Silica {current} is up to date.")
+                        } else {
+                            format!(
+                                "Silica {latest} is available — you have {current}. Get it at github.com/lw-xiong/Silica/releases"
+                            )
+                        }
+                    }
+                    _ => "Check for updates: could not read the release version.".to_string(),
+                }
+            }
+            Ok(output) => format!(
+                "Check for updates: GitHub replied with status {}.",
+                output.status
+            ),
+            Err(err) => format!("Check for updates: could not reach GitHub: {err}"),
+        };
+
+        self.report(result, cx);
     }
 
     /// Rebuild the global [`Theme`] from the vault's current appearance and

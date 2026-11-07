@@ -1385,6 +1385,9 @@ pub enum SettingsEvent {
     /// key changed. The workspace writes it and applies what it can. Boxed
     /// because a whole `AppConfig` dwarfs the other events.
     Changed(Box<SettingChange>),
+    /// A button was clicked: the label it showed, so the workspace knows
+    /// which one ("Check for updates", "Open", "Browse", ...).
+    ButtonClicked(SharedString),
 }
 
 pub struct SettingsView {
@@ -3272,17 +3275,24 @@ impl SettingsView {
                     )
                     .into_any_element()
             }
-            Control::Button(label) => div()
-                .px_3()
-                .py(px(3.))
-                .rounded_sm()
-                .bg(theme.bg_alt)
-                .border_1()
-                .border_color(theme.border)
-                .text_size(px(12.))
-                .text_color(theme.text_muted)
-                .child(label.clone())
-                .into_any_element(),
+            Control::Button(label) => {
+                let label = label.clone();
+                div()
+                    .px_3()
+                    .py(px(3.))
+                    .rounded_sm()
+                    .bg(theme.bg_alt)
+                    .border_1()
+                    .border_color(theme.border)
+                    .text_size(px(12.))
+                    .text_color(theme.text_muted)
+                    .child(label.clone())
+                    .cursor_pointer()
+                    .on_mouse_down(MouseButton::Left, cx.listener(move |_this, _, _, cx| {
+                        cx.emit(SettingsEvent::ButtonClicked(label.clone()));
+                    }))
+                    .into_any_element()
+            }
         }
     }
 
