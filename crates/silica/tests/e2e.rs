@@ -392,20 +392,34 @@ fn the_view_header_bookmark_action_prompts_for_a_title() {
     app.settle();
     app.call("type", json!({"text": "# My Heading\\n"}));
     app.settle();
-    app.call("command", json!({"id": "bookmarks:bookmark-current-heading"}));
+    app.call(
+        "command",
+        json!({"id": "bookmarks:bookmark-current-heading"}),
+    );
     app.settle();
-    let modal = app.call("state", json!({})).get("modal").cloned().unwrap_or(json!(null));
+    let modal = app
+        .call("state", json!({}))
+        .get("modal")
+        .cloned()
+        .unwrap_or(json!(null));
     assert_eq!(
         modal.get("kind").and_then(|k| k.as_str()),
         Some("prompt"),
         "the bookmark command opened no prompt: {modal:?}"
     );
     assert_eq!(
-        modal.get("pending_op").and_then(|p| p.get("op")).and_then(|o| o.as_str()),
+        modal
+            .get("pending_op")
+            .and_then(|p| p.get("op"))
+            .and_then(|o| o.as_str()),
         Some("add-bookmark"),
         "{modal:?}"
     );
-    let placeholder = modal.get("pending_op").and_then(|p| p.get("placeholder")).and_then(|p| p.as_str()).unwrap_or("");
+    let placeholder = modal
+        .get("pending_op")
+        .and_then(|p| p.get("placeholder"))
+        .and_then(|p| p.as_str())
+        .unwrap_or("");
     assert!(
         placeholder.contains("My Heading"),
         "the prompt bookmarks the current heading: {modal:?}"
