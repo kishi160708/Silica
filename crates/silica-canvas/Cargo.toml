@@ -11,3 +11,9 @@ publish.workspace = true
 [dependencies]
 silica-formats.workspace = true
 serde_json.workspace = true
+# SVG rendering and PNG rasterisation for canvas export: usvg parses SVG,
+# resvg/tiny_skia rasterises it, image encodes the PNG.
+usvg = { workspace = true }
+resvg = { workspace = true }
+tiny-skia = { workspace = true }
+image = { workspace = true }

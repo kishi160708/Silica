@@ -375,6 +375,7 @@ pub const RUNNABLE: &[&str] = &[
     //   what the repo marks its native additions with.
     "silica:export-site",
     "canvas:new-file",
+    "canvas:export-as-image",
     "canvas:jump-to-group",
     "canvas:convert-to-file",
     "bases:new-file",
@@ -4121,6 +4122,85 @@ impl Workspace {
         }
     }
 
+    /// `canvas:export-as-image`: render the open canvas to a PNG and save it
+    /// in the vault next to the canvas file.
+    fn export_canvas_as_image(&mut self, cx: &mut Context<Self>) {
+        if self.main_view(cx) != MainView::Canvas {
+            self.report("Canvas: Export as image needs a canvas open", cx);
+            return;
+        }
+        let view = self.canvas.read(cx);
+        let canvas = &view.scene.canvas;
+        if canvas.nodes.is_empty() {
+            self.report("Canvas: Nothing to export", cx);
+            return;
+        }
+
+        // Compute bounds and place nodes with a 50-unit margin.
+        let mut min_x = f64::INFINITY;
+        let mut min_y = f64::INFINITY;
+        let mut max_x = 0.0f64;
+        let mut max_y = 0.0f64;
+        for n in &canvas.nodes {
+            min_x = min_x.min(n.x);
+            min_y = min_y.min(n.y);
+            max_x = max_x.max(n.x + n.width);
+            max_y = max_y.max(n.y + n.height);
+        }
+        let pad = 50.0;
+        let width = (max_x - min_x + 2.0 * pad) as u32;
+        let height = (max_y - min_y + 2.0 * pad) as u32;
+
+        let placed: Vec<silica_canvas::image::Placed> = canvas
+            .nodes
+            .iter()
+            .map(|n| silica_canvas::image::Placed {
+                node_id: n.id.clone(),
+                x: n.x - min_x + pad,
+                y: n.y - min_y + pad,
+                width: n.width,
+                height: n.height,
+            })
+            .collect();
+
+        let palette = silica_canvas::image::Palette {
+            background: "#1e1e1e".into(),
+            node_fill: "#2d2d2d".into(),
+            node_stroke: "#5a5a5a".into(),
+            node_text: "#e0e0e0".into(),
+            edge: "#888888".into(),
+        };
+        let svg_doc =
+            silica_canvas::image::svg(width, height, &placed, &canvas.edges, &palette);
+        let png_bytes = match silica_canvas::image::png(&svg_doc, width, height) {
+            Ok(b) => b,
+            Err(err) => {
+                self.report(format!("Canvas: PNG rasterise failed: {err}"), cx);
+                return;
+            }
+        };
+
+        // Save to vault: canvas-export-<timestamp>.png
+        let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+        let rel = format!("canvas-export-{ts}.png");
+        let abs = match self.vault_path(&rel) {
+            Ok(p) => p,
+            Err(err) => {
+                self.report(format!("Canvas: {err}"), cx);
+                return;
+            }
+        };
+        if let Some(dir) = abs.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        match std::fs::File::create(&abs)
+            .and_then(|mut f| std::io::Write::write_all(&mut f, &png_bytes))
+        {
+            Ok(()) => self.report(format!("Canvas: Exported {rel}"), cx),
+            Err(err) => self.report(format!("Canvas: Write failed: {err}"), cx),
+        }
+    }
+
     /// Opens the chooser and picks `query` out of it, for `--template`.
     pub fn pick_template(&mut self, query: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.open_template_chooser(window, cx);
@@ -4948,6 +5028,7 @@ impl Workspace {
             "bases:add-item" => self.add_base_item(cx),
             "canvas:jump-to-group" => self.jump_to_group(window, cx),
             "canvas:convert-to-file" => self.convert_card_to_file(cx),
+            "canvas:export-as-image" => self.export_canvas_as_image(cx),
             "markdown:toggle-preview" => self.toggle_mode(&ToggleMode, window, cx),
             // * The properties block is the same editable widget in reading
             //   view, and `editor:toggle-fold-properties` was observed running

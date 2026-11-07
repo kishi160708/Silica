@@ -1336,3 +1336,4 @@ impl Scene {
 
 #[cfg(test)]
 mod tests;
+pub mod image;
