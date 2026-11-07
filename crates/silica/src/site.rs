@@ -973,7 +973,7 @@ mod tests {
         assert!(html.contains("<img src=\"x\""), "the img was lost: {html}");
     }
 
-#[test]
+    #[test]
     fn a_javascript_url_does_not_survive() {
         let html = strip_active("<a href=\"javascript:alert(1)\">x</a>");
         assert!(
@@ -983,7 +983,7 @@ mod tests {
         assert!(html.contains(">x</a>"), "the link was lost: {html}");
     }
 
-#[test]
+    #[test]
     fn a_cased_and_unquoted_handler_does_not_survive() {
         let html = strip_active("<IMG ONERROR=alert(1) src=x>");
         assert!(
@@ -993,14 +993,14 @@ mod tests {
         assert!(html.contains("src=x"), "src was lost: {html}");
     }
 
-#[test]
+    #[test]
     fn ordinary_links_and_images_are_untouched() {
         let src = "<a href=\"https://example.com/a?b=1&amp;c=2\">go</a>\
 <img src=\"pic.png\" alt=\"a>b\"><img src=\"data:image/png;base64,AAAA\">";
         assert_eq!(strip_active(src), src);
     }
 
-#[test]
+    #[test]
     fn a_gt_inside_a_value_does_not_end_the_tag() {
         let html = strip_active("<a title=\"a>b\" href=\"javascript:alert(1)\">x</a>");
         assert!(
@@ -1010,7 +1010,7 @@ mod tests {
         assert!(html.contains("title=\"a>b\""), "title was lost: {html}");
     }
 
-#[test]
+    #[test]
     fn a_data_document_url_does_not_survive() {
         let html = strip_active("<object data=\"data:text/html,<b>\"></object>");
         assert!(
@@ -1019,7 +1019,7 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn a_watch_loop_that_is_already_stopped_exports_nothing() {
         let stop = Arc::new(AtomicBool::new(true));
         let root = std::env::temp_dir().join("silica-site-watch-stopped-root");
@@ -1029,7 +1029,7 @@ mod tests {
         assert!(!out.exists(), "a stopped loop must not write anything");
     }
 
-#[test]
+    #[test]
     fn a_change_inside_the_vault_re_exports_the_site() {
         // * Per-process dirs: parallel test binaries on one host must not
         //   watch each other's vault.
@@ -1063,7 +1063,7 @@ mod tests {
         assert!(seen, "writing a note inside the vault refreshes the export");
     }
 
-#[test]
+    #[test]
     fn an_index_url_encodes_only_what_breaks_a_url() {
         let plain = std::path::Path::new("/tmp/my-site");
         assert_eq!(index_url(plain), "file:///tmp/my-site/index.html");
