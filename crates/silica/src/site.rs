@@ -739,4 +739,57 @@ mod tests {
         let _ = std::fs::remove_dir_all(&fresh);
         let _ = std::fs::remove_dir_all(&foreign);
     }
+
+    #[test]
+    fn an_event_handler_attribute_does_not_survive() {
+        let html = strip_active("<p>a</p><img src=\"x\" onerror=\"alert(1)\"><p>b</p>");
+        assert!(!html.contains("onerror"), "onerror survived: {html}");
+        assert!(html.contains("<img src=\"x\""), "the img was lost: {html}");
+    }
+
+    #[test]
+    fn a_javascript_url_does_not_survive() {
+        let html = strip_active("<a href=\"javascript:alert(1)\">x</a>");
+        assert!(
+            !html.to_ascii_lowercase().contains("javascript:"),
+            "javascript: survived: {html}"
+        );
+        assert!(html.contains(">x</a>"), "the link was lost: {html}");
+    }
+
+    #[test]
+    fn a_cased_and_unquoted_handler_does_not_survive() {
+        let html = strip_active("<IMG ONERROR=alert(1) src=x>");
+        assert!(
+            !html.to_ascii_lowercase().contains("onerror"),
+            "ONERROR survived: {html}"
+        );
+        assert!(html.contains("src=x"), "src was lost: {html}");
+    }
+
+    #[test]
+    fn ordinary_links_and_images_are_untouched() {
+        let src = "<a href=\"https://example.com/a?b=1&amp;c=2\">go</a>\
+<img src=\"pic.png\" alt=\"a>b\"><img src=\"data:image/png;base64,AAAA\">";
+        assert_eq!(strip_active(src), src);
+    }
+
+    #[test]
+    fn a_gt_inside_a_value_does_not_end_the_tag() {
+        let html = strip_active("<a title=\"a>b\" href=\"javascript:alert(1)\">x</a>");
+        assert!(
+            !html.to_ascii_lowercase().contains("javascript:"),
+            "javascript: survived: {html}"
+        );
+        assert!(html.contains("title=\"a>b\""), "title was lost: {html}");
+    }
+
+    #[test]
+    fn a_data_document_url_does_not_survive() {
+        let html = strip_active("<object data=\"data:text/html,<b>\"></object>");
+        assert!(
+            !html.to_ascii_lowercase().contains("data:text/html"),
+            "data:text/html survived: {html}"
+        );
+    }
 }
