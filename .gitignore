@@ -18,7 +18,10 @@ Untitled.base
 Untitled [0-9]*.md
 Untitled [0-9]*.canvas
 Untitled [0-9]*.base
+# Local session artifacts — never meant for the repository. The all-caps
+# spelling arrived later than the original mixed-case rule, so cover both.
 UPGRADE-Log.md
+UPGRADE-LOG.md
 
 # Intermediate frame captures (input for compose.py -> .gif in docs/img)
 tools/readme-recording/frames/
