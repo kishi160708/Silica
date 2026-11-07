@@ -11,6 +11,7 @@
 use crate::assets::{icon, logo};
 use crate::backlinks::{self, Group, Match as PaneMatch, Section};
 use crate::bases::{BasesEvent, BasesView};
+use silica_bases::FileData;
 use crate::bookmarks::{BookmarkEvent, BookmarksPane};
 use crate::canvas::menu::tooltip;
 use crate::canvas::{CanvasEvent, CanvasView};
@@ -88,7 +89,7 @@ use silica_plugins::native::PluginContext;
 use silica_templates as templates;
 use silica_text::table::TableCommand;
 use silica_text::{BlockInsert, LinePrefix, LinkSyntax};
-use silica_vault::{FileChange, TrashOption, Vault, VaultError, VaultRegistry};
+use silica_vault::{FileChange, TrashOption, Vault, VaultError, VaultFile, VaultRegistry};
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::path::{Component, Path, PathBuf};
@@ -509,6 +510,14 @@ pub struct VaultState {
     cache: RwLock<MetadataCache>,
     /// Note text as indexed, for search and mentions.
     texts: RwLock<HashMap<String, Arc<String>>>,
+    /// Vault-relative path → the scan row. Built once at load and kept in
+    /// step with changes, so `file_data` is O(1) instead of a linear scan
+    /// over every file in the vault.
+    pub(crate) file_index: RwLock<HashMap<String, Arc<VaultFile>>>,
+    /// Vault-relative path → the parsed `FileData` a base sees for that
+    /// note. Rebuilt per changed file, not per vault scan, so opening a
+    /// base on a large vault does not re-parse every note.
+    pub(crate) file_data_cache: RwLock<HashMap<String, Arc<FileData>>>,
     /// The config files Settings writes, behind locks for the same reason
     /// `property_types` is: a control changes one while the vault is open.
     app: RwLock<AppConfig>,
@@ -644,11 +653,20 @@ impl VaultState {
             })
             .collect();
         let cache = MetadataCache::new(vault.link_resolver(), metas);
+        // * Path index: one entry per file, so `file_data` is O(1) instead of
+        //   a linear scan over every file in the vault.
+        let file_index: HashMap<String, Arc<VaultFile>> = vault
+            .files()
+            .iter()
+            .map(|f| (f.path.clone(), Arc::new(f.clone())))
+            .collect();
         Ok(VaultState {
             root: vault.root().to_path_buf(),
             vault: RwLock::new(vault),
             cache: RwLock::new(cache),
             texts: RwLock::new(texts),
+            file_index: RwLock::new(file_index),
+            file_data_cache: RwLock::new(HashMap::new()),
             app: RwLock::new(app),
             appearance: RwLock::new(appearance),
             core_plugins: RwLock::new(core_plugins),
@@ -907,10 +925,16 @@ impl VaultState {
                     (_, Some((meta, text))) => {
                         cache.insert_file(path.clone(), meta);
                         texts.insert(path.clone(), text);
-                        changes.notes.push(path);
+                        changes.notes.push(path.clone());
                     }
                     (_, None) => cache.add_path(&path),
                 }
+                // * Invalidate cached FileData for any path that changed so the
+                //   next `file_data` call rebuilds it from the fresh index.
+                self.file_data_cache
+                    .write()
+                    .expect("cache lock")
+                    .remove(&path);
             }
             if files.iter().any(|c| !matches!(c, FileChange::Modified(_))) {
                 cache.reresolve();

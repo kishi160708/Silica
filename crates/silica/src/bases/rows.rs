@@ -115,15 +115,29 @@ pub fn env_for(state: &VaultState, base_path: &str) -> Env {
 
 /// One file of the vault as a [`FileData`], by its vault-relative path.
 /// Paths compare case-insensitively, as everywhere else in the vault.
+/// Results are cached so opening a base on a large vault does not rebuild
+/// every note's `FileData`.
 pub fn file_data(state: &VaultState, path: &str) -> Option<Arc<FileData>> {
-    let vault = state.vault();
+    // * Fast path: a cached `FileData` is already there.
+    {
+        let cache = state.file_data_cache.read().expect("cache lock");
+        if let Some(found) = cache.get(path) {
+            return Some(found.clone());
+        }
+    }
     let cache = state.cache();
     let types = state.property_types();
-    let file = vault
-        .files()
-        .iter()
-        .find(|f| f.path.eq_ignore_ascii_case(path))?;
-    Some(Arc::new(build(file, &cache, &types)))
+    // * O(1) via the path index instead of a linear scan over every file.
+    let file = state.file_index.read().expect("index lock").get(path)?.clone();
+    let data = build(&file, &cache, &types);
+    let arc = Arc::new(data);
+    // * Store so the next call for this path is a hash lookup.
+    state
+        .file_data_cache
+        .write()
+        .expect("cache lock")
+        .insert(path.to_string(), arc.clone());
+    Some(arc)
 }
 
 /// One file's values, from the scan row and the cache record alone.
