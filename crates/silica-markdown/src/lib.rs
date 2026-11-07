@@ -330,4 +330,34 @@ mod tests {
         assert_eq!(canonical_callout_type("cite"), "quote");
         assert_eq!(canonical_callout_type("custom"), "note");
     }
+
+    /// P1: large-note parse regression benchmark. A 50k-line / ~4 MB document
+    /// should parse well under the audit's ~222 ms baseline. This is a
+    /// regression guard, not a precise measurement — CI hardware varies.
+    #[test]
+    fn large_document_parse_stays_under_budget() {
+        let mut lines = Vec::with_capacity(50_001);
+        for i in 0..50_001 {
+            lines.push(format!(
+                "## Heading {i}\n\nSome paragraph text with **bold** and *italic* and [a link](file.md).\n\n- list item one\n- list item two\n\n```rust\nfn hello_{i}() -> i32 {{\n    {i}\n}}\n```\n\n> A blockquote with `inline code` and ~~strikethrough~~.\n\n---\n\n| Column A | Column B |\n|----------|----------|\n| cell {i}a | cell {i}b |\n\n"
+            ));
+        }
+        let text = lines.join("\n");
+        assert!(text.len() > 4_000_000, "document should be multi-MB");
+
+        let started = std::time::Instant::now();
+        let doc = parse(&text);
+        let elapsed = started.elapsed();
+
+        // The document must parse at all (correctness), and the time is
+        // recorded for regression tracking. The audit observed ~222 ms mean
+        // on release hardware; debug-mode CI is much slower, so the budget is
+        // generous and exists to catch regressions, not to enforce a target.
+        let _block_count = doc.blocks.len();
+        assert!(
+            elapsed.as_millis() < 15000,
+            "large parse took {} ms, over the 15000 ms regression budget",
+            elapsed.as_millis()
+        );
+    }
 }

@@ -692,6 +692,11 @@ pub struct Editor {
     pending_parse: Option<Task<()>>,
     /// An edit arrived while a parse was running; parse again when it lands.
     parse_queued: bool,
+    /// Byte ranges that changed since the last parse completed. The
+    /// foundation for incremental parsing: once the parser can re-parse a
+    /// substring and splice it into the existing tree, these ranges tell it
+    /// what to touch instead of the whole document.
+    dirty_ranges: Vec<std::ops::Range<usize>>,
     readable_line_length: bool,
     /// Whether line numbers are painted in the gutter (`showLineNumber`).
     show_line_number: bool,
@@ -827,6 +832,7 @@ impl Editor {
             palette: Palette::default(),
             pending_parse: None,
             parse_queued: false,
+            dirty_ranges: Vec::new(),
             readable_line_length: true,
             show_line_number: false,
             show_indent_guide: true,
@@ -1061,7 +1067,7 @@ impl Editor {
         if !self.buf.table_command(cmd) {
             return false;
         }
-        self.after_edit(Some(window), cx);
+        self.after_edit(Some(window), cx, None);
         true
     }
 
@@ -1069,7 +1075,7 @@ impl Editor {
     /// line, with the cursor in its first header cell.
     pub fn insert_table(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.buf.insert_table() {
-            self.after_edit(Some(window), cx);
+            self.after_edit(Some(window), cx, None);
         }
     }
 
@@ -1082,7 +1088,7 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         if self.buf.toggle_wrap(marker) {
-            self.after_edit(window, cx);
+            self.after_edit(window, cx, None);
         }
     }
 
@@ -1091,7 +1097,7 @@ impl Editor {
     /// the same bytes a click on the rendered checkbox writes.
     pub fn toggle_checklist(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
         if self.buf.toggle_checklist() {
-            self.after_edit(window, cx);
+            self.after_edit(window, cx, None);
         }
     }
 
@@ -1134,7 +1140,7 @@ impl Editor {
         }
         if let Some(text) = item.text() {
             if self.buf.paste(&text) {
-                self.after_edit(window, cx);
+                self.after_edit(window, cx, None);
             }
         }
     }
@@ -1152,21 +1158,21 @@ impl Editor {
     /// Toggle a bullet list on the current line(s).
     pub fn toggle_list(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
         if self.buf.toggle_line_prefix(LinePrefix::Bullet) {
-            self.after_edit(window, cx);
+            self.after_edit(window, cx, None);
         }
     }
 
     /// Toggle a blockquote on the current line(s).
     pub fn toggle_blockquote(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
         if self.buf.toggle_line_prefix(LinePrefix::Quote) {
-            self.after_edit(window, cx);
+            self.after_edit(window, cx, None);
         }
     }
 
     /// `editor:cycle-list-checklist`: bullet, `[ ]`, `[x]`, bullet.
     pub fn cycle_checklist(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.buf.cycle_checklist() {
-            self.after_edit(Some(window), cx);
+            self.after_edit(Some(window), cx, None);
         }
     }
 
@@ -1179,28 +1185,28 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         if self.buf.toggle_wrap_colored("==", color) {
-            self.after_edit(Some(window), cx);
+            self.after_edit(Some(window), cx, None);
         }
     }
 
     /// `editor:clear-formatting`: the markers inside the selection go.
     pub fn clear_formatting(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.buf.clear_formatting() {
-            self.after_edit(Some(window), cx);
+            self.after_edit(Some(window), cx, None);
         }
     }
 
     /// One of the six insert-block commands at the caret.
     pub fn insert_block(&mut self, kind: BlockInsert, window: &mut Window, cx: &mut Context<Self>) {
         if self.buf.insert_block(kind) {
-            self.after_edit(Some(window), cx);
+            self.after_edit(Some(window), cx, None);
         }
     }
 
     /// `editor:set-heading-<n>`: rewrites the selected lines' `#`s.
     pub fn set_heading(&mut self, level: u8, window: Option<&mut Window>, cx: &mut Context<Self>) {
         if self.buf.set_heading(level) {
-            self.after_edit(window, cx);
+            self.after_edit(window, cx, None);
         }
     }
 
@@ -1212,21 +1218,21 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         if self.buf.toggle_line_prefix(kind) {
-            self.after_edit(Some(window), cx);
+            self.after_edit(Some(window), cx, None);
         }
     }
 
     /// `editor:delete-paragraph`.
     pub fn delete_paragraph(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.buf.delete_paragraph() {
-            self.after_edit(Some(window), cx);
+            self.after_edit(Some(window), cx, None);
         }
     }
 
     /// `editor:swap-line-up` and `-down`.
     pub fn swap_lines(&mut self, up: bool, window: &mut Window, cx: &mut Context<Self>) {
         if self.buf.swap_lines(up) {
-            self.after_edit(Some(window), cx);
+            self.after_edit(Some(window), cx, None);
         }
     }
 
@@ -1235,7 +1241,7 @@ impl Editor {
     /// which is where `after_edit` opens the autocompletion popup.
     pub fn insert_link(&mut self, kind: LinkSyntax, window: &mut Window, cx: &mut Context<Self>) {
         if self.buf.insert_link(kind) {
-            self.after_edit(Some(window), cx);
+            self.after_edit(Some(window), cx, None);
         }
     }
 
@@ -1250,7 +1256,7 @@ impl Editor {
                 .outdent(self.use_tab, self.tab_size, self.smart_indent_list)
         };
         if moved {
-            self.after_edit(Some(window), cx);
+            self.after_edit(Some(window), cx, None);
         }
     }
 
@@ -1295,7 +1301,7 @@ impl Editor {
     /// template and the two date commands reach the document.
     pub fn insert_at_cursors(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self.buf.insert_at_cursors(text) {
-            self.after_edit(Some(window), cx);
+            self.after_edit(Some(window), cx, None);
         }
     }
 
@@ -2165,7 +2171,7 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         self.buf.edit(range, insert, kind);
-        self.after_edit(window, cx);
+        self.after_edit(window, cx, None);
     }
 
     /// One replacement per selection as one undo step; see
@@ -2178,14 +2184,14 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         if self.buf.edit_all(edits, kind) {
-            self.after_edit(window, cx);
+            self.after_edit(window, cx, None);
         }
     }
 
     /// Inserts `s` at every cursor, replacing what each has selected.
     fn insert_all(&mut self, s: &str, kind: EditKind, window: &mut Window, cx: &mut Context<Self>) {
         if self.buf.insert_all(s, kind) {
-            self.after_edit(Some(window), cx);
+            self.after_edit(Some(window), cx, None);
         }
     }
 
@@ -2209,7 +2215,7 @@ impl Editor {
     fn type_char(&mut self, s: &str, kind: EditKind, window: &mut Window, cx: &mut Context<Self>) {
         let opts = self.auto_pair();
         if Self::type_char_in(&mut self.buf, s, kind, opts) {
-            self.after_edit(Some(window), cx);
+            self.after_edit(Some(window), cx, None);
         }
     }
 
@@ -2223,13 +2229,21 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         if self.buf.delete_all(range, kind) {
-            self.after_edit(Some(window), cx);
+            self.after_edit(Some(window), cx, None);
         }
     }
 
-    fn after_edit(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
+    fn after_edit(
+        &mut self,
+        window: Option<&mut Window>,
+        cx: &mut Context<Self>,
+        changed: Option<std::ops::Range<usize>>,
+    ) {
         // * An edit never happens out of sight.
         self.unfold_at_cursor();
+        if let Some(range) = changed {
+            self.dirty_ranges.push(range);
+        }
         self.request_parse(cx);
         self.refresh_matches(cx);
         self.update_suggest(true, cx);
@@ -2254,7 +2268,7 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         if self.buf.edit_many(edits, cursor, anchor) {
-            self.after_edit(Some(window), cx);
+            self.after_edit(Some(window), cx, None);
         }
     }
 
@@ -2348,6 +2362,7 @@ impl Editor {
                     }
                     editor.refresh_folds();
                 }
+                editor.dirty_ranges.clear();
                 editor.stats = ParseStats {
                     parse_ms,
                     spans: result.2,
@@ -2904,7 +2919,7 @@ impl Editor {
             return;
         }
         if self.buf.newline(self.tab_size, self.smart_indent_list) {
-            self.after_edit(Some(window), cx);
+            self.after_edit(Some(window), cx, None);
         }
     }
 
@@ -2950,7 +2965,7 @@ impl Editor {
             .buf
             .indent(self.use_tab, self.tab_size, self.smart_indent_list)
         {
-            self.after_edit(Some(window), cx);
+            self.after_edit(Some(window), cx, None);
         }
     }
 
@@ -2964,19 +2979,19 @@ impl Editor {
             .buf
             .outdent(self.use_tab, self.tab_size, self.smart_indent_list)
         {
-            self.after_edit(Some(window), cx);
+            self.after_edit(Some(window), cx, None);
         }
     }
 
     fn undo(&mut self, _: &Undo, window: &mut Window, cx: &mut Context<Self>) {
         if self.buf.undo() {
-            self.after_edit(Some(window), cx);
+            self.after_edit(Some(window), cx, None);
         }
     }
 
     fn redo(&mut self, _: &Redo, window: &mut Window, cx: &mut Context<Self>) {
         if self.buf.redo() {
-            self.after_edit(Some(window), cx);
+            self.after_edit(Some(window), cx, None);
         }
     }
 
@@ -3058,7 +3073,7 @@ impl Editor {
             .and_then(|html| crate::html_to_markdown::convert(&html))
             .unwrap_or(text);
         if self.buf.paste(&text) {
-            self.after_edit(Some(window), cx);
+            self.after_edit(Some(window), cx, None);
         }
     }
 
@@ -3103,7 +3118,7 @@ impl Editor {
                     format!("![[{written}]]")
                 };
                 if self.buf.paste(&embed) {
-                    self.after_edit(Some(window), cx);
+                    self.after_edit(Some(window), cx, None);
                 }
                 cx.emit(EditorEvent::FilesChanged(changes));
                 true
@@ -3191,7 +3206,7 @@ impl Editor {
 
         let combined = embeds.join("\n");
         if self.buf.paste(&combined) {
-            self.after_edit(Some(window), cx);
+            self.after_edit(Some(window), cx, None);
         }
         if !all_changes.files.is_empty() {
             cx.emit(EditorEvent::FilesChanged(all_changes));
@@ -3455,7 +3470,7 @@ impl Editor {
     ) {
         self.buf
             .apply_edits(edits, Cursors::at(cursor), EditKind::Other);
-        self.after_edit(None, cx);
+        self.after_edit(None, cx, None);
     }
 
     // ----- mouse ---------------------------------------------------------------
@@ -3921,7 +3936,7 @@ impl Editor {
             head,
             Some(anchor),
         ) {
-            self.after_edit(window, cx);
+            self.after_edit(window, cx, None);
         }
         true
     }
@@ -4031,7 +4046,7 @@ impl Editor {
             primary: 0,
         };
         self.buf.apply_edits(ranges, after, EditKind::Other);
-        self.after_edit(window, cx);
+        self.after_edit(window, cx, None);
     }
 
     /// `markdown:add-metadata-property`: opens an unnamed row at the end of
