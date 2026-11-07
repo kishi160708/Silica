@@ -188,6 +188,32 @@ mod tests {
     }
 
     #[test]
+    fn regex_replacements_only_expand_when_the_range_aligns() {
+        let re = Options {
+            match_case: false,
+            regex: true,
+        };
+        let text = "abcd";
+        let regex = compile(r"bc", re).unwrap();
+        // * The aligned match expands its groups.
+        assert_eq!(replacement_for(text, &(1..3), &regex, re, "[$&]"), "[bc]");
+        // * A range the regex does not start at keeps the replacement
+        //   verbatim: expanding there would splice another match's groups
+        //   into this edit.
+        assert_eq!(replacement_for(text, &(2..3), &regex, re, "[$&]"), "[$&]");
+        // * A group the pattern does not have expands to nothing, and a
+        //   case-insensitive match puts the ORIGINAL text through $&.
+        let regex = compile(r"(a)(x)?", re).unwrap();
+        assert_eq!(replacement_for(text, &(0..1), &regex, re, "$2"), "");
+        assert_eq!(replacement_for(text, &(0..1), &regex, re, "<$&>"), "<a>");
+        // * A range the regex would start LATER keeps the replacement
+        //   verbatim too: the greedy optional extends the real match to
+        //   0..2, so an edit aimed at 0..1 must not borrow its groups.
+        let regex = compile(r"(a)(b)?", re).unwrap();
+        assert_eq!(replacement_for(text, &(0..1), &regex, re, "$1"), "$1");
+    }
+
+    #[test]
     fn next_and_previous_wrap() {
         let m = vec![2..4, 10..12, 20..22];
         assert_eq!(next_from(&m, 0), Some(0));

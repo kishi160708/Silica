@@ -2314,7 +2314,7 @@ Enter, Tab and Shift+Enter accept one three different ways.
 
 What Obsidian does here was observed rather than guessed. Its four
 `app.workspace.editorSuggest.suggests` instances are drivable from a
-throwaway plugin (see [[obsidian-behavior-probes]] in the session notes and
+throwaway plugin (see the obsidian-behavior-probes note in the session notes and
 [[#File operations, 2026-10-17]] for the method): `onTrigger` was called for
 37 shapes of line, `getSuggestions` for what each offers, and the popup's
 own `scope` key handlers for what every accept key writes, across both link

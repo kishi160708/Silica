@@ -312,12 +312,29 @@ fn write_snapshot(snapshots: &Path, stem: &str, ext: &str, bytes: &[u8]) -> std:
         // * its handle and renames relative to it, so the pathname check above
         // * is not what stands between a junction and the snapshot.
         #[cfg(unix)]
-        let written = write_at(snapshots, Path::new(target.file_name().unwrap()), bytes);
+        let written = target
+            .file_name()
+            .map(|name| write_at(snapshots, Path::new(name), bytes))
+            .unwrap_or_else(|| {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "snapshot path has no file name",
+                ))
+            });
         #[cfg(windows)]
         let written = {
-            let relative = target
-                .strip_prefix(snapshots)
-                .unwrap_or_else(|_| Path::new(target.file_name().unwrap()));
+            let relative = match target.strip_prefix(snapshots) {
+                Ok(rel) => rel,
+                Err(_) => match target.file_name() {
+                    Some(name) => Path::new(name),
+                    None => {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            "snapshot path has no file name",
+                        ))
+                    }
+                },
+            };
             win_fs::write_at(snapshots, relative, bytes)
         };
         #[cfg(not(any(unix, windows)))]

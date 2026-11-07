@@ -18,3 +18,11 @@ Untitled.base
 Untitled [0-9]*.md
 Untitled [0-9]*.canvas
 Untitled [0-9]*.base
+UPGRADE-Log.md
+
+# Intermediate frame captures (input for compose.py -> .gif in docs/img)
+tools/readme-recording/frames/
+*.log
+gate*.log
+clippy.log
+test-*.log

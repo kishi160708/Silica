@@ -125,7 +125,9 @@ def main():
 """
     svg_path = HICOLOR / "scalable/apps/silica.svg"
     svg_path.parent.mkdir(parents=True, exist_ok=True)
-    svg_path.write_text(svg_content)
+    # * LF even on Windows: the default text mode writes CRLF here and the
+    #   repo tracks LF, so cutting icons would dirty the tree for nothing.
+    svg_path.write_text(svg_content, newline="\n")
     print(
         f"{HICOLOR.relative_to(ROOT)}: {len(HICOLOR_SIZES)} sizes "
         f"({', '.join(str(n) for n in HICOLOR_SIZES)}) and scalable SVG"
