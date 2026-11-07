@@ -330,4 +330,36 @@ mod tests {
         assert_eq!(canonical_callout_type("cite"), "quote");
         assert_eq!(canonical_callout_type("custom"), "note");
     }
+
+    /// Nesting used to be unbounded: lowering is recursive, so deep structures
+    /// crashed the parser with an uncatchable stack overflow before it finished.
+    /// Depths here are chosen to overflow an 8 MiB stack without the bound.
+    #[test]
+    fn deep_nesting_parses_without_overflow() {
+        for src in [
+            (0..2000)
+                .map(|i| format!("{}> x\n", "> ".repeat(i)))
+                .collect::<String>(),
+            "[^x]: ".repeat(2000),
+            (0..2000)
+                .map(|i| format!("{}- a\n", " ".repeat(i)))
+                .collect::<String>(),
+            (0..2000)
+                .map(|i| format!("{}> [!note]+ t\n", "> ".repeat(i % 9)))
+                .collect::<String>(),
+        ] {
+            let doc = parse(&src);
+            assert!(!doc.blocks.is_empty());
+        }
+    }
+
+    /// The bound must be invisible for authoring-shaped nesting.
+    #[test]
+    fn ordinary_nesting_untouched() {
+        let doc = parse("> - one\n>   - two\n>     - three\n");
+        let html = crate::html::render_html(&doc).to_string();
+        assert!(html.contains("<blockquote>"), "{html}");
+        assert!(html.contains("<li>one"), "{html}");
+        assert!(html.contains("<li>three"), "{html}");
+    }
 }
