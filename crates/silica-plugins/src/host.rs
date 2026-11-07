@@ -747,6 +747,154 @@ fn install<'js>(
         }
     });
 
+    // * Resolved outgoing links of one file: target path -> occurrence count.
+    //   Reads the file, resolves each link against the vault, groups hits.
+    let s = Rc::clone(&shared);
+    set!(
+        "__silica_raw_resolved_links",
+        move |path: String| -> String {
+            let shared = s.borrow();
+            let resolved_path = match shared.resolve(&path) {
+                Ok(p) => p,
+                Err(_) => return String::new(),
+            };
+            let root = shared.root.clone();
+            drop(shared);
+            let Ok(text) = std::fs::read_to_string(&resolved_path) else {
+                return String::new();
+            };
+            let meta = silica_cache::index_markdown(&text);
+            let mut out: serde_json::Map<String, Value> = serde_json::Map::new();
+            let links: Vec<&str> = meta
+                .links
+                .iter()
+                .map(|l| l.link.as_str())
+                .chain(meta.embeds.iter().map(|l| l.link.as_str()))
+                .chain(meta.frontmatter_links.iter().map(|l| l.link.as_str()))
+                .collect();
+            for link in links {
+                if let Some(target) = vault_link_target(&root, link, &path) {
+                    let entry = out.entry(target).or_insert_with(|| Value::from(0));
+                    *entry = Value::from(entry.as_u64().unwrap_or(0) + 1);
+                }
+            }
+            Value::Object(out).to_string()
+        }
+    );
+
+    // * Unresolved outgoing links of one file: link text -> occurrence count.
+    let s = Rc::clone(&shared);
+    set!(
+        "__silica_raw_unresolved_links",
+        move |path: String| -> String {
+            let shared = s.borrow();
+            let resolved_path = match shared.resolve(&path) {
+                Ok(p) => p,
+                Err(_) => return String::new(),
+            };
+            let root = shared.root.clone();
+            drop(shared);
+            let Ok(text) = std::fs::read_to_string(&resolved_path) else {
+                return String::new();
+            };
+            let meta = silica_cache::index_markdown(&text);
+            let mut out: serde_json::Map<String, Value> = serde_json::Map::new();
+            let links: Vec<&str> = meta
+                .links
+                .iter()
+                .map(|l| l.link.as_str())
+                .chain(meta.embeds.iter().map(|l| l.link.as_str()))
+                .chain(meta.frontmatter_links.iter().map(|l| l.link.as_str()))
+                .collect();
+            for link in links {
+                if vault_link_target(&root, link, &path).is_none() {
+                    let entry = out.entry(link.to_string()).or_insert_with(|| Value::from(0));
+                    *entry = Value::from(entry.as_u64().unwrap_or(0) + 1);
+                }
+            }
+            Value::Object(out).to_string()
+        }
+    );
+
+    // * Backlinks to one file: every vault note that links to it, grouped by
+    //   source. Scans all markdown notes — O(vault), honest but not cached.
+    //   Ponytail: for large vaults the app should hand its backlink index
+    //   over instead of re-scanning here.
+    let s = Rc::clone(&shared);
+    set!(
+        "__silica_raw_backlinks",
+        move |path: String| -> String {
+            let root = s.borrow().root.clone();
+            drop(s.borrow());
+            let mut out: Vec<Value> = Vec::new();
+            if let Ok(entries) = walk_markdown_files(&root) {
+                for entry in entries {
+                    let Ok(text) = std::fs::read_to_string(&entry) else {
+                        continue;
+                    };
+                    let meta = silica_cache::index_markdown(&text);
+                    let source = entry.to_string_lossy().replace('\\', "/");
+                    let hits: Vec<String> = meta
+                        .links
+                        .iter()
+                        .map(|l| l.link.as_str())
+                        .chain(meta.embeds.iter().map(|l| l.link.as_str()))
+                        .chain(meta.frontmatter_links.iter().map(|l| l.link.as_str()))
+                        .filter(|link| {
+                            vault_link_target(&root, link, &source)
+                                .as_deref()
+                                == Some(path.as_str())
+                        })
+                        .map(|s| s.to_string())
+                        .collect();
+                    if !hits.is_empty() {
+                        out.push(json!({
+                            "source": source,
+                            "links": hits,
+                        }));
+                    }
+                }
+            }
+            serde_json::to_string(&out).unwrap_or_default()
+        }
+    );
+
+    // * All tags across the vault: name, occurrence count, files containing it.
+    //   Scans all markdown notes — O(vault).
+    //   Ponytail: the app should hand its tag index over for large vaults.
+    let s = Rc::clone(&shared);
+    set!(
+        "__silica_raw_get_tags",
+        move || -> String {
+            let root = s.borrow().root.clone();
+            drop(s.borrow());
+            let mut tags: std::collections::BTreeMap<String, (usize, Vec<String>)> =
+                std::collections::BTreeMap::new();
+            if let Ok(entries) = walk_markdown_files(&root) {
+                for entry in entries {
+                    let Ok(text) = std::fs::read_to_string(&entry) else {
+                        continue;
+                    };
+                    let meta = silica_cache::index_markdown(&text);
+                    let source = entry.to_string_lossy().replace('\\', "/");
+                    for tag in &meta.tags {
+                        let name = tag.tag.as_str();
+                        let entry = tags.entry(name.to_string()).or_default();
+                        entry.0 += 1;
+                        entry.1.push(source.clone());
+                    }
+                }
+            }
+            let out: Vec<Value> = tags
+                .into_iter()
+                .map(|(name, (count, files))| {
+                    json!({"name": name, "count": count, "files": files})
+                })
+                .collect();
+            serde_json::to_string(&out).unwrap_or_default()
+        }
+    );
+
     let s = Rc::clone(&shared);
     set!("__silica_raw_vault_read", move |ctx: Ctx<'js>,
                                           path: String|
@@ -1125,6 +1273,71 @@ pub(crate) fn collect_files(root: &Path) -> Vec<FileEntry> {
     }
     out.sort_by(|a, b| a.path.cmp(&b.path));
     out
+}
+
+/// Every markdown file under `root`, as absolute paths. Hidden folders are
+/// skipped.
+fn walk_markdown_files(root: &Path) -> std::io::Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') {
+                continue;
+            }
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            let path = entry.path();
+            if kind.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if !kind.is_file() {
+                continue;
+            }
+            if matches!(path.extension(), Some(ext) if ext == "md") {
+                out.push(path);
+            }
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+/// Resolves a wikilink `link` written in `source` against the vault at
+/// `root`, returning the vault-relative target path if the file exists.
+/// Tries `<root>/<link>.md` and `<root>/<source_dir>/<link>.md`.
+fn vault_link_target(root: &Path, link: &str, source: &str) -> Option<String> {
+    let target = link.split('|').next()?.split('#').next()?;
+    let target = target.trim();
+    if target.is_empty() {
+        return None;
+    }
+    let direct = root.join(format!("{target}.md"));
+    if direct.is_file() {
+        return rel_path(root, &direct);
+    }
+    let source_dir = Path::new(source).parent();
+    if let Some(dir) = source_dir {
+        let relative = root.join(dir.join(format!("{target}.md")));
+        if relative.is_file() {
+            return rel_path(root, &relative);
+        }
+    }
+    None
+}
+
+/// Vault-relative path of `file` under `root`, with `/` separators.
+fn rel_path(root: &Path, file: &Path) -> Option<String> {
+    file.strip_prefix(root)
+        .ok()
+        .map(|p| p.to_string_lossy().replace('\\', "/").to_string())
 }
 
 /// The parse index, translated into the shape Obsidian's `metadataCache`

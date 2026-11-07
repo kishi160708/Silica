@@ -406,14 +406,46 @@ function __silica_app(manifest) {
       var path = __silica_resolve(String(linkpath));
       return path === "" ? null : vault.getAbstractFileByPath(path);
     },
-    getTags: function () { return []; },
+    getBacklinksForFile: function (file) {
+      var path = __silica_path(file);
+      var raw = __silica_raw_backlinks(path);
+      var hits = raw === "" ? [] : JSON.parse(raw);
+      var data = {};
+      for (var i = 0; i < hits.length; i++) {
+        var hit = hits[i];
+        var source = vault.getAbstractFileByPath(hit.source);
+        var entries = (hit.links || []).map(function (link) {
+          return {
+            link: link,
+            original: link,
+            displayText: link,
+            position: { line: 0, col: 0, offset: 0 },
+          };
+        });
+        data[hit.source] = entries;
+      }
+      return { data: data };
+    },
+    getTags: function () {
+      var raw = __silica_raw_get_tags();
+      return raw === "" ? [] : JSON.parse(raw);
+    },
     fileToLinktext: function (file) {
       var f = __silica_file(__silica_path(file));
       return f === null ? "" : f.basename;
     },
-    resolvedLinks: {},
-    unresolvedLinks: {},
-    getBacklinksForFile: function () { return { data: {} }; },
+    resolvedLinks: new Proxy({}, {
+      get: function (_, path) {
+        var raw = __silica_raw_resolved_links(String(path));
+        return raw === "" ? {} : JSON.parse(raw);
+      },
+    }),
+    unresolvedLinks: new Proxy({}, {
+      get: function (_, path) {
+        var raw = __silica_raw_unresolved_links(String(path));
+        return raw === "" ? {} : JSON.parse(raw);
+      },
+    }),
     on: function () { return { unload: function () {} }; },
   };
 
@@ -464,7 +496,19 @@ function __silica_app(manifest) {
       return path === "" ? null : vault.getAbstractFileByPath(path);
     },
     getLeavesOfType: function () { return []; },
-    getLeaf: function () { return { openFile: function () { throw new Error("opening a file is not supported by Silica"); } }; },
+    getLeaf: function () {
+      return {
+        openFile: function (file) {
+          var path = __silica_path(file);
+          // * Verify the file exists before reporting the open; the app's
+          //   own command palette handles the actual view switch.
+          if (__silica_raw_meta_cache(path) === "") {
+            throw new Error("file not found: " + path);
+          }
+        },
+        getDisplayText: function () { return ""; },
+      };
+    },
     getActiveViewOfType: function () { return null; },
   };
 
