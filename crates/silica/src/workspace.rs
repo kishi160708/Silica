@@ -417,6 +417,8 @@ pub const RUNNABLE: &[&str] = &[
     "editor:table-col-align-center",
     "editor:table-col-align-right",
     "app:go-back",
+    "quick-capture:open",
+    "task-dashboard:open",
     "app:go-forward",
     "app:reload",
     "app:increase-font-size",

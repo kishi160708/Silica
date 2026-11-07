@@ -246,6 +246,9 @@ zk-prefixer
 insert-unique-link
 random-note
 
+quick-capture:open
+task-dashboard:open
+
 # Silica ids that are not Obsidian commands (marked by the `silica:` prefix).
 silica:export-site
 silica:export-site-watch
