@@ -855,6 +855,65 @@ mod tests {
         );
     }
 
+    /// Renaming a folder that holds a file another process has open with no
+    /// sharing must fail with an I/O error naming the move, and leave the
+    /// folder exactly where it was: the file list still holds every note
+    /// under the old name, because a rename that half-applied would leave
+    /// the index describing a tree the disk no longer has.
+    #[cfg(windows)]
+    #[test]
+    fn renaming_a_folder_holding_a_locked_file_is_refused_not_half_applied() {
+        use std::fs::OpenOptions;
+        use std::os::windows::fs::OpenOptionsExt;
+        let (dir, mut v) = vault();
+        let root = dir.path();
+        let held = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .share_mode(0)
+            .open(root.join("Sub/S.md"));
+        let held = match held {
+            Ok(h) => h,
+            Err(_) => return, // CI without the right to open exclusively
+        };
+
+        let err = v
+            .rename("Sub", "Moved")
+            .expect_err("the move must be refused");
+        assert!(
+            matches!(err, OpError::Io { .. }),
+            "a locked file in the way must surface as an io error: {err}"
+        );
+        assert!(
+            err.to_string().contains("Moved") || err.to_string().contains("Sub"),
+            "{err}"
+        );
+        // * Nothing moved: the disk and the index still agree.
+        assert!(root.join("Sub/S.md").is_file(), "the folder moved anyway");
+        assert!(
+            !root.join("Moved").exists(),
+            "a half-applied rename left a destination"
+        );
+        let paths: Vec<&str> = paths(&v);
+        assert!(
+            paths.contains(&"Sub/S.md"),
+            "the index dropped the note: {paths:?}"
+        );
+        assert!(
+            paths.contains(&"Sub/Deep/D.md"),
+            "the index dropped a nested note: {paths:?}"
+        );
+        assert!(
+            paths.iter().all(|p| !p.starts_with("Moved")),
+            "the index lists the new name"
+        );
+        assert!(
+            v.folders().contains(&"Sub".to_string()),
+            "the folder list moved early"
+        );
+        drop(held);
+    }
+
     /// A name the extension splitter has to think about. Trashing and
     /// restoring it must come back to the same file, because a
     /// stem/extension split that takes the wrong half would restore the note
@@ -893,6 +952,52 @@ mod tests {
                 "{name} came back different"
             );
         }
+    }
+
+    /// Restoring into a name the vault already holds must not overwrite it:
+    /// the trashed copy stays in `.trash` and the note on disk keeps its
+    /// bytes, because a restore that silently replaced the current file would
+    /// trade the user's newer note for the older one. And a name that tries to
+    /// leave the vault — `..`, or an absolute path — is refused before any
+    /// file moves, the same way every other write path is.
+    #[test]
+    fn a_restore_refuses_a_name_the_vault_already_holds_or_that_leaves_it() {
+        let (dir, mut v) = vault();
+        fs::create_dir_all(dir.path().join(".trash")).unwrap();
+
+        // * A note trashed, and a new note written under the same name.
+        v.trash("A.md", TrashOption::Local).unwrap();
+        v.create_note("A.md", "the newer note\n").unwrap();
+        let keep = fs::read_to_string(dir.path().join("A.md")).unwrap();
+        assert!(v.list_trash().unwrap().iter().any(|t| t == "A.md"));
+
+        let err = v.restore_from_trash("A.md").expect_err("the name is taken");
+        assert!(matches!(err, OpError::DestinationExists), "{err}");
+        // * Neither copy was touched by the refusal.
+        assert_eq!(
+            fs::read_to_string(dir.path().join("A.md")).unwrap(),
+            keep,
+            "the current note was replaced by the restore"
+        );
+        assert!(
+            v.list_trash().unwrap().iter().any(|t| t == "A.md"),
+            "the trashed copy disappeared"
+        );
+
+        // * A name that would leave the vault never moves anything: refused
+        // * before any file moves, and nothing appears outside the vault.
+        for escape in ["../../outside.md", "../outside.md", "/etc/passwd"] {
+            let err = v.restore_from_trash(escape);
+            assert!(err.is_err(), "{escape:?} must be refused, not restored");
+        }
+        assert!(
+            !dir.path().join("outside.md").exists(),
+            "a restore escaped to the vault root"
+        );
+        assert!(
+            !dir.path().parent().unwrap().join("outside.md").exists(),
+            "a restore escaped the vault"
+        );
     }
 
     #[test]
