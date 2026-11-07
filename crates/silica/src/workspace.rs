@@ -548,6 +548,7 @@ pub fn bind_keys(cx: &mut App, registry: &CommandRegistry) {
         .collect();
     cx.bind_keys(bindings);
     crate::reading::view::bind_keys(cx);
+    right_panes::bind_pane_keys(cx);
 }
 
 /// Everything derived from the vault folder: built once off the UI thread,
@@ -1465,6 +1466,8 @@ struct TagPaneState {
     show_search: bool,
     /// Folded tags by lowercased path.
     collapsed: HashSet<String>,
+    /// The row the arrow keys are on, when the pane has the keyboard.
+    selected: Option<usize>,
     /// Whether the next "Expand all" click folds every tag. Starts false so
     /// the first click is a no-op (everything is already expanded), the
     /// second folds every row, and the third opens them again — matching
@@ -1480,6 +1483,7 @@ impl Default for TagPaneState {
             use_hierarchy: true,
             show_search: false,
             collapsed: HashSet::new(),
+            selected: None,
             tag_fold_next: false,
             sort_menu_open: false,
         }
@@ -1492,6 +1496,8 @@ impl Default for TagPaneState {
 struct PropertyPaneState {
     sort: PaneSort,
     show_search: bool,
+    /// The row the arrow keys are on, when the pane has the keyboard.
+    selected: Option<usize>,
     sort_menu_open: bool,
 }
 
@@ -1504,6 +1510,8 @@ struct OutlinePaneState {
     /// `followCursor`: the pane scrolls the marked row into view.
     follow_cursor: bool,
     show_search: bool,
+    /// The row the arrow keys are on, when the pane has the keyboard.
+    selected: Option<usize>,
     /// Folded headings by index into the outline.
     collapsed: HashSet<usize>,
     /// The note the folds belong to.
@@ -2802,6 +2810,11 @@ const LAST_OPEN_FILES_KEPT: usize = 10;
 
 pub struct Workspace {
     focus_handle: FocusHandle,
+    /// The right-dock panes' focus handle. A click on a pane row or its
+    /// dock tab focuses it, which is what makes the arrow keys move within
+    /// the pane instead of the editor; Escape hands the keyboard back to
+    /// the main area.
+    pane_focus: FocusHandle,
     /// Set when something changed what the main area shows and the keyboard
     /// has to follow it; [`Workspace::render`] is where it is honoured.
     refocus_main: bool,
@@ -3488,6 +3501,7 @@ impl Workspace {
         });
         let mut ws = Workspace {
             focus_handle: cx.focus_handle(),
+            pane_focus: cx.focus_handle(),
             refocus_main: false,
             state: None,
             opening_root: None,

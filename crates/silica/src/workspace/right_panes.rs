@@ -5,6 +5,8 @@
 
 use super::*;
 
+actions!(pane_keys, [PaneUp, PaneDown, PaneActivate, PaneLeaveFocus]);
+
 impl Workspace {
 
     /// Obsidian's `nav-header`: 40 px, 8 px of padding, the buttons
@@ -769,7 +771,7 @@ impl Workspace {
                     None,
                     Self::tree_label(label),
                     Some(row.count.to_string().into()),
-                    false,
+                    self.tag_state.selected == Some(ix),
                     theme,
                     cx,
                     Some(Box::new(move |this, position, cx| {
@@ -782,6 +784,7 @@ impl Workspace {
                 )
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.show_search(&format!("tag:#{path}"), Some(window), cx);
+                    this.focus_panes(window, cx);
                 })),
             );
         }
@@ -863,7 +866,7 @@ impl Workspace {
                     Some(row.icon),
                     Self::tree_label(name.clone()),
                     Some(row.count.to_string().into()),
-                    false,
+                    self.property_state.selected == Some(ix),
                     theme,
                     cx,
                     Some(Box::new(move |this, position, cx| {
@@ -984,7 +987,7 @@ impl Workspace {
                 .px(px(12.))
                 .pt(px(4.))
                 .pb(px(32.));
-            for row in rows {
+            for (ix, row) in rows.into_iter().enumerate() {
                 let offset = row.offset;
                 let fold = row.has_children.then(|| {
                     let ix = row.ix;
@@ -1019,7 +1022,7 @@ impl Workspace {
                         None,
                         label,
                         None,
-                        row.active,
+                        row.active || self.outline_state.selected == Some(ix),
                         theme,
                         cx,
                         Some(Box::new(move |this, position, cx| {
@@ -1111,7 +1114,12 @@ impl Workspace {
                     icon_name,
                     tab == which,
                     theme,
-                    move |this, _, cx| this.select_right_tab(which, cx),
+                    move |this, window, cx| {
+                        this.select_right_tab(which, cx);
+                        // * The dock tab takes the keyboard, the way a row
+                        //   click does: the arrows then walk the pane.
+                        this.focus_panes(window, cx);
+                    },
                     cx,
                 )
             })
@@ -1128,6 +1136,13 @@ impl Workspace {
             .w(px(self.right_width as f32))
             .h_full()
             .bg(theme.bg_secondary)
+            // * The pane actions live on this container: the panes' own
+            //   focus handle makes them reachable, and each handler checks
+            //   that handle is focused before it acts.
+            .on_action(cx.listener(Self::pane_up))
+            .on_action(cx.listener(Self::pane_down))
+            .on_action(cx.listener(Self::pane_on_enter))
+            .on_action(cx.listener(Self::pane_on_escape))
             .map(|d| self.corners.right().apply(d))
             .child(
                 div()
@@ -1259,4 +1274,146 @@ impl Workspace {
         }
         Some(list.into_any_element())
     }
+
+    // ----- keyboard navigation -------------------------------------------------
+
+    /// Focuses the right-dock panes, the way clicking a row or its dock tab
+    /// does: the arrow keys move within the pane from then on.
+    pub(crate) fn focus_panes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let handle = self.pane_focus.clone();
+        window.focus(&handle, cx);
+        cx.notify();
+    }
+
+    /// Whether the panes hold the keyboard. The four pane actions are
+    /// registered on the workspace's element tree, so without this guard
+    /// they would also move the mark while the main area is focused.
+    fn panes_focused(&self, window: &Window) -> bool {
+        self.pane_focus.clone().is_focused(window)
+    }
+
+    fn pane_up(&mut self, _: &PaneUp, window: &mut Window, cx: &mut Context<Self>) {
+        if self.panes_focused(window) {
+            self.pane_move(-1, cx);
+        }
+    }
+
+    fn pane_down(&mut self, _: &PaneDown, window: &mut Window, cx: &mut Context<Self>) {
+        if self.panes_focused(window) {
+            self.pane_move(1, cx);
+        }
+    }
+
+    fn pane_on_enter(&mut self, _: &PaneActivate, window: &mut Window, cx: &mut Context<Self>) {
+        if self.panes_focused(window) {
+            self.pane_activate(window, cx);
+        }
+    }
+
+    fn pane_on_escape(&mut self, _: &PaneLeaveFocus, window: &mut Window, cx: &mut Context<Self>) {
+        if self.panes_focused(window) {
+            self.pane_leave_focus(window, cx);
+        }
+    }
+
+    /// How many rows the visible pane has, for clamping the arrow keys.
+    pub(crate) fn pane_row_count(&self, cx: &App) -> usize {
+        match self.right_tab {
+            RightTab::Tags => self.tag_rows(cx).len(),
+            RightTab::Properties => self.property_rows(cx).len(),
+            RightTab::Outline => self.outline_rows(cx).len(),
+            // * Backlinks and Outgoing are card lists without a row model
+            //   the arrows could walk; their rows stay click-only.
+            _ => 0,
+        }
+    }
+
+    /// The selection of the pane that has the keyboard, moved by `delta`
+    /// rows and clamped to the pane's row count.
+    pub(crate) fn pane_move(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let count = self.pane_row_count(cx);
+        if count == 0 {
+            return;
+        }
+        let selected = match self.right_tab {
+            RightTab::Tags => &mut self.tag_state.selected,
+            RightTab::Properties => &mut self.property_state.selected,
+            RightTab::Outline => &mut self.outline_state.selected,
+            _ => return,
+        };
+        let next = match selected {
+            Some(ix) => (*ix as isize + delta).clamp(0, count as isize - 1) as usize,
+            None => {
+                if delta >= 0 {
+                    0
+                } else {
+                    count - 1
+                }
+            }
+        };
+        *selected = Some(next);
+        cx.notify();
+    }
+
+    /// Enter on the selected row: the same thing a click on it does — a tag
+    /// or property row searches for it, an outline row reveals its heading
+    /// in the note.
+    pub(crate) fn pane_activate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let ix = match self.right_tab {
+            RightTab::Tags => self.tag_state.selected,
+            RightTab::Properties => self.property_state.selected,
+            RightTab::Outline => self.outline_state.selected,
+            _ => None,
+        };
+        let Some(ix) = ix else {
+            return;
+        };
+        match self.right_tab {
+            RightTab::Tags => {
+                let rows = self.tag_rows(cx);
+                if let Some(row) = rows.get(ix) {
+                    let path = row.path.clone();
+                    self.show_search(&format!("tag:#{path}"), Some(window), cx);
+                }
+            }
+            RightTab::Properties => {
+                let rows = self.property_rows(cx);
+                if let Some(row) = rows.get(ix) {
+                    let name = row.name.clone();
+                    self.show_search(&format!("[\"{name}\"]"), Some(window), cx);
+                }
+            }
+            RightTab::Outline => {
+                let rows = self.outline_rows(cx);
+                if let Some(row) = rows.get(ix) {
+                    self.reveal_heading(row.offset, cx);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Escape hands the keyboard back to the main area and drops the mark.
+    pub(crate) fn pane_leave_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.right_tab {
+            RightTab::Tags => self.tag_state.selected = None,
+            RightTab::Properties => self.property_state.selected = None,
+            RightTab::Outline => self.outline_state.selected = None,
+            _ => {}
+        }
+        self.focus_main(window, cx);
+    }
+}
+
+/// Keys for the side panes, bound to the panes' own context beneath the
+/// workspace's: a row click (or the dock tab) focuses the panes, the
+/// arrows move the mark, Enter runs the row, Escape goes back to the note.
+pub fn bind_pane_keys(cx: &mut App) {
+    let ctx = Some("SidePane");
+    cx.bind_keys([
+        KeyBinding::new("up", PaneUp, ctx),
+        KeyBinding::new("down", PaneDown, ctx),
+        KeyBinding::new("enter", PaneActivate, ctx),
+        KeyBinding::new("escape", PaneLeaveFocus, ctx),
+    ]);
 }
