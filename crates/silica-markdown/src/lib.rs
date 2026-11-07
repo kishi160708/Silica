@@ -165,16 +165,25 @@ pub struct PartialDocument<'a> {
 /// over the block list, not a parse — which is what lets an edit ask
 /// which region to re-parse in O(blocks).
 pub fn snap_window(blocks: &[Block<'_>], from: usize, to: usize) -> Range<usize> {
-    let start = blocks
+    let spans: Vec<Span> = blocks.iter().map(|b| b.span).collect();
+    snap_window_spans(&spans, from, to)
+}
+
+/// [`snap_window`] over bare block spans, for a caller that keeps the
+/// boundaries but not the tree they came from: the editor drops its
+/// `Document` once the decorations are derived, and a byte span is all a
+/// window needs.
+pub fn snap_window_spans(spans: &[Span], from: usize, to: usize) -> Range<usize> {
+    let start = spans
         .iter()
-        .find(|b| b.span.end > from)
-        .map(|b| b.span.start)
+        .find(|s| s.end > from)
+        .map(|s| s.start)
         .unwrap_or(from);
-    let end = blocks
+    let end = spans
         .iter()
-        .find(|b| b.span.start >= to)
-        .map(|b| b.span.start)
-        .unwrap_or_else(|| blocks.last().map_or(to, |b| b.span.end));
+        .find(|s| s.start >= to)
+        .map(|s| s.start)
+        .unwrap_or_else(|| spans.last().map_or(to, |s| s.end));
     start..end
 }
 

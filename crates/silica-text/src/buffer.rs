@@ -934,6 +934,22 @@ impl TextBuffer {
         });
     }
 
+    /// The edits of the newest undo group, as `(from, to, new_len)` in the
+    /// text before them: the byte ranges a parse could re-parse instead of
+    /// the whole document. Empty before the first edit.
+    pub fn last_edits(&self) -> Vec<(usize, usize, usize)> {
+        self.history
+            .undo
+            .last()
+            .map(|g| {
+                g.edits
+                    .iter()
+                    .map(|e| (e.at, e.at + e.old.len(), e.new.len()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// Undoes one step, restoring the selections it started from. False
     /// when the history is empty.
     pub fn undo(&mut self) -> bool {
