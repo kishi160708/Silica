@@ -15,6 +15,7 @@ use crate::span::Span;
 use crate::Options;
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::ops::Range;
 
 /// A block whose inline content has not been parsed yet.
 #[derive(Debug)]
@@ -390,6 +391,109 @@ impl<'a, 'o> BlockParser<'a, 'o> {
             line_consumed: false,
             link_definitions: HashMap::new(),
             footnote_labels: Vec::new(),
+        }
+    }
+
+    /// Parses only the lines whose starts fall in `window`, positioned as a
+    /// full parse would be at the window's first line: clean container
+    /// state, `start_line` as the line counter (the adjacency checks read
+    /// it, so a window at line 50 must not think it is line 0), and the
+    /// document's definitions seeded first so an inline inside the window
+    /// resolves against a definition outside it.
+    ///
+    /// The window must start and end at top-level block boundaries — what
+    /// `crate::snap_window` computes from a previous parse. A window that
+    /// cuts a block in half parses the half differently than the whole,
+    /// which is the one way this would silently disagree with a full
+    /// parse; the caller's ceiling is the guard against that.
+    pub(crate) fn parse_window(
+        src: &'a str,
+        window: Range<usize>,
+        start_line: usize,
+        opts: &'o Options,
+        definitions: &HashMap<String, LinkDefinition<'a>>,
+        footnote_labels: &[&'a str],
+    ) -> BlockOutput<'a> {
+        let mut p = BlockParser {
+            src,
+            opts,
+            open: vec![Node::new(NodeKind::Document, window.start, start_line)],
+            line: Span::default(),
+            line_number: start_line,
+            offset: window.start,
+            column: 0,
+            next_nonspace: 0,
+            next_nonspace_column: 0,
+            indent: 0,
+            indented: false,
+            blank: false,
+            partially_consumed_tab: false,
+            all_closed: true,
+            last_matched: 0,
+            line_consumed: false,
+            // * Seeded, so first-wins inside the window keeps an earlier
+            //   definition from outside it, and a footnote reference inside
+            //   resolves against a definition outside it.
+            link_definitions: definitions.clone(),
+            footnote_labels: footnote_labels.to_vec(),
+        };
+        // * A window that starts at the document's head must do what
+        //   `parse` does before its line loop: pull the frontmatter out as
+        //   its own block, or a document that opens with `---` parses as a
+        //   thematic break and a setext heading — which is exactly the
+        //   disagreement a full parse would not make.
+        if window.start == 0 && opts.frontmatter {
+            if let Some(fm) = crate::extract_frontmatter(src) {
+                let text_end = src[..fm.end].trim_end_matches(['\n', '\r']).len();
+                p.open[0].children.push(RawBlock {
+                    kind: RawKind::Yaml { yaml: fm.yaml },
+                    span: Span::new(fm.start, text_end),
+                    id: None,
+                });
+                p.open[0].children_end_blank.push(false);
+                p.line_number = src[..fm.end].matches('\n').count();
+                p.offset = fm.end;
+            }
+        }
+        p.feed_lines(p.offset.max(window.start), window.end);
+        while p.open.len() > 1 {
+            p.finalize();
+        }
+        let doc = p.open.pop().unwrap();
+        // * A Document node positioned at `window.start` carries that offset
+        //   in its span; the blocks it holds are the window's own.
+        BlockOutput {
+            blocks: doc.children,
+            link_definitions: p.link_definitions,
+            footnote_labels: p.footnote_labels,
+        }
+    }
+    /// The line loop of [`parse`], fenced to the byte range `[from, to)`.
+    /// `parse` feeds every line of the document; this feeds just the
+    /// window's, which is what makes the parse proportional to the edit
+    /// rather than to the document.
+    fn feed_lines(&mut self, from: usize, to: usize) {
+        let src = self.src;
+        let mut pos = from;
+        while pos < to {
+            let rest = &src[pos..to];
+            let (end, next) = match rest.find('\n') {
+                Some(i) => {
+                    let end = if i > 0 && rest.as_bytes()[i - 1] == b'\r' {
+                        pos + i - 1
+                    } else {
+                        pos + i
+                    };
+                    (end, pos + i + 1)
+                }
+                None => {
+                    let end = pos + rest.trim_end_matches('\r').len();
+                    (end, to)
+                }
+            };
+            self.incorporate_line(Span::new(pos, end));
+            self.line_number += 1;
+            pos = next;
         }
     }
 

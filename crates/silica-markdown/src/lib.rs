@@ -34,6 +34,8 @@ pub use span::{LineIndex, Loc, Pos, Span};
 
 use block::{RawBlock, RawItem, RawKind};
 use inline::InlineContext;
+use std::collections::HashMap;
+use std::ops::Range;
 
 /// Which extensions the parser recognizes. [`Options::obsidian`] is the
 /// default; [`Options::commonmark`] turns every extension off for spec tests.
@@ -140,6 +142,100 @@ pub fn parse_with<'a>(src: &'a str, opts: &Options) -> Document<'a> {
         blocks,
         link_definitions: out.link_definitions,
         footnote_labels: out.footnote_labels,
+    }
+}
+
+/// A re-parsed window of a document: the whole top-level blocks overlapping
+/// a byte range, with every span and slice in the coordinates of the source
+/// it was parsed from. This is the half-document an edit produces; the
+/// caller splices it into the results it already holds.
+pub struct PartialDocument<'a> {
+    /// The byte range this covers, in the source it was parsed from.
+    pub window: Range<usize>,
+    pub blocks: Vec<Block<'a>>,
+    /// Definitions found inside the window. Definitions seeded from outside
+    /// are not repeated here.
+    pub link_definitions: Vec<LinkDefinition<'a>>,
+    /// Footnote labels found inside the window, in order.
+    pub footnote_labels: Vec<&'a str>,
+}
+
+/// The whole top-level blocks of `blocks` that overlap `[from, to)`,
+/// widened on both sides so no block is cut in half. The cost is a walk
+/// over the block list, not a parse — which is what lets an edit ask
+/// which region to re-parse in O(blocks).
+pub fn snap_window(blocks: &[Block<'_>], from: usize, to: usize) -> Range<usize> {
+    let start = blocks
+        .iter()
+        .find(|b| b.span.end > from)
+        .map(|b| b.span.start)
+        .unwrap_or(from);
+    let end = blocks
+        .iter()
+        .find(|b| b.span.start >= to)
+        .map(|b| b.span.start)
+        .unwrap_or_else(|| blocks.last().map_or(to, |b| b.span.end));
+    start..end
+}
+
+/// Parses only the lines of `src` whose starts fall in `window`, positioned
+/// as a full parse would be at the window's first line.
+///
+/// `definitions` and `footnote_labels` are the document's, from the parse
+/// the edit is applied to: an inline inside the window may point at a
+/// definition outside it, and the window has to resolve those. Pass the
+/// ones whose spans sit outside `window` — the ones inside are stale in a
+/// just-edited document, and the window re-derives its own.
+///
+/// The window must start and end at top-level block boundaries; compute it
+/// with [`snap_window`]. A caller holding no previous parse passes the
+/// whole document and calls [`parse`] instead.
+pub fn parse_range<'a>(
+    src: &'a str,
+    window: Range<usize>,
+    start_line: usize,
+    opts: &Options,
+    definitions: &HashMap<String, LinkDefinition<'a>>,
+    footnote_labels: &[&'a str],
+) -> PartialDocument<'a> {
+    let out = block::BlockParser::parse_window(
+        src,
+        window.clone(),
+        start_line,
+        opts,
+        definitions,
+        footnote_labels,
+    );
+    // * The window's own definitions are the ones whose spans sit inside it:
+    //   the seeded map carries the outside ones, and a window-parsed
+    //   definition always lies within the window's lines. A label both
+    //   inside and outside keeps the earlier one, exactly as a full parse
+    //   does. Footnote labels carry no spans, so the window's are the
+    //   collected set minus what was seeded.
+    let owned: Vec<LinkDefinition<'a>> = out
+        .link_definitions
+        .iter()
+        .filter(|(_, def)| def.span.start >= window.start && def.span.end <= window.end)
+        .map(|(_, def)| def.clone())
+        .collect();
+    let notes: Vec<&'a str> = out
+        .footnote_labels
+        .iter()
+        .filter(|label| !footnote_labels.contains(label))
+        .copied()
+        .collect();
+    let cx = InlineContext {
+        src,
+        opts,
+        definitions: &out.link_definitions,
+        footnote_labels: &out.footnote_labels,
+    };
+    let blocks = lower_blocks(&cx, out.blocks);
+    PartialDocument {
+        window,
+        blocks,
+        link_definitions: owned,
+        footnote_labels: notes,
     }
 }
 
@@ -359,5 +455,89 @@ mod tests {
             "large parse took {} ms, over the 15000 ms regression budget",
             elapsed.as_millis()
         );
+    }
+
+    /// A small deterministic PRNG, so the property test below needs no
+    /// dependency: a 64-bit LCG seeded per test.
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
+            self.0 >> 33
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n as u64) as usize
+        }
+    }
+
+    /// The document the edit tests run over: every construct whose parse
+    /// could disagree with a re-parse of a window — fences, lists, quotes,
+    /// callouts, tables, html, refdefs and footnotes.
+    const CORPUS: &str = "---\ntitle: Test\n---\n\nIntro paragraph with [ref] and a [[wikilink]].\n\n[ref]: /target \"Title\"\n\n## A heading\n\n- one\n- two\n  - nested\n\n1. first\n2. second\n\n> a quote\n> second line\n\n```rust\nfn main() {}\n```\n\n> [!note] Title here\n> body of the callout\n\n| a | b |\n| - | - |\n| 1 | 2 |\n\n<div>\nhtml block\n</div>\n\nA footnote reference[^1] in prose.\n\n[^1]: The footnote body.\n\nFinal paragraph.\n";
+
+    /// One edit, CommonMark semantics: (from, to, replacement), where a
+    /// pure insert has from == to.
+    fn random_edit(rng: &mut Rng, len: usize) -> (usize, usize, String) {
+        let chars: [&str; 12] = ["*", "`", "#", "-", ">", "[", "]", "\n", "|", "!", " ", "1"];
+        if rng.below(3) == 0 && len > 4 {
+            let from = rng.below(len);
+            let span = 1 + rng.below(3);
+            let to = (from + span).min(len);
+            (from, to, String::new())
+        } else {
+            let from = rng.below(len);
+            let count = 1 + rng.below(6);
+            let mut s = String::new();
+            for _ in 0..count {
+                s.push_str(chars[rng.below(chars.len())]);
+            }
+            (from, from, s)
+        }
+    }
+
+    /// The core property: for every edit, re-parsing only the snapped
+    /// window produces the same blocks a full parse of the edited text
+    /// produces over that same region. This is the contract the editor's
+    /// incremental pipeline rests on.
+    #[test]
+    fn a_window_reparse_equals_a_full_parse() {
+        let mut rng = Rng(0x5eed_1234);
+        let opts = Options::obsidian();
+        let mut text = CORPUS.to_string();
+        for case in 0..120 {
+            // * Each edit is applied to the already-edited text, so a bug
+            //   in one step compounds into the next rather than hiding.
+            let (from, to, replacement) = random_edit(&mut rng, text.len());
+            text.replace_range(from..to, &replacement);
+            // * Snap against a full parse of the edited text — the parse the
+            //   editor would already have on screen if it parsed this far.
+            let full = parse_with(&text, &opts);
+            let window = snap_window(&full.blocks, from, from + replacement.len());
+            // * The window's inlines may point at definitions and footnotes
+            //   outside it, so those get seeded.
+            let outside: HashMap<_, _> = full
+                .link_definitions
+                .iter()
+                .filter(|(_, d)| d.span.end <= window.start || d.span.start >= window.end)
+                .map(|(k, d)| (k.clone(), d.clone()))
+                .collect();
+            let start_line = text[..window.start].matches('\n').count();
+            let partial =
+                parse_range(&text, window.clone(), start_line, &opts, &outside, &full.footnote_labels);
+            // * The same region of the full parse, structurally compared.
+            let wanted: Vec<Block<'_>> = full
+                .blocks
+                .iter()
+                .filter(|b| b.span.start < window.end && b.span.end > window.start)
+                .cloned()
+                .collect();
+            assert_eq!(
+                partial.blocks, wanted,
+                "case {case}: window {window:?} of edit {from}..{to} disagrees with a full parse"
+            );
+        }
     }
 }
