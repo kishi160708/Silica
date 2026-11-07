@@ -400,12 +400,14 @@ pub const RUNNABLE: &[&str] = &[
     "editor:table-row-up",
     "editor:table-row-down",
     "editor:table-row-copy",
+    "editor:table-row-duplicate",
     "editor:table-row-delete",
     "editor:table-col-before",
     "editor:table-col-after",
     "editor:table-col-left",
     "editor:table-col-right",
     "editor:table-col-copy",
+    "editor:table-col-duplicate",
     "editor:table-col-delete",
     "editor:table-col-align-left",
     "editor:table-col-align-center",
@@ -413,6 +415,8 @@ pub const RUNNABLE: &[&str] = &[
     "app:go-back",
     "app:go-forward",
     "app:reload",
+    "app:increase-font-size",
+    "app:decrease-font-size",
     "audio-recorder:start",
     "audio-recorder:stop",
     "app:open-settings",
@@ -437,6 +441,9 @@ pub const RUNNABLE: &[&str] = &[
     "file-explorer:move-file",
     "file-explorer:duplicate-file",
     "workspace:edit-file-title",
+    "workspace:copy-path",
+    "workspace:copy-full-path",
+    "silica:vault-backup",
     "workspace:new-tab",
     "workspace:close",
     "workspace:close-others",
@@ -3780,7 +3787,62 @@ impl Workspace {
         self.report(result, cx);
     }
 
-    /// Rebuild the global [`Theme`] from the vault's current appearance and
+    /// Obsidian's "Increase font size" and "Decrease font size": the base
+    /// font size in `appearance.json`, one point at a time within the range
+    /// the Settings slider offers. It goes through `change_setting`, the
+    /// same path the slider takes, so the theme is recomputed live and the
+    /// file is the record of what the user asked for.
+    fn step_font_size(&mut self, up: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        const MIN: u32 = 10;
+        const MAX: u32 = 30;
+        let mut next = state.appearance().clone();
+        let current = next.base_font_size.unwrap_or(16);
+        let step = if up {
+            current + 1
+        } else {
+            current.saturating_sub(1)
+        };
+        let step = step.clamp(MIN, MAX);
+        if step == current {
+            return;
+        }
+        next.base_font_size = Some(step);
+        self.change_setting(SettingChange::Appearance(next), window, cx);
+    }
+
+    /// Obsidian never backs a vault up: that is Sync's job, and Sync is paid.
+    /// `silica:vault-backup` is Silica's own answer to the most common
+    /// request the app gets -- a local copy that outlives a bad edit -- and
+    /// it lands beside the snapshots Silica already keeps, never on the
+    /// vault itself. One folder per run, named for the moment it was taken,
+    /// and all but the newest few pruned so a day's work does not become a
+    /// disk's worth of copies.
+    fn backup_vault(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let root = state.root.clone();
+        let backups = root.join(".silica").join("backups");
+        let keep = 7;
+        let outcome = silica_vault::ops::backup_vault(&root, &backups, keep);
+        match outcome {
+            Ok(report) => self.report(
+                format!(
+                    "Backed up {} file(s), {} byte(s), into {}",
+                    report.files,
+                    report.bytes,
+                    backups.display()
+                ),
+                cx,
+            ),
+            Err(err) => self.report(format!("Backup failed: {err}"), cx),
+        }
+    }
+
+    /// Recompute the global [`Theme`] from the vault's current appearance and
     /// app config, the system's dark/light state, and any CSS theme or
     /// snippets on disk. Called from [`change_setting`] so appearance and
     /// font changes take effect without a restart.
@@ -5320,6 +5382,14 @@ impl Workspace {
             }
             "app:go-back" => self.go_back(&GoBack, window, cx),
             "app:go-forward" => self.go_forward(&GoForward, window, cx),
+            "app:increase-font-size" | "app:decrease-font-size" => {
+                let up = id == "app:increase-font-size";
+                self.step_font_size(up, window, cx);
+            }
+            "workspace:copy-path" | "workspace:copy-full-path" => {
+                self.copy_current_path(id == "workspace:copy-full-path", cx);
+            }
+            "silica:vault-backup" => self.backup_vault(window, cx),
             "app:reload" => {
                 self.close_modal(window, cx);
                 let Ok(exe) = std::env::current_exe() else {
@@ -7303,6 +7373,27 @@ impl Workspace {
     /// [[Specification#The file explorer's context menus]].
     fn copy_path(&mut self, path: &str, cx: &mut Context<Self>) {
         cx.write_to_clipboard(ClipboardItem::new_string(path.to_string()));
+    }
+
+    /// Obsidian's `workspace:copy-path` and `workspace:copy-full-path`, which
+    /// only exist as menu items over there but are commands in every sense:
+    /// the path of the open note, vault-relative or the host path, and a
+    /// spoken refusal with no note open rather than a clipboard holding the
+    /// last thing it held.
+    fn copy_current_path(&mut self, full: bool, cx: &mut Context<Self>) {
+        let Some(current) = self.current.clone() else {
+            self.report("No note is open", cx);
+            return;
+        };
+        let text = if full {
+            match self.vault_path(&current) {
+                Ok(path) => path.display().to_string(),
+                Err(_) => current,
+            }
+        } else {
+            current
+        };
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
     }
 
     /// The explorer menu's "Open in default app": the file handed to the
