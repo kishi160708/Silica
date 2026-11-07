@@ -149,30 +149,30 @@ fn side_menu_items(target: &SidePaneTarget) -> Vec<SidePaneMenuItem> {
     match target {
         SidePaneTarget::Tag(tag) => vec![
             item("Search for \"#tag\"", "search", A::SearchTag(tag.clone())),
-            item("Rename tag...", "pen-line", A::RenameTag(tag.clone())),
-            item("Copy tag", "clipboard", A::CopyTag(tag.clone())),
+            item(crate::i18n::t("Rename tag..."), "pen-line", A::RenameTag(tag.clone())),
+            item(crate::i18n::t("Copy tag"), "clipboard", A::CopyTag(tag.clone())),
         ],
         SidePaneTarget::Property(key) => vec![
             item(
-                "Search for property",
+                crate::i18n::t("Search for property"),
                 "search",
                 A::SearchProperty(key.clone()),
             ),
-            item("Copy property", "clipboard", A::CopyProperty(key.clone())),
+            item(crate::i18n::t("Copy property"), "clipboard", A::CopyProperty(key.clone())),
         ],
         SidePaneTarget::Heading { path, offset } => vec![
             item(
-                "Open heading",
+                crate::i18n::t("Open heading"),
                 "file-text",
                 A::OpenHeading(path.clone(), *offset),
             ),
             item(
-                "Open note in new tab",
+                crate::i18n::t("Open note in new tab"),
                 "file-plus",
                 A::OpenHeadingInNewTab(path.clone()),
             ),
             item(
-                "Open note to the right",
+                crate::i18n::t("Open note to the right"),
                 "separator-vertical",
                 A::OpenHeadingToRight(path.clone()),
             ),
@@ -363,6 +363,11 @@ pub const RUNNABLE: &[&str] = &[
     "editor:insert-embed",
     "editor:follow-link",
     "editor:open-link-in-new-leaf",
+    "editor:copy",
+    "editor:cut",
+    "editor:paste",
+    "editor:redo",
+    "editor:undo",
     "switcher:open",
     "global-search:open",
     "graph:open",
@@ -371,6 +376,7 @@ pub const RUNNABLE: &[&str] = &[
     //   what the repo marks its native additions with.
     "silica:export-site",
     "canvas:new-file",
+    "canvas:export-as-image",
     "canvas:jump-to-group",
     "canvas:convert-to-file",
     "bases:new-file",
@@ -395,18 +401,25 @@ pub const RUNNABLE: &[&str] = &[
     "editor:table-row-up",
     "editor:table-row-down",
     "editor:table-row-copy",
+    "editor:table-row-duplicate",
     "editor:table-row-delete",
     "editor:table-col-before",
     "editor:table-col-after",
     "editor:table-col-left",
     "editor:table-col-right",
     "editor:table-col-copy",
+    "editor:table-col-duplicate",
     "editor:table-col-delete",
     "editor:table-col-align-left",
     "editor:table-col-align-center",
     "editor:table-col-align-right",
     "app:go-back",
     "app:go-forward",
+    "app:reload",
+    "app:increase-font-size",
+    "app:decrease-font-size",
+    "audio-recorder:start",
+    "audio-recorder:stop",
     "app:open-settings",
     "app:open-help",
     "app:open-vault",
@@ -429,6 +442,9 @@ pub const RUNNABLE: &[&str] = &[
     "file-explorer:move-file",
     "file-explorer:duplicate-file",
     "workspace:edit-file-title",
+    "workspace:copy-path",
+    "workspace:copy-full-path",
+    "silica:vault-backup",
     "workspace:new-tab",
     "workspace:close",
     "workspace:close-others",
@@ -1623,6 +1639,8 @@ enum PendingOp {
     /// Note composer's merge: the value names the note the current one
     /// is absorbed into.
     MergeCurrent(String),
+    /// "Rename tag...": the value names the tag the old one becomes.
+    RenameTag { from: String },
 }
 
 /// One tab of the main area: what it shows and where it has been. The
@@ -2419,6 +2437,46 @@ fn renamed_path(from: &str, value: &str, is_folder: bool) -> Result<String, Stri
     } else {
         format!("{folder}/{new_name}")
     })
+}
+
+/// Replaces every occurrence of `#old_tag` with `#new_tag` in `content`,
+/// but only when the tag is a standalone construct: the character before
+/// `#` is not alphanumeric or underscore, and the character after the tag
+/// name is not alphanumeric, underscore, or slash (so `#tag` in
+/// `#tagged` or `#tag/subtag` is left alone). Frontmatter tags like
+/// `tag: old_tag` or `- old_tag` are matched the same way on the `#`-less
+/// form because the caller strips the leading `#` before calling this.
+fn rename_tag_in_content(content: &str, old_tag: &str, new_tag: &str) -> String {
+    let tag_marker = format!("#{}", old_tag);
+    let mut result = String::with_capacity(content.len());
+    let mut start = 0;
+    while let Some(found) = content[start..].find(&tag_marker) {
+        let abs_start = start + found;
+        let abs_end = abs_start + tag_marker.len();
+        // * Character before # must not be alphanumeric or underscore.
+        let before_ok = abs_start == 0 || {
+            let prev = content.as_bytes()[abs_start - 1];
+            !prev.is_ascii_alphanumeric() && prev != b'_'
+        };
+        // * Character after tag name must not be alphanumeric, underscore,
+        //   or slash (so nested tags like #tag/subtag are not renamed when
+        //   renaming #tag).
+        let after_ok = abs_end == content.len() || {
+            let next = content.as_bytes()[abs_end];
+            !next.is_ascii_alphanumeric() && next != b'_' && next != b'/'
+        };
+        if before_ok && after_ok {
+            result.push_str(&content[start..abs_start]);
+            result.push('#');
+            result.push_str(new_tag);
+            start = abs_end;
+        } else {
+            result.push_str(&content[start..abs_end]);
+            start = abs_end;
+        }
+    }
+    result.push_str(&content[start..]);
+    result
 }
 
 /// Whether the view header carries the mode switch. An empty tab's header
@@ -3314,6 +3372,11 @@ impl Workspace {
                     SettingsEvent::Changed(change) => {
                         this.change_setting(change.as_ref().clone(), window, cx)
                     }
+                    SettingsEvent::ButtonClicked(label) => {
+                        if label == "Check for updates" {
+                            this.check_for_updates(window, cx);
+                        }
+                    }
                 },
             ),
             cx.subscribe_in(
@@ -3704,7 +3767,106 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Rebuild the global [`Theme`] from the vault's current appearance and
+    /// `Check for updates` in Settings > General: queries the GitHub API for
+    /// the latest release and tells the user whether this build is current.
+    /// Uses curl (already on every supported OS) so no new dependency is
+    /// needed, and only reads the public releases endpoint — no auth, no
+    /// private data is sent.
+    fn check_for_updates(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let current = env!("CARGO_PKG_VERSION");
+        let output = std::process::Command::new("curl")
+            .arg("-s")
+            .arg("--max-time")
+            .arg("15")
+            .arg("https://api.github.com/repos/lw-xiong/Silica/releases/latest")
+            .output();
+
+        let result = match output {
+            Ok(output) if output.status.success() => {
+                let body = String::from_utf8_lossy(&output.stdout);
+                let latest: Option<String> = serde_json::from_str::<serde_json::Value>(&body)
+                    .ok()
+                    .and_then(|v| v.get("tag_name").and_then(|tag| tag.as_str().map(str::to_string)))
+                    .map(|s| s.trim_start_matches('v').to_string());
+                match latest {
+                    Some(latest) if !latest.is_empty() => {
+                        if latest == current {
+                            format!("Silica {current} is up to date.")
+                        } else {
+                            format!(
+                                "Silica {latest} is available — you have {current}. Get it at github.com/lw-xiong/Silica/releases"
+                            )
+                        }
+                    }
+                    _ => "Check for updates: could not read the release version.".to_string(),
+                }
+            }
+            Ok(output) => format!(
+                "Check for updates: GitHub replied with status {}.",
+                output.status
+            ),
+            Err(err) => format!("Check for updates: could not reach GitHub: {err}"),
+        };
+
+        self.report(result, cx);
+    }
+
+    /// Obsidian's "Increase font size" and "Decrease font size": the base
+    /// font size in `appearance.json`, one point at a time within the range
+    /// the Settings slider offers. It goes through `change_setting`, the
+    /// same path the slider takes, so the theme is recomputed live and the
+    /// file is the record of what the user asked for.
+    fn step_font_size(&mut self, up: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        const MIN: u32 = 10;
+        const MAX: u32 = 30;
+        let mut next = state.appearance().clone();
+        let current = next.base_font_size.unwrap_or(16);
+        let step = if up {
+            current + 1
+        } else {
+            current.saturating_sub(1)
+        };
+        let step = step.clamp(MIN, MAX);
+        if step == current {
+            return;
+        }
+        next.base_font_size = Some(step);
+        self.change_setting(SettingChange::Appearance(next), window, cx);
+    }
+
+    /// Obsidian never backs a vault up: that is Sync's job, and Sync is paid.
+    /// `silica:vault-backup` is Silica's own answer to the most common
+    /// request the app gets -- a local copy that outlives a bad edit -- and
+    /// it lands beside the snapshots Silica already keeps, never on the
+    /// vault itself. One folder per run, named for the moment it was taken,
+    /// and all but the newest few pruned so a day's work does not become a
+    /// disk's worth of copies.
+    fn backup_vault(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let root = state.root.clone();
+        let backups = root.join(".silica").join("backups");
+        let keep = 7;
+        let outcome = silica_vault::ops::backup_vault(&root, &backups, keep);
+        match outcome {
+            Ok(report) => self.report(
+                format!(
+                    "Backed up {} file(s), {} byte(s), into {}",
+                    report.files,
+                    report.bytes,
+                    backups.display()
+                ),
+                cx,
+            ),
+            Err(err) => self.report(format!("Backup failed: {err}"), cx),
+        }
+    }
+
+    /// Recompute the global [`Theme`] from the vault's current appearance and
     /// app config, the system's dark/light state, and any CSS theme or
     /// snippets on disk. Called from [`change_setting`] so appearance and
     /// font changes take effect without a restart.
@@ -4092,6 +4254,85 @@ impl Workspace {
                 self.report(format!("Created {path}"), cx);
             }
             Err(err) => self.report(err, cx),
+        }
+    }
+
+    /// `canvas:export-as-image`: render the open canvas to a PNG and save it
+    /// in the vault next to the canvas file.
+    fn export_canvas_as_image(&mut self, cx: &mut Context<Self>) {
+        if self.main_view(cx) != MainView::Canvas {
+            self.report("Canvas: Export as image needs a canvas open", cx);
+            return;
+        }
+        let view = self.canvas.read(cx);
+        let canvas = &view.scene.canvas;
+        if canvas.nodes.is_empty() {
+            self.report("Canvas: Nothing to export", cx);
+            return;
+        }
+
+        // Compute bounds and place nodes with a 50-unit margin.
+        let mut min_x = f64::INFINITY;
+        let mut min_y = f64::INFINITY;
+        let mut max_x = 0.0f64;
+        let mut max_y = 0.0f64;
+        for n in &canvas.nodes {
+            min_x = min_x.min(n.x);
+            min_y = min_y.min(n.y);
+            max_x = max_x.max(n.x + n.width);
+            max_y = max_y.max(n.y + n.height);
+        }
+        let pad = 50.0;
+        let width = (max_x - min_x + 2.0 * pad) as u32;
+        let height = (max_y - min_y + 2.0 * pad) as u32;
+
+        let placed: Vec<silica_canvas::image::Placed> = canvas
+            .nodes
+            .iter()
+            .map(|n| silica_canvas::image::Placed {
+                node_id: n.id.clone(),
+                x: n.x - min_x + pad,
+                y: n.y - min_y + pad,
+                width: n.width,
+                height: n.height,
+            })
+            .collect();
+
+        let palette = silica_canvas::image::Palette {
+            background: "#1e1e1e".into(),
+            node_fill: "#2d2d2d".into(),
+            node_stroke: "#5a5a5a".into(),
+            node_text: "#e0e0e0".into(),
+            edge: "#888888".into(),
+        };
+        let svg_doc =
+            silica_canvas::image::svg(width, height, &placed, &canvas.edges, &palette);
+        let png_bytes = match silica_canvas::image::png(&svg_doc, width, height) {
+            Ok(b) => b,
+            Err(err) => {
+                self.report(format!("Canvas: PNG rasterise failed: {err}"), cx);
+                return;
+            }
+        };
+
+        // Save to vault: canvas-export-<timestamp>.png
+        let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+        let rel = format!("canvas-export-{ts}.png");
+        let abs = match self.vault_path(&rel) {
+            Ok(p) => p,
+            Err(err) => {
+                self.report(format!("Canvas: {err}"), cx);
+                return;
+            }
+        };
+        if let Some(dir) = abs.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        match std::fs::File::create(&abs)
+            .and_then(|mut f| std::io::Write::write_all(&mut f, &png_bytes))
+        {
+            Ok(()) => self.report(format!("Canvas: Exported {rel}"), cx),
+            Err(err) => self.report(format!("Canvas: Write failed: {err}"), cx),
         }
     }
 
@@ -4648,10 +4889,7 @@ impl Workspace {
                     let state = state.clone();
                     let root = state.as_ref().map(|s| s.root.clone()).unwrap_or_default();
                     let full_path = root.join(path);
-                    let mut existing = std::fs::read_to_string(&full_path).map_err(|e| {
-                        eprintln!("Could not read {}: {e}", full_path.display());
-                        String::new()
-                    })?;
+                    let mut existing = std::fs::read_to_string(&full_path).unwrap_or_default();
                     existing.push_str(text);
                     std::fs::write(&full_path, existing).map_err(|e| e.to_string())
                 }
@@ -4777,7 +5015,8 @@ impl Workspace {
         }
         match id {
             // * `theme:switch` cycles system → moonstone (light) → obsidian
-            //   (dark) → system, mirroring Obsidian's theme switcher.
+            //   (dark) → monochrome (grayscale, whichever base) → system,
+            //   mirroring Obsidian's theme switcher with a Silica extra.
             //   `theme:toggle-light-dark` toggles light/dark; system starts
             //   at light. Both write `appearance.json` and recompute the
             //   global theme live via `change_setting` → `recompute_theme`,
@@ -4794,6 +5033,8 @@ impl Workspace {
                 let next_theme = match config.theme.as_deref() {
                     Some("system") => "moonstone",
                     Some("moonstone") => "obsidian",
+                    Some("obsidian") => "monochrome",
+                    Some("monochrome") => "system",
                     _ => "system",
                 };
                 let mut config = config;
@@ -4925,6 +5166,7 @@ impl Workspace {
             "bases:add-item" => self.add_base_item(cx),
             "canvas:jump-to-group" => self.jump_to_group(window, cx),
             "canvas:convert-to-file" => self.convert_card_to_file(cx),
+            "canvas:export-as-image" => self.export_canvas_as_image(cx),
             "markdown:toggle-preview" => self.toggle_mode(&ToggleMode, window, cx),
             // * The properties block is the same editable widget in reading
             //   view, and `editor:toggle-fold-properties` was observed running
@@ -5164,6 +5406,31 @@ impl Workspace {
             }
             "app:go-back" => self.go_back(&GoBack, window, cx),
             "app:go-forward" => self.go_forward(&GoForward, window, cx),
+            "app:increase-font-size" | "app:decrease-font-size" => {
+                let up = id == "app:increase-font-size";
+                self.step_font_size(up, window, cx);
+            }
+            "workspace:copy-path" | "workspace:copy-full-path" => {
+                self.copy_current_path(id == "workspace:copy-full-path", cx);
+            }
+            "silica:vault-backup" => self.backup_vault(window, cx),
+            "app:reload" => {
+                self.close_modal(window, cx);
+                let Ok(exe) = std::env::current_exe() else {
+                    self.report("Reload failed: cannot find executable", cx);
+                    return;
+                };
+                let args: Vec<String> = std::env::args().collect();
+                if std::process::Command::new(exe)
+                    .args(&args[1..])
+                    .spawn()
+                    .is_ok()
+                {
+                    std::process::exit(0);
+                } else {
+                    self.report("Reload failed: cannot restart", cx);
+                }
+            }
             "app:open-settings" => self.open_settings(None, window, cx),
             "app:toggle-left-sidebar" => {
                 self.left_visible = !self.left_visible;
@@ -6287,10 +6554,7 @@ impl Workspace {
         let text = if dirty {
             self.editor.read(cx).file_contents()
         } else {
-            std::fs::read_to_string(state.vault().absolute(&current)).unwrap_or_else(|e| {
-                eprintln!("Could not read {}: {e}", current);
-                String::new()
-            })
+            std::fs::read_to_string(state.vault().absolute(&current)).unwrap_or_default()
         };
         self.build_reading_model(&current, &text, &state, cx);
     }
@@ -7133,6 +7397,27 @@ impl Workspace {
     /// [[Specification#The file explorer's context menus]].
     fn copy_path(&mut self, path: &str, cx: &mut Context<Self>) {
         cx.write_to_clipboard(ClipboardItem::new_string(path.to_string()));
+    }
+
+    /// Obsidian's `workspace:copy-path` and `workspace:copy-full-path`, which
+    /// only exist as menu items over there but are commands in every sense:
+    /// the path of the open note, vault-relative or the host path, and a
+    /// spoken refusal with no note open rather than a clipboard holding the
+    /// last thing it held.
+    fn copy_current_path(&mut self, full: bool, cx: &mut Context<Self>) {
+        let Some(current) = self.current.clone() else {
+            self.report("No note is open", cx);
+            return;
+        };
+        let text = if full {
+            match self.vault_path(&current) {
+                Ok(path) => path.display().to_string(),
+                Err(_) => current,
+            }
+        } else {
+            current
+        };
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
     }
 
     /// The explorer menu's "Open in default app": the file handed to the
@@ -8435,6 +8720,77 @@ link to it is rewritten. The current note is deleted."
                         }
                     }
                     Err(err) => self.report(err, cx),
+                }
+            }
+            PendingOp::RenameTag { from } => {
+                self.pending = None;
+                self.close_modal(window, cx);
+                let Some(state) = self.state.clone() else {
+                    return;
+                };
+                let new_tag = value.trim();
+                if new_tag.is_empty() {
+                    self.report("Tag name cannot be empty", cx);
+                    return;
+                }
+                if !new_tag.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '/') {
+                    self.report("Tag name contains invalid characters", cx);
+                    return;
+                }
+                if new_tag == from {
+                    return;
+                }
+                // * Find every file containing the old tag, rewrite it in
+                //   place, and let the watcher re-index. The rename rewrites
+                //   inline #tags and frontmatter tags alike.
+                let tag_lower = from.to_lowercase();
+                let files = state
+                    .cache()
+                    .tags()
+                    .get(&tag_lower)
+                    .map(|e| e.files.clone())
+                    .unwrap_or_default();
+                let vault_root = state.vault().root().to_path_buf();
+                let mut changed = Vec::new();
+                for path in &files {
+                    let absolute = vault_root.join(path);
+                    let Ok(content) = std::fs::read_to_string(&absolute) else {
+                        continue;
+                    };
+                    let next = rename_tag_in_content(&content, &from, new_tag);
+                    if next != content {
+                        if let Err(err) =
+                            silica_vault::write_no_follow(&absolute, next.as_bytes())
+                        {
+                            self.report(format!("Could not write {path}: {err}"), cx);
+                            return;
+                        }
+                        changed.push(path.clone());
+                    }
+                }
+                if !changed.is_empty() {
+                    let count = changed.len();
+                    self.after_changes(
+                        Changes {
+                            files: changed
+                                .into_iter()
+                                .map(FileChange::Modified)
+                                .collect(),
+                            notes: Vec::new(),
+                            removed_notes: Vec::new(),
+                        },
+                        cx,
+                    );
+                    self.report(
+                        format!(
+                            "Renamed \"#{from}\" to \"#{new_tag}\" in {} file{}",
+                            count,
+                            if count == 1 { "" } else { "s" }
+                        ),
+                        cx,
+                    );
+                } else {
+                    self.report("No files to rename", cx);
                 }
             }
         }
@@ -12690,6 +13046,9 @@ link to it is rewritten. The current note is deleted."
                 Some(PendingOp::MergeCurrent(source)) => {
                     json!({"op": "merge-current", "source": source})
                 }
+                Some(PendingOp::RenameTag { from }) => {
+                    json!({"op": "rename-tag", "from": from})
+                }
                 Some(PendingOp::ExportSite) => json!({"op": "export-site"}),
             },
         );
@@ -14237,9 +14596,9 @@ link to it is rewritten. The current note is deleted."
                     .py_1()
                     .cursor_pointer()
                     .hover(|s| s.bg(theme.bg_alt))
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                    .on_click(cx.listener(move |this, _, window, cx| {
                         this.close_side_menu(cx);
-                        this.handle_side_menu_action(&item.action, cx);
+                        this.handle_side_menu_action(&item.action, window, cx);
                         cx.notify();
                     }))
                     .child(crate::assets::icon(item.icon, 16., theme.text_muted))
@@ -14261,15 +14620,39 @@ link to it is rewritten. The current note is deleted."
 
     /// Handles a side-pane context menu action: searches for tags/properties,
     /// copies paths, or opens outline headings.
-    fn handle_side_menu_action(&mut self, action: &SidePaneAction, cx: &mut Context<Self>) {
+    fn handle_side_menu_action(&mut self, action: &SidePaneAction, window: &mut Window, cx: &mut Context<Self>) {
         match action {
             SidePaneAction::SearchTag(tag) => {
                 self.show_search(&format!("tag:#{tag}"), None, cx);
             }
-            SidePaneAction::RenameTag(_tag) => {
-                // * Tag renaming is not yet implemented: Obsidian's rename
-                //   rewrites every occurrence across the vault, which requires
-                //   a vault-wide scan and link repair that is not yet built.
+            SidePaneAction::RenameTag(tag) => {
+                // * The prompt asks for the new tag name; the rename itself
+                //   rewrites every occurrence across the vault on submit.
+                let Some(state) = self.state.clone() else {
+                    return;
+                };
+                let tag_lower = tag.to_lowercase();
+                let count = state
+                    .cache()
+                    .tags()
+                    .get(&tag_lower)
+                    .map(|e| e.count)
+                    .unwrap_or(0);
+                self.open_prompt(
+                    PendingOp::RenameTag { from: tag.clone() },
+                    PromptSpec {
+                        title: "Rename tag".into(),
+                        detail: Some(
+                            format!("Rename \"#{tag}\" to what? ({count} occurrence{} across the vault)", if count == 1 { "" } else { "s" }).into(),
+                        ),
+                        input: None,
+                        placeholder: "Tag name".into(),
+                        confirm: "Rename".into(),
+                        ..PromptSpec::default()
+                    },
+                    window,
+                    cx,
+                );
             }
             SidePaneAction::CopyTag(tag) => {
                 self.copy_path(tag, cx);
