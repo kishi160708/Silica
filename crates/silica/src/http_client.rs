@@ -1,11 +1,11 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, anyhow};
-use futures::FutureExt;
+use anyhow::{anyhow, Result};
 use futures::future::BoxFuture;
+use futures::FutureExt;
 use http_client::{
-    AsyncBody, HttpClient, Url,
     http::{HeaderValue, Response, StatusCode},
+    AsyncBody, HttpClient, Url,
 };
 
 /// The largest remote image Silica will keep. A note's picture is a picture;
