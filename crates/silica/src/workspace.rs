@@ -4750,7 +4750,8 @@ impl Workspace {
         }
         match id {
             // * `theme:switch` cycles system → moonstone (light) → obsidian
-            //   (dark) → system, mirroring Obsidian's theme switcher.
+            //   (dark) → monochrome (grayscale, whichever base) → system,
+            //   mirroring Obsidian's theme switcher with a Silica extra.
             //   `theme:toggle-light-dark` toggles light/dark; system starts
             //   at light. Both write `appearance.json` and recompute the
             //   global theme live via `change_setting` → `recompute_theme`,
@@ -4767,6 +4768,8 @@ impl Workspace {
                 let next_theme = match config.theme.as_deref() {
                     Some("system") => "moonstone",
                     Some("moonstone") => "obsidian",
+                    Some("obsidian") => "monochrome",
+                    Some("monochrome") => "system",
                     _ => "system",
                 };
                 let mut config = config;
