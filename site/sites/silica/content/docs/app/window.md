@@ -1,6 +1,6 @@
 ---
 title: The window
-description: A tour of Silica's window — the left dock with Files and Search, the note in the middle, the right dock with Backlinks, Outgoing links, Outline and Tags, the status bar, and how navigation works.
+description: A tour of Silica's window: the left dock with Files and Search, the note in the middle, the right dock with Backlinks, Outgoing links, Outline and Tags, the status bar, and how navigation works.
 ---
 
 # The window
@@ -25,14 +25,14 @@ alone on screen.
 
 Three tabs:
 
-- **[Files](/docs/app/files/)** — the folder tree of the vault. The tab Silica opens on.
-- **[Search](/docs/app/search/)** — vault-wide search with the full query grammar.
-- **Bookmarks** — the tree in your vault's `bookmarks.json`: files, folders, headings,
+- **[Files](/docs/app/files/)**, the folder tree of the vault. The tab Silica opens on.
+- **[Search](/docs/app/search/)**, vault-wide search with the full query grammar.
+- **Bookmarks**, the tree in your vault's `bookmarks.json`: files, folders, headings,
   blocks, searches and groups, read and written in Obsidian's bytes.
 
 `Ctrl + Shift + F` opens Search; `file-explorer:open` returns to Files and
-`bookmarks:open` to Bookmarks. `Ctrl + E` is not involved — toggling the dock itself is
-`app:toggle-left-sidebar`.
+`bookmarks:open` to Bookmarks. `Ctrl + E` is not involved, because toggling the dock itself
+is `app:toggle-left-sidebar`.
 
 ## The note
 
@@ -63,13 +63,13 @@ tree is written back to `workspace.json` in the shape Obsidian writes it.
 Five tabs, in Obsidian's order. Three are about the open note; Tags and All properties are
 about the whole vault:
 
-- **[Backlinks](/docs/app/panes/)** — notes that link here, and unlinked mentions of this
+- **[Backlinks](/docs/app/panes/)**, notes that link here, and unlinked mentions of this
   note's name or aliases.
-- **[Outgoing links](/docs/app/panes/)** — where this note points, resolved and unresolved.
-- **[Tags](/docs/app/panes/)** — every tag in the vault with its count.
-- **[All properties](/docs/app/panes/)** — every property key in the vault with its type and
+- **[Outgoing links](/docs/app/panes/)**, where this note points, resolved and unresolved.
+- **[Tags](/docs/app/panes/)**, every tag in the vault with its count.
+- **[All properties](/docs/app/panes/)**, every property key in the vault with its type and
   count.
-- **[Outline](/docs/app/panes/)** — this note's headings; click one to scroll to it.
+- **[Outline](/docs/app/panes/)**, this note's headings; click one to scroll to it.
 
 `app:toggle-right-sidebar` hides and shows the dock. Each tab also has a command of its own
 (`backlink:open`, `outgoing-links:open`, `tag-pane:open`, `properties:open`,
@@ -95,15 +95,15 @@ up. See [performance](/docs/reference/performance/).
 | To | Do |
 |---|---|
 | Open a note | Click it in Files, or click a link in a note |
-| Find a note by name | `Ctrl + O` — the [quick switcher](/docs/app/switcher/) |
-| Run anything by name | `Ctrl + P` — the [command palette](/docs/app/switcher/) |
+| Find a note by name | `Ctrl + O`, the [quick switcher](/docs/app/switcher/) |
+| Run anything by name | `Ctrl + P`, the [command palette](/docs/app/switcher/) |
 | Go back / forward | `Ctrl + Alt + ←` / `Ctrl + Alt + →` |
 | Jump to a heading | Click it in Outline, or follow a `[[Note#Heading]]` link |
-| See the vault's shape | `Ctrl + G` — the [graph](/docs/app/graph/) |
+| See the vault's shape | `Ctrl + G`, the [graph](/docs/app/graph/) |
 | Open Settings | `Ctrl + ,` |
 
-Clicking a link to a note that does not exist creates it — the same as Obsidian, and the
-same as pressing Enter in the quick switcher on a name nothing matches. See [managing
+Clicking a link to a note that does not exist creates it, the same as Obsidian and the same
+as pressing Enter in the quick switcher on a name nothing matches. See [managing
 notes](/docs/app/manage/).
 
 History is per window and linear: opening a note from the graph, from a link, from Files or
@@ -122,15 +122,15 @@ hotkeys](/docs/reference/commands/).
 
 ## The theme
 
-Colors come from your vault's `appearance.json` — the base theme (dark or light) and the
-accent color — and are read before the window opens, so the first frame is already right.
+Colors come from your vault's `appearance.json`, both the base theme (dark or light) and the
+accent color, and are read before the window opens, so the first frame is already right.
 A CSS theme (`cssTheme`) is not applied; that is a later phase.
 
 Fonts come from `appearance.json` too: the interface font, the text font and the monospace
 font, with the font size.
 
 > **Note** The default text and interface font is Liberation Sans rather than something more
-> modern, because the pinned GPUI cannot pick weights out of a variable font — with a
+> modern, because the pinned GPUI cannot pick weights out of a variable font; with a
 > single-file variable font, nothing renders bold. Set `textFontFamily` and
 > `interfaceFontFamily` in `appearance.json` to any font with real static Bold faces and it
 > is honored.

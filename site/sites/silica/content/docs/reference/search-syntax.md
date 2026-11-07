@@ -1,6 +1,6 @@
 ---
 title: Search syntax
-description: The complete query grammar Silica's vault search implements — boolean logic and precedence, every field operator, the scoped operators, regular expressions, and property queries.
+description: The complete query grammar Silica's vault search implements, covering boolean logic and precedence, every field operator, the scoped operators, regular expressions, and property queries.
 ---
 
 # Search syntax
@@ -15,13 +15,13 @@ grammar drives the [graph](/docs/app/graph/)'s `search` filter and its color gro
 | Query | Means |
 |---|---|
 | `focus` | Notes containing "focus" |
-| `focus stacking` | Both terms — **AND** is implicit |
+| `focus stacking` | Both terms, where **AND** is implicit |
 | `focus OR stacking` | Either term. `OR` must be **uppercase** |
 | `-stacking` | **Not** containing "stacking" |
 | `"focus stacking"` | That exact phrase |
 | `(a OR b) c` | Grouping with parentheses |
 
-**Precedence:** the implicit AND binds **tighter** than `OR`. So `a b OR c` is
+**Precedence.** The implicit AND binds **tighter** than `OR`. So `a b OR c` is
 `(a AND b) OR c`, not `a AND (b OR c)`. This is the single most common surprise in the
 grammar, and the reason the *explain* output is worth looking at.
 
@@ -53,9 +53,9 @@ file:(spec OR draft)          an operator over a group
 -path:archive/                everything outside archive/
 ```
 
-> **Note** `tag:#project` matches `#project` **and** `#project/silica` — a parent tag matches
-> its children. To match only the exact tag, there is no narrower form; search the child out
-> with `-tag:#project/silica`.
+> **Note** `tag:#project` matches `#project` **and** `#project/silica`, because a parent tag
+> matches its children. To match only the exact tag, there is no narrower form; search the
+> child out with `-tag:#project/silica`.
 
 ## Scoped operators
 
@@ -66,7 +66,7 @@ the note*; a scoped operator means both are in the *same* line, block, section o
 |---|---|
 | `line:(a b)` | Both terms on one line |
 | `block:(a b)` | Both in one block (paragraph, list item, table, code block) |
-| `section:(a b)` | Both in one section — between two headings |
+| `section:(a b)` | Both in one section, between two headings |
 | `task:(a b)` | Both in one task item, of any status |
 | `task-todo:(a b)` | Both in one **unfinished** task |
 | `task-done:(a b)` | Both in one **finished** task |
@@ -78,7 +78,7 @@ task-todo:(review)               an open task about reviewing
 task-done:(deploy)               a finished task about deploying
 ```
 
-`task:` with no terms is not a thing — give it a term or a group.
+`task:` with no terms is not a thing, so give it a term or a group.
 
 ## Regular expressions
 
@@ -113,7 +113,7 @@ Square brackets query frontmatter [properties](/docs/format/properties/):
 
 Silica can print the parsed query as a tree, with the same labels Obsidian's *Explain search
 terms* panel uses. When a query returns something unexpected, this is the fastest way to see
-why — usually that `OR` grabbed more than you meant.
+why, which is usually that `OR` grabbed more than you meant.
 
 ## From the command line
 
@@ -128,7 +128,7 @@ Quote it in your shell: `#` starts a comment in most of them.
 
 ## Not yet
 
-- Sort options and copying results — see [search](/docs/app/search/).
+- Sort options and copying results; see [search](/docs/app/search/).
 - Saved searches.
 - Searching inside PDFs or other attachments. Search covers note text.
 

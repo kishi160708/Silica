@@ -16,12 +16,12 @@ A working notebook on **silica** and the family of volcanic rocks it belongs to:
 ![[silica-macro.jpg|560]]
 
 > [!info] How this vault is organised
-> - [[#Rocks]] — one note per rock type, each with a properties table, hand-sample photo and the field tests that tell it apart
-> - [[#Volcanoes]] — the places that made the samples
-> - [[#Processes]] — vesiculation, viscosity, classification and jointing
-> - [[#Field notes]] — dated traverses and lab runs, written from the [[Field note|template]]
-> - [[Rock cycle.canvas|Rock cycle]] — the whole thing drawn as a canvas
-> - [[Field card]] — the two-page PDF that goes in the sample bag
+> - [[#Rocks]]: one note per rock type, each with a properties table, hand-sample photo and the field tests that tell it apart
+> - [[#Volcanoes]]: the places that made the samples
+> - [[#Processes]]: vesiculation, viscosity, classification and jointing
+> - [[#Field notes]]: dated traverses and lab runs, written from the [[Field note|template]]
+> - [[Rock cycle.canvas|Rock cycle]]: the whole thing drawn as a canvas
+> - [[Field card]]: the two-page PDF that goes in the sample bag
 
 ## Rocks
 
@@ -32,17 +32,17 @@ A working notebook on **silica** and the family of volcanic rocks it belongs to:
 | [[Reticulite]] | basaltic glass | > 95 % | no, it sinks when wet | the lightest rock there is |
 | [[Basalt]] | 45–52 % SiO₂ | low | no | the parent lava |
 | [[Andesite]] | 52–63 % SiO₂ | low to moderate | no | [[Parícutin]] erupted a basaltic andesite |
-| [[Rhyolite]] | > 69 % SiO₂ | varies | — | makes [[Pumice]] and [[Obsidian]] |
+| [[Rhyolite]] | > 69 % SiO₂ | varies |  | makes [[Pumice]] and [[Obsidian]] |
 | [[Obsidian]] | rhyolitic glass | none | no | the namesake of the app this vault was written for |
-| [[Tuff]] | consolidated ash | — | — | what tephra becomes |
+| [[Tuff]] | consolidated ash |  |  | what tephra becomes |
 
 ## Volcanoes
 
-- [[Sunset Crater]] — a textbook [[Cinder cone]] in Arizona, erupted around 1085 CE
-- [[Parícutin]] — the cinder cone that grew in a cornfield from 1943 to 1952
-- [[Mount Etna]] — lapilli over Catania during the February 2021 paroxysms
-- [[Kīlauea]] — lava fountains that quench into [[Reticulite]] and Pele's hair
-- [[Stromboli]] — the eruption style that makes most of the world's silica
+- [[Sunset Crater]]: a textbook [[Cinder cone]] in Arizona, erupted around 1085 CE
+- [[Parícutin]]: the cinder cone that grew in a cornfield from 1943 to 1952
+- [[Mount Etna]]: lapilli over Catania during the February 2021 paroxysms
+- [[Kīlauea]]: lava fountains that quench into [[Reticulite]] and Pele's hair
+- [[Stromboli]]: the eruption style that makes most of the world's silica
 
 ## Processes
 
@@ -54,12 +54,12 @@ def vesicularity(bulk_density: float, dre_density: float = 2.8) -> float:
 print(f"{vesicularity(1.1):.0%}")   # 61%
 ```
 
-1. [[Vesiculation]] — bubbles nucleate, grow and coalesce as the magma decompresses
-2. [[Magma viscosity]] — why basalt makes silica and rhyolite makes pumice
-3. [[Strombolian eruptions]] — gas slugs bursting at the vent
-4. [[Tephra]] — ash, lapilli, blocks and bombs, by size
-5. [[TAS classification]] — naming a volcanic rock from two numbers
-6. [[Columnar jointing]] — what a cooling lava flow does when it shrinks
+1. [[Vesiculation]]: bubbles nucleate, grow and coalesce as the magma decompresses
+2. [[Magma viscosity]]: why basalt makes silica and rhyolite makes pumice
+3. [[Strombolian eruptions]]: gas slugs bursting at the vent
+4. [[Tephra]]: ash, lapilli, blocks and bombs, by size
+5. [[TAS classification]]: naming a volcanic rock from two numbers
+6. [[Columnar jointing]]: what a cooling lava flow does when it shrinks
 
 ## Field notes
 

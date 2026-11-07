@@ -1,12 +1,12 @@
 ---
 title: Hotkeys
-description: How Silica applies your vault's hotkeys.json — rebinding, unbinding, how a binding becomes a label, the Hotkeys tab's filters, and what happens to bindings for commands Silica cannot run yet.
+description: How Silica applies your vault's hotkeys.json, covering rebinding, unbinding, how a binding becomes a label, the Hotkeys tab's filters, and what happens to bindings for commands Silica cannot run yet.
 ---
 
 # Hotkeys
 
 Every shortcut in Silica is an Obsidian command bound from its hotkey. There are no
-hard-coded shortcuts in the shell — the one exception is `Ctrl + Q`, which quits.
+hard-coded shortcuts in the shell, except for `Ctrl + Q`, which quits.
 
 The practical consequence: **your vault's `hotkeys.json` applies unchanged.** If you have
 spent years rebinding Obsidian to your liking, Silica opens with your keys.
@@ -35,7 +35,7 @@ keys.
 ```
 
 `Mod` means Ctrl on Windows and Linux and Cmd on macOS. `Ctrl` means Ctrl everywhere,
-including macOS — which is why Obsidian's own default for *Next tab* is `Ctrl + Tab` rather
+including macOS, which is why Obsidian's own default for *Next tab* is `Ctrl + Tab` rather
 than `Mod + Tab`.
 
 An empty list, as on `graph:open` above, unbinds the command.
@@ -48,7 +48,7 @@ capitalised.
 
 ## The Hotkeys tab
 
-Settings' Hotkeys tab lists every command id Silica knows — all 244 of them — with its name
+Settings' Hotkeys tab lists every command id Silica knows, all 244 of them, with its name
 and its effective binding. Four filters, as in Obsidian:
 
 | Filter | Shows |
@@ -72,11 +72,11 @@ custom.
 From the Hotkeys tab, the way Obsidian does it: the plus on a row waits for a chord and
 takes the next one you press, the cross on a chip drops that binding, and the rotate button
 restores the command's defaults by removing its entry. Each of those rewrites
-`.obsidian/hotkeys.json` — in the file's own key order, so a vault's bindings do not shuffle
-the first time Silica writes one — and a chord already bound to another command is marked
+`.obsidian/hotkeys.json`, in the file's own key order, so a vault's bindings do not shuffle
+the first time Silica writes one, and a chord already bound to another command is marked
 the way Obsidian marks it. Editing the file by hand and reopening the vault still works.
 
 ## Next
 
-- [Commands and hotkeys](/docs/reference/commands/) — the ids, the names and the defaults.
+- [Commands and hotkeys](/docs/reference/commands/): the ids, the names and the defaults.
 - [Search syntax](/docs/reference/search-syntax/)

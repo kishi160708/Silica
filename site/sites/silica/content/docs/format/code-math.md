@@ -1,6 +1,6 @@
 ---
 title: Tables, code and math
-description: Tables and the pipe-escaping rule, fenced and inline code, math blocks, and %%comments%% — what Silica parses, what it renders, and what shows as source.
+description: Tables and the pipe-escaping rule, fenced and inline code, math blocks, and %%comments%%, what Silica parses, what it renders, and what shows as source.
 ---
 
 # Tables, code and math
@@ -40,16 +40,16 @@ view](/docs/app/reading-view/).
 In Live Preview a table stays a grid wherever the cursor is, the way Obsidian's table editor
 does. Click a cell to open a field in it: `Tab` and `Shift + Tab` walk the cells, `Enter`
 drops into the cell below, `Escape` abandons, and the column grows with what is typed.
-Committing a cell replaces that cell's bytes and nothing else — ordinary typing re-pads
+Committing a cell replaces that cell's bytes and nothing else, so ordinary typing re-pads
 nothing, which is what Obsidian does too. A `|` typed into a cell is written `\|` and a
 newline becomes a space, because either would otherwise restructure the table. In Source
 mode you edit the pipes directly.
 
-Obsidian's sixteen table commands are all here — add, move, duplicate and delete rows and
-columns, set a column's alignment, insert a table — and, like Obsidian's, they are offered
-only while the cursor is in a table. Each **rewrites the whole table**: every cell padded to
-its column's width, outer pipes added, short rows filled out, the delimiter grown to match.
-That is Obsidian's behavior, byte for byte, and one undo step takes it back.
+Obsidian's sixteen table commands are all here: add, move, duplicate and delete rows and
+columns, set a column's alignment, insert a table. Like Obsidian's, they are offered only
+while the cursor is in a table. Each **rewrites the whole table**, with every cell padded to
+its column's width, outer pipes added, short rows filled out, and the delimiter grown to
+match. That is Obsidian's behavior, byte for byte, and one undo step takes it back.
 
 > **Note** The table under the cursor comes from the one Markdown parser rather than from
 > hunting for pipes, so a `|` inside a code span splits a cell here exactly where it splits
@@ -72,7 +72,7 @@ fn main() {
 ```
 ````
 
-The label is shown on the block in reading view. **Code never wraps** — a long line scrolls
+The label is shown on the block in reading view. **Code never wraps**; a long line scrolls
 sideways inside its own block, which is almost always what you want for code and is what
 Obsidian does.
 
@@ -100,11 +100,12 @@ other inline markup behaves. `\textcolor` and `\color` keep their colours; every
 takes the theme's text colour.
 
 > **Note** The syntax is **KaTeX's**, not MathJax's. Nearly everything written in a note works
-> identically — fractions, roots, sums and integrals with limits, matrices and the `aligned`,
+> identically: fractions, roots, sums and integrals with limits, matrices and the `aligned`,
 > `cases` and `array` environments, Greek, `\mathbb` and friends, `\text`, stretchy
-> delimiters, accents, `\ce` chemistry. What MathJax accepts and KaTeX does not — a few
-> AMS extensions, `\newcommand` across formulas, `\require` — shows the formula's **source
-> in red**, which is also what a formula with a syntax error looks like, in Obsidian too.
+> delimiters, accents, `\ce` chemistry. What MathJax accepts and KaTeX does not, such as a
+> few AMS extensions, `\newcommand` across formulas and `\require`, shows the formula's
+> **source in red**, which is also what a formula with a syntax error looks like, in Obsidian
+> too.
 
 The delimiter rules are Obsidian's, and they are stricter than you might expect:
 

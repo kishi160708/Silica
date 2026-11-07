@@ -91,8 +91,8 @@ git push origin v0.1.0 && git push forgejo v0.1.0
 
 Either workflow refuses to build when the tag and the workspace version disagree, since the archive
 is named from the tag and the binary reports the manifest version. GitHub builds
-`x86_64-unknown-linux-gnu`, `x86_64-pc-windows-msvc` and `aarch64-apple-darwin` — one archive per
-target, plus `SHA256SUMS` over all of them — and publishes with `gh release create`. The homelab
+`x86_64-unknown-linux-gnu`, `x86_64-pc-windows-msvc` and `aarch64-apple-darwin`, one archive per target,
+plus `SHA256SUMS` over all of them, and publishes with `gh release create`. The homelab
 Forgejo runner has only the Linux container (see [[#Environment]] and `ci.yml`), so it
 builds the x86_64 Linux archive and creates the release through the instance API with the token
 Forgejo Actions injects for the run. Release notes on both are the commit subjects since the
@@ -140,7 +140,7 @@ properties table, and the reading view with headings, wikilinks and lists. Nothi
 stderr.
 
 One thing to know before trusting it: only the opening frame was checked. There is no control
-socket on Windows — it is a Unix domain socket, and `--control` says so and carries on — so the
+socket on Windows (it is a Unix domain socket, and `--control` says so and carries on), so the
 keyboard, editing and saving paths have not been driven there the way the Linux ones are. (Both
 were put right two days later: [[#Windows smoke test, 2026-10-22]] and
 [[#The control socket on Windows, 2026-10-22]].)
@@ -163,8 +163,8 @@ right edge. The app itself is scaled correctly; only the measuring tape is confu
 ### The hidden frame on Windows, 2026-10-20
 
 The caption came back because `TitlebarOptions::appears_transparent` was left at its default.
-`window_decorations` is the Linux question — Wayland and X11 answer whether the compositor handed
-the frame over, and `Decorations::Client` is what the workspace looks for — but Windows has no
+`window_decorations` is the Linux question: Wayland and X11 answer whether the compositor handed
+the frame over, and `Decorations::Client` is what the workspace looks for. Windows has no
 implementation of it at all and answers `Server` whatever it does. What the Windows backend reads
 is `appears_transparent`: with it set, `WM_NCCALCSIZE` keeps the client area's top edge and the
 title bar is gone, while the system keeps the drop shadow and the resize border outside the
@@ -191,7 +191,7 @@ Cut from `main` at bb888c1 (0.3.0) on `w11`, the same toolchain as above. A cold
 keyboard, editing and saving paths the 2026-10-20 run left untouched were driven from the logged-on
 session with a PowerShell script: `SendKeys` for the keyboard, `SetCursorPos` and `mouse_event` for
 the mouse, `CopyFromScreen` for the screenshots, and the script set per-monitor-v2 DPI aware with
-`SetProcessDpiAwarenessContext` so `GetWindowRect` and the bitmap agree in real pixels — which is
+`SetProcessDpiAwarenessContext` so `GetWindowRect` and the bitmap agree in real pixels, which is
 the fix for the measuring-tape confusion above. The vault was a copy of `docs/silica`, at 1400x900
 logical and 150%.
 
@@ -349,14 +349,14 @@ without closing while the pointer is on the row, leaving the press to the row's 
 toggle. The flicker was the frame between the two.
 
 **The window** had never been read, only inferred: the switcher probe knew only that
-`app:open-vault` left no modal behind. It leaves no modal because it opens a *window* —
+`app:open-vault` left no modal behind. It leaves no modal because it opens a *window*,
 `app://obsidian.md/starter.html`, a CDP page target of its own with no `app` in it, so
 `cdp.mjs`'s `connect()` (which waits for a booted vault window) cannot see it.
 `tools/obsidian-probe/vault-manager.mjs` drives the vault window to open it, attaches to
 the new target by hand, and reads it (`results/2026-10-29-vault-manager.json`).
 
 Three findings shaped the build. A row is the folder's **name over its parent folder's
-path**, with the full path as the tooltip — not the full path twice. The list is **`ts`
+path**, with the full path as the tooltip rather than the full path twice. The list is **`ts`
 descending**, which is *not* the switcher menu's order: the same registry draws its rows
 in document key order in the menu and most-recent-first in the window, and the second
 probe run proved it by sorting the file on disk six ways and matching only that one. And
@@ -376,7 +376,7 @@ behind a throwaway environment variable, screenshotted, and the hook taken out a
 
 ### The vault switcher, 2026-10-29
 
-Reported as a bug: the switcher's menu was "showing duplicate vault paths" — two
+Reported as a bug: the switcher's menu was "showing duplicate vault paths": two
 dozen rows all reading `vault`. The registry was innocent; its 43 entries were 43
 distinct folders, most of them scratch vaults a probe or an agent session had opened
 under `/tmp`, and a row is the folder's name. So the question was what Obsidian does
@@ -388,14 +388,14 @@ the menu and read it (`results/2026-10-29-vault-switcher.json`).
 Obsidian draws the duplicates exactly as Silica did: a row is a `.menu-item-title`
 holding the folder's name, with no path, no `aria-label` and no icon, so two vaults
 named `vault` are two identical rows. What it does differently is drop a vault whose
-folder is gone — Silica listed it faint — and list the rows in the registry
+folder is gone, where Silica listed it faint, and list the rows in the registry
 document's key order rather than by recency, which the spec had claimed and
 `VaultRegistry::vaults` had sorted for. Both are now matched: the sort is gone (a
 vault keeps the place it was first opened in, a new one goes last), missing folders
 are filtered out of the menu but kept in `silica.json`, and the path stays as the
 row's tooltip, which Obsidian has no equivalent of. Obsidian's tail row is a single
 "Manage vaults..." opening its vault-manager window, which Silica did not have then;
-it does now, and the tail matches — see the next note.
+it does now, and the tail matches; see the next note.
 
 ### The explorer's context menus, 2026-10-28
 
@@ -485,12 +485,12 @@ in the box.
 
 ### The settled UI rules, 2026-10-28
 
-The backlog's "Settled by the probes of 2026-10-25 — the UI rules" entry held
+The backlog's "Settled by the probes of 2026-10-25: the UI rules" entry held
 fifteen answers and, it said, no code. That turned out to be half wrong: the
 entry had gone stale, and eleven of its fifteen items had been built by the
 work of the week after it was written without anyone striking them off. So this
 pass began with a verification sweep rather than with code, and the sweep is
-the reason it is worth writing down — it found three bugs that the stale text
+the reason it is worth writing down: it found three bugs that the stale text
 had been hiding, one of them bad enough that it had been quietly wrong for
 every vault.
 
@@ -509,9 +509,9 @@ like this goes stale in the first place.
   and `eval`'s `All` arm returned true with no children to check, so the `Any`
   above it was satisfied by everything. `Any([])` already answered false, so
   the asymmetry was the bug. It is fixed in the matcher rather than in
-  `Search::is_empty`, because `foo (` and `foo AND` do hold a matcher —
-  Obsidian runs the search and prints "No matches found.", a real zero and not
-  a gated pane — and because every other consumer of a `Search` inherited the
+  `Search::is_empty`, because `foo (` and `foo AND` do hold a matcher (Obsidian
+  runs the search and prints "No matches found.", a real zero and not a gated
+  pane), and because every other consumer of a `Search` inherited the
   same default. One of them was doing so visibly: a graph colour group with an
   empty query coloured every note in the graph. That now reads the empty query
   explicitly, the way the graph's search filter already did, so the behaviour
@@ -527,29 +527,29 @@ like this goes stale in the first place.
 - **The callout colours were the light theme's, in both themes.**
   `Theme::callout_color` took `&self` and never read `self.dark`, so every
   callout but `quote` was the wrong colour on the theme Obsidian ships. The
-  values it needed were all already in the tree — `--callout-color` is a
+  values it needed were all already in the tree: `--callout-color` is a
   `--color-<name>` token, the same six the canvas presets and the highlight
-  washes draw from — so the hue is picked by type now and the value comes from
+  washes draw from, so the hue is picked by type now and the value comes from
   the theme. `CanvasColors`' own doc comment had claimed those presets were
   "the ones `Theme::callout_color` has for the same hues" since the canvas
   landed; it is true as of this pass. A fourth test locks the callout hues and
   the highlight washes to one source so they cannot drift apart again, and it
   caught the light blue being `0x086dff` here and `0x086ddd` in
-  `highlight_color` for the one token — the spec records `#086ddd`.
+  `highlight_color` for the one token; the spec records `#086ddd`.
 - **The property pills take Backspace twice.** The gesture is a pure state
   machine (`PillStep` in `properties.rs`), and `Field::backspace` returns it
   as a `#[must_use]` rather than offering a plain delete beside it: the old bug
   was exactly a key path taking the character route and skipping the gesture,
   so now no caller can. Press one selects the last pill and writes nothing,
   press two issues the existing `remove_item` change, and the walk backwards
-  rebuilds the trailing input from the row as it then stands — `ListEdit`'s
+  rebuilds the trailing input from the row as it then stands: `ListEdit`'s
   items are a pre-removal snapshot, and committing one would write the removed
   item back. Enter now leaves the input open the way Obsidian does, with the
   bytes it writes unchanged, and the remove control is `lucide-x` instead of a
   `×` character.
-- **The empty tab** is Obsidian's: `New tab` wherever its name is shown — the
+- **The empty tab** is Obsidian's: `New tab` wherever its name is shown (the
   tab strip had it, the view header and the window title still said "No file is
-  open" — four pills (`New note Ctrl + N`, `New base`, `New canvas`,
+  open"), four pills (`New note Ctrl + N`, `New base`, `New canvas`,
   `Go to file Ctrl + O`) each running the command it names through the existing
   registry, so `hotkeys.json` applies and a pill whose plugin is off is left
   out; no mode switch in the header; and a status bar that reads `0 properties`,
@@ -566,7 +566,7 @@ like this goes stale in the first place.
   and are worth remembering: a `canvas` host has no intrinsic height, so the
   title vanished until it was given one, and a focus handle only joins the
   dispatch tree with the frame that paints it, so the first click needs
-  `window.on_next_frame` — the same rule as
+  `window.on_next_frame`, the same rule as
   [[#The frame, the type and the icons, 2026-10-20]].
 - **Both location dropdowns** are selects now rather than text fields. The
   attachment one writes the four shapes Obsidian writes (`/`, `./`,
@@ -575,9 +575,9 @@ like this goes stale in the first place.
   moment the option is picked and all three are absent at the default
   settings; the first pick on an empty `app.json` leaves exactly
   `{"attachmentFolderPath": "/"}`. Where each shape sends a file is
-  `silica_vault::ops::attachment_path` — a leading `./` is relative to the
+  `silica_vault::ops::attachment_path` (a leading `./` is relative to the
   note's folder, anything else is vault-absolute, `/` and `""` are both the
-  root — with the spec's six rows as tests. It has no caller: Silica creates
+  root), with the spec's six rows as tests. It has no caller: Silica creates
   no attachments yet, which is also why all three rows keep their
   `not_yet()` tag. `Honored::No` is "not read at all yet: the value is written
   for Obsidian", and a resolver with no caller honours nothing; the tag the row
@@ -622,7 +622,7 @@ reading-view chevron, the mode-switch hand-over and the relaunch were driven
 through the release binary on the probe's own note.
 
 - **`fold.rs`** holds the model: `foldables` walks the one parse for the
-  lines that fold — top-level headings through the line before the next of
+  lines that fold: top-level headings through the line before the next of
   the same or a higher level, trailing blanks included and the last one to
   the end of the file; list items with lines under them, the blank line
   after excluded; nothing in a blockquote or callout, no setext underline,
@@ -640,12 +640,12 @@ through the release binary on the probe's own note.
   10 px left of a list line, shown on hover and always while folded; a
   mouse-down on it toggles. A fold command leaves the caret where it is,
   as CodeMirror does, so `fold-less` from inside a folded section still
-  finds it; a caret that *arrives* in a fold — a link, a search hit, an
-  outline row, an edit — opens it. Only the parse of the current text
+  finds it; a caret that *arrives* in a fold (a link, a search hit, an
+  outline row, an edit) opens it. Only the parse of the current text
   settles the folds: a stale parse's foldables would drop them.
-- **The reading view** collapses a heading's section — the blocks after it
+- **The reading view** collapses a heading's section (the blocks after it
   to the next heading of the same or a higher level return empty, so they
-  are absent rather than hidden — behind Obsidian's
+  are absent rather than hidden) behind Obsidian's
   `heading-collapse-indicator`: a chevron 28 px into the left margin,
   revealed on hover, that only its own click toggles; the heading's text
   and the space beside it do nothing, as observed. The heading is drawn by
@@ -659,7 +659,7 @@ through the release binary on the probe's own note.
   note, in `note-fold/<vault id>.json` under Silica's configuration folder
   (`~/.config/silica`, where `silica.json` lives) and never in the vault.
   It is written on leaving a note and on quit, read as a note opens, and the
-  editor re-derives each `from` line's extent from the heading — a stored
+  editor re-derives each `from` line's extent from the heading; a stored
   `to` is advisory, as observed. A rename carries the record with the
   note. `{0,0}` is the properties fold, kept and restored with the rest.
 - **`foldHeading` and `foldIndent`** gate the two kinds at parse time; with
@@ -672,7 +672,7 @@ What this build decided on its own is listed in
 
 ### The settled editing commands, 2026-10-26
 
-The backlog's "Settled by the probes of 2026-10-25 — the editing commands"
+The backlog's "Settled by the probes of 2026-10-25: the editing commands"
 entry held thirteen answers and no code. All of it is implemented now, to the
 bytes in
 [[Specification#Observed editing command behavior, Obsidian 1.14.5 (installer build 1.13.7)]]
@@ -682,7 +682,7 @@ those tables is a unit test in `silica-text`, and the whole set was driven once
 through the release binary over the control socket on a scratch vault, which
 read back the same bytes.
 
-- **Fourteen command ids join `RUNNABLE`**: `editor:insert-callout`,
+- Fourteen command ids join `RUNNABLE`: `editor:insert-callout`,
   `-codeblock`, `-mathblock`, `-horizontal-rule`, `-tag` and `-footnote`
   (`format::block_insert_plan`); `editor:cycle-list-checklist`
   (`cycle_checklist_plan`); the six `editor:toggle-highlight-<colour>`
@@ -690,14 +690,14 @@ read back the same bytes.
   the one parser's tree, so `snake_case` and the inside of a code span are
   safe); and `editor:set-heading`, registered as a command that runs and
   changes nothing, with a comment saying that this is what Obsidian does.
-- **Mod+L inserts `- [ ] `** on a line without a checkbox — after a list
-  marker, a `> `, leading whitespace — and the caret moves with it; over a
+- **Mod+L inserts `- [ ] `** on a line without a checkbox (after a list
+  marker, a `> `, leading whitespace), and the caret moves with it; over a
   selection the decision is taken once (flip all, add to all, or invert
   each), blank lines ignored. The "no checkbox to toggle" notice is gone.
 - **The cycle** is bullet → `[ ]` → `[x]` → bullet, the marker kept, a
   custom status discarded on the first press. Over a selection with a line
   that is not a list item every line is pulled back to a bullet; otherwise
-  each line advances one step — the converging rule where Obsidian's own
+  each line advances one step: the converging rule where Obsidian's own
   output oscillates.
 - **Highlight colours** write one emoji after the opening `==`. The parser's
   `Highlight` node now carries `color: Option<HighlightColor>`, taking the
@@ -712,7 +712,7 @@ read back the same bytes.
   skipped, mid-line edges kept), `toggle-comments` excepted; a bare caret
   takes the word under it. After a multi-line wrap the selection covers the
   wrapped text, markers included, so a second press strips every line.
-- **Auto-pairing is the one rule**: a bracket closes when the character
+- Auto-pairing is the one rule: a bracket closes when the character
   ahead is whitespace, the end of the line or a closing bracket; a quote or
   marker needs that and whitespace or the start of the line behind. No
   context suppresses it. Skip-over is provenance: `TextBuffer::planted`
@@ -722,7 +722,7 @@ read back the same bytes.
   `]` `]` steps out. The old unmatched-opener scan is gone.
 - **Shift+Tab** takes one unit of display columns off, a tab counting
   `tabSize`, and writes the rest back as tabs then spaces (`useTab`) or
-  spaces; with `useTab: false` the unit — for Tab too — is four spaces
+  spaces; with `useTab: false` the unit, for Tab too, is four spaces
   whatever `tabSize` says, as observed. Enter on an empty nested item keeps
   its own one-step rule, which the probes did not touch.
 
@@ -773,7 +773,7 @@ parse here and is shown the way a syntax error is shown there.
   or stroke for radicals, stretched delimiters and wide accents. Rules are
   never thinner than a device pixel. A `FormulaElement` is the fixed-size
   element the reading view's `$$` block and the Live Preview widget lay out.
-- **Inline math is the hard part**: gpui shapes text and nothing else, so a
+- Inline math is the hard part: gpui shapes text and nothing else, so a
   line has no slot for an element. An inline formula is therefore laid out
   as a run of no-break spaces (figure space, no-break space, narrow no-break
   space, measured in the text font at the size in force) at least as wide as
@@ -859,15 +859,15 @@ Nothing of the chrome was guessed: `tools/obsidian-probe/pdf.mjs` ran 36
 steps against Obsidian 1.14.5 first, and
 [[Specification#Observed PDF view behavior, Obsidian 1.14.5 (installer build 1.13.7)]]
 is what the view was conformed to. Three of its findings shaped the build.
-**The leaf is file-only**: `workspace.json` carries
+The leaf is file-only: `workspace.json` carries
 `{"type":"pdf","state":{"file":"doc.pdf"}}` and never a page or a zoom; those
 live in pdf.js's own `localStorage['pdfjs.history']`, outside the vault, so
 Silica writes nothing either and keeps a tab's page and zoom in memory for
 the session only (the same reasoning that put file recovery outside phase
-3). **There is no zoom select and no rotate**: two step buttons on a ×1.1
+3). There is no zoom select and no rotate: two step buttons on a ×1.1
 ladder rounded to tenths, and a Display options menu; `Ctrl+=` is the
 window's zoom, not the viewer's, so it is not bound here. **An embed is a
-whole viewer**, toolbar included, sized to its first page — which is why
+whole viewer**, toolbar included, sized to its first page, which is why
 the embed and the leaf share one drawing rather than the embed being a
 picture of a page.
 
@@ -885,8 +885,8 @@ embed's *Open* menu (the button opens the file), *Save current position in
 document* on a canvas card (the probe saw it do nothing), match
 highlighting, and password-protected files (`Error::Encrypted`).
 
-On the method: the split was five agents — the probe, the crate, the view,
-the embeds, and this write-up — with the renderer's API frozen in the brief
+On the method: the split was five agents (the probe, the crate, the view,
+the embeds, and this write-up), with the renderer's API frozen in the brief
 and the cache written before the view and the embeds started, so the two
 could build against the same thing without waiting on each other. Two
 things went wrong that the next split should know. An agent that starts a
@@ -926,15 +926,15 @@ answered once in `silica-bases` and nothing in the app reorders a row.
 Two decisions are worth keeping. A note is written by the **workspace**, not
 by the view: a base's row is another file, it may be open in a buffer with
 unsaved edits, and a write behind that buffer's back would be thrown away by
-its own next save — so the cell reports the change it wants and the workspace
+its own next save, so the cell reports the change it wants and the workspace
 guards it, the way the unlinked-mention write does. And `bases::writes` holds
 one implementation of each view write, because the toolbar's panels and the
 column header's menu both write `sort` and `order`; consolidating the two
 copies turned up a checkbox that collapsed a view with no `order` to a single
 column.
 
-The work was split six ways over the files — the layouts, the toolbar, the
-editing, the commands, the embed — which worked because the shell was built
+The work was split six ways over the files (the layouts, the toolbar, the
+editing, the commands, the embed), which worked because the shell was built
 and frozen first and each piece owned its own file. What it cost is the
 duplication the split invited: four helpers and the scroll-body walk existed
 twice before the consolidating pass moved them into `bases::cells`, and two
@@ -942,7 +942,7 @@ surfaces had grown their own `prepend_sort`.
 
 Almost nothing in this build is a new observation: the runs rendered a table
 and nothing else. [[Specification#What building the rest of the Bases view settled, 2026-10-25]]
-is therefore a list of **readings** rather than of behaviors — what a card's
+is therefore a list of **readings** rather than of behaviors: what a card's
 title is, what a kanban column's header says, whether a cell can be edited in
 place at all (the one captured cell control is a *disabled* checkbox, which
 argues against it), and three toolbar controls left inert because what each
@@ -954,7 +954,7 @@ list meaning "none" has no spelling. Each is one click of a probe.
 
 A `.base` opens on its table instead of the "not supported yet" placeholder.
 Read-only: the file is drawn, never written. Six pieces, which is also how the
-work was split —
+work was split:
 
 - `silica-bases::table` resolves a view against the vault: the base's filters
   and the view's own, the columns of `order`, the cells, `sort`, `groupBy` and
@@ -963,7 +963,7 @@ work was split —
   null and a boolean are empty, a List joins with a bare `,` while each element
   keeps its own rendering, a Link is its text.
 - `silica::bases::rows` is the bridge from the vault's scan and cache to those
-  values, with no disk reads at all — 114 ms over 20 000 notes, against the
+  values, with no disk reads at all: 114 ms over 20 000 notes, against the
   2 s index gate and the 256 ms the load itself costs.
 - `silica::bases::view` draws it: a 30 px header row, rows in a reset-not-
   spliced variable-height list, a disabled checkbox for a boolean, group
@@ -977,7 +977,7 @@ work was split —
 A base is a view over the *whole vault*, which is the one place it differs from
 every other view in the shell: a canvas card is rebuilt when its own file
 changes, but any change at all may change a base's rows. So `after_changes`
-invalidates every group's base, and the table follows the vault live — adding a
+invalidates every group's base, and the table follows the vault live: adding a
 note that matches takes the demo's table from 8 rows to 9 without reopening it.
 
 What the build settled against the observations is in
@@ -999,9 +999,9 @@ memory.
 
 The ratchet is the point, as it was for the parser. The same CDP run that
 captured 277 parse trees also captured what Obsidian *answered* for each
-statement it evaluated, so `tests/obsidian_values.tsv` holds 1044 of those —
-the statement, the rendered text and the `lucide-*` type tag, or Obsidian's
-exact refusal — and the harness pins the clock to the run's own second and
+statement it evaluated, so `tests/obsidian_values.tsv` holds 1044 of those (the
+statement, the rendered text and the `lucide-*` type tag, or Obsidian's
+exact refusal), and the harness pins the clock to the run's own second and
 rebuilds the run's row. 1166 observations were read and 122 dropped with a
 reason each: the wall clock and `random()`, the values the probe could not
 serialize (a Link or a File alone: `String(value.data)` cannot say which it
@@ -1010,12 +1010,12 @@ trap the parser's extractor hit.
 
 Three rules decide most of the behaviour, and all three are observed. **Null
 absorbs**: a missing property is null and null answers every call and every
-access with null, with exactly three exceptions — `isEmpty()` is true,
+access with null, with exactly three exceptions: `isEmpty()` is true,
 `isTruthy()` is false, `toString()` is the String "null". **Comparison coerces
 where arithmetic refuses**: `"3" > 2` is true while `1 + true` is
 `Invalid operator between Number and Boolean`. And **comparison against null is
 three-valued**: `nosuchprop > 1` is null rather than false, where `"abc" > 1`
-*is* false — two failures that are easy to collapse into one and must not be.
+*is* false, and the two failures are easy to collapse into one and must not be.
 
 What the build itself settled, against the summary written the day before, is
 in [[Specification#What building the evaluator settled, 2026-10-25]]: the
@@ -1024,7 +1024,7 @@ rather than a File, `key` and `value` as what an Object's `filter` binds, a
 Tags value naming itself `List`, and eight smaller corrections. The one that
 cost real work is the Duration: its properties are fractional *totals*, and
 `months` is the duration laid on the calendar from the Unix epoch, which is the
-only reading that reproduces the recorded `9.761398643219833` — a fixed-length
+only reading that reproduces the recorded `9.761398643219833`; a fixed-length
 month gives 9.7449, 9.7513 or 9.8868.
 
 What is not built: the view. Nothing in the app calls the evaluator yet.
@@ -1102,8 +1102,8 @@ inserting it right after the active tab; `new_tab` now pushes to the end, which
 ### Explorer keyboard, 2026-10-21
 
 Probed first again: `tools/obsidian-probe/explorer-keyboard.mjs` found that a click
-which opens a file hands the keyboard to the editor — so the first run's arrow keys
-all landed in the editor — and the second run entered the tree through
+which opens a file hands the keyboard to the editor, so the first run's arrow keys
+all landed in the editor, and the second run entered the tree through
 `reveal-active-file` instead. The findings are
 [[Specification#Observed file explorer keyboard behavior, Obsidian 1.14.4 (installer build 1.13.7)]]:
 arrows walk the visible rows without opening anything, Enter opens, Right opens a
@@ -1171,7 +1171,7 @@ the one panel thing Obsidian had and Silica lacked: a draggable sidebar width.
 Three CDP scripts read the running app's computed styles, bounding boxes, icon class names and
 `workspace.json` writes. Two traps cost a run each: `require('obsidian')` is not in the renderer's
 scope, and **Obsidian 1.14 opens Settings in a popout window**, so `document.querySelector('.setting-item')`
-in the vault window finds nothing — the rows are reached through
+in the vault window finds nothing: the rows are reached through
 `app.setting.activeTab.containerEl`, which is a different document. The "Window frame style"
 setting turned out to live in the Interface tab, to default to **Hidden** on Linux, and to write
 nothing under `.obsidian` whichever option is chosen, so there is no vault key for Silica to honour.
@@ -1191,8 +1191,8 @@ before the margin ends.
 Since 2026-10-21 the corners are rounded 10 px, which is what Obsidian's hidden frame measures on
 this desktop (`--window-border-radius` is unset in its CSS, so the rounding is the frame's own):
 gpui clips children to rectangles, so `WindowCorners` works out which corners meet no tiled edge
-and every element that reaches one — the workspace's own root box, the ribbon, a sidebar, the tab
-strip, the close button, the status bar, the Settings backdrop — rounds that corner itself, as
+and every element that reaches one (the workspace's own root box, the ribbon, a sidebar, the tab
+strip, the close button, the status bar, the Settings backdrop) rounds that corner itself, as
 Zed's title bar does. The root box is the one that is easy to miss: it paints `theme.bg` over the
 whole content, so left square it fills each corner with a notch outside every rounded child, and
 the window looks square with a dark fleck in the corner. A canvas
@@ -1212,8 +1212,8 @@ and `Theme` defaults both families to it; `appearance.json` fonts still override
 the one Obsidian computes: #1C1C1C / #282828 / #333333 with #dadada, #b3b3b3 and #666666 text
 in the dark theme, #ffffff / #f6f6f6 / #e4e4e4 with #222222, #5c5c5c and #ababab in the light,
 the accent `hsl(258, 88%, 66%)`, and hover and active rows a 6.7 percent wash of white or black
-rather than a flat colour. Sizes are `theme.rs` constants now — 13 px UI small, 12 px smaller,
-15 px medium, 40 px headers, 44 px ribbon, 16 px icons, 300 px sidebars — and headings use the
+rather than a flat colour. Sizes are `theme.rs` constants now (13 px UI small, 12 px smaller,
+15 px medium, 40 px headers, 44 px ribbon, 16 px icons, 300 px sidebars), and headings use the
 observed scale (h1 1.618em at 700 down to h6 1em at 600, 1.2 and 1.3 line heights) in the reading
 view and in Live Preview alike. The status bar became Obsidian's bottom-right tab rather than a
 bar across the window.
@@ -1229,8 +1229,8 @@ toggles, backlinks and outgoing links, the folder triangle) Silica picks a Lucid
 requires and which reads the same.
 
 **The sidebars.** Each dock is `workspace.json`'s `left.width` / `right.width` wide (300 when the
-file has none), and a 3 px handle on its inner edge — a hairline at rest, the accent under the
-pointer — drags it between 150 px and what leaves the main area room. The width is written back
+file has none), and a 3 px handle on its inner edge (a hairline at rest, the accent under the
+pointer) drags it between 150 px and what leaves the main area room. The width is written back
 only once a drag moved it, so a file's `300` stays the integer Obsidian wrote. `state.docks.*.width`
 reports it over the socket, and a drag is driven with `mouse down/move/up` (the MCP tools have no
 drag).
@@ -1248,7 +1248,7 @@ fixes, and they went in one after another, each driven over the control socket o
 this vault before it was committed.
 
 **Tabs.** A `Tab` is a path, a mode and its own history. The active tab's fields are the ones the
-workspace always had — `current`, `mode`, `history`, `history_ix` — so every route that opens a
+workspace always had (`current`, `mode`, `history`, `history_ix`), so every route that opens a
 note is unchanged, and `tabs[active_tab]` is a snapshot refreshed before anything reads it. That
 shape was chosen over accessors because seventy call sites read those fields and none of them
 needed to know. The editor still holds one buffer: switching tabs saves and reloads, the way opening
@@ -1256,7 +1256,7 @@ a note does, which is also why a tab switch loses the scroll position the way hi
 does (the open entry on history covers both). The last close leaves Obsidian's empty "New tab", and
 a closed tab remembers its index so `undo-close-pane` puts it back where it was.
 
-**workspace.json.** Reading it is a walk of the leaves under `main`, depth first across groups —
+**workspace.json.** Reading it is a walk of the leaves under `main`, depth first across groups,
 Silica has one strip, so a split layout is flattened to show it. Writing it back is the decision
 the backlog had left open under the vault-is-truth rule; the answer is to write only what the
 session changed and only what Silica models: a restored leaf keeps its id and every key Obsidian
@@ -1272,7 +1272,7 @@ id its key starts with, and a disabled core plugin's entry is not drawn. The sid
 the real gap: with the ribbon hidden, a collapsed left dock had no way back from the window.
 
 **The Hotkeys tab** turned up a writer bug worth remembering. The merging `write_config` keeps a
-key the new value lacks — right for every config file that is a struct, wrong for `hotkeys.json`,
+key the new value lacks, right for every config file that is a struct and wrong for `hotkeys.json`,
 which *is* a map of entries, where dropping a command's entry is what restores its defaults. The
 first live run showed the tab on defaults while the file still held the custom chord. The fix is a
 second writer, `Vault::replace_config`, that writes the value whole, used for that file alone. The
@@ -1286,7 +1286,7 @@ request, before the frame that restores the workspace's handlers after a modal c
 panel occludes, which is what keeps a slider drag from also panning the graph: the graph's canvas
 used to accept any mouse-down inside its bounds and now asks its hitbox. `graph.json` is written a
 third of a second after a change. A vault without the file gets the twenty keys in Obsidian's
-order — the test pins it at the 494 bytes Obsidian's own creation write measured — and a vault
+order (the test pins it at the 494 bytes Obsidian's own creation write measured), and a vault
 with it gets the changed keys merged in so `0.518713248970312` keeps its digits; whole numbers are
 written without a decimal point the way JavaScript prints them, and the last group removed is
 written as `[]`, both of which the merge would otherwise have got wrong. Force changes reach the
@@ -1302,21 +1302,21 @@ window.
 **What the socket made possible.** Every flag under [[#Commands]] arranges a state at startup and
 then the app is on its own, so an audit over those flags is an audit of screenshots: you can see
 that something looks wrong and you cannot ask why, or what the app thinks it just did. Over the
-socket a finding is a transcript — the keystroke, the `state` before, the `state` after — and the
+socket a finding is a transcript (the keystroke, the `state` before, the `state` after), and the
 reviewer reads the same transcript the auditor did. Two measuring tricks came out of the run and
 are worth keeping, because the state dump exposes no *rendered* text (`Editor::describe` reports
 the cursor, selection, scroll and visible lines, never the `DisplayLine`), so colour, weight, pills
 and labels are simply not observable from outside. The first is a y-scan: click every second pixel
 down the editor and read back which line each point resolves to, which gives every row's exact
-height — a 24 px text row, a 56 px collapsed callout, a ~104 px image widget — and so separates a
+height (a 24 px text row, a 56 px collapsed callout, a ~104 px image widget), and so separates a
 laid-out widget from a line of text without a screenshot. The second is an x-scan: sweep across one
 row and map display columns back to source columns, which shows exactly which bytes are hidden or
 substituted, and settles a question like `Note#Heading` versus `Note > Heading` to within a
 character width. Both are race-free. The other thing the socket bought is plain parallelism: eight
 agents, one subsystem and one app each, at the same time.
 
-**The shape of the audit.** Eight probes ran in parallel — Files, Live Preview, reading view, right
-dock and graph, search and the modals, Settings, the source editor, the workspace shell — and every
+**The shape of the audit.** Eight probes ran in parallel (Files, Live Preview, reading view, right
+dock and graph, search and the modals, Settings, the source editor, the workspace shell), and every
 finding then went to an adversarial reviewer whose main job was the *Obsidian* half. That is where
 the previous pass had failed: of its four refutations, all four were Silica behaving correctly
 against an Obsidian behaviour the auditor had remembered rather than observed. The pass confirmed 82
@@ -1324,16 +1324,16 @@ findings over seven subsystems and refuted seven, and two of the refutations
 are worth remembering by anyone who drives the app this way, because they were the harness, not the
 app: "Tab types a literal tab into the find field" and "Shift+Enter inserts a newline into the
 prompt" both come from gpui's `Window::dispatch_keystroke`, whose first line is
-`keystroke.with_simulated_ime()` — it fabricates a `key_char` for `tab`, `enter` and `space`
+`keystroke.with_simulated_ime()`: it fabricates a `key_char` for `tab`, `enter` and `space`
 whenever control, alt and platform are absent, and *shift is not excluded*. No user can reproduce
 either. A socket-driven claim about a key needs that check before it is filed.
 
-**The accident: there were two audits.** That first pass did not finish in one sitting — it hit a
+**The accident: there were two audits.** That first pass did not finish in one sitting: it hit a
 session limit partway and was resumed. The resumed probe agents did not replay from cache; they
 re-ran, and what came back was a genuinely independent second audit of the same window, worded
 differently and reaching 92 findings where the first reached 82. Nobody noticed at the time. The
-fix campaign took the first pass plus the second pass's Live Preview file — which is the only Live
-Preview file either run produced — and worked from those 95, while the second pass's other 79
+fix campaign took the first pass plus the second pass's Live Preview file (the only Live
+Preview file either run produced) and worked from those 95, while the second pass's other 79
 findings sat unread. That is a process error, and the arithmetic it produced is what gave it away:
 the counts in the notes did not add up.
 
@@ -1342,7 +1342,7 @@ other, say more than either alone. Triaging the second pass's 79 against the *fi
 gave a result that is worth more than a re-read of the first pass's list: 27 were already fixed, 52
 still reproduced, and the triage's evidence is against the current code rather than the code as it
 was, so where the two passes overlap its line numbers and its repros are the ones to act on. It
-corrected the first pass in both directions — it narrowed the properties-in-reading-view finding to
+corrected the first pass in both directions: it narrowed the properties-in-reading-view finding to
 one third of its filed scope, settled the `0` chip question against the backlog's own prediction,
 showed that the published fix sketch for the empty-rename error pointed at the wrong file, and
 caught a fix the first verification pass had scored as complete when only one of its two routes was
@@ -1361,13 +1361,13 @@ tool in the campaign, because `drive_session` now runs every new editing command
 corpus notes and over the real vault. It caught two byte hazards nobody had predicted: the first
 `swap_lines` happily swapped the last content line with the phantom empty line a file's trailing
 newline creates, which would have stripped that newline from every file it touched, and
-`delete_paragraph` can empty a note to zero bytes — correct behaviour, but the harness's "the
+`delete_paragraph` can empty a note to zero bytes, which is correct behaviour, but the harness's "the
 session wrote something" guard had to be made honest about it. Auto-pairing produced a second one
 only a test could see: wrapping two *touching* selections wrote `(alpha()beta)`, because
 `apply_edits` sorts back to front and an opener and a closer landing at the same offset are
 order-sensitive; writing the wrap as one edit over the whole selection removed the whole class.
 The frontmatter-link fix was reproduced as a unit test before it was written, and the test showed a
-self-contradiction inside one cache — `resolved_links("Source.md")` counted the property link while
+self-contradiction inside one cache: `resolved_links("Source.md")` counted the property link while
 `backlinks("Target.md")` was empty. And the setext fix proved a negative: dumping what
 `highlight_lines` actually emits showed the clipped heading span covering the whole of *both* rows
 (`0..2` over `==` and `0..2` over `==`), so a pure function of one line's text and spans cannot tell
@@ -1381,9 +1381,9 @@ is where the campaign's own damage surfaced. Two of the three were regressions t
 introduced, and both compiled, passed clippy and passed every test.
 
 The first is focus after a delete. The fix for "typing into a deleted note is silently discarded"
-parks the keyboard on the workspace handle when the main area goes empty — correct — and nothing
+parks the keyboard on the workspace handle when the main area goes empty, which is correct, and nothing
 ever hands it back, because `open_file` never called the new `focus_main`. So: delete the open
-note, then open any other note by any route — the switcher, an explorer row, history — and the
+note, then open any other note by any route (the switcher, an explorer row, history), and the
 editor paints the note while `focus` is still `{workspace, ["Workspace"]}`, `type` answers
 `{"target":"none"}` and the arrow keys answer `handled: false`. Every note opened for the rest of
 the session is keyboard-dead until the user happens to click inside the editor. No test could have
@@ -1391,22 +1391,22 @@ caught it: focus lives in a painted frame's dispatch tree, and `crates/silica` h
 harness.
 
 The second is an empty list property. The property-pill work routes a click on a list-valued row's
-value cell to `PropertyAction::EditItem { index: items.len() }` — the empty input Obsidian keeps
+value cell to `PropertyAction::EditItem { index: items.len() }`, the empty input Obsidian keeps
 after the pills. For `aliases: []` the pill strip has no children, so the flex container has zero
 height, so gpui gives it no hitbox, so the handler never runs and the click falls through to the
 editor behind. The visible result is worse than a dead cell: the next keystrokes go to the editor
-caret, and the sweep that found it left `Zed, Alpha` on its own line *inside* the YAML fences —
+caret, and the sweep that found it left `Zed, Alpha` on its own line *inside* the YAML fences,
 corrupted frontmatter from two clicks and a word. The cause is layout, not the action, and the fix
 is `Row::is_blank()` drawing the same faint placeholder an absent value draws, so the row has a
 height and therefore a hitbox.
 
-The third was not ours, and it is the widest: clicking any dock row — an explorer row, a search
-result, an outline row, a backlink — blurs the editor. The root div's `track_focus` focuses the
+The third was not ours, and it is the widest: clicking any dock row (an explorer row, a search
+result, an outline row, a backlink) blurs the editor. The root div's `track_focus` focuses the
 workspace handle on any mouse-down outside a focusable child, and none of those row handlers asked
 for the keyboard back, so the note opens and then neither typing nor the arrow keys do anything
 until the user clicks inside the text. It had been true all along; nobody had written a repro for
 "open a note the way a person opens a note, then try to type". All three are fixed, the first two
-in wave 7 through one rule — when what the main area shows changes, the keyboard goes to whatever
+in wave 7 through one rule: when what the main area shows changes, the keyboard goes to whatever
 that area paints, requested by the handlers that have no `&mut Window` and honoured at the top of
 the next `render`.
 
@@ -1417,7 +1417,7 @@ has driven the thing.
 
 **Wave 8: the bug nobody was looking for.** The triage agents were asked, among other things, to
 try the app with text that is not ASCII. One of them wrote a note holding 45 letters, a non-breaking
-space, and then the search term — and the window disappeared. The log:
+space, and then the search term, and the window disappeared. The log:
 
 ```
 thread '<unnamed>' panicked at crates/silica/src/search.rs:552:31:
@@ -1432,16 +1432,16 @@ inside the character. Reproduced again with the ideographic space. Note where th
 it was raised on the background `run_search` task and still took the main thread down with it, so
 *any* panic in search is fatal to the process and to whatever the user had not saved.
 
-The second thing is the same shape without the crash, filed by the second audit pass — the one the
-campaign never read — and confirmed live by the same triage. Backspace and the arrow
+The second thing is the same shape without the crash, filed by the second audit pass (the one the
+campaign never read) and confirmed live by the same triage. Backspace and the arrow
 keys stepped by `char`, so one Backspace turned `é` into a bare `e`, split 🇩🇪 into a lone regional
-indicator, or left a dangling zero-width joiner at the end of a family emoji — and two seconds later
+indicator, or left a dangling zero-width joiner at the end of a family emoji, and two seconds later
 the autosave wrote that into the vault. That is the only silent corruption either audit turned up,
 and the ground rule it breaks is the first one in the repo.
 
 Both are now fixed. The windowing moved out of the gpui crate into a pure
-`crates/silica-search/src/snippet.rs` whose `floor`/`ceil` helpers snap every window edge — and
-every hit range, so a stale range widens instead of slicing — to a character boundary, with the
+`crates/silica-search/src/snippet.rs` whose `floor`/`ceil` helpers snap every window edge (and
+every hit range, so a stale range widens instead of slicing) to a character boundary, with the
 live panic written as a unit test *before* the fix and a second test sliding a lead-in of emoji,
 CJK, a combining accent and an NBSP past the window edge one byte at a time. The agent then went
 looking for siblings of the class and found one in `fuzzy.rs`, where `simple_search` mapped
@@ -1451,28 +1451,28 @@ forward Delete, Left/Right, the shifted variants and word motion, and the auto-p
 treats a single-character cluster as half of a pair. Wave 8 also closed the second route into the
 typeable empty state: deleting the open note was hardened in wave 1, but `Editor::new` still seeded
 the name `"untitled"`, which is exactly the thing `main_view` tests to decide whether a buffer has
-a file behind it — so every launch that opened no markdown, an empty vault or a vault holding only
+a file behind it, so every launch that opened no markdown, an empty vault or a vault holding only
 a canvas, handed the user a live editor over nothing and discarded what they typed into it.
 
-**The second lesson.** The two deepest defects in the whole campaign — a process-killing panic and
-a silent corruption that reached the vault — were found by typing unusual text into the running
+**The second lesson.** The two deepest defects in the whole campaign, a process-killing panic and
+a silent corruption that reached the vault, were found by typing unusual text into the running
 app. Not by reading code: both sites read perfectly well, and one of them had been read by an
 auditor who filed four other findings in the same file. Not by a scripted repro either, because a
 repro is written from a hypothesis and nobody hypothesised a non-breaking space. They came from an
 agent with a licence to try odd input against a live binary. A vault of real prose is full of
 pasted NBSPs, CJK punctuation, accented names, flags and family emoji, and every one of them is an
 input the test corpus does not contain. The class to grep for is narrow and worth grepping for
-again: an offset into user text computed by arithmetic — `+ 1`, `len()`, `chars().count()` — rather
+again: an offset into user text computed by arithmetic (`+ 1`, `len()`, `chars().count()`) rather
 than taken from `char_indices`, a regex engine or a grapheme cursor.
 
 **The lesson worth keeping.** Partitioning by file ownership is what let eight agents edit one tree
-at once, and it worked — the waves landed with no merge conflicts and the gate was green between
+at once, and it worked: the waves landed with no merge conflicts and the gate was green between
 each. What it cost is every item that needed two owners. The list property is the worked example.
 Wave 4a built the whole per-item model in `properties.rs`, with tests proving a comma survives the
 round trip; wave 4b built the renderer in `reading/view.rs` that draws an open field in its pill's
 place. Both landed, both were correct, and the user-visible behaviour did not change at all,
 because the only route from a click to an open field runs through `Editor::property_action`, whose
-`match` over `PropertyAction` is exhaustive — adding the variant the pills needed would have left
+`match` over `PropertyAction` is exhaustive, so adding the variant the pills needed would have left
 `editor.rs` not compiling for every other agent in the wave. Three waves of careful handoff notes
 later, the item was fixed in one wave by one agent holding `editor.rs`, `reading/view.rs` and
 `properties.rs` together. The same shape explains the callout chevron (fold state has to live on
@@ -1480,14 +1480,14 @@ later, the item was fixed in one wave by one agent holding `editor.rs`, `reading
 in `workspace.rs`, useless without the hitbox the editor agent had already added), and the
 frontmatter links (the cache half shipped a wave before the pane that reads it). The rule to carry
 forward: scope a group by the *change*, not by the file, and when a change needs two files, give
-one agent both — a handoff note across a wave boundary costs more than the conflict it avoids.
+one agent both: a handoff note across a wave boundary costs more than the conflict it avoids.
 
 **Where it ended.** 501 tests pass, clippy is clean across the workspace, and the Writer gate over
 the real PLMCRZY vault still round-trips 14/14 byte-identical, which is the number that matters:
 nothing in a campaign's worth of UI work moved a byte in a vault, and the one path that *was*
-moving bytes it should not — the grapheme split — is closed. Of the 95 findings the waves worked
+moving bytes it should not (the grapheme split) is closed. Of the 95 findings the waves worked
 from, 54 are fixed. Of the second pass's other 79, 27 were already fixed by that work and two more
-by wave 8, leaving 50 that still reproduce — most of them the same large gaps the first pass had
+by wave 8, leaving 50 that still reproduce, most of them the same large gaps the first pass had
 filed, a dozen of them sharper than the first pass had them, and twenty that nobody had filed at
 all. All of it, with the probes the declined items are waiting on, is in [[UI parity backlog]].
 
@@ -1499,8 +1499,8 @@ own. `--type` can open the autocompletion popup for a screenshot, but it cannot
 ask whether the popup opened, which row is selected, or what the status bar said
 afterwards. [[#The probe batch, 2026-10-18]] recorded why the obvious escape is
 shut: there is no `xdotool` on this machine and a synthetic event carries no
-focus, so input has to be driven from inside the process — which is what
-`--stress`, `--type` and `--accept` already were, self-driven input one scenario
+focus, so input has to be driven from inside the process, which is what
+`--stress`, `--type` and `--accept` already were: self-driven input one scenario
 at a time, compiled in. A socket keeps the self-driven input and moves the loop
 outside the binary, so whatever drives can read the answer and decide what to
 do next.
@@ -1532,8 +1532,8 @@ request, in order.
 
 Positions are window-local logical pixels. Byte offsets are zero-based into the
 note's UTF-8 bytes, like Obsidian's `Pos`, and line and column are zero-based
-too. Every failure — unknown method, a parameter of the wrong type, no vault
-open, a path outside the vault — comes back as a plain string in `error`.
+too. Every failure (unknown method, a parameter of the wrong type, no vault
+open, a path outside the vault) comes back as a plain string in `error`.
 Nothing that crosses the socket may panic.
 
 | method | params | result |
@@ -1546,11 +1546,11 @@ Nothing that crosses the socket may panic.
 | `open` | `name` (`Note#Heading`, `Note#^id`), `mode?` | `{"current"}` |
 | `open_path` | `path`, `mode?` | `{"current"}` |
 | `set_mode` | `mode`: reading, live, source, graph | `{"mode"}` |
-| `command` | `id` | `{"status"}` — the status bar after it ran |
+| `command` | `id` | `{"status"}`, the status bar after it ran |
 | `keys` | `keys`: gpui keystrokes, `["ctrl-shift-f","enter"]` | `{"handled","pending"}` |
 | `type` | `text` | `{"target"}`: editor, input or none |
 | `click` | `x`, `y`, `button?`, `count?`, `mods?` | `{"ok"}` |
-| `mouse` | `action`: down, up, move; `x`, `y`, `button?`, `mods?` — a `move` naming a `button` is a drag in progress | `{"ok"}` |
+| `mouse` | `action`: down, up, move; `x`, `y`, `button?`, `mods?`; a `move` naming a `button` is a drag in progress | `{"ok"}` |
 | `scroll` | `x`, `y`, `dx`, `dy`, `unit?`: pixels, lines | `{"ok"}` |
 | `set_selection` | `start`, `end?` (byte offsets) | `{"cursor"}` |
 | `scroll_to` | `line` | `{"ok"}` |
@@ -1566,8 +1566,8 @@ Nothing that crosses the socket may panic.
 **The state dump.** `state` answers one object in which every key is always
 present and absence is `null`, so a driver can index into it without guarding
 each step. `vault` is the root, name and load state; `file` the open path, mode,
-dirty flag and tab history; `tabs` the strip — each tab's path, mode and
-title, and which is active; `docks` the explorer's rows and the search pane's
+dirty flag and tab history; `tabs` the strip (each tab's path, mode and
+title, and which is active); `docks` the explorer's rows and the search pane's
 query, counts and results on the left, backlinks, outgoing links, tags, all
 properties and the outline on the right; `modal` which of the switcher, palette, Settings, prompt or
 chooser is up and its query, selection and row labels; `editor` the cursor,
@@ -1594,7 +1594,7 @@ way long enough for [[UI parity backlog#Blocked by the harness, not by the code]
 to record drag-select as unverifiable, when what was missing was the entry. After any tool that changes state it
 calls `wait_idle` before returning, so the next `silica_state` or screenshot is
 current rather than one frame behind. A tool that fails is `isError: true`
-content, not a JSON-RPC error — only an unknown method or malformed parameters
+content, not a JSON-RPC error; only an unknown method or malformed parameters
 are those.
 
 **Six pitfalls, in the order they are likely to bite.**
@@ -1611,7 +1611,7 @@ are those.
 - **Autosave's two-second delay makes `read_file` stale.** Edits save on their
   own two seconds after the last keystroke, so a `read_file` straight after a
   `type` reads the bytes from before the edit. Either wait the delay out or run
-  the save command — `list_commands` has its id — before reading.
+  the save command (`list_commands` has its id) before reading.
 - **`wait_idle` can time out with nothing wrong.** KWin stops delivering frame
   callbacks when the monitors sleep, so a wait for the next frames never
   completes; it answers `timed_out: true` rather than hanging, and the fix is
@@ -1678,12 +1678,12 @@ what follows is what they changed in the design.
 suggested a fixed order with `text` before the geometry. The scrambled
 fixture showed the truth: Obsidian's `getData` starts from the object it
 read, with the keys the model owns deleted, and assigns the model's keys
-onto it — JavaScript keeps an existing key's position and appends a new
+onto it, since JavaScript keeps an existing key's position and appends a new
 one. So `text`, `type`, `file`, `url`, `backgroundStyle` and any plugin key
 stay where the file had them, and `x, y, width, height, color` always land
 after them. That is why the gate vault's `id, x, y, ..., type, text` became
 `id, type, text, x, y, ...`, and why a node Obsidian creates (no file order)
-is written `id, x, y, width, height, type, text` — an order that is *not* a
+is written `id, x, y, width, height, type, text`, an order that is *not* a
 fixed point of its own reader. `Node`, `Edge` and `Canvas` now carry the
 file's key order and write through that algorithm; a node made in Silica
 carries none and comes out as an app-made one.
@@ -1693,11 +1693,11 @@ on every write, because the loaded fixtures came back that way. The nodes
 created through the API did not: Obsidian partitions on *load* and appends
 afterwards, so the partition moved into the reader. The second draft
 asserted that every Obsidian-written fixture round-trips byte-identical,
-and two did not — the app-made ones, for the reason above. Both are now
+and two did not, the app-made ones, for the reason above. Both are now
 tests that say the opposite of what the draft assumed.
 
 **The formatter rule is `typeof`.** A container stays on one line unless
-one of its values is `null`, an object or an array — JavaScript's
+one of its values is `null`, an object or an array: JavaScript's
 `typeof v === 'object'`, null included, which took a fourth run with
 `[true,false]` against `[null]` to separate from "has a nested container".
 Numbers follow `JSON.stringify` (`1e3` → `1000`, `-0` → `0`), so `Node`'s
@@ -1707,8 +1707,8 @@ would have been refused by the old `i64`.
 **Closing is a write.** Opening a canvas writes nothing; closing it
 rewrites the file through the formatter even when nothing was edited,
 keeping the file's own key order. For the gate run that means a canvas
-Obsidian merely looked at will show in the diff — reformatted, not
-reordered — and Silica, which writes nothing on close, will not do the
+Obsidian merely looked at will show in the diff (reformatted, not
+reordered), and Silica, which writes nothing on close, will not do the
 same. That asymmetry is recorded rather than copied.
 
 **Checked against the real vault.** The harness has a new property: every
@@ -1721,13 +1721,13 @@ the bytes are settled.
 
 ### Porting two checklist blocks to CDP, 2026-10-19
 
-The first two blocks of [[Interaction probes]] — the search pane and
-properties in the reading view — were ported from hand steps to scripts
+The first two blocks of [[Interaction probes]] (the search pane and
+properties in the reading view) were ported from hand steps to scripts
 under `tools/obsidian-probe/` and run against Obsidian 1.14.4 (installer
 build 1.13.7) in fresh scratch vaults. Each script runs in three phases:
 `fixtures` with Obsidian down (the notes are written with `fs`, mtimes set
 with `utimes`), `run` with it up, and `after-restart` if `run` ended by
-quitting it — which is how "does the sort survive a restart" and "does the
+quitting it, which is how "does the sort survive a restart" and "does the
 fold survive a restart" are answered with a real relaunch. `run-block.sh`
 owns the lifecycle: fresh vault, fresh id, `obsidian.json` swapped in and
 restored byte-identical. Search took 31 steps and properties 15, no
@@ -1751,13 +1751,13 @@ sections' 2026-10-19 paragraphs.
 - Reusing an id across folders inherits that id's IndexedDB cache: a search
   on a brand-new vault returned the previous vault's files until the re-index
   caught up. Fresh id per scratch vault, and no trust dialog is involved when
-  no plugin is enabled — CDP needs none.
+  no plugin is enabled, since CDP needs none.
 
 **The copy-results detour.** "Copy search results" lives in the result-count
 menu, and a real click on it left the clipboard untouched for two seconds,
 with no notice. Calling the handler directly threw on `preventDefault`;
 reading its source gave `function(e){e.preventDefault(),new
-x2(this.app,this.dom).open()}` — it opens a **modal**, and three scripts had
+x2(this.app,this.dom).open()}`, which opens a **modal**, and three scripts had
 watched the clipboard and the menus without once looking for one. The modal
 has a Show path toggle, Link style (None, Wikilink, Markdown link) and List
 prefix (None, Dash, Asterisk, Numbered) dropdowns, a preview textarea and a
@@ -1785,7 +1785,7 @@ more than the batch did.
 it as `obsidian --remote-debugging-port=9222` and `http://127.0.0.1:9222/json`
 lists the page target. CDP's `Input.dispatchKeyEvent` and
 `Input.dispatchMouseEvent` are injected by the *browser*, not by JavaScript,
-so they carry focus and run the same input path a person's keyboard does —
+so they carry focus and run the same input path a person's keyboard does,
 exactly what `el.dispatchEvent` cannot do. Node 24 has a built-in
 `WebSocket`, so the client needs no dependencies at all; the throwaway
 plugin is not needed either, since `Runtime.evaluate` reaches `app`.
@@ -1796,8 +1796,8 @@ target title reads **Obsidian 1.14.4** while the user agent reads
 installer 1.13.7.
 
 The first run typed thirteen characters and answered the whole auto-pair
-item — the one [[Interaction probes]] ranked first and estimated at fifty
-minutes of hand work — in about a minute, including the question the batch
+item (the one [[Interaction probes]] ranked first and estimated at fifty
+minutes of hand work) in about a minute, including the question the batch
 had flagged as confounded: **skip-over is provenance-tracked** (Obsidian
 skips only a closer it inserted; a planted `)` is pushed along) while
 **backspace-deletes-both is positional** (it fires on any empty pair).
@@ -1807,8 +1807,8 @@ Both are now in [[Specification#Observed auto-pair behavior, Obsidian 1.14.4]].
 block in it is CDP-automatable: real clicks on the search sort dropdown,
 real typing into a property field, real mouse drags in the file explorer,
 a real anchor click, a scripted quit-and-relaunch for the cold-load case.
-What stays human is aesthetic judgement — how `<sup>` looks, whether a
-hover affordance feels right — which is a small residue, not eight hours.
+What stays human is aesthetic judgement (how `<sup>` looks, whether a
+hover affordance feels right), which is a small residue, not eight hours.
 
 **It does not belong in CI, and the reason is not the plumbing.** These
 runs assert *Obsidian's* behavior, not Silica's: a red build would mean
@@ -1818,14 +1818,14 @@ and installed on a self-hosted runner. The division that works is the one
 this repo already uses for autocompletion in
 `silica-suggest/tests/obsidian_rows.rs`:
 
-- **CI, every push:** Silica asserted against the *recorded* observation
+- CI, every push: Silica asserted against the *recorded* observation
   tables. Pure Rust, deterministic, no Obsidian. A failure here is a real
   Silica regression.
-- **On demand, when the Obsidian pin moves:** the CDP harness re-derives
+- On demand, when the Obsidian pin moves: the CDP harness re-derives
   those tables from the live app and the diff is read by a person. A change
   here is news about Obsidian, and it is the moment to update the tables
   and the spec together.
-- **By hand, rarely:** the aesthetic residue.
+- By hand, rarely: the aesthetic residue.
 
 ### The probe batch, 2026-10-18
 
@@ -1872,8 +1872,8 @@ percent-encoding that the run never exercised.
 **No item came back ready to build.** The limitation is structural and worth
 recording: there is no input automation on this machine, and a synthetic
 event does not carry focus. Anything that needs a real keystroke or a real
-drag — typing into a property field, opening the search sort dropdown, F2
-with the explorer focused, a drag with timing — returned nothing. The probe
+drag (typing into a property field, opening the search sort dropdown, F2
+with the explorer focused, a drag with timing) returned nothing. The probe
 settled formats, storage, DOM shapes and command ids; it could not settle
 interaction. Those remainders are listed per feature in [[Specification]],
 and closing them wants a person at the keyboard, not a bigger plugin.
@@ -1897,29 +1897,29 @@ The block parser is looser than that. `- [x]` may carry **1 to 4 spaces or a
 tab** between the marker and the brackets (`block.rs`, `spaces_after_marker` in
 `1..5`), so `marker.end + 1` is right for one space, right for a tab by
 coincidence, and wrong for every other padding. A `starts_with('[')` guard
-caught the miss and dropped the span, so nothing corrupt was ever written —
-the checkbox simply **was not there**: `-  [x] a` parsed as a task, rendered
+caught the miss and dropped the span, so nothing corrupt was ever written;
+the checkbox simply was not there: `-  [x] a` parsed as a task, rendered
 without a box, and ignored the click. Confirmed before the fix across the five
 paddings; only one space and a tab produced a span.
 
 The repair is the ground rule applied literally. `ListItem` now carries
 `task_span` alongside `task`, recorded in the one place that already knows
-where the brackets are — the detection site in `block.rs`, where `self.offset`
+where the brackets are, the detection site in `block.rs`, where `self.offset`
 is absolute and container markers are consumed, so a task inside a blockquote
 or callout spans correctly for free. `highlight.rs` reads that span instead of
 recomputing it, and the arithmetic is gone. One parser, one answer.
 
 Two tests pin it: every padding the parser accepts yields exactly one span
 that starts and ends on a bracket, and the shapes it rejects (`- [ ]` at end
-of line, `- [ ]no space`, five spaces) yield none. Both ratchets are unmoved —
-1007/1009 corpus notes and all 652 CommonMark examples — because `render_html`
+of line, `- [ ]no space`, five spaces) yield none. Both ratchets are unmoved
+(1007/1009 corpus notes and all 652 CommonMark examples), because `render_html`
 never read the old derivation.
 
 One thing that looked like a second defect is not one. Clicking a task writes
 `[ ]` whenever the status byte is not a space, so `[X]`, `[?]`, `[-]` and
 `[>]` all collapse to empty, and the corpus has all four
 (`tests/corpus/vault/edge/Blocks.md`) while [[Specification]] commits to "task
-items with any single character". That looked like data loss — but the probe
+items with any single character". That looked like data loss, but the probe
 run the same day shows **Obsidian does exactly the same thing**, so
 `editor.rs` is right and stays as it is. See
 [[#The probe batch, 2026-10-18]].
@@ -1933,7 +1933,7 @@ whole exercise.
 **The four `.obsidian` files were all rewritten and all byte-identical.**
 Every one carries a fresh mtime from the moment Obsidian opened the vault, and
 every hash matches. So Obsidian rewrites its config set on open and reproduces
-it exactly — which is the behavior `Vault::write_config` was built to match,
+it exactly, which is the behavior `Vault::write_config` was built to match,
 now confirmed from the other side.
 
 **`Data Pipeline Mindmap.canvas` changed.** The pre-open bytes were recovered
@@ -1953,13 +1953,13 @@ halves:
   a newline.
 
 So a canvas written by anything but Obsidian is rewritten whole the first time
-Obsidian saves it — the same shape as a table command rewriting its whole
+Obsidian saves it, the same shape as a table command rewriting its whole
 table, one level up. Worth knowing before phase 4 writes one.
 
 **And Silica could not reproduce that file today.** `Canvas::to_json` uses
 serde_json's pretty formatter with a tab, which puts every field on its own
 line, and `Node`'s field order puts `text` after `color`. Fed the canvas
-Obsidian had just written, it returns 6011 bytes for 4731 in — every line
+Obsidian had just written, it returns 6011 bytes for 4731 in, every line
 different. Nothing is broken by it yet, because nothing in Silica writes a
 canvas: `to_json` has no caller outside its own test, and that test only
 asserts the output starts `{\n\t"nodes"` and re-parses equal, which a
@@ -1970,7 +1970,7 @@ and a formatter that holds a node on one line.
 ### The gate run opens, 2026-10-18
 
 Every Writer item is done, so the gate is the work. It has two halves. The
-half that is ours to decide — every path from a keystroke to a file's bytes —
+half that is ours to decide (every path from a keystroke to a file's bytes)
 is the harness, and it now passes over the real vault: all thirteen
 properties, `SILICA_ROUNDTRIP_VAULT=~/bstore2/raga/plmcrzy/PLMCRZY`,
 nothing written to the vault (checked after the run by mtime, as the harness
@@ -1989,8 +1989,8 @@ diff -r "$GATE"/snapshot-<date> "$VAULT" --exclude workspace.json      # after t
 
 Seventeen files on 2026-10-18. `workspace.json` is left out for the reason it
 is left out of the harness: Silica neither models nor writes it, and Obsidian
-rewrites it constantly. A file the diff reports is the gate's evidence — then
-the question is which app moved it, and whether the move was a user's edit or
+rewrites it constantly. A file the diff reports is the gate's evidence: the
+question is then which app moved it, and whether the move was a user's edit or
 an app rewriting bytes nobody touched.
 
 A hash manifest is kept beside the snapshot for a quick check, but note that
@@ -2010,7 +2010,7 @@ configs rather than the notes:
 
 - **The config round trip ignored the vault.** `config_dirs()` named the two
   sets in the repository and nothing else, so `SILICA_ROUNDTRIP_VAULT` covered
-  a person's notes but never their `.obsidian` — the set that has what a repo
+  a person's notes but never their `.obsidian`, the set that has what a repo
   fixture cannot invent: files missing outright, an `appearance.json` that is
   a bare `{}`, no trailing newline on any of them. It now includes the named
   vault's, and all four of PLMCRZY's round-trip byte-identical.
@@ -2025,14 +2025,14 @@ configs rather than the notes:
   listed neither `switcher.json` nor the other per-plugin files. All four are
   listed now, but Obsidian does not create any of them until a setting in that
   plugin is written, so no set on this machine has one and they still cover
-  nothing. The same is true of `hotkeys.json`, which no set here has either —
+  nothing. The same is true of `hotkeys.json`, which no set here has either,
   though Silica never writes that one. `types.json` has its own round trips in
   `silica-vault`.
 
-**Thin, and worth saying plainly:** the real vault adds ten hand-written notes
+Thin, and worth saying plainly: the real vault adds ten hand-written notes
 to the corpus's thousand. Pointing the harness at the whole
 `~/bstore2/raga/plmcrzy` tree finds 214 more `.md` files, but they are
-`node_modules` READMEs rather than notes a person wrote — breadth of Markdown,
+`node_modules` READMEs rather than notes a person wrote: breadth of Markdown,
 not breadth of vault. The corpus is still what covers the shapes; the real
 vault covers that a real `.obsidian` survives a write.
 
@@ -2041,14 +2041,14 @@ vault covers that a real `.obsidian` survives a write.
 Obsidian's sixteen table commands work: add, move, duplicate and delete
 rows and columns, set a column's alignment, and insert a table. They are in
 the palette, bound through their own command ids, and hidden unless the
-cursor is in a table — which is what Obsidian's own check callback does.
+cursor is in a table, which is what Obsidian's own check callback does.
 
 The commands were probed the way the suggester was, by calling each
 command's `editorCheckCallback` over eight shapes of table with the cursor
 in two cells, then reading the note back; 186 of the 480 runs had the check
 pass, and only those were used. Two traps: the check needs `editor.focus()`
 first (without it `executeCommandById` returns true and does nothing), and
-it only ever passes in **Live Preview** — in raw source mode Obsidian will
+it only ever passes in **Live Preview**; in raw source mode Obsidian will
 not run a table command at all. Silica runs them in Source mode too, since
 its Source mode is a real editing mode rather than a fallback.
 
@@ -2057,7 +2057,7 @@ table.** Obsidian pads every cell to its column's width (minimum three, what
 the delimiter needs), adds outer pipes to a table written without them,
 fills short rows out with empty cells, and grows the delimiter to match
 (`:-----`, `:----:`, `-----:`). So "edit one cell" is never a small diff,
-in either app — which is fine for the gate as long as Silica pads
+in either app, which is fine for the gate as long as Silica pads
 identically, and `silica-text/src/table.rs` holds the observed rows as
 tests.
 
@@ -2066,7 +2066,7 @@ looking for pipes: `BlockKind::Table` already carries the alignments and a
 span per cell, so a `|` inside a code span splits a cell here exactly where
 it splits one in the reading view. That turned up a real difference:
 `` | `a|b` | **bold** | `` has three header cells against a two-cell
-delimiter, so GFM — and Silica's parser — call it a paragraph, while
+delimiter, so GFM (and Silica's parser) calls it a paragraph, while
 Obsidian's table editor rewrites it into a three-column table. Silica does
 nothing there rather than turn prose into a table.
 
@@ -2081,7 +2081,7 @@ Cells are editable too. Clicking one opens a field in it, the way a
 property row's value opens; Tab and Shift+Tab walk the cells, Enter drops
 into the cell below, Escape abandons the edit, and the column grows with
 what is typed. A table now stays a grid wherever the cursor is, as
-Obsidian's `table-editor` does, instead of unfolding to its pipes — Source
+Obsidian's `table-editor` does, instead of unfolding to its pipes; Source
 mode is where the markdown is edited directly.
 
 A second probe settled what a cell edit writes, which the first had left
@@ -2095,10 +2095,10 @@ would otherwise restructure the table (`table::cell_text`); and a commit
 writes nothing unless the cell still holds the bytes the field was opened
 on, so a document that moved underneath is left alone.
 
-**Unprobed:** where Obsidian leaves the cursor after each command (the
+Unprobed: where Obsidian leaves the cursor after each command (the
 columns it reported came from an unfocused editor and disagreed with
 themselves), whether a column counts characters or display columns for CJK
-and emoji — Silica counts characters — and what Obsidian writes for a `|`
+and emoji (Silica counts characters), and what Obsidian writes for a `|`
 typed into a cell.
 
 ### Daily notes, 2026-10-18
@@ -2112,7 +2112,7 @@ The probe settled the three rules that matter:
 
 - **The configured folder has to exist.** Obsidian refuses with
   "Failed to create daily note. Folder “X” not found." and writes nothing,
-  rather than creating it — while folders the *format* names
+  rather than creating it, while folders the *format* names
   (`YYYY/MM/YYYY-MM-DD`) are created on the way.
 - **An existing note is opened, not rewritten.** The probe's note had a
   byte order mark, CRLF endings and the body "hand written, do not touch";
@@ -2121,7 +2121,7 @@ The probe settled the three rules that matter:
   missing, previous is the 2nd and next is the 20th.
 
 Stepping needs the open note's own date, and a moment format cannot be read
-backwards — `DD-MM-YYYY` and `YYYY/MM/DD` would each need their own parser.
+backwards: `DD-MM-YYYY` and `YYYY/MM/DD` would each need their own parser.
 So `daily_note_day` renders instead: it walks a window of days around today
 and takes the one whose rendered path is the path in hand. The same walk
 finds the neighbour, which is why a format that does not sort
@@ -2145,7 +2145,7 @@ and a daily note whose folder is missing creates nothing at all.
 
 `Workspace::flush_save` is the one left. It needs a GPUI window, and gpui's
 `TestAppContext` is behind a `test-support` feature that pulls a leak
-detector and proptest — too much weight for the three lines of IO around a
+detector and proptest, too much weight for the three lines of IO around a
 guard that is itself tested in `silica-text` and was verified in the
 running app with `--stress`. Worth revisiting if the app grows more of
 these.
@@ -2157,7 +2157,7 @@ milestone: what Obsidian itself writes for a file whose line endings
 disagree. It is answered now, and the answer is stronger than the question.
 
 **Obsidian's editor normalizes on save.** Every ending becomes `\n` and a
-UTF-8 byte order mark is dropped — not just for a mixed file but for a
+UTF-8 byte order mark is dropped, not just for a mixed file but for a
 uniform CRLF one, which comes back all LF after a single character is
 typed. A note that is only *opened* is not touched; the normalization
 belongs to the save.
@@ -2180,7 +2180,7 @@ second run.
 Found while closing the gate gaps, and the same class of loss. A byte order
 mark is not JSON, so `serde_json` refused a config file carrying one: every
 setting in it read as its default, and the first write replaced the file
-wholesale — taking every key Silica does not model with it. Windows editors
+wholesale, taking every key Silica does not model with it. Windows editors
 leave such a mark, so this was reachable with no misuse at all.
 
 The mark is now stripped for parsing on both sides and written back on
@@ -2192,19 +2192,19 @@ that case.
 ### Adapt to system, and an invented clamp, 2026-10-18
 
 Two bugs found while landing the Settings dropdowns, neither of which
-writes a byte, so neither was a gate problem — but the first made a
+writes a byte, so neither was a gate problem, but the first made a
 setting a lie.
 
 `Theme::from_appearance` matched `moonstone` and sent everything else to
-the dark theme, so `theme: "system"` — Obsidian's default, and what a vault
-with no theme key means — rendered dark forever, while the Settings row
+the dark theme, so `theme: "system"` (Obsidian's default, and what a vault
+with no theme key means) rendered dark forever, while the Settings row
 promised "on restart". The scheme now follows the desktop: gpui's
 `Window::appearance` answers it, and since the theme global is built before
 a window exists, it is rebuilt once there is one.
 
 The other was `base_font_size.clamp(10, 40)`, a range Silica invented. The
 probe settled both halves of it: Obsidian's own slider offers 10 to 30, and
-Obsidian neither clamps nor rewrites a file holding something else — 99 sat
+Obsidian neither clamps nor rewrites a file holding something else: 99 sat
 in `appearance.json` through a whole session untouched. So the file's value
 is honoured, with a floor that only keeps a zero out of the layout, and the
 slider's own range is the observed one.
@@ -2217,7 +2217,7 @@ about: a note open and edited in Silica while Obsidian saves the same note.
 
 `Workspace::flush_save` wrote the whole buffer over the file with no
 comparison against what was there, and the watcher deliberately does not
-reload a note whose buffer is dirty — it reports "changed on disk; unsaved
+reload a note whose buffer is dirty: it reports "changed on disk; unsaved
 edits kept" and returns. So Obsidian's save survived for about two seconds
 and was then overwritten by Silica's autosave, silently.
 
@@ -2232,14 +2232,14 @@ writing the file from a shell and waiting through ten seconds of further
 autosaves leaves the shell's bytes on disk. The harness holds the property
 over every note of the corpus and a real vault.
 
-**Unprobed:** what Obsidian itself does when it finds a note changed
+Unprobed: what Obsidian itself does when it finds a note changed
 underneath. Silica refuses and says so, which loses nothing either way;
 merging or writing a conflict copy would be inventing behavior.
 
 ### Templates, 2026-10-18
 
-`insert-template` opens a chooser over the template folder's notes — by
-basename, sorted, with Obsidian's own `Type name of a template...` — and
+`insert-template` opens a chooser over the template folder's notes (by
+basename, sorted, with Obsidian's own `Type name of a template...`) and
 writes the chosen one at the cursor with its placeholders filled in.
 `insert-current-date` and `insert-current-time` write the same `{{date}}`
 and `{{time}}` without a template around them.
@@ -2247,7 +2247,7 @@ and `{{time}}` without a template around them.
 What a placeholder does was observed rather than guessed, and the literal
 half is the surprising one: `{{DATE}}` expands and `{{ date }}` does not,
 `{{date:}}` falls back to the setting, an empty setting falls back to
-Obsidian's own default, and nothing is exempt from expansion — not fenced
+Obsidian's own default, and nothing is exempt from expansion: not fenced
 code, inline code, math or wikilinks. `{{title}}` is the target note's
 basename, never its first heading and never a frontmatter `title`. The
 whole template the probe expanded is a test in `silica-templates`, byte
@@ -2260,7 +2260,7 @@ test in `silica-vault`. A format token Silica cannot render is refused with
 a message rather than written wrong, which matters more for daily notes,
 where the format is a path.
 
-The one new dependency is `chrono`, for the local civil date — it was
+The one new dependency is `chrono`, for the local civil date: it was
 already in the tree through gpui, so the lockfile gains an edge and no
 crate. `silica-templates` itself stays clock-free: the instant is passed
 in, which is why every test is a fixed date.
@@ -2272,7 +2272,7 @@ being edited. The query after the `^` matches a block's text or its id,
 either way and whatever the case, so `^ara` finds "A paragraph." and
 `^BLOCKONE` finds the block with that id. A row shows the block's text with
 the `^id` taken off and the id beside it, and accepting one writes the path
-exactly as it was typed with no display text — the heading rule — or
+exactly as it was typed with no display text (the heading rule), or
 `[](Alpha.md#^id)` under `useMarkdownLinks`, with the cursor between the
 brackets.
 
@@ -2283,7 +2283,7 @@ six-lowercase-hex id (180 generated in a row were 180 distinct values), and
 the byte-for-byte placement of a written id for a paragraph and a heading.
 
 Every block is offered, and accepting one whose block has no id writes the
-id into the *target* note — a write into a file the user never opened,
+id into the *target* note, a write into a file the user never opened,
 which is the shape of change the Writer gate exists to catch. The second
 probe settled the placement for every kind, and there are only two shapes:
 a block whose text ends a line takes ` ^id` inline, and a block that spans
@@ -2300,7 +2300,7 @@ and the next save cannot write the id straight back out.
 Two things are Silica's own. Obsidian writes LF newlines into a CRLF note
 and leaves it mixed, as it does for properties; Silica writes the note's
 own ending. And a block an id cannot be written onto is refused rather than
-written to — `blocks::plan_id` applies the insertion and re-indexes it
+written to: `blocks::plan_id` applies the insertion and re-indexes it
 before offering it, which the real vault proved necessary: a note whose
 code fence is never closed runs to the end of the file, so an id written
 after it lands *inside* the fence, indexes as nothing, and would leave a
@@ -2335,7 +2335,7 @@ What the probes settled that guessing would have got wrong:
 - **Display text follows the path, not the name.** `|Alpha` is added exactly
   when the path part carries a `/`, and only for notes, so `[[Sub/Alpha|Alpha]]`
   but `[[../pic.png]]`.
-- **An empty `[[` is ordered by modification time**, newest first — not by
+- **An empty `[[` is ordered by modification time**, newest first, not by
   recency of opening, which is what the quick switcher uses. The list is also
   files and aliases only: the switcher offers unresolved link targets, this
   does not.
@@ -2354,23 +2354,23 @@ already being read for `size`.
 
 The Writer gate's harness covers the new write path: accepting a suggestion
 at five places in every corpus note replaces the query and nothing else, and
-undoes back to the file's bytes — over the real vault too.
+undoes back to the file's bytes, over the real vault too.
 
 Ranking is Silica's own fuzzy matcher (the one behind the quick switcher), so
 the order within a query can differ from Obsidian's; what each row *writes*
 is what matches.
 
-**Not done:** block references. `[[Note#^` offers nothing rather than
+Not done: block references. `[[Note#^` offers nothing rather than
 offering a row it cannot write, because accepting a block with no id of its
-own means writing a six-character id into the *target* note — inline on a
+own means writing a six-character id into the *target* note: inline on a
 paragraph, on its own line after a heading. That is a write into a second
 file and wants its own change. `Ctrl+P`/`Ctrl+N`, which Obsidian's popup also
 binds to the selection, are left to Silica's own bindings.
 
 ### Settings sliders and text fields, 2026-10-18
 
-The two sliders write — font size (`baseFontSize`, 10 to 30) and indent
-visual width (`tabSize`, 2 to 8) — and so do the two text fields Obsidian
+The two sliders write (font size (`baseFontSize`, 10 to 30) and indent
+visual width (`tabSize`, 2 to 8)), and so do the two text fields Obsidian
 offers as free text: the folder for new notes and the attachment folder
 path. Each is the same shape as a dropdown's `Typed`: a key and the one
 accessor pair its display is read through and its write goes through, with
@@ -2378,8 +2378,8 @@ a test that walks every one of them for both properties.
 
 The ranges are the ones Obsidian's own controls offer, read off its
 rendered tabs in the phase 3 probe. Obsidian neither clamps nor rewrites a
-file holding something outside them — 99 sat in `appearance.json` through a
-whole session — so the range bounds only what Silica's control can set, and
+file holding something outside them (99 sat in `appearance.json` through a
+whole session), so the range bounds only what Silica's control can set, and
 a file that already holds something else keeps it.
 
 One behavior is worth the test it got: clearing the attachment folder field
@@ -2393,7 +2393,7 @@ pattern the properties row and the table cell already use, with one
 `TextInput` owned by the view rather than by a row: the rows are rebuilt
 from the vault on every render, so a row cannot own anything.
 
-**Left read-only, deliberately:** the three font families and spellcheck
+Left read-only, deliberately: the three font families and spellcheck
 languages (Obsidian offers a font picker and a 58-entry select, not free
 text, so a text field would be inventing a control), excluded files (a
 dialog), accent colour (a colour input), themes (nothing scans
@@ -2409,8 +2409,8 @@ its options and picking one writes the key.
 
 A dropdown is a `Typed`: the key, the option list, and the one pair of
 accessors the control's label is read through and a pick is written
-through. That is the same guarantee the toggles' `Flag` gives — a row
-cannot show one key and write another — and it let the seven hand-written
+through. That is the same guarantee the toggles' `Flag` gives (a row
+cannot show one key and write another), and it let the seven hand-written
 label matches go, since the table now owns both directions. Two tests walk
 every dropdown: one asserts a pick writes its own key and nothing else,
 the other writes each option, reloads the vault and asserts the control
@@ -2428,19 +2428,19 @@ rather than getting a mechanism of its own.
 
 The options are drawn with `deferred`, the way the file explorer's context
 menu is. Without it the rows below paint over the open menu, because a
-later sibling wins — this version of gpui has no `z_index`.
+later sibling wins: this version of gpui has no `z_index`.
 
-**Unprobed:** the option labels are Silica's existing ones, read off
+Unprobed: the option labels are Silica's existing ones, read off
 Obsidian's settings tab when the read-only modal was built, not re-observed
-in the phase 3 run — that run drove the config keys rather than the
+in the phase 3 run, which drove the config keys rather than the
 controls, so it settled what is written and not what the tab reads.
 
 ### Settings writing, 2026-10-18
 
 Every toggle in the Settings modal writes. A click clones the config the
 control reads, flips its one field and emits it; `Workspace::change_setting`
-writes the file through `Vault::write_config` — which merges into the file's
-own JSON, so only that key moves — stores it in the `VaultState` and pushes
+writes the file through `Vault::write_config` (which merges into the file's
+own JSON, so only that key moves), stores it in the `VaultState` and pushes
 what the running app can change into the open views. The banner now says
 which controls write; dropdowns, text fields and sliders are still read-only.
 
@@ -2468,7 +2468,7 @@ Which is which is now on the row. Every item carries an `Honored`: nothing
 on a setting Silica follows as you click it, "on restart" for the theme and
 the fonts (the `Theme` global is built once from `appearance.json` at
 startup), and "not in Silica yet" for everything written only for Obsidian
-to read — the whole Core plugins tab included, since Silica's own Files,
+to read, the whole Core plugins tab included, since Silica's own Files,
 Search and Graph do not turn off with the plugins that own them in Obsidian.
 The vault is shared, so writing a setting Silica ignores is worth doing;
 letting a click look like it changed something here is not. A test walks
@@ -2481,8 +2481,8 @@ a vault with no `core-plugins.json` gets a whole map of every plugin at its
 default, because a one-key file would read as "everything else off", and the
 legacy array shape keeps its shape.
 
-The question this note used to leave open — whether Obsidian removes a key
-when a setting goes back to its default — was settled by the phase 3 probe:
+The question this note used to leave open (whether Obsidian removes a key
+when a setting goes back to its default) was settled by the phase 3 probe:
 it does not. Every default-valued write kept its key with the explicit
 value, so what Silica already writes is what Obsidian writes, and no way of
 removing a config key is needed. See
@@ -2490,8 +2490,8 @@ removing a config key is needed. See
 
 ### Round-trip harness, 2026-10-18
 
-The Writer gate — the vault round-trips byte-identical after a week of mixed
-use — now has a harness:
+The Writer gate (the vault round-trips byte-identical after a week of mixed
+use) now has a harness:
 `crates/silica-text/tests/writer_roundtrip.rs`, over the 1000-note corpus and
 both `.obsidian` sets in the repository. Four properties, one per shape of
 writing:
@@ -2509,7 +2509,7 @@ Invariants are checked after every step, not just at the end: the line index
 is the one the text implies, every cursor sits on a character boundary, and
 what a save would write reads back as the text in hand. Setting
 `SILICA_ROUNDTRIP_VAULT` to a vault's path runs the same round trips over it
-(nothing is written — the edits happen in a buffer in memory), which is how
+(nothing is written; the edits happen in a buffer in memory), which is how
 the gate's real vault is checked without a test depending on one.
 
 To make the editor testable the text model moved out of the GPUI view into
@@ -2518,7 +2518,7 @@ the undo history and one method per editing command), `FileText`, the
 `lists`, `find` and edit-plan modules, all free of gpui.
 `crates/silica/src/editor.rs` keeps the shaping, scrolling, decorations, find
 panel and properties table and holds a `TextBuffer`; its actions are now
-`buf.<command>()` followed by `after_edit`. Nothing changed in behavior —
+`buf.<command>()` followed by `after_edit`. Nothing changed in behavior:
 the suite and a 400-step stress run on a 20k-line note are the evidence.
 
 Writing the harness found three bugs on the spot:
@@ -2590,9 +2590,9 @@ wikilink value draws as the link (its alias, or the target without a
 subpath) and follows on click; a tag item is clickable whether or not it is
 written with `#`; a checkbox draws a box; an empty value shows a
 placeholder; a value that does not fit its type is marked and kept as
-written. In Live Preview a click on a key or value opens a field — the
+written. In Live Preview a click on a key or value opens a field (the
 editor routes typing, the arrows, Home, End, Backspace and Delete into it,
-Enter commits, Tab commits a key and moves to its value, Escape abandons —
+Enter commits, Tab commits a key and moves to its value, Escape abandons),
 and a commit is one undo step through `apply_edits`. The row icon opens the
 type menu, the `×` removes the property, `+ Add property` opens an unnamed
 row that writes nothing until it is named. The three commands
@@ -2796,8 +2796,8 @@ matches inside wikilinks, markdown links, inline code and fenced code.
 The Bookmarks core plugin, from the same probe run as the tab groups
 ([[Specification#Observed bookmarks behavior, Obsidian 1.14.4 (installer build 1.13.7)]]).
 `silica-formats::bookmarks` reads `bookmarks.json` keeping every item as the
-JSON object it was — so an item Silica never touched is written back key for
-key, unknown keys included — and lays out the items Silica makes in
+JSON object it was (so an item Silica never touched is written back key for
+key, unknown keys included) and lays out the items Silica makes in
 Obsidian's order (`type`, `ctime`, then `path`/`subpath`, `query`, `title`
 and `options`, or `items` then `title` for a group). The vault writes the
 file whole, two-space indented, no trailing newline, as observed; the
@@ -2805,7 +2805,7 @@ observed file is a round-trip test.
 
 The pane is a third tab of the left dock, shown while `core-plugins.json`
 leaves the plugin on: the header's first three buttons ("Bookmark the
-active tab...", "New group", "Collapse all" — the search filter is not
+active tab...", "New group", "Collapse all", with the search filter not
 built), one row per item with a glyph per kind, groups folding, the open
 note's row marked, a right-click "Remove". A file row opens the note at its
 heading or block, a search row fills the Search pane, a graph row opens the
@@ -2874,8 +2874,8 @@ edit writes `{"nodes":[...],"edges":[]}`; a file that does not parse shows
 its error and is never written. Each tab group has a `canvas` entity beside
 its editor and reading view, `MainView::Canvas` paints it in every mode but
 the graph's, and the tab records the view's `viewState` as it changes so the
-leaf is written as Obsidian's — `type: canvas`, `lucide-layout-dashboard`,
-the title without the extension — whether or not the tab is live on quit.
+leaf is written as Obsidian's (`type: canvas`, `lucide-layout-dashboard`,
+the title without the extension) whether or not the tab is live on quit.
 `canvas:new-file` creates `Untitled.canvas` empty in the vault root and opens
 it in a new tab unless the active one is empty.
 
@@ -2907,7 +2907,7 @@ Two things about running it are worth keeping. The harness's first Obsidian
 hung with its debugging port gone after a settings step timed out, and
 nothing but a kill and a relaunch brought it back; and with the window only
 1024 px wide, every input event has to be aimed after centring the view on
-its target, or it lands in a sidebar — the first pass right-clicked the
+its target, or it lands in a sidebar; the first pass right-clicked the
 ribbon and opened the graph in the canvas's leaf. The fixture lives on in
 the results folder, the scripts beside the harness.
 
@@ -2959,8 +2959,8 @@ outer band of each side makes a new group on that side and the middle joins
 the strip. The zones light up as the pointer crosses them, the ghost is the
 tab's title, and a drag let go anywhere else changes nothing. The split a
 side drop makes goes through the same `place_beside` as "Split right" and
-"Split down" — a sibling when the enclosing split runs that way, a wrapping
-split otherwise, the `dimension` halved or handed to the wrapper — only now
+"Split down" (a sibling when the enclosing split runs that way, a wrapping
+split otherwise, the `dimension` halved or handed to the wrapper), only now
 the new group can go in front as well as behind, so `Layout::insert_beside`
 took an `after` flag. The tab itself moves between the groups' stashed tab
 lists with every group stashed first; a group whose active tab left shows
@@ -2989,8 +2989,8 @@ in front and the zone geometry.
 The main area was one strip of tabs over one editor and one reading view;
 `workspace.json`'s `main` was flattened into it on read and left alone on
 write when it held more than one group. It is now a tree. `Layout` is the
-tree Obsidian's `main` records — a root `split` over `tabs` groups and nested
-splits — and every `TabGroup` owns an editor and a reading view of its own, so
+tree Obsidian's `main` records (a root `split` over `tabs` groups and nested
+splits), and every `TabGroup` owns an editor and a reading view of its own, so
 two groups show two notes at once. The active group's tabs and note stay in
 the workspace's live fields, exactly as the active tab's always did, and
 switching groups stashes them and loads the other's without reloading a
@@ -3057,21 +3057,21 @@ handler, so IME works.
 ## Plugins (phase 5)
 
 Started 2026-11-01. Goal: run as much of a vault's existing Obsidian plugins as
-can run without giving up the native renderer — see [[Plugins]] for the design
+can run without giving up the native renderer; see [[Plugins]] for the design
 and the tier line.
 
 | Item | Status |
 | --- | --- |
-| Plugin classification | done: `silica-plugins` reads each installed `manifest.json` and a bounded prefix of `main.js`, and puts every plugin in a tier — native, compatibility, or refused with the reason (`Refusal::DesktopOnly` / `Node` / `CodeMirror` / `Dom`) |
+| Plugin classification | done: `silica-plugins` reads each installed `manifest.json` and a bounded prefix of `main.js`, and puts every plugin in a tier: native, compatibility, or refused with the reason (`Refusal::DesktopOnly` / `Node` / `CodeMirror` / `Dom`) |
 | Community plugins list | done: each installed row says which tier it landed in, and the count line says how many can run here |
-| The compatibility host | done: QuickJS through `rquickjs`, one runtime per plugin, and the `app` shim — commands, ribbon, settings tabs, `loadData`/`saveData`, and vault IO answered from the index |
+| The compatibility host | done: QuickJS through `rquickjs`, one runtime per plugin, and the `app` shim (commands, ribbon, settings tabs, `loadData`/`saveData`, and vault IO answered from the index) |
 | Markdown post-processors | done: a post-processor stage in the native parse pass, its result carried into the render |
 | `metadataCache` and vault IO | done: the shim's read and write surface, answered from the index the reader already built |
 | The native plugin path | done: a `Plugin` trait in `silica-plugins`, 17 core plugins built on it, wired into `run` and the palette |
 
 A plugin is refused, not half-run: the classification pass and the list it feeds
 exist so a vault never ends up a state the user cannot explain. A compat plugin
-loads where it is listed — the Settings tab and the palette — and each row says
+loads where it is listed (the Settings tab and the palette), and each row says
 what its runtime did: what it registered, or the reason it stopped.
 
 ## Spike gates
@@ -3209,17 +3209,17 @@ line trimmed, with the range moved to fit; "Show more context" adds the non-blan
 either side. Unlinked mentions are deduplicated per `(path, range)` (the old list
 carried every duplicate the regex produced and printed the 200-row cap as the count),
 grouped by file, and keep the mention's own range for the Link button, which writes
-`[[Name]]` — `[[Name|text]]` when the text is an alias or another case, a markdown link
-under `useMarkdownLinks` — through the editor's buffer when the note is the open one and
+`[[Name]]` (`[[Name|text]]` when the text is an alias or another case, a markdown link
+under `useMarkdownLinks`) through the editor's buffer when the note is the open one and
 straight to disk otherwise, after checking the file is still the bytes the mention was
 found in. A Links row carries the link as written and a click goes through
 `follow_link`, so the subpath, the alias and the "create the note" case all come for
 free; the Links section is flat, as Obsidian's is.
 
-The Backlinks header is Obsidian's four `nav-action-button`s — Collapse results
+The Backlinks header is Obsidian's four `nav-action-button`s: Collapse results
 (`list`), Show more context (`move-vertical`), Change sort order (the Files view's six
 orders, in a menu with a check) and Show search filter (an in-pane field that keeps
-groups whose name matches whole and other groups' matching lines) — and the leaf's
+groups whose name matches whole and other groups' matching lines), and the leaf's
 seven keys (`collapseAll`, `extraContext`, `sortOrder`, `showSearch`, `searchQuery`,
 `backlinkCollapsed`, `unlinkedCollapsed`) plus the outgoing leaf's two are read from
 `workspace.json` at restore and written back in place, through a `leaf_state` /
@@ -3278,9 +3278,9 @@ the findings are the three sections
 [[Specification#Observed tags pane behavior, Obsidian 1.14.4 (installer build 1.13.7)]],
 [[Specification#Observed all properties pane behavior, Obsidian 1.14.4 (installer build 1.13.7)]]
 and [[Specification#Observed outline pane behavior, Obsidian 1.14.4 (installer build 1.13.7)]].
-What that settled that the old panes had wrong: the three share one row — `tree-item-self`, 276 by
+What that settled that the old panes had wrong: the three share one row (`tree-item-self`, 276 by
 25 at a 27 px pitch, 13 px muted text with the count a 12 px faint flair, an 8 px radius, the text
-indented 17 px per depth with a fold triangle 20 px before it and a hairline guide per level — and
+indented 17 px per depth with a fold triangle 20 px before it and a hairline guide per level, and
 one header, four, two and three `nav-action-button`s centred 2 px apart with a tooltip each and a
 30 px search box that pushes the rows down 38 px. The tags pane shows no `#`, counts occurrences
 rather than notes and gives a parent its descendants' occurrences too (`project` 6 = `#Project` 1 +
@@ -3291,8 +3291,8 @@ leaf keeps `sortOrder`, `useHierarchy`, `showSearch` and `searchQuery`, and Esca
 its own (the editor takes the keyboard, the rows stay filtered). The All properties pane wears a
 Lucide icon per widget (`text`, `list`, `binary`, `check-square`, `calendar`, `clock`, `tags`,
 `forward`, `file-question` for a nested map), keeps `sortOrder`, `showSearch` and `searchQuery`,
-and Escape there does hide the box and clear the query. The Outline nests structurally — a heading
-under the nearest preceding heading of a smaller level, whatever the numbers — wraps long headings
+and Escape there does hide the box and clear the query. The Outline nests structurally (a heading
+under the nearest preceding heading of a smaller level, whatever the numbers), wraps long headings
 rather than cutting them, marks the heading whose section holds the cursor (or, in reading mode,
 the line at the top of the view) with the hover wash, scrolls that row into view only while
 "Auto-scroll to current section" is on, folds per heading with "Collapse all" swapping to "Expand
@@ -3300,7 +3300,7 @@ all", filters to the matching rows and their ancestors with the match highlighte
 headings found." for a note without any, keeps `file`, `followCursor`, `showSearch` and
 `searchQuery`, and a click puts the cursor on the heading's line at column 0, centred.
 
-Built: `crates/silica/src/panes.rs`, gpui-free with unit tests, holds the models — `PaneSort` with
+Built: `crates/silica/src/panes.rs`, gpui-free with unit tests, holds the models: `PaneSort` with
 Obsidian's four stored values and menu labels, `tag_tree` / `sort_tags` / `tag_rows` (inclusive
 counts, the first-file spelling, hierarchy or flat, folds, the filter), `property_rows` with
 `property_icon`, and `outline_depths` / `heading_at` / `outline_rows` (structural nesting, folds,
@@ -3334,7 +3334,7 @@ probe's own `workspace.json` (flat, `frequencyReverse`, `com`; `alphabeticalReve
 the same keys. Not replicated: the tags pane's "Expand all" quirk (Obsidian's first click did
 nothing and its label never changes; Silica's label never changes either but its first click folds
 everything), the search highlight's exact styling (the spec has no computed values for
-`suggestion-highlight`, so the accent colour stands in), and anything the spec lists as unprobed —
+`suggestion-highlight`, so the accent colour stands in), and anything the spec lists as unprobed:
 whether the tag filter matches the whole path (Silica matches the whole path, case-insensitively),
 the row context menus, keyboard navigation, dragging a row. Kept on purpose: the Outline still
 rebuilds from the buffer as you type, where Obsidian waits for the file to reach disk, because
@@ -3371,7 +3371,7 @@ pane itself (`tools/obsidian-probe/search-shots.mjs`, written up under
 the magnifier, the Match case decorator and the clear button inside the field and the
 Search settings button after it; the Explain search terms block; the three toggles; the
 results bar with the count (its menu: Copy search results, Bookmark...) and the sort
-control; and the list — a 25 px title row per file with the chevron, the name and the
+control; and the list: a 25 px title row per file with the chevron, the name and the
 match count, over a card of its matches, each padded 8/20/8/12, wrapping, the matched
 text on the yellow wash with its weight unchanged, the accent wash and the two "Show
 more context" chevrons under the pointer. Matches wrap, so the uniform list became
@@ -3379,8 +3379,8 @@ gpui's `list` with a `ListState`: a new result set resets it to the top (a splic
 whole range left it at the end), and a fold or a change of context splices so the scroll
 position holds.
 
-The leaf's six keys — `query`, `matchingCase`, `explainSearch`, `collapseAll`,
-`extraContext`, `sortOrder` — are read from the left dock's `search` leaf at restore and
+The leaf's six keys (`query`, `matchingCase`, `explainSearch`, `collapseAll`,
+`extraContext`, `sortOrder`) are read from the left dock's `search` leaf at restore and
 written back in place, so a query survives a restart as Obsidian's does. Match case
 wraps the parsed query in `Query::CaseSensitive`; the sort control re-sorts the list it
 has without running the query again, the name orders through `natural_cmp` and the time

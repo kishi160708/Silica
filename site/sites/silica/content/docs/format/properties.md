@@ -1,6 +1,6 @@
 ---
 title: Properties and tags
-description: YAML frontmatter and tags in Silica — where frontmatter is allowed, how aliases work, the two ways to tag a note, and the surprisingly precise rules for what counts as a tag.
+description: YAML frontmatter and tags in Silica, where frontmatter is allowed, how aliases work, the two ways to tag a note, and the precise rules for what counts as a tag.
 ---
 
 # Properties and tags
@@ -37,8 +37,8 @@ reads the whole block, and the keys it gives special meaning to are:
 | `aliases` | Other names for this note. Used by the [quick switcher](/docs/app/switcher/), by [unlinked mentions](/docs/app/panes/), and resolvable by `[[alias]]` |
 | `tags` | Tags for this note (see below) |
 
-Every other key is kept and available to [property searches](/docs/reference/search-syntax/)
-— `[status:done]`, `[created:>2026-01-01]`.
+Every other key is kept and available to [property searches](/docs/reference/search-syntax/),
+as in `[status:done]` and `[created:>2026-01-01]`.
 
 **Links in properties are real links.** `source: "[[Paper]]"` produces a backlink in *Paper*
 and an edge in the graph. When *Paper* is renamed, Silica rewrites the link text in place
@@ -47,8 +47,8 @@ and leaves the rest of your YAML bytes untouched.
 ## Editing properties
 
 In Live Preview the properties block is a typed table you edit in place. Click a key or a
-value to open a field — typing, the arrows, Home, End, Backspace and Delete go into it,
-`Enter` commits, `Tab` commits a key and moves to its value, `Escape` abandons — and a
+value to open a field, where typing, the arrows, Home, End, Backspace and Delete go into it,
+`Enter` commits, `Tab` commits a key and moves to its value, and `Escape` abandons. A
 commit is one undo step. The row's glyph opens the type menu (text, list, number, checkbox,
 date, datetime), the `×` removes the property, and *+ Add property* opens an unnamed row
 that writes nothing until it is named. `markdown:add-metadata-property` (`Ctrl + ;`),
@@ -58,7 +58,7 @@ key, and `propertiesInDocument` chooses the table, nothing, or the raw YAML.
 **What a write touches.** Obsidian rewrites the *whole* frontmatter block on any property
 write, which costs you your YAML comments and your flow lists. Silica writes Obsidian's
 canonical form only for the entries whose **value** actually changed, and compares values
-rather than rendered text — so an untouched `tags: [one, two]` keeps its flow sequence and
+rather than rendered text, so an untouched `tags: [one, two]` keeps its flow sequence and
 its quoting, and every other byte in the block stays where it was. A ratchet test over the
 1,005 corpus notes with frontmatter pins that down.
 
@@ -94,7 +94,7 @@ The rules are precise, because `#` is also a heading marker and appears in URLs.
 matches Obsidian's observed behavior:
 
 - A tag needs **at least one non-numeric character**. `#2026` is not a tag; `#q4-2026` is.
-- **`# Heading` is not a tag** — the space settles it.
+- **`# Heading` is not a tag**; the space settles it.
 - A `#` **after an alphanumeric character is not a tag**: the `#section` in
   `page#section` is part of the word.
 - A `#` right after **whitespace** starts a tag. So does a `#` right after **another inline

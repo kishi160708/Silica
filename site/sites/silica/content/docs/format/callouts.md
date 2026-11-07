@@ -1,6 +1,6 @@
 ---
 title: Callouts
-description: Obsidian callouts in Silica — the syntax, the built-in types and their aliases, folding, titles, and the parsing details that decide whether you get a callout or an ordinary quote.
+description: Obsidian callouts in Silica: the syntax, the built-in types and their aliases, folding, titles, and the parsing details that decide whether you get a callout or an ordinary quote.
 ---
 
 # Callouts
@@ -39,7 +39,7 @@ With no title, the type's own name is used as the title.
 Three details decide whether you actually get a callout, and they are Obsidian's:
 
 - **The type is trimmed**, so `> [! bad]` is a callout of type `bad`.
-- **`> [!tip]Title`, with no space**, is *not* a callout — it is an ordinary block quote.
+- **`> [!tip]Title`, with no space**, is *not* a callout; it is an ordinary block quote.
 - An id can be attached to a callout by putting ` ^id` at the end of its header line.
 
 ## The built-in types
@@ -64,8 +64,8 @@ the same type:
 | `quote` | `cite` |
 
 A type Silica does not recognize still renders as a callout, with the default appearance and
-the type name as its title — the same as Obsidian, and the reason a custom callout type from
-a theme or snippet degrades gracefully rather than vanishing.
+the type name as its title, the same as Obsidian. That is the reason a custom callout type
+from a theme or snippet degrades gracefully rather than vanishing.
 
 ## While editing
 

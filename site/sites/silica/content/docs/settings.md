@@ -1,6 +1,6 @@
 ---
 title: Settings
-description: The Settings window in Silica — which tabs it shows, where every value comes from in your .obsidian folder, which controls write back to your vault, and which settings actually take effect.
+description: The Settings window in Silica, which tabs it shows, where every value comes from in your .obsidian folder, which controls write back to your vault, and which settings actually take effect.
 ---
 
 # Settings
@@ -9,8 +9,9 @@ description: The Settings window in Silica — which tabs it shows, where every 
 `.obsidian` folder, so what you see is your real configuration rather than a set of Silica
 defaults.
 
-**Settings writes.** Every control Obsidian itself offers as one — the toggles, the seven
-dropdowns, the two sliders and the two folder fields — writes its key when you change it.
+**Settings writes.** Every control Obsidian itself offers as one, including the toggles, the
+seven dropdowns, the two sliders and the two folder fields, writes its key when you change
+it.
 A write merges into the file's own JSON, so only the key you changed moves and keys Silica
 does not know about are left where they are.
 
@@ -69,9 +70,10 @@ which take effect on the next keystroke without reopening the note.
 Settings that are **shown but not yet acted on** include spellcheck, Vim mode, inline title,
 fold heading and fold indent, line numbers, indent guides, right-to-left, window frame style,
 and `cssTheme`. They are read from your configuration and displayed truthfully, and changing
-one still writes the key for Obsidian to honor; the behavior behind them is not implemented
-here. Each such row says so on its own line — "not in Silica yet", or "on restart" for the
-theme and the fonts — so you can tell which is which without leaving the window.
+one still writes the key for Obsidian to honor, but the behavior behind them is not
+implemented here. Each such row says so on its own line, as "not in Silica yet", or "on
+restart" for the theme and the fonts, so you can tell which is which without leaving the
+window.
 
 ## Core and community plugins
 
@@ -82,7 +84,7 @@ the tab is informational: switching one off in Obsidian does not currently remov
 corresponding pane from Silica.
 
 The **Community plugins** tab lists your installed plugins, read from
-`community-plugins.json` and each plugin's manifest — name, version, author, description.
+`community-plugins.json` and each plugin's manifest: name, version, author, description.
 
 > **Note** Community plugins are **listed, not run**. They are JavaScript written against an
 > Electron application; Silica is a native binary and cannot execute them. A native plugin
@@ -92,7 +94,7 @@ The **Community plugins** tab lists your installed plugins, read from
 ## Not shown
 
 Some settings are absent rather than disabled, because the specification does not yet record
-the `app.json` key behind them — and inventing a key would be worse than omitting the row.
+the `app.json` key behind them, and inventing a key would be worse than omitting the row.
 These include: the default file to open, deleting attachments with their note, Mermaid
 support, quick font-size adjustment, zoom level, and URI callbacks. Obsidian's Keychain tab,
 and the options tabs of core plugins other than the quick switcher and the command palette,

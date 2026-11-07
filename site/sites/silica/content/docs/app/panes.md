@@ -1,6 +1,6 @@
 ---
 title: Backlinks and the side panes
-description: The right dock — Backlinks with linked and unlinked mentions, Outgoing links with unresolved ones, the vault-wide Tags and All properties panes, and the Outline of headings.
+description: The right dock, with Backlinks and their linked and unlinked mentions, Outgoing links including unresolved ones, the vault-wide Tags and All properties panes, and the Outline of headings.
 ---
 
 # Backlinks and the side panes
@@ -21,7 +21,7 @@ per file with its count, over a card of that file's matches. Each match is its o
 context with the link highlighted in it, so you can see the sentence it was used in. A note
 that links here three times is one group of three matches.
 
-**Unlinked mentions** are places where this note's name — or any of its aliases — appears as
+**Unlinked mentions** are places where this note's name, or any of its aliases, appears as
 plain text that could have been a link but is not. The matching is deliberately narrow, so
 the pane stays useful rather than noisy:
 
@@ -33,8 +33,8 @@ the pane stays useful rather than noisy:
 - Deduplicated per place, so one mention is one row.
 
 A **Link** button appears under the pointer on an unlinked mention and writes the link for
-you — `[[Name]]`, or `[[Name|text]]` when the text is an alias or another case, or a
-Markdown link under `useMarkdownLinks` — into the note the mention is in, after checking
+you, as `[[Name]]`, or `[[Name|text]]` when the text is an alias or another case, or a
+Markdown link under `useMarkdownLinks`, into the note the mention is in, after checking
 that file is still the bytes the mention was found in.
 
 ### The header
@@ -43,9 +43,9 @@ Four buttons, Obsidian's: **Collapse results**, **Show more context** (the non-b
 either side of each match), **Change sort order** (the Files view's six orders, in a menu
 with a check) and **Show search filter**, an in-pane field that keeps groups whose name
 matches and other groups' matching lines. Each group folds on its own row. All of it lives
-in the leaf's own keys in `.obsidian/workspace.json` — `collapseAll`, `extraContext`,
-`sortOrder`, `showSearch`, `searchQuery`, `backlinkCollapsed`, `unlinkedCollapsed` — read at
-startup and written back in place.
+in the leaf's own keys in `.obsidian/workspace.json`: `collapseAll`, `extraContext`,
+`sortOrder`, `showSearch`, `searchQuery`, `backlinkCollapsed`, `unlinkedCollapsed`. These are
+read at startup and written back in place.
 
 ## Outgoing links
 
@@ -72,14 +72,14 @@ Every tag in the vault with the number of **occurrences** carrying it, written w
 `#`. Counts merge the two ways a note can be tagged, case-insensitively:
 
 - Inline `#tags` in the body.
-- The `tags` property in frontmatter — whether written as a YAML list or as a comma-separated
+- The `tags` property in frontmatter, whether written as a YAML list or as a comma-separated
   string, with or without the leading `#`.
 
 So `#Project`, `#project` and `tags: [project]` are one tag with a count of three, spelled
 the way its first indexed occurrence spells it.
 
 Nested tags nest: `project/silica` is a foldable row under `project`, and a parent's count
-includes its descendants' — which is also why a `tag:#project` search matches them. Turn
+includes its descendants', which is also why a `tag:#project` search matches them. Turn
 **Show nested tags** off and every tag becomes one flat row carrying its `project/` prefix.
 See [search syntax](/docs/reference/search-syntax/).
 
@@ -92,7 +92,7 @@ Clicking a row searches for that tag. The header's four buttons are **Change sor
 `properties:open`
 
 Every property key in the vault, with the number of notes carrying it and a glyph for the
-widget Obsidian would give it — text, list, number, checkbox, date, datetime, tags, aliases,
+widget Obsidian would give it: text, list, number, checkbox, date, datetime, tags, aliases,
 or a question mark for a key whose value is a nested mapping. Keys declared in
 `.obsidian/types.json` are listed even at a count of zero, and two spellings of one key merge
 case-insensitively under the one seen first. The header offers sort order and a search
@@ -107,21 +107,21 @@ of a smaller level, whatever the numbers. Click one to put the cursor on its lin
 Works in reading view and while editing, and it follows the buffer as you type rather than
 waiting for the file to reach disk.
 
-The heading whose section holds the cursor — or, in reading view, the line at the top of the
-view — is marked. The header's three buttons are **Auto-scroll to current section**, which
+The heading whose section holds the cursor, or in reading view the line at the top of the
+view, is marked. The header's three buttons are **Auto-scroll to current section**, which
 decides whether that row is also scrolled into view, **Expand all** / **Collapse all**, and
 **Show search filter**, which keeps the matching rows and their ancestors.
 A note with no headings says *No headings found.*
 
-Each pane's own state — its sort order, its folds, whether its filter box is showing and
-what is typed into it — lives in that leaf of `.obsidian/workspace.json` and is read at
+Each pane's own state (its sort order, its folds, whether its filter box is showing and
+what is typed into it) lives in that leaf of `.obsidian/workspace.json` and is read at
 startup and written back in place. A vault Obsidian never laid out gets Obsidian's default
 docks written for it, so nothing is lost on quit.
 
 ## Keeping up with the vault
 
 All five panes follow the vault. A note saved in another window, a file added by git, a
-folder dropped in — the panes refresh within a moment, and so do the resolved and unresolved
+folder dropped in: the panes refresh within a moment, and so do the resolved and unresolved
 link counts, because a note appearing can make a link elsewhere resolve.
 
 ## Not yet
@@ -135,4 +135,4 @@ link counts, because a note appearing can make a link elsewhere resolve.
 ## Next
 
 - [Search](/docs/app/search/)
-- [Internal links](/docs/format/links/) — how link resolution actually decides.
+- [Internal links](/docs/format/links/): how link resolution actually decides.

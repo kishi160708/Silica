@@ -1,6 +1,6 @@
 ---
 title: Managing notes
-description: Creating, renaming, moving, copying and deleting notes in Silica — and exactly how a rename rewrites the links in the rest of the vault, which links change and which are left byte for byte.
+description: Creating, renaming, moving, copying and deleting notes in Silica, and exactly how a rename rewrites the links in the rest of the vault: which links change and which are left byte for byte.
 ---
 
 # Managing notes
@@ -13,7 +13,7 @@ hardest to get right, so the rules are spelled out rather than summarised.
 | New note | `Ctrl + N`, the Files menu, a click on a link nobody has created, or Enter in the switcher on a name nothing matches |
 | New folder | `file-explorer:new-folder`, or the Files menu |
 | Rename | `F2` (`workspace:edit-file-title`), or the Files menu |
-| Move | `file-explorer:move-file` — a fuzzy folder picker |
+| Move | `file-explorer:move-file`, a fuzzy folder picker |
 | Make a copy | `file-explorer:duplicate-file`, or the Files menu |
 | Delete | `app:delete-file`, or the Files menu |
 
@@ -30,7 +30,7 @@ is your `newFileLocation` setting:
 |---|---|
 | `root` | At the top of the vault |
 | `current` | In the folder of the note you have open |
-| `folder` | In `newFileFolderPath` — falling back to the root if that folder does not exist |
+| `folder` | In `newFileFolderPath`, falling back to the root if that folder does not exist |
 
 A link with a folder in it creates the folders: clicking `[[reference/formats/DNG]]` where
 none of that exists creates `reference/`, `reference/formats/` and the note.
@@ -41,10 +41,10 @@ Creating a note over a path that already exists fails with Obsidian's own messag
 ## Renaming and moving: what happens to your links
 
 This is the important part. When you rename or move a file, every link in the vault that
-resolved to it is rewritten — and nothing else in those notes is touched.
+resolved to it is rewritten, and nothing else in those notes is touched.
 
-**The new link is written in your `newLinkFormat`** — shortest path, relative path, or
-absolute path — whatever form the old link had. All of `[[a]]`, `[[A.md]]`, `[[Sub/A]]`,
+**The new link is written in your `newLinkFormat`**, whether that is shortest path, relative
+path, or absolute path, whatever form the old link had. All of `[[a]]`, `[[A.md]]`, `[[Sub/A]]`,
 `[A](./A.md)` and `[A](/A.md)` become the same thing. Shortest format falls back to the full
 path when a basename is ambiguous.
 
@@ -57,7 +57,7 @@ because `[[Name]]` still says what it needs to say.
 - A wikilink stays a wikilink; a Markdown link stays a Markdown link.
 - An embed stays an embed.
 - An angle-bracketed destination keeps its brackets.
-- A Markdown destination keeps its `.md`, and encodes only spaces —
+- A Markdown destination keeps its `.md`, and encodes only spaces:
   `[x](Ä%20(b)%20100%.md)`.
 - The subpath is kept: `[[Note#Heading]]` keeps `#Heading`.
 
@@ -67,13 +67,13 @@ equal to the *old basename*, and is not the written path, follows the new basena
 follows the new basename when it *was* the old basename, or the new link path when it was the
 old destination without its `.md`.
 
-**What is never touched:**
+What is never touched:
 
 - Code spans and fenced code blocks.
 - Reference-style links and their definitions.
 - `[[#Heading]]` self-links.
 
-**A moved note's own links** are regenerated only when the move would break them — a
+**A moved note's own links** are regenerated only when the move would break them, as with a
 `[B](../B.md)` in a note that just went into a subfolder.
 
 **Frontmatter links update.** Here Silica differs from Obsidian deliberately: Obsidian
@@ -81,8 +81,8 @@ re-serialises the whole YAML block when it rewrites a frontmatter link, which ca
 `aliases: [Bee]` into a block list. Silica replaces the link text in place and leaves the
 rest of the bytes alone.
 
-> **Note** With `alwaysUpdateLinks` off, Silica asks first — *"Update links?"* with a
-> *Don't update* button — as Obsidian's dialog does. The default is on.
+> **Note** With `alwaysUpdateLinks` off, Silica asks first, *"Update links?"* with a
+> *Don't update* button, as Obsidian's dialog does. The default is on.
 
 Renaming onto a path that exists fails with *"Destination file already exists!"*. A
 case-only rename succeeds.
@@ -97,7 +97,7 @@ renames every note in a 1,009-note corpus, moves its folders under every format,
 its attachments, checking each time that every resolved link still resolves to the same file,
 that no link appears or disappears, and that nothing outside the links changed.
 
-The same probe corrected Silica's link-resolution order — see [internal
+The same probe corrected Silica's link-resolution order; see [internal
 links](/docs/format/links/).
 
 ## Deleting
@@ -107,7 +107,7 @@ Where a deleted file goes is your `trashOption`:
 | `trashOption` | Behavior |
 |---|---|
 | `system` (default) | The desktop trash. On Linux this is the freedesktop trash, with a proper `.trashinfo` record, so your file manager can restore it |
-| `local` | The vault's own `.trash/` folder — files flat, folders whole, name collisions numbered ` 2`, ` 3` |
+| `local` | The vault's own `.trash/` folder, with files flat, folders whole, and name collisions numbered ` 2`, ` 3` |
 | `none` | Deleted outright |
 
 With `promptDelete` on (the default) you are asked to confirm first.
@@ -117,8 +117,8 @@ With `promptDelete` on (the default) you are asked to confirm first.
 > `.trash/` rather than in the Recycle Bin or the macOS Trash.
 
 Deleting does **not** rewrite links. The links that pointed at the file simply become
-unresolved, which is what Obsidian does and is almost certainly what you want — a broken
-link is a reminder, a silently removed one is lost information.
+unresolved, which is what Obsidian does and is almost certainly what you want, because a
+broken link is a reminder and a silently removed one is lost information.
 
 ## Not yet
 
@@ -129,5 +129,5 @@ link is a reminder, a silently removed one is lost information.
 
 ## Next
 
-- [Internal links](/docs/format/links/) — how a link decides which file it means.
-- [Settings](/docs/settings/) — where `newLinkFormat` and friends live.
+- [Internal links](/docs/format/links/): how a link decides which file it means.
+- [Settings](/docs/settings/): where `newLinkFormat` and friends live.

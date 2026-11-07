@@ -8,7 +8,7 @@ the parser disagree, a probe note goes into
 `crates/silica-markdown/tests/corpus/vault/edge`, the vault is re-rendered, and
 the observed behavior is matched and written into
 `docs/silica/Specification.md`. The tedious part is *thinking of* the snippets,
-and that part suits a small local model — because **Obsidian is the oracle**, a
+and that part suits a small local model, because **Obsidian is the oracle**, a
 weak snippet is only a boring test, never a wrong answer. Nothing the model
 writes is trusted as a fact; it is trusted only as a thing to try.
 
@@ -30,8 +30,8 @@ tools/probe-gen/probe_gen.py promote --note "Probe Callouts" --only 0003,0019
 
 `generate` asks in rounds, because one request for 60 snippets gets 20 and
 repeats itself while three rounds at a high temperature cover more ground. Every
-candidate is then validated — empty, over-long, prose with no Markdown in it,
-duplicated within the batch, or already a line in the committed probes — and
+candidate is then validated, empty, over-long, prose with no Markdown in it,
+duplicated within the batch, or already a line in the committed probes, and
 each rejection is counted and printed, because a prompt whose output is 80%
 rejected needs fixing and that is only visible if the drops are not silent.
 
@@ -54,8 +54,8 @@ triage needs no bisection. The committed corpus is never written to until
 
 `triage` runs the corpus test's own comparator over the staging pair via
 `CORPUS_DIR`, and reads the failures out of the `CORPUS_DUMP` directory rather
-than parsing console output. Canonicalizing Obsidian's HTML is subtle — MathJax
-containers, copy buttons, `dir="auto"` — and a second implementation here would
+than parsing console output. Canonicalizing Obsidian's HTML is subtle, MathJax
+containers, copy buttons, `dir="auto"`, and a second implementation here would
 disagree with the gate it exists to predict.
 
 `promote` appends the snippets you choose to an `edge/` note and then stops,
@@ -111,13 +111,13 @@ without `json_schema`.
 - **One resident model.** The router runs `--models-max 1`, so naming a
   different preset mid-pipeline evicts the loaded one and costs a 10-30 s
   reload. Pick one model per run. After 30 minutes idle
-  (`--sleep-idle-seconds 1800`) the first request pays that reload too — a
+  (`--sleep-idle-seconds 1800`) the first request pays that reload too, a
   slow first call is the model waking, not a hang.
 - VRAM mostly takes care of itself here: `--fit` measures free memory per
   device at load time, `fit-target = 2048` leaves 2 GiB per GPU for the
   compositor, and idle sleep gives the weights back. The thing to remember is
-  that only 2e:00.0 is available to it — 02:00.0 is pinned to vfio-pci for the
-  W11 VM — so a model fitted while the VM was down will not re-fit on wake.
+  that only 2e:00.0 is available to it, 02:00.0 is pinned to vfio-pci for the
+  W11 VM, so a model fitted while the VM was down will not re-fit on wake.
 - The model emits `<think>` blocks when a *general* preset is named; they are
   stripped, and the request also sends `enable_thinking: false`. The `-code`
   presets have `reasoning = off` already.
