@@ -126,6 +126,11 @@ pub struct Theme {
     pub checkbox: Hsla,
     pub checkbox_border: Hsla,
     pub checkbox_marker: Hsla,
+    /// `--color-blue`: the token `note`, `info` and `todo` callouts and a
+    /// blue `==highlight==` wash paint with. Not a canvas preset (cyan is),
+    /// so it keeps its own pair across themes — which is why it has to be
+    /// named to be able to follow a grayscale theme.
+    pub blue: Hsla,
     pub ui_font: SharedString,
     pub text_font: SharedString,
     pub mono_font: SharedString,
@@ -249,6 +254,7 @@ impl Theme {
             checkbox: hsla(258. / 360., 0.88, 0.66, 1.),
             checkbox_border: rgb(0x666666).into(),
             checkbox_marker: rgb(0x1c1c1c).into(),
+            blue: rgb(0x027aff).into(),
             ui_font: crate::assets::FONT_FAMILY.into(),
             text_font: crate::assets::FONT_FAMILY.into(),
             mono_font: DEFAULT_MONO_FONT.into(),
@@ -278,6 +284,7 @@ impl Theme {
             checkbox: hsla(258. / 360., 0.88, 0.66, 1.),
             checkbox_border: rgb(0xababab).into(),
             checkbox_marker: rgb(0xffffff).into(),
+            blue: rgb(0x086ddd).into(),
             ui_font: crate::assets::FONT_FAMILY.into(),
             text_font: crate::assets::FONT_FAMILY.into(),
             mono_font: DEFAULT_MONO_FONT.into(),
@@ -340,6 +347,13 @@ impl Theme {
             theme.link = accent;
             theme.tag = accent;
         }
+        // * `monochrome` is Silica's own theme name, not Obsidian's: the
+        //   base it resolves to first, then the chroma comes out. It goes
+        //   last so a community theme or an accent can still be reasoned
+        //   about — nothing survives the desaturation anyway.
+        if config.theme.as_deref() == Some("monochrome") {
+            theme.desaturate();
+        }
         theme
     }
 
@@ -358,7 +372,7 @@ impl Theme {
             C::Green => presets[3],
             // * `--color-blue`: not a canvas preset (cyan is), so its own
             //   pair of values.
-            C::Blue => rgb(if self.dark { 0x027aff } else { 0x086ddd }).into(),
+            C::Blue => self.blue,
             C::Purple => presets[5],
         };
         c.a = 0.3;
@@ -386,8 +400,35 @@ impl Theme {
             // * Obsidian's grey is a flat value in both themes.
             "quote" => rgb(0x9e9e9e).into(),
             // * `note`, `info`, `todo` and anything Obsidian does not know.
-            _ => rgb(if self.dark { 0x027aff } else { 0x086ddd }).into(),
+            _ => self.blue,
         }
+    }
+
+    /// The same theme with every chroma taken out for `monochrome`: the
+    /// grays kept (backgrounds, borders, text), every hue-neutralised to the
+    /// muted text grey, and the canvas presets — card fills, callouts and
+    /// highlight washes included — mapped to a fixed ramp of grays. Light
+    /// and dark stay distinguishable because only chroma dies, not the
+    /// underlying ramp, and the wash keeps its alpha so highlight still
+    /// marks its text.
+    pub fn desaturate(&mut self) {
+        let ramp = [
+            rgba(0x555555ff).into(),
+            rgba(0x7e7e7eff).into(),
+            rgba(0xabababff).into(),
+            rgba(0xb3b3b3ff).into(),
+            rgba(0xdadadaff).into(),
+            rgba(0xffffffff).into(),
+        ];
+        self.accent = self.text_muted;
+        self.link = self.text_muted;
+        self.tag = self.text_muted;
+        self.checkbox = self.text_muted;
+        self.blue = self.text_muted;
+        let mut wash = self.text_muted;
+        wash.a = if self.dark { 0.4 } else { 0.5 };
+        self.highlight_bg = wash;
+        self.canvas.presets = ramp;
     }
 }
 
@@ -978,6 +1019,40 @@ mod tests {
             Theme::dark().callout_color("quote"),
             Theme::light().callout_color("quote")
         );
+    }
+
+    /// A `monochrome` appearance keeps whichever base it resolves to and
+    /// loses every hue: the accent pair, links, tags, checkboxes, the blue
+    /// callout and the six canvas presets all answer a chromatic-free gray,
+    /// and only the wash's alpha survives, so highlight still marks text.
+    #[test]
+    fn a_monochrome_theme_answers_gray_without_losing_its_base() {
+        let config = AppearanceConfig {
+            theme: Some("monochrome".to_string()),
+            ..Default::default()
+        };
+        for system_dark in [true, false] {
+            let theme = Theme::from_appearance(&config, system_dark, None, &[]);
+            assert!(theme.dark == system_dark, "monochrome lost its base scheme");
+            assert_eq!(theme.accent, theme.text_muted);
+            assert_eq!(theme.link, theme.text_muted);
+            assert_eq!(theme.tag, theme.text_muted);
+            assert_eq!(theme.checkbox, theme.text_muted);
+            assert_eq!(theme.accent.s, 0.0, "the accent kept a hue");
+            assert_eq!(theme.blue, theme.text_muted, "the blue callout kept a hue");
+            assert!(theme.highlight_bg.a > 0.0, "the wash went invisible");
+            assert_eq!(theme.highlight_bg.s, 0.0, "the wash kept a hue");
+            for kind in [
+                "note", "info", "todo", "failure", "success", "warning", "example", "quote",
+            ] {
+                let c = theme.callout_color(kind);
+                assert_eq!(c.s, 0.0, "[!{kind}] kept a hue on monochrome");
+            }
+            for (i, preset) in theme.canvas.presets.iter().enumerate() {
+                assert_eq!(preset.s, 0.0, "canvas preset {i} kept a hue");
+                assert!(preset.a > 0.0, "canvas preset {i} went invisible");
+            }
+        }
     }
 
     /// The callout hues and the highlight washes read the same tokens, so the

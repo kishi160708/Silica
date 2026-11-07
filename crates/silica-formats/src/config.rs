@@ -202,7 +202,8 @@ pub struct AppConfig {
 /// `appearance.json`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AppearanceConfig {
-    /// `obsidian` (dark) | `moonstone` (light) | `system`
+    /// `obsidian` (dark) | `moonstone` (light) | `system` | `monochrome`
+    /// (Silica's own: the base it resolves to, every chroma stripped)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
     /// Installed community theme name, or empty for default.
