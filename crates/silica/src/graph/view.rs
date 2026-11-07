@@ -7,6 +7,7 @@
 //! note, the local graph the current note and its neighbors.
 
 use super::layout::{Forces, Layout};
+use crate::canvas::menu::tooltip;
 /// Shaped node label lines, keyed by (label, colour, font family). The
 /// graph paints at one fixed font size, so those three are the whole
 /// shaping input and a shaped line outlives any single paint.
@@ -1368,6 +1369,7 @@ impl GraphView {
     fn icon_button(
         name: &'static str,
         glyph: &'static str,
+        label: &'static str,
         theme: &Theme,
     ) -> gpui::Stateful<gpui::Div> {
         div()
@@ -1382,6 +1384,7 @@ impl GraphView {
             .text_size(px(13.))
             .text_color(theme.text_muted)
             .hover(|s| s.bg(theme.bg_alt).text_color(theme.text))
+            .tooltip(tooltip(label))
             .child(glyph)
     }
 
@@ -1428,7 +1431,7 @@ impl GraphView {
 
     fn render_controls(&self, theme: &Theme, cx: &mut Context<Self>) -> gpui::AnyElement {
         if self.config.close.unwrap_or(false) {
-            return Self::icon_button("graph-controls-open", "⚙", theme)
+            return Self::icon_button("graph-controls-open", "⚙", "Show graph controls", theme)
                 .absolute()
                 .top_2()
                 .left_2()
@@ -1570,14 +1573,20 @@ impl GraphView {
                             .rounded_sm()
                             .cursor_pointer()
                             .bg(color)
+                            .tooltip(tooltip("Change group color"))
                             .on_click(
                                 cx.listener(move |this, _, _, cx| this.cycle_group_color(ix, cx)),
                             ),
                     )
                     .child(query)
                     .child(
-                        Self::icon_button_dyn(format!("graph-group-remove-{ix}"), "×", theme)
-                            .on_click(cx.listener(move |this, _, _, cx| this.remove_group(ix, cx))),
+                        Self::icon_button_dyn(
+                            format!("graph-group-remove-{ix}"),
+                            "×",
+                            "Remove group",
+                            theme,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| this.remove_group(ix, cx))),
                     )
                     .into_any_element()
             })
@@ -1618,7 +1627,7 @@ impl GraphView {
                 .into_any_element(),
             self.slider_row(Slider::LineSize, theme, cx)
                 .into_any_element(),
-            Self::icon_button_dyn("graph-refresh".to_string(), "↻", theme)
+            Self::icon_button_dyn("graph-refresh".to_string(), "↻", "Rebuild graph", theme)
                 .on_click(cx.listener(|this, _, _, cx| this.rebuild(cx)))
                 .into_any_element(),
         ];
@@ -1641,21 +1650,35 @@ impl GraphView {
                         .items_center()
                         .gap_1()
                         .child(
-                            Self::icon_button_dyn("graph-depth-down".to_string(), "−", theme)
-                                .on_click(cx.listener(move |this, _, _, cx| {
+                            Self::icon_button_dyn(
+                                "graph-depth-down".to_string(),
+                                "−",
+                                "Decrease depth",
+                                theme,
+                            )
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
                                     if this.local_depth > 1 {
                                         this.local_depth -= 1;
                                         this.rebuild(cx);
                                     }
-                                })),
+                                },
+                            )),
                         )
                         .child(div().text_color(theme.text).child(depth_label))
                         .child(
-                            Self::icon_button_dyn("graph-depth-up".to_string(), "+", theme)
-                                .on_click(cx.listener(move |this, _, _, cx| {
+                            Self::icon_button_dyn(
+                                "graph-depth-up".to_string(),
+                                "+",
+                                "Increase depth",
+                                theme,
+                            )
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
                                     this.local_depth += 1;
                                     this.rebuild(cx);
-                                })),
+                                },
+                            )),
                         ),
                 )
                 .into_any_element();
@@ -1695,16 +1718,21 @@ impl GraphView {
                     .px_1()
                     .py(px(3.))
                     .child(
-                        Self::icon_button("graph-controls-animate", "▶", theme)
+                        Self::icon_button("graph-controls-animate", "▶", "Restart layout", theme)
                             .on_click(cx.listener(|this, _, _, cx| this.restart_layout(cx))),
                     )
                     .child(
-                        Self::icon_button("graph-controls-export", "⭳", theme)
-                            .on_click(cx.listener(|this, _, window, cx| this.export(window, cx))),
+                        Self::icon_button(
+                            "graph-controls-export",
+                            "⭳",
+                            "Export graph as PNG",
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _, window, cx| this.export(window, cx))),
                     )
                     .child(
-                        Self::icon_button("graph-controls-reset", "↺", theme).on_click(
-                            cx.listener(|this, _, _, cx| {
+                        Self::icon_button("graph-controls-reset", "↺", "Shuffle layout", theme)
+                            .on_click(cx.listener(|this, _, _, cx| {
                                 // * Randomize the physics layout without touching zoom or pan.
                                 //   user_adjusted = true keeps the simulation from calling fit()
                                 //   and overriding the user's current view.
@@ -1721,12 +1749,16 @@ impl GraphView {
                                 this.user_adjusted = true;
                                 this.start_simulation(cx);
                                 cx.notify();
-                            }),
-                        ),
+                            })),
                     )
                     .child(
-                        Self::icon_button("graph-controls-close", "×", theme)
-                            .on_click(cx.listener(|this, _, _, cx| this.set_closed(true, cx))),
+                        Self::icon_button(
+                            "graph-controls-close",
+                            "×",
+                            "Hide graph controls",
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.set_closed(true, cx))),
                     ),
             )
             .child(self.section(Section::Filters, filters, theme, cx))
@@ -1739,6 +1771,7 @@ impl GraphView {
     fn icon_button_dyn(
         name: String,
         glyph: &'static str,
+        label: &'static str,
         theme: &Theme,
     ) -> gpui::Stateful<gpui::Div> {
         div()
@@ -1753,6 +1786,7 @@ impl GraphView {
             .cursor_pointer()
             .text_color(theme.text_muted)
             .hover(|s| s.bg(theme.bg_alt).text_color(theme.text))
+            .tooltip(tooltip(label))
             .child(glyph)
     }
 }
