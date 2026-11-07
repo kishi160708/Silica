@@ -142,9 +142,9 @@ pub struct Registrations {
     pub failure: Option<String>,
 }
 
-/// A file in the vault, as the plugin API's `TAbstractFile` reports one.
-#[derive(Debug, Clone)]
-struct FileEntry {
+/// A vault file as a plugin sees it: path, name, size, mtime.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileEntry {
     path: String,
     name: String,
     basename: String,
@@ -160,10 +160,17 @@ struct Shared {
     data_path: PathBuf,
     /// The plugin's own id, as the vault knows it.
     id: String,
+    /// The vault's files, re-walked if anything has changed since the last
+    /// read. When `shared_files` is set, this mirrors it instead of walking
+    /// the directory tree again — one walk serves every plugin.
     files: Vec<FileEntry>,
     /// Set by anything that changes the vault, so the next read of the file
     /// list walks it again instead of answering from a stale snapshot.
     files_stale: bool,
+    /// One file list shared across every compatibility plugin, so N plugins
+    /// do not walk the vault N times. Set by the loader before each plugin
+    /// starts; `files()` returns from it instead of walking.
+    shared_files: Option<Rc<RefCell<Vec<FileEntry>>>>,
     notices: Vec<String>,
     active_file: Option<String>,
     /// The note open in the editor. Writes to it are refused: a plugin writing
@@ -179,6 +186,15 @@ impl Shared {
     /// has no handle on the app's index; for a vault large enough for that to
     /// matter, the app should hand its index over instead.
     fn files(&mut self) -> &[FileEntry] {
+        // * One walk serves every plugin: if a shared file list was handed in,
+        //   mirror it instead of walking the vault again.
+        if let Some(shared) = &self.shared_files {
+            let borrowed = shared.borrow();
+            if self.files != *borrowed {
+                self.files = borrowed.clone();
+            }
+            return &self.files;
+        }
         if self.files_stale {
             self.files = collect_files(&self.root.clone());
             self.files_stale = false;
@@ -374,6 +390,7 @@ impl PluginHost {
         plugin_dir: &Path,
         manifest: &PluginManifest,
         open_note: Option<String>,
+        shared_files: Option<Rc<RefCell<Vec<FileEntry>>>>,
     ) -> PluginHost {
         let id = if manifest.id.is_empty() {
             plugin_dir
@@ -383,12 +400,15 @@ impl PluginHost {
         } else {
             manifest.id.clone()
         };
+        // * Without a shared list, the first files() call must walk the vault.
+        let files_stale = shared_files.is_none();
         let shared = Rc::new(RefCell::new(Shared {
             id,
             root: vault.to_path_buf(),
             data_path: plugin_dir.join("data.json"),
-            files: collect_files(vault),
-            files_stale: false,
+            files: Vec::new(),
+            files_stale,
+            shared_files,
             notices: Vec::new(),
             active_file: open_note.clone(),
             open_note,
@@ -1008,7 +1028,9 @@ fn describe(ctx: &Ctx<'_>, error: rquickjs::Error) -> String {
 
 /// The vault's files, as `TAbstractFile` reports them. Hidden folders are
 /// skipped, which keeps `.obsidian` and `.trash` out of what a plugin sees.
-fn collect_files(root: &Path) -> Vec<FileEntry> {
+/// One vault walk: every file under `root`, as `FileEntry`s. Shared across
+/// plugins so N plugins do not walk the vault N times.
+pub(crate) fn collect_files(root: &Path) -> Vec<FileEntry> {
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -1178,6 +1200,7 @@ mod path_tests {
             id: "example".into(),
             files: Vec::new(),
             files_stale: false,
+            shared_files: None,
             notices: Vec::new(),
             active_file: None,
             open_note: open_note.map(str::to_string),
@@ -1300,6 +1323,7 @@ mod capability_tests {
             data_path: root.join("data.json"),
             files: Vec::new(),
             files_stale: false,
+            shared_files: None,
             notices: Vec::new(),
             active_file: None,
             open_note: None,

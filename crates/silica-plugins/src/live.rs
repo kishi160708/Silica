@@ -11,8 +11,10 @@
 //! beside the per-vault compatibility hosts.
 
 use std::cell::RefCell;
+use std::rc::Rc;
 use std::path::{Path, PathBuf};
 
+use crate::host::{collect_files, FileEntry};
 use crate::native::PluginContext;
 use crate::{native::Plugin, PluginHost, Registry, Tier};
 
@@ -76,12 +78,29 @@ pub fn ensure(root: &Path, config_dir: &str, registry: &Registry) {
             return;
         }
         let plugins = root.join(config_dir).join("plugins");
+        // * One file walk serves every plugin instead of each walking alone.
+        let shared_files: Option<Rc<RefCell<Vec<FileEntry>>>> = if registry
+            .records()
+            .iter()
+            .any(|record| record.enabled && record.tier == Tier::Compat)
+        {
+            Some(Rc::new(RefCell::new(collect_files(root))))
+        } else {
+            None
+        };
         let hosts = registry
             .records()
             .iter()
             .filter(|record| record.enabled && record.tier == Tier::Compat)
             .map(|record| {
-                PluginHost::load(root, &plugins.join(&record.folder), &record.manifest, None)
+                let sf = Rc::clone(shared_files.as_ref().unwrap());
+                PluginHost::load(
+                    root,
+                    &plugins.join(&record.folder),
+                    &record.manifest,
+                    None,
+                    Some(sf),
+                )
             })
             .collect();
         *loaded = Some(Loaded {

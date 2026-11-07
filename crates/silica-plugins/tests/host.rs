@@ -125,6 +125,7 @@ fn load(fixture: &Fixture, open_note: Option<&str>) -> PluginHost {
         &fixture.plugin,
         &manifest(),
         open_note.map(|note| note.to_string()),
+        None,
     )
 }
 
