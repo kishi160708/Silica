@@ -126,6 +126,9 @@ pub(crate) enum SidePaneTarget {
     /// An outline heading row: right-click opens the heading in its note.
     /// Holds the note path and the heading's byte offset.
     Heading { path: String, offset: usize },
+    /// A Backlinks / Outgoing links row: a resolved note (`path`), or an
+    /// unresolved link (`link`) that has no note behind it yet.
+    Link { path: String, link: Option<String> },
 }
 
 /// What a right-click on a row does: it is handed the click point and the
@@ -185,6 +188,36 @@ fn side_menu_items(target: &SidePaneTarget) -> Vec<SidePaneMenuItem> {
                 A::OpenHeadingToRight(path.clone()),
             ),
         ],
+        // * A Backlinks or Outgoing row: the same open trio Obsidian draws
+        //   over a link row, plus the path on the clipboard. An unresolved
+        //   link opens the note it would create — the row's click already
+        //   follows it that way, and the menu matching the row is the least
+        //   surprise.
+        SidePaneTarget::Link { path, link } => {
+            let open = if link.is_some() && path.is_empty() {
+                link.clone().unwrap_or_default()
+            } else {
+                path.clone()
+            };
+            vec![
+                item(crate::i18n::t("Open note"), "file-text", A::OpenLink(open.clone())),
+                item(
+                    crate::i18n::t("Open note in new tab"),
+                    "file-plus",
+                    A::OpenLinkInNewTab(open.clone()),
+                ),
+                item(
+                    crate::i18n::t("Open note to the right"),
+                    "separator-vertical",
+                    A::OpenLinkToRight(open.clone()),
+                ),
+                item(
+                    crate::i18n::t("Copy path"),
+                    "clipboard",
+                    A::CopyLinkPath(if path.is_empty() { link.clone().unwrap_or_default() } else { path.clone() }),
+                ),
+            ]
+        }
     }
 }
 
@@ -200,6 +233,13 @@ pub enum SidePaneAction {
     OpenHeading(String, usize),
     OpenHeadingInNewTab(String),
     OpenHeadingToRight(String),
+    /// Open a Backlinks / Outgoing row's note (or the note its link text
+    /// would create).
+    OpenLink(String),
+    OpenLinkInNewTab(String),
+    OpenLinkToRight(String),
+    /// Copy the row's vault-relative path.
+    CopyLinkPath(String),
 }
 
 /// The command registry with the vault's `hotkeys.json` applied.
@@ -6438,7 +6478,13 @@ impl Workspace {
                     )
                 });
                 self.release_buffer(cx);
-                self.status = format!("{path}: {other:?} files are not supported yet").into();
+                // * A click on a file no view draws is not a dead end: hand
+                //   it to the desktop, the way the row menu's "Open in
+                //   default app" already does. Until a view exists for this
+                //   kind, the system's own app is the better answer than a
+                //   placeholder that does nothing.
+                self.open_in_default_app(path, cx);
+                self.status = format!("{path} opened outside Silica ({other:?} file)").into();
             }
         }
         self.refresh_panes(state, cx);

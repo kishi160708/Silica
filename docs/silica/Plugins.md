@@ -73,6 +73,89 @@ free: a crash or a runaway is one plugin's, not the app's. Hard, hostile-code is
 (WASM under Wasmtime) is a later switch behind the same host trait; it costs more per call, and
 nothing about the design above depends on which engine is underneath.
 
+### API compatibility matrix
+
+Verified against a running host by the tests in `crates/silica-plugins/tests/host.rs` and
+`host.rs`'s capability tests. "Works" means the documented contract holds, not that every
+Electron side effect exists.
+
+**vault — full read/write**
+
+| Obsidian | Silica |
+| --- | --- |
+| `vault.read` / `cachedRead` | works |
+| `vault.readBinary` | works; base64 text, decode with `atob()` |
+| `vault.create` / `modify` / `append` / `delete` / `trash` | works, through the app's writers |
+| `vault.rename` | works, with link repair |
+| `vault.createFolder` | works |
+| `vault.getFiles` / `getMarkdownFiles` / `getAbstractFileByPath` | works; one vault walk shared by every plugin |
+| `vault.adapter` | not exposed; the vault's own path rules apply |
+
+**vault config — answered, not mutable**
+
+`vault.getConfig` returns `{}` rather than throwing: a plugin that probes for a key sees an
+absent key instead of crashing. `vault.setConfig` resolves without writing; Obsidian's
+`app.json` is the Settings modal's job, not a plugin's.
+
+**metadataCache — served from the index**
+
+| Obsidian | Silica |
+| --- | --- |
+| `getFileCache` / `getCache` | works, in Obsidian's shape |
+| `getFirstLinkpathDest` | works, shortest-path resolution |
+| `getTags` / `getAllTags` | works; every vault tag with occurrence counts |
+| `getBacklinksForFile` | works; every note linking to the file, grouped by source |
+| `resolvedLinks[path]` / `unresolvedLinks[path]` | works; Proxy resolving per file on access |
+| `fileToLinktext` | works |
+
+**workspace — the leaf model GPUI does not have**
+
+`getActiveFile` works. `getLeaf().openFile` verifies the file exists; the app's own command
+palette performs the view switch. `getLeavesOfType` returns `[]` and `getActiveViewOfType`
+returns `null` — there is one main area, not a leaf registry, so the honest answer is an empty
+one rather than a fake leaf a plugin cannot use. `onLayoutReady` defers to the plugin's next
+interaction.
+
+**Registration surface**
+
+Commands, ribbon icons, settings tabs, post-processors, code-block processors, and
+`loadData`/`saveData` all work. `registerEvent` / `registerDomEvent` / `registerView` /
+`registerExtensions` are recorded no-ops: the app owns its layout and events, and a plugin
+that registers a custom view still runs — it just has nowhere to draw it, which classification
+reports up front.
+
+**Timers**
+
+QuickJS ships no event loop, so the host provides `setTimeout`, `setInterval` and their
+clears. Due callbacks are pumped before each command or post-processor — the pump a
+synchronous runtime has. A debounced callback or a periodic job therefore fires on the
+plugin's next interaction instead of never.
+
+**Node globals**
+
+`require("obsidian")` returns the shim; requiring anything else throws with the reason. There
+is no `process`, `Buffer`, `window`, or `document`, and a plugin reaching for one is refused
+at classification time rather than crashing later.
+
+**Numbers, strings, dates**
+
+`normalizePath`, `parseYaml` / `stringifyYaml` (block-style YAML, not JSON), `moment` (the
+token subset a note-naming plugin needs), and `getIcon`/`addIcon` (recorded, no-op — GPUI
+draws Silica's own icons) behave as documented. `prepareFuzzySearch` does real subsequence
+matching; `prepareSimpleSearch` requires every word.
+
+**Refused — the deliberate boundary**
+
+`requestUrl` throws: the host makes no network calls from plugin code, which is the SSRF
+boundary the note-fetching code builds its own protections around. `Modal` and `ItemView`
+throw: they need a DOM. `htmlToMarkdown` and `sanitizeHTMLToDom` throw. These are answered
+loudly, so a plugin's failure names the method instead of dying on `undefined`.
+
+**Platform**
+
+`Platform.isWin` / `isMacOS` / `isLinux` report the build target, not a hardcoded Linux.
+`Platform.isMobile` is `false` on every target — there is no mobile client yet.
+
 ### The performance contract
 
 The order of business is that plugins are cheap when idle and cannot stall a frame.

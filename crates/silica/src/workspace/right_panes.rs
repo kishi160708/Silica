@@ -516,6 +516,18 @@ impl Workspace {
             SidePaneAction::OpenHeadingToRight(path) => {
                 self.open_in_new_tab(path.clone(), None, cx);
             }
+            SidePaneAction::OpenLink(path) => {
+                self.open_file(path.clone(), None, cx);
+            }
+            SidePaneAction::OpenLinkInNewTab(path) => {
+                self.open_in_new_tab(path.clone(), None, cx);
+            }
+            SidePaneAction::OpenLinkToRight(path) => {
+                self.open_in_new_tab(path.clone(), None, cx);
+            }
+            SidePaneAction::CopyLinkPath(path) => {
+                self.copy_path(path, cx);
+            }
         }
     }
 

@@ -41,14 +41,17 @@ const DAYS: [&str; 7] = [
 /// The tokens this understands, longest first so `MMMM` wins over `MM`.
 const TOKENS: &[&str] = &[
     "YYYY", "MMMM", "dddd", "SSS", "MMM", "DDD", "ddd", "YY", "MM", "DD", "Do", "HH", "hh", "mm",
-    "ss", "Q", "M", "D", "d", "H", "h", "m", "s", "A", "a", "X", "x",
+    "ss", "Q", "M", "D", "d", "H", "h", "m", "s", "A", "a", "X", "x", "k", "S",
 ];
 
 /// Tokens moment renders that this does not: week numbers and their
 /// week-years, the zone, and the day-of-week spellings that depend on the
-/// locale's first day.
+/// locale's first day. These stay refused rather than guessed — a wrong
+/// date is a note in the wrong place, and a day-name is a locale answer
+/// this module has not observed. `unsupported_tokens` names each one so
+/// the caller can refuse loudly.
 const KNOWN_UNSUPPORTED: &[&str] = &[
-    "GGGG", "gggg", "WW", "ww", "ZZ", "GG", "gg", "E", "e", "W", "w", "Z", "k", "S",
+    "GGGG", "gggg", "WW", "ww", "W", "w", "ZZ", "GG", "gg", "E", "e", "Z",
 ];
 
 /// `format` rendered for `at`, with `[...]` passed through verbatim.
@@ -143,6 +146,14 @@ fn render(token: &str, at: &Stamp) -> String {
         "d" => at.weekday().to_string(),
         "HH" => format!("{:02}", at.hour),
         "H" => at.hour.to_string(),
+        // * moment's `k` is 1..24: midnight is 24, not 0.
+        "k" => match at.hour {
+            0 => "24".to_string(),
+            h => h.to_string(),
+        },
+        // * Tenths of a second. A stamp carries whole seconds, so the
+        //   tenths digit is the same zero `SSS` renders.
+        "S" => "0".to_string(),
         "hh" => format!("{hour12:02}"),
         "h" => hour12.to_string(),
         "mm" => format!("{:02}", at.minute),
@@ -279,6 +290,20 @@ mod tests {
         assert_eq!(unsupported_tokens("YYYY-MM-DD Z"), ["Z"]);
         // * A bracketed one is literal text, not a token.
         assert!(unsupported_tokens("YYYY[W]MM").is_empty());
+        // * `k` and `S` are now rendered: 1..24 hours and tenths of a second
+        //   need no locale probe, so they are not refused.
+        assert!(unsupported_tokens("HH:mm k S").is_empty());
+    }
+
+    #[test]
+    fn k_counts_midnight_as_24_and_s_renders_tenths() {
+        let midnight = &dates()[4]; // * 2026-10-19 00:00:00
+        let noon = &dates()[1]; // * 2024-02-29 13:45:30
+        assert_eq!(format("k", midnight), "24");
+        assert_eq!(format("k", noon), "13");
+        // * A whole-second stamp has no tenths, the same zero SSS renders.
+        assert_eq!(format("S", noon), "0");
+        assert_eq!(format("HH:mm:ss.SSS S", noon), "13:45:30.000 0");
     }
 
     #[test]

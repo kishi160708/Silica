@@ -451,17 +451,38 @@ impl Workspace {
                         .cursor_pointer()
                         .hover(|s| s.bg(theme.bg_alt))
                         .when(unresolved, |d| d.tooltip(tooltip("Not created yet")))
-                        .on_click(cx.listener(move |this, _, _, cx| {
+                        .on_click({
                             // * A Links row follows the link the way the note
                             //   would, subpath included, and creates the note
                             //   nothing stands behind; a mentions row opens
                             //   the file.
-                            if let Some(link) = link.clone() {
-                                this.follow_link(LinkTarget::Internal(link), cx);
-                            } else if let Some(path) = path.clone() {
-                                this.open_file(path, None, cx);
-                            }
-                        }))
+                            let path = path.clone();
+                            let link = link.clone();
+                            cx.listener(move |this, _, _, cx| {
+                                if let Some(link) = link.clone() {
+                                    this.follow_link(LinkTarget::Internal(link), cx);
+                                } else if let Some(path) = path.clone() {
+                                    this.open_file(path, None, cx);
+                                }
+                            })
+                        })
+                        // * A right-click on a Backlinks or Outgoing row opens
+                        //   the row menu the other panes have had: open the
+                        //   note here, in a new tab, or to the right, and copy
+                        //   its path. An unresolved row targets the note its
+                        //   link would create, the same place its click goes.
+                        .on_mouse_down(gpui::MouseButton::Right, {
+                            let path = path.clone();
+                            let link = link.clone();
+                            cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                                let target = SidePaneTarget::Link {
+                                    path: path.clone().unwrap_or_default(),
+                                    link: if path.is_none() { link.clone() } else { None },
+                                };
+                                this.open_side_menu(event.position, target, cx);
+                                cx.stop_propagation();
+                            })
+                        })
                         .child(gutter)
                         .child(
                             div()
