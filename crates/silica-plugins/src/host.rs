@@ -655,6 +655,16 @@ fn install<'js>(
         s.borrow_mut().notices.push(message);
     });
 
+    // Inject platform info so the shim's `Platform` object reports the real
+    // host instead of pretending to be Linux everywhere.
+    #[cfg(target_os = "windows")]
+    let platform_json = r#"{"isDesktopApp":true,"isMobileApp":false,"isMobile":false,"isDesktop":true,"isWin":true,"isMacOS":false,"isLinux":false}"#;
+    #[cfg(target_os = "macos")]
+    let platform_json = r#"{"isDesktopApp":true,"isMobileApp":false,"isMobile":false,"isDesktop":true,"isWin":false,"isMacOS":true,"isLinux":false}"#;
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let platform_json = r#"{"isDesktopApp":true,"isMobileApp":false,"isMobile":false,"isDesktop":true,"isWin":false,"isMacOS":false,"isLinux":true}"#;
+    globals.set("__silica_platform", platform_json)?;
+
     let s = Rc::clone(&shared);
     set!("__silica_raw_read_data", move || -> String {
         std::fs::read_to_string(s.borrow().data_path.clone()).unwrap_or_default()
@@ -1296,6 +1306,16 @@ mod capability_tests {
             post_processors: Vec::new(),
         }));
         context.with(|ctx| {
+            // Inject the platform the tests run on, matching the host's cfg,
+            // before the shim evaluates (it reads __silica_platform at load).
+            #[cfg(target_os = "windows")]
+            let platform_json = r#"{"isDesktopApp":true,"isMobileApp":false,"isMobile":false,"isDesktop":true,"isWin":true,"isMacOS":false,"isLinux":false}"#;
+            #[cfg(target_os = "macos")]
+            let platform_json = r#"{"isDesktopApp":true,"isMobileApp":false,"isMobile":false,"isDesktop":true,"isWin":false,"isMacOS":true,"isLinux":false}"#;
+            #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+            let platform_json = r#"{"isDesktopApp":true,"isMobileApp":false,"isMobile":false,"isDesktop":true,"isWin":false,"isMacOS":false,"isLinux":true}"#;
+            ctx.globals().set("__silica_platform", platform_json)
+                .map_err(|e| format!("platform: {e}"))?;
             ctx.eval::<(), _>(SHIM.as_bytes())
                 .map_err(|e| format!("shim: {e}"))?;
             ctx.eval::<String, _>(script.as_bytes())

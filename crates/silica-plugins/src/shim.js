@@ -404,7 +404,7 @@ function __silica_app(manifest) {
       var path = __silica_resolve(String(linkpath));
       return path === "" ? null : vault.getAbstractFileByPath(path);
     },
-    getTags: function () { throw new Error("metadataCache.getTags is not supported by Silica"); },
+    getTags: function () { return []; },
     fileToLinktext: function (file) {
       var f = __silica_file(__silica_path(file));
       return f === null ? "" : f.basename;
@@ -596,7 +596,7 @@ var __silica_obsidian = {
   Setting: Setting,
   Notice: function Notice(message) { __silica_raw_notice(String(message)); },
   moment: moment,
-  Platform: { isDesktopApp: true, isMobileApp: false, isMobile: false, isDesktop: true, isWin: false, isMacOS: false, isLinux: true },
+  Platform: JSON.parse(__silica_platform || '{"isDesktopApp":true,"isMobileApp":false,"isMobile":false,"isDesktop":true,"isWin":false,"isMacOS":false,"isLinux":false}'),
   normalizePath: function (path) {
     var out = String(path).replace(/\\/g, "/").replace(/\/+/g, "/");
     if (out.length > 1) out = out.replace(/\/$/, "");
