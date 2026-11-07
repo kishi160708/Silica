@@ -142,9 +142,9 @@ pub struct Registrations {
     pub failure: Option<String>,
 }
 
-/// A file in the vault, as the plugin API's `TAbstractFile` reports one.
-#[derive(Debug, Clone)]
-struct FileEntry {
+/// A vault file as a plugin sees it: path, name, size, mtime.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileEntry {
     path: String,
     name: String,
     basename: String,
@@ -160,10 +160,17 @@ struct Shared {
     data_path: PathBuf,
     /// The plugin's own id, as the vault knows it.
     id: String,
+    /// The vault's files, re-walked if anything has changed since the last
+    /// read. When `shared_files` is set, this mirrors it instead of walking
+    /// the directory tree again — one walk serves every plugin.
     files: Vec<FileEntry>,
     /// Set by anything that changes the vault, so the next read of the file
     /// list walks it again instead of answering from a stale snapshot.
     files_stale: bool,
+    /// One file list shared across every compatibility plugin, so N plugins
+    /// do not walk the vault N times. Set by the loader before each plugin
+    /// starts; `files()` returns from it instead of walking.
+    shared_files: Option<Rc<RefCell<Vec<FileEntry>>>>,
     notices: Vec<String>,
     active_file: Option<String>,
     /// The note open in the editor. Writes to it are refused: a plugin writing
@@ -171,6 +178,71 @@ struct Shared {
     open_note: Option<String>,
     /// Post-processors the plugin registered, in the order it asked for them.
     post_processors: Vec<(i64, String)>,
+    /// Timers the plugin scheduled through `setTimeout`/`setInterval`, keyed
+    /// by the id handed back to JS. A slot is `None` once cancelled or, for
+    /// one-shot timers, once fired.
+    timers: Vec<Option<Timer>>,
+}
+
+/// One scheduled callback: the bound key to run, when it is due, and its
+/// repeat period (`None` for a one-shot `setTimeout`).
+struct Timer {
+    key: String,
+    at: Instant,
+    period: Option<Duration>,
+}
+
+impl Shared {
+    /// Registers a timer and returns its id. `delay_ms` clamps to zero, so a
+    /// plugin that passes a negative or NaN delay gets an immediate run
+    /// rather than an error.
+    fn add_timer(&mut self, delay_ms: f64, repeat: bool, key: String) -> u32 {
+        let delay = if delay_ms.is_finite() && delay_ms > 0.0 {
+            Duration::from_secs_f64(delay_ms / 1000.0)
+        } else {
+            Duration::ZERO
+        };
+        let timer = Timer {
+            key,
+            at: Instant::now() + delay,
+            period: repeat.then_some(delay),
+        };
+        // * Reuse cancelled slots so the id space stays small.
+        if let Some(slot) = self.timers.iter().position(|t| t.is_none()) {
+            self.timers[slot] = Some(timer);
+            return slot as u32;
+        }
+        self.timers.push(Some(timer));
+        (self.timers.len() - 1) as u32
+    }
+
+    fn cancel_timer(&mut self, id: u32) {
+        if let Some(slot) = self.timers.get_mut(id as usize) {
+            *slot = None;
+        }
+    }
+
+    /// The bound keys of timers that are due now, rescheduling the repeating
+    /// ones. Called with the borrow held briefly; the callbacks themselves
+    /// run through the context afterwards.
+    fn due_timers(&mut self) -> Vec<String> {
+        let now = Instant::now();
+        let mut due = Vec::new();
+        for slot in self.timers.iter_mut() {
+            let Some(timer) = slot else { continue };
+            if timer.at > now {
+                continue;
+            }
+            due.push(timer.key.clone());
+            match timer.period {
+                Some(period) => {
+                    timer.at = now + period;
+                }
+                None => *slot = None,
+            }
+        }
+        due
+    }
 }
 
 impl Shared {
@@ -179,6 +251,15 @@ impl Shared {
     /// has no handle on the app's index; for a vault large enough for that to
     /// matter, the app should hand its index over instead.
     fn files(&mut self) -> &[FileEntry] {
+        // * One walk serves every plugin: if a shared file list was handed in,
+        //   mirror it instead of walking the vault again.
+        if let Some(shared) = &self.shared_files {
+            let borrowed = shared.borrow();
+            if self.files != *borrowed {
+                self.files = borrowed.clone();
+            }
+            return &self.files;
+        }
         if self.files_stale {
             self.files = collect_files(&self.root.clone());
             self.files_stale = false;
@@ -380,6 +461,7 @@ impl PluginHost {
         plugin_dir: &Path,
         manifest: &PluginManifest,
         open_note: Option<String>,
+        shared_files: Option<Rc<RefCell<Vec<FileEntry>>>>,
     ) -> PluginHost {
         let id = if manifest.id.is_empty() {
             plugin_dir
@@ -389,16 +471,20 @@ impl PluginHost {
         } else {
             manifest.id.clone()
         };
+        // * Without a shared list, the first files() call must walk the vault.
+        let files_stale = shared_files.is_none();
         let shared = Rc::new(RefCell::new(Shared {
             id,
             root: vault.to_path_buf(),
             data_path: plugin_dir.join("data.json"),
-            files: collect_files(vault),
-            files_stale: false,
+            files: Vec::new(),
+            files_stale,
+            shared_files,
             notices: Vec::new(),
             active_file: open_note.clone(),
             open_note,
             post_processors: Vec::new(),
+            timers: Vec::new(),
         }));
 
         let runtime = match Runtime::new() {
@@ -597,6 +683,29 @@ impl PluginHost {
         result
     }
 
+    /// Runs every timer the plugin has scheduled that is due now, then
+    /// reschedules (or drops) it. Called before a command or post-processor
+    /// runs, which is the pump this synchronous runtime has: a debounced
+    /// callback or an interval fires on the plugin's next interaction rather
+    /// than on a background thread, which the context cannot leave.
+    pub fn pump_timers(&self) {
+        let due = self.shared.borrow_mut().due_timers();
+        if due.is_empty() {
+            return;
+        }
+        self.deadline.set(Instant::now() + CALL_DEADLINE);
+        self.context.with(|ctx| {
+            for key in due {
+                let call = format!("__silica_run({:?}, null)", key);
+                if let Err(error) = ctx.eval::<(), _>(call.as_bytes()) {
+                    let message = describe(&ctx, error);
+                    self.shared.borrow_mut().notices.push(message);
+                }
+            }
+        });
+        drain_jobs(&self._runtime);
+    }
+
     /// Runs a command the plugin registered, by id.
     /// The note the editor has open, as the app sees it. Set before a
     /// command runs, because the host is built long before any note is open
@@ -607,6 +716,7 @@ impl PluginHost {
     }
 
     pub fn run_command(&self, id: &str) -> Result<(), String> {
+        self.pump_timers();
         let command = self
             .registrations
             .commands
@@ -628,6 +738,7 @@ impl PluginHost {
     /// the method exists so registrations are real even before a frame
     /// consumes them.
     pub fn run_post_processor(&self, key: &str) -> Result<(), String> {
+        self.pump_timers();
         self.run(key, None)
     }
 
@@ -733,6 +844,154 @@ fn install<'js>(
         }
     });
 
+    // * Resolved outgoing links of one file: target path -> occurrence count.
+    //   Reads the file, resolves each link against the vault, groups hits.
+    let s = Rc::clone(&shared);
+    set!(
+        "__silica_raw_resolved_links",
+        move |path: String| -> String {
+            let shared = s.borrow();
+            let resolved_path = match shared.resolve(&path) {
+                Ok(p) => p,
+                Err(_) => return String::new(),
+            };
+            let root = shared.root.clone();
+            drop(shared);
+            let Ok(text) = std::fs::read_to_string(&resolved_path) else {
+                return String::new();
+            };
+            let meta = silica_cache::index_markdown(&text);
+            let mut out: serde_json::Map<String, Value> = serde_json::Map::new();
+            let links: Vec<&str> = meta
+                .links
+                .iter()
+                .map(|l| l.link.as_str())
+                .chain(meta.embeds.iter().map(|l| l.link.as_str()))
+                .chain(meta.frontmatter_links.iter().map(|l| l.link.as_str()))
+                .collect();
+            for link in links {
+                if let Some(target) = vault_link_target(&root, link, &path) {
+                    let entry = out.entry(target).or_insert_with(|| Value::from(0));
+                    *entry = Value::from(entry.as_u64().unwrap_or(0) + 1);
+                }
+            }
+            Value::Object(out).to_string()
+        }
+    );
+
+    // * Unresolved outgoing links of one file: link text -> occurrence count.
+    let s = Rc::clone(&shared);
+    set!(
+        "__silica_raw_unresolved_links",
+        move |path: String| -> String {
+            let shared = s.borrow();
+            let resolved_path = match shared.resolve(&path) {
+                Ok(p) => p,
+                Err(_) => return String::new(),
+            };
+            let root = shared.root.clone();
+            drop(shared);
+            let Ok(text) = std::fs::read_to_string(&resolved_path) else {
+                return String::new();
+            };
+            let meta = silica_cache::index_markdown(&text);
+            let mut out: serde_json::Map<String, Value> = serde_json::Map::new();
+            let links: Vec<&str> = meta
+                .links
+                .iter()
+                .map(|l| l.link.as_str())
+                .chain(meta.embeds.iter().map(|l| l.link.as_str()))
+                .chain(meta.frontmatter_links.iter().map(|l| l.link.as_str()))
+                .collect();
+            for link in links {
+                if vault_link_target(&root, link, &path).is_none() {
+                    let entry = out.entry(link.to_string()).or_insert_with(|| Value::from(0));
+                    *entry = Value::from(entry.as_u64().unwrap_or(0) + 1);
+                }
+            }
+            Value::Object(out).to_string()
+        }
+    );
+
+    // * Backlinks to one file: every vault note that links to it, grouped by
+    //   source. Scans all markdown notes — O(vault), honest but not cached.
+    //   Ponytail: for large vaults the app should hand its backlink index
+    //   over instead of re-scanning here.
+    let s = Rc::clone(&shared);
+    set!(
+        "__silica_raw_backlinks",
+        move |path: String| -> String {
+            let root = s.borrow().root.clone();
+            drop(s.borrow());
+            let mut out: Vec<Value> = Vec::new();
+            if let Ok(entries) = walk_markdown_files(&root) {
+                for entry in entries {
+                    let Ok(text) = std::fs::read_to_string(&entry) else {
+                        continue;
+                    };
+                    let meta = silica_cache::index_markdown(&text);
+                    let source = entry.to_string_lossy().replace('\\', "/");
+                    let hits: Vec<String> = meta
+                        .links
+                        .iter()
+                        .map(|l| l.link.as_str())
+                        .chain(meta.embeds.iter().map(|l| l.link.as_str()))
+                        .chain(meta.frontmatter_links.iter().map(|l| l.link.as_str()))
+                        .filter(|link| {
+                            vault_link_target(&root, link, &source)
+                                .as_deref()
+                                == Some(path.as_str())
+                        })
+                        .map(|s| s.to_string())
+                        .collect();
+                    if !hits.is_empty() {
+                        out.push(json!({
+                            "source": source,
+                            "links": hits,
+                        }));
+                    }
+                }
+            }
+            serde_json::to_string(&out).unwrap_or_default()
+        }
+    );
+
+    // * All tags across the vault: name, occurrence count, files containing it.
+    //   Scans all markdown notes — O(vault).
+    //   Ponytail: the app should hand its tag index over for large vaults.
+    let s = Rc::clone(&shared);
+    set!(
+        "__silica_raw_get_tags",
+        move || -> String {
+            let root = s.borrow().root.clone();
+            drop(s.borrow());
+            let mut tags: std::collections::BTreeMap<String, (usize, Vec<String>)> =
+                std::collections::BTreeMap::new();
+            if let Ok(entries) = walk_markdown_files(&root) {
+                for entry in entries {
+                    let Ok(text) = std::fs::read_to_string(&entry) else {
+                        continue;
+                    };
+                    let meta = silica_cache::index_markdown(&text);
+                    let source = entry.to_string_lossy().replace('\\', "/");
+                    for tag in &meta.tags {
+                        let name = tag.tag.as_str();
+                        let entry = tags.entry(name.to_string()).or_default();
+                        entry.0 += 1;
+                        entry.1.push(source.clone());
+                    }
+                }
+            }
+            let out: Vec<Value> = tags
+                .into_iter()
+                .map(|(name, (count, files))| {
+                    json!({"name": name, "count": count, "files": files})
+                })
+                .collect();
+            serde_json::to_string(&out).unwrap_or_default()
+        }
+    );
+
     let s = Rc::clone(&shared);
     set!("__silica_raw_vault_read", move |ctx: Ctx<'js>,
                                           path: String|
@@ -746,6 +1005,22 @@ fn install<'js>(
         std::fs::read_to_string(&resolved).map_err(|error| {
             Exception::throw_message(&ctx, &format!("'{path}' could not be read: {error}"))
         })
+    });
+
+    let s = Rc::clone(&shared);
+    set!("__silica_raw_vault_read_bytes", move |ctx: Ctx<'js>,
+                                               path: String|
+          -> rquickjs::Result<
+        String,
+    > {
+        let resolved = s
+            .borrow()
+            .resolve(&path)
+            .map_err(|error| Exception::throw_message(&ctx, &error))?;
+        let bytes = std::fs::read(&resolved).map_err(|error| {
+            Exception::throw_message(&ctx, &format!("{path} could not be read: {error}"))
+        })?;
+        Ok(to_base64(&bytes))
     });
 
     let s = Rc::clone(&shared);
@@ -951,6 +1226,20 @@ fn install<'js>(
         }
     );
 
+    // * Timers. QuickJS ships no event loop, so the host keeps the schedule
+    //   and pumps due callbacks before commands and post-processors run.
+    let s = Rc::clone(&shared);
+    set!("__silica_raw_set_timer", move |delay_ms: f64,
+                                         repeat: bool,
+                                         key: String|
+          -> u32 {
+        s.borrow_mut().add_timer(delay_ms, repeat, key)
+    });
+    let s = Rc::clone(&shared);
+    set!("__silica_raw_cancel_timer", move |id: u32| {
+        s.borrow_mut().cancel_timer(id);
+    });
+
     globals.set("__silica_manifest", manifest_json)?;
     Ok(())
 }
@@ -1012,9 +1301,38 @@ fn describe(ctx: &Ctx<'_>, error: rquickjs::Error) -> String {
     error.to_string()
 }
 
+/// Base64-encode `bytes` so QuickJS can receive binary file contents as text.
+/// A plugin decodes with `atob()`. No external dependency: the alphabet is
+/// RFC 4648, output is padded with `=`.
+fn to_base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0];
+        let b1 = chunk.get(1).copied().unwrap_or(0);
+        let b2 = chunk.get(2).copied().unwrap_or(0);
+        let triple = ((b0 as u32) << 16) | ((b1 as u32) << 8) | (b2 as u32);
+        out.push(ALPHABET[((triple >> 18) & 63) as usize] as char);
+        out.push(ALPHABET[((triple >> 12) & 63) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(ALPHABET[((triple >> 6) & 63) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(ALPHABET[(triple & 63) as usize] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
+}
+
 /// The vault's files, as `TAbstractFile` reports them. Hidden folders are
 /// skipped, which keeps `.obsidian` and `.trash` out of what a plugin sees.
-fn collect_files(root: &Path) -> Vec<FileEntry> {
+/// One vault walk: every file under `root`, as `FileEntry`s. Shared across
+/// plugins so N plugins do not walk the vault N times.
+pub(crate) fn collect_files(root: &Path) -> Vec<FileEntry> {
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -1066,6 +1384,71 @@ fn collect_files(root: &Path) -> Vec<FileEntry> {
     }
     out.sort_by(|a, b| a.path.cmp(&b.path));
     out
+}
+
+/// Every markdown file under `root`, as absolute paths. Hidden folders are
+/// skipped.
+fn walk_markdown_files(root: &Path) -> std::io::Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') {
+                continue;
+            }
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            let path = entry.path();
+            if kind.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if !kind.is_file() {
+                continue;
+            }
+            if matches!(path.extension(), Some(ext) if ext == "md") {
+                out.push(path);
+            }
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+/// Resolves a wikilink `link` written in `source` against the vault at
+/// `root`, returning the vault-relative target path if the file exists.
+/// Tries `<root>/<link>.md` and `<root>/<source_dir>/<link>.md`.
+fn vault_link_target(root: &Path, link: &str, source: &str) -> Option<String> {
+    let target = link.split('|').next()?.split('#').next()?;
+    let target = target.trim();
+    if target.is_empty() {
+        return None;
+    }
+    let direct = root.join(format!("{target}.md"));
+    if direct.is_file() {
+        return rel_path(root, &direct);
+    }
+    let source_dir = Path::new(source).parent();
+    if let Some(dir) = source_dir {
+        let relative = root.join(dir.join(format!("{target}.md")));
+        if relative.is_file() {
+            return rel_path(root, &relative);
+        }
+    }
+    None
+}
+
+/// Vault-relative path of `file` under `root`, with `/` separators.
+fn rel_path(root: &Path, file: &Path) -> Option<String> {
+    file.strip_prefix(root)
+        .ok()
+        .map(|p| p.to_string_lossy().replace('\\', "/").to_string())
 }
 
 /// The parse index, translated into the shape Obsidian's `metadataCache`
@@ -1184,10 +1567,12 @@ mod path_tests {
             id: "example".into(),
             files: Vec::new(),
             files_stale: false,
+            shared_files: None,
             notices: Vec::new(),
             active_file: None,
             open_note: open_note.map(str::to_string),
             post_processors: Vec::new(),
+            timers: Vec::new(),
         };
         (dir, Rc::new(RefCell::new(shared)))
     }
@@ -1346,10 +1731,12 @@ mod capability_tests {
             data_path: root.join("data.json"),
             files: Vec::new(),
             files_stale: false,
+            shared_files: None,
             notices: Vec::new(),
             active_file: None,
             open_note: None,
             post_processors: Vec::new(),
+            timers: Vec::new(),
         }));
         context.with(|ctx| {
             // Inject the platform the tests run on, matching the host's cfg,

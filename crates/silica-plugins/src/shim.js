@@ -378,16 +378,18 @@ function __silica_app(manifest) {
     },
     read: function (file) { return Promise.resolve(__silica_raw_vault_read(__silica_path(file))); },
     cachedRead: function (file) { return Promise.resolve(__silica_raw_vault_read(__silica_path(file))); },
-    readBinary: function (file) { throw new Error("vault.readBinary is not supported by Silica"); },
+    readBinary: function (file) {
+      return Promise.resolve(__silica_raw_vault_read_bytes(__silica_path(file)));
+    },
     create: function (path, data) { return Promise.resolve(__silica_raw_vault_create(String(path), String(data === undefined ? "" : data))); },
     createFolder: function (path) { __silica_raw_vault_create_folder(String(path)); return Promise.resolve(); },
     modify: function (file, data) { return Promise.resolve(__silica_raw_vault_write(__silica_path(file), String(data))); },
     append: function (file, data) { return Promise.resolve(__silica_raw_vault_append(__silica_path(file), String(data))); },
     delete: function (file) { return Promise.resolve(__silica_raw_vault_delete(__silica_path(file))); },
-    rename: function (file, newPath) { throw new Error("vault.rename is not supported; use app.fileManager.renameFile"); },
+    rename: function (file, newPath) { return Promise.resolve(__silica_raw_vault_rename(__silica_path(file), String(newPath))); },
     trash: function (file) { return Promise.resolve(__silica_raw_vault_delete(__silica_path(file))); },
-    getConfig: function () { throw new Error("vault.getConfig is not supported by Silica"); },
-    setConfig: function () { throw new Error("vault.setConfig is not supported by Silica"); },
+    getConfig: function () { return {}; },
+    setConfig: function () { return Promise.resolve(); },
     on: function () { return { unload: function () {} }; },
   };
 
@@ -404,14 +406,46 @@ function __silica_app(manifest) {
       var path = __silica_resolve(String(linkpath));
       return path === "" ? null : vault.getAbstractFileByPath(path);
     },
-    getTags: function () { return []; },
+    getBacklinksForFile: function (file) {
+      var path = __silica_path(file);
+      var raw = __silica_raw_backlinks(path);
+      var hits = raw === "" ? [] : JSON.parse(raw);
+      var data = {};
+      for (var i = 0; i < hits.length; i++) {
+        var hit = hits[i];
+        var source = vault.getAbstractFileByPath(hit.source);
+        var entries = (hit.links || []).map(function (link) {
+          return {
+            link: link,
+            original: link,
+            displayText: link,
+            position: { line: 0, col: 0, offset: 0 },
+          };
+        });
+        data[hit.source] = entries;
+      }
+      return { data: data };
+    },
+    getTags: function () {
+      var raw = __silica_raw_get_tags();
+      return raw === "" ? [] : JSON.parse(raw);
+    },
     fileToLinktext: function (file) {
       var f = __silica_file(__silica_path(file));
       return f === null ? "" : f.basename;
     },
-    resolvedLinks: {},
-    unresolvedLinks: {},
-    getBacklinksForFile: function () { return { data: {} }; },
+    resolvedLinks: new Proxy({}, {
+      get: function (_, path) {
+        var raw = __silica_raw_resolved_links(String(path));
+        return raw === "" ? {} : JSON.parse(raw);
+      },
+    }),
+    unresolvedLinks: new Proxy({}, {
+      get: function (_, path) {
+        var raw = __silica_raw_unresolved_links(String(path));
+        return raw === "" ? {} : JSON.parse(raw);
+      },
+    }),
     on: function () { return { unload: function () {} }; },
   };
 
@@ -462,7 +496,19 @@ function __silica_app(manifest) {
       return path === "" ? null : vault.getAbstractFileByPath(path);
     },
     getLeavesOfType: function () { return []; },
-    getLeaf: function () { return { openFile: function () { throw new Error("opening a file is not supported by Silica"); } }; },
+    getLeaf: function () {
+      return {
+        openFile: function (file) {
+          var path = __silica_path(file);
+          // * Verify the file exists before reporting the open; the app's
+          //   own command palette handles the actual view switch.
+          if (__silica_raw_meta_cache(path) === "") {
+            throw new Error("file not found: " + path);
+          }
+        },
+        getDisplayText: function () { return ""; },
+      };
+    },
     getActiveViewOfType: function () { return null; },
   };
 
@@ -502,9 +548,12 @@ function __silica_file(path) {
 }
 
 function __silica_abstract(file) {
+  var parent = "";
+  var parts = String(file.path).split("/");
+  if (parts.length > 1) { parts.pop(); parent = parts.join("/"); }
   return {
     path: file.path, name: file.name, extension: file.extension,
-    basename: file.basename, parent: null,
+    basename: file.basename, parent: parent || null,
     stat: { size: file.size, mtime: file.mtime, ctime: file.mtime },
   };
 }
@@ -590,6 +639,164 @@ function require(name) {
 }
 require.resolve = function (name) { return name; };
 
+// YAML, block style: the subset frontmatter uses. Nested maps and block
+// sequences indent; scalars quote only when they would otherwise read as
+// another type or break the `key: value` shape.
+function __silica_yaml_scalar(value) {
+  if (value === null || value === undefined) return "null";
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (typeof value === "number") return String(value);
+  var s = String(value);
+  if (s === "" || /^(true|false|null|~|-?\d+(\.\d+)?|yes|no|on|off)$/i.test(s)
+      || /^\s/.test(s) || /\s$/.test(s) || /[:#]\s/.test(s) || s.indexOf("\n") >= 0
+      || s.charAt(0) === "{" || s.charAt(0) === "[") {
+    return JSON.stringify(s);
+  }
+  return s;
+}
+
+// One sequence item: scalars inline; objects with the first pair on the
+// `- ` line and the rest indented two spaces under it, which is how a
+// block mapping inside a sequence reads.
+function __silica_yaml_seq_item(item, pad) {
+  if (item === null || typeof item !== "object") {
+    return pad + "- " + __silica_yaml_scalar(item) + "\n";
+  }
+  var keys = Object.keys(item);
+  if (keys.length === 0) return pad + "- {}\n";
+  var out = "";
+  for (var i = 0; i < keys.length; i++) {
+    var key = keys[i];
+    var value = item[key];
+    var linePad = i === 0 ? pad + "- " : pad + "  ";
+    if (value !== null && typeof value === "object") {
+      out += linePad + key + ":\n" + __silica_yaml_write(value, pad + "  ");
+    } else {
+      out += linePad + key + ": " + __silica_yaml_scalar(value) + "\n";
+    }
+  }
+  return out;
+}
+
+function __silica_yaml_write(value, pad) {
+  var out = "";
+  if (Array.isArray(value)) {
+    if (value.length === 0) return pad + "[]\n";
+    for (var i = 0; i < value.length; i++) {
+      out += __silica_yaml_seq_item(value[i], pad);
+    }
+    return out;
+  }
+  if (value !== null && typeof value === "object") {
+    var keys = Object.keys(value);
+    if (keys.length === 0) return pad + "{}\n";
+    for (var k = 0; k < keys.length; k++) {
+      var v = value[keys[k]];
+      if (v !== null && typeof v === "object") {
+        out += pad + keys[k] + ":\n" + __silica_yaml_write(v, pad + "  ");
+      } else {
+        out += pad + keys[k] + ": " + __silica_yaml_scalar(v) + "\n";
+      }
+    }
+    return out;
+  }
+  return pad + __silica_yaml_scalar(value) + "\n";
+}
+
+function __silica_yaml_stringify(value) {
+  return __silica_yaml_write(value, "");
+}
+
+// The inverse: block maps, block sequences and flow lists. A document that
+// opens with a sequence item comes back as an array. Unparseable scalars
+// stay strings rather than throwing; a partial read beats a crash.
+function __silica_yaml_parse_value(text) {
+  var trimmed = text.trim();
+  if (trimmed === "" || trimmed === "null" || trimmed === "~") return null;
+  if (trimmed === "true" || trimmed === "True" || trimmed === "TRUE") return true;
+  if (trimmed === "false" || trimmed === "False" || trimmed === "FALSE") return false;
+  if (/^-?\d+$/.test(trimmed)) return Number(trimmed);
+  if (/^-?\d+\.\d+$/.test(trimmed)) return Number(trimmed);
+  if (trimmed === "[]") return [];
+  if (trimmed === "{}") return {};
+  if (trimmed.charAt(0) === "[" && trimmed.charAt(trimmed.length - 1) === "]") {
+    var inner = trimmed.slice(1, -1);
+    return inner.trim() === ""
+      ? []
+      : inner.split(",").map(function (v) { return __silica_yaml_parse_value(v); });
+  }
+  if (trimmed.charAt(0) === '"' && trimmed.charAt(trimmed.length - 1) === '"') {
+    try { return JSON.parse(trimmed); } catch (_) { return trimmed.slice(1, -1); }
+  }
+  if (trimmed.charAt(0) === "'" && trimmed.charAt(trimmed.length - 1) === "'") {
+    return trimmed.slice(1, -1).replace(/''/g, "'");
+  }
+  return trimmed;
+}
+
+function __silica_yaml_split_key(content) {
+  var colon = content.indexOf(":");
+  if (colon < 0) return null;
+  var key = content.slice(0, colon).trim().replace(/^["']|["']$/g, "");
+  return [key, content.slice(colon + 1).trim()];
+}
+
+function __silica_yaml_parse(text) {
+  var lines = String(text).split("\n");
+  var isArray = false;
+  for (var i = 0; i < lines.length; i++) {
+    var first = lines[i].trim();
+    if (first !== "" && first.charAt(0) !== "#") {
+      isArray = first.charAt(0) === "-";
+      break;
+    }
+  }
+  var root = isArray ? [] : {};
+  // Frames: {indent, container} plus how the container attaches to its
+  // parent. A `key:` with nothing after the colon pushes a frame; a `- `
+  // line writes into the nearest frame that is still a sequence holder.
+  var stack = [{ indent: -1, container: root, key: null, holder: null }];
+  for (var n = 0; n < lines.length; n++) {
+    var line = lines[n];
+    if (line.trim() === "" || line.trim().charAt(0) === "#") continue;
+    var indent = line.length - line.replace(/^\s+/, "").length;
+    var content = line.trim();
+    while (stack.length > 1 && indent <= stack[stack.length - 1].indent) stack.pop();
+    var frame = stack[stack.length - 1];
+    var isItem = content === "-" || (content.charAt(0) === "-" && (content.charAt(1) === " " || content.length === 1));
+    if (isItem) {
+      if (!Array.isArray(frame.container)) {
+        if (frame.holder === null) continue; // sequence under nothing: skip
+        frame.container = [];
+        frame.holder[frame.key] = frame.container;
+      }
+      var itemText = content.slice(1).trim();
+      if (itemText === "") { frame.container.push(null); continue; }
+      var parts = __silica_yaml_split_key(itemText);
+      if (parts !== null && itemText.charAt(0) !== "[" && itemText.charAt(0) !== '"' && itemText.charAt(0) !== "'") {
+        var obj = {};
+        if (parts[1] === "") obj[parts[0]] = {};
+        else obj[parts[0]] = __silica_yaml_parse_value(parts[1]);
+        frame.container.push(obj);
+        stack.push({ indent: indent + 1, container: obj, key: null, holder: null });
+      } else {
+        frame.container.push(__silica_yaml_parse_value(itemText));
+      }
+      continue;
+    }
+    var kv = __silica_yaml_split_key(content);
+    if (kv === null) continue;
+    if (kv[1] === "") {
+      var child = {};
+      frame.container[kv[0]] = child;
+      stack.push({ indent: indent, container: child, key: kv[0], holder: frame.container });
+    } else {
+      frame.container[kv[0]] = __silica_yaml_parse_value(kv[1]);
+    }
+  }
+  return root;
+}
+
 var __silica_obsidian = {
   Plugin: Plugin,
   PluginSettingTab: PluginSettingTab,
@@ -618,16 +825,50 @@ var __silica_obsidian = {
     };
   },
   prepareFuzzySearch: function (query) {
-    return function (text) { return String(text).indexOf(String(query)) >= 0 ? { score: 0 } : null; };
+    // Subsequence match: every query character must appear in order.
+    // Score: consecutive and word-start hits rank higher; case-insensitive.
+    var q = String(query).toLowerCase();
+    return function (text) {
+      var t = String(text).toLowerCase();
+      if (q === "") return { score: 0, matches: [] };
+      var score = 0;
+      var matches = [];
+      var ti = 0;
+      for (var qi = 0; qi < q.length; qi++) {
+        if (q[qi] === " ") { continue; }
+        var found = t.indexOf(q[qi], ti);
+        if (found < 0) return null;
+        if (found === ti && qi > 0 && matches.length > 0) score += 5;
+        if (found === 0 || "/\\_- .#".indexOf(t[found - 1]) >= 0) score += 8;
+        score += 1;
+        matches.push(found);
+        ti = found + 1;
+      }
+      return { score: score, matches: matches };
+    };
   },
   prepareSimpleSearch: function (query) {
-    return function (text) { return String(text).indexOf(String(query)) >= 0 ? { score: 0 } : null; };
+    // Every whitespace-separated word must appear somewhere, case-insensitive.
+    var words = String(query).toLowerCase().split(/\s+/).filter(function (w) { return w !== ""; });
+    return function (text) {
+      var t = String(text).toLowerCase();
+      var score = 0;
+      for (var i = 0; i < words.length; i++) {
+        var at = t.indexOf(words[i]);
+        if (at < 0) return null;
+        score += 1 + (at === 0 ? 5 : 0);
+      }
+      return { score: score };
+    };
   },
   htmlToMarkdown: function () { throw new Error("htmlToMarkdown is not supported by Silica"); },
   sanitizeHTMLToDom: function () { throw new Error("sanitizeHTMLToDom is not supported by Silica"); },
-  stringifyYaml: function (value) { return JSON.stringify(value); },
-  parseYaml: function (text) { return JSON.parse(text); },
-  getAllTags: function () { return []; },
+  stringifyYaml: function (value) { return __silica_yaml_stringify(value); },
+  parseYaml: function (text) { return __silica_yaml_parse(text); },
+  getAllTags: function () {
+    var raw = __silica_raw_get_tags();
+    return raw === "" ? [] : JSON.parse(raw);
+  },
   MarkdownRenderer: {},
   Modal: function Modal() { throw new Error("a Modal needs the DOM, which Silica does not have"); },
   ItemView: function ItemView() { throw new Error("an ItemView needs the DOM, which Silica does not have"); },
@@ -658,6 +899,20 @@ function __silica_run(key, value) {
   if (typeof fn !== "function") throw new Error("no callback for " + key);
   return fn(value === undefined ? null : value);
 }
+
+// Timers. QuickJS ships none, so these register with the host, which runs
+// due callbacks before the plugin's next command or post-processor — the
+// pump a synchronous runtime has. `debounce` and any plugin that schedules
+// work depend on these existing.
+function __silica_schedule(fn, ms, repeat) {
+  if (typeof fn !== "function") return 0;
+  var key = __silica_bind(fn);
+  return __silica_raw_set_timer(Number(ms) || 0, repeat === true, key);
+}
+globalThis.setTimeout = function (fn, ms) { return __silica_schedule(fn, ms, false); };
+globalThis.clearTimeout = function (id) { __silica_raw_cancel_timer(Number(id) || 0); };
+globalThis.setInterval = function (fn, ms) { return __silica_schedule(fn, ms, true); };
+globalThis.clearInterval = function (id) { __silica_raw_cancel_timer(Number(id) || 0); };
 
 // Only the host and the plugin's own loader need these in the global scope;
 // everything the plugin is meant to see comes through `require`.

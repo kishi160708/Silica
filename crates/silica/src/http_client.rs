@@ -366,6 +366,15 @@ impl HttpClient for SilicaHttpClient {
             let resolve_clone = resolve_arg.clone();
 
             std::thread::spawn(move || {
+                // * Ponytail: one curl process per cache miss costs ~10 ms of
+                //   spawn overhead and no connection reuse. A pooled async
+                //   client (reqwest+rustls) would cut that, but it cannot pin
+                //   the resolved IP per hop the way `--resolve` does here, so
+                //   the SSRF boundary — validated redirects onto pinned
+                //   addresses — would have to be rebuilt around it first.
+                //   Upgrade path: swap this loop for a pooled client once a
+                //   per-hop DNS resolver exists; the validation helpers stay.
+                //
                 // * Follow redirects manually, validating every hop, so a
                 //   redirect chain cannot bounce to a private address that the
                 //   original URL passed.

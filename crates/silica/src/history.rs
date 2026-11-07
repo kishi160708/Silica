@@ -261,6 +261,76 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_writes_do_not_lose_snapshots() {
+        let (_dir, history) = temp_store();
+        let store = std::sync::Arc::new(history);
+        let n_threads = 8;
+        let writes_per_thread = 50;
+        let mut handles = Vec::new();
+        for t in 0..n_threads {
+            let h = store.clone();
+            handles.push(std::thread::spawn(move || {
+                for i in 0..writes_per_thread {
+                    h.record("Concurrent.md", &format!("thread {t} write {i}\n"));
+                }
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+        // * Concurrent writes land in the same nanosecond often, and `list`
+        //   groups those files under one stamp — so the entry count can sit
+        //   below KEEP even though no snapshot was overwritten. The
+        //   invariants that matter: the store holds exactly KEEP snapshot
+        //   files (nothing lost to a clobber, nothing unpruned), every
+        //   listed version reads back, and what reads back is one of the
+        //   strings a thread wrote.
+        let dir = store.note_dir("Concurrent.md");
+        let files = std::fs::read_dir(&dir)
+            .expect("the snapshot dir")
+            .filter_map(|e| e.ok())
+            .count();
+        assert_eq!(files, KEEP, "the store must hold exactly KEEP snapshots");
+        let versions = store.list("Concurrent.md");
+        assert!(!versions.is_empty());
+        for v in &versions {
+            let text = store
+                .read("Concurrent.md", v.at)
+                .expect("snapshot must read back");
+            assert!(
+                text.starts_with("thread ") && text.ends_with("\n"),
+                "read-back is not a written snapshot: {text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn interrupted_write_keeps_existing_snapshot_readable() {
+        let (_dir, history) = temp_store();
+        history.record("A.md", "complete\n");
+        let before = history.list("A.md");
+        assert_eq!(before.len(), 1);
+        let dir = history.note_dir("A.md");
+        let torn = dir.join(format!("{}-{}.md", before[0].at + 1, 0));
+        std::fs::write(&torn, "partia").unwrap();
+        let after = history.read("A.md", before[0].at);
+        assert_eq!(after.as_deref(), Some("complete\n"));
+    }
+
+    #[test]
+    fn snapshot_round_trip_matches_bytes_exactly() {
+        let (_dir, history) = temp_store();
+        let content = "---\ntitle: Café\naliases: [\" naïve \", \"naïve\"]\ntags: [tag/one, tag/two]\n---\n\n# 日本語\n\nÉté à la plage — 100% ok.\n";
+        history.record("RoundTrip.md", content);
+        let versions = history.list("RoundTrip.md");
+        assert_eq!(versions.len(), 1);
+        let read_back = history
+            .read("RoundTrip.md", versions[0].at)
+            .expect("snapshot must read back");
+        assert_eq!(read_back, content);
+    }
+
+    #[test]
     fn a_note_with_no_history_lists_nothing() {
         let (_dir, history) = temp_store();
         assert!(history.list("Missing.md").is_empty());
