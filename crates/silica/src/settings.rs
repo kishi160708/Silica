@@ -21,6 +21,7 @@
 //! doing — pretending it changes something here is not.
 
 use crate::assets::logo;
+use crate::i18n::t;
 use crate::palette::hotkey_chip;
 use crate::text_input::{InputEvent, TextInput};
 use crate::theme::Theme;
@@ -93,14 +94,14 @@ impl Tab {
 
     pub fn name(self) -> &'static str {
         match self {
-            Tab::General => "General",
-            Tab::Appearance => "Appearance",
-            Tab::Interface => "Interface",
-            Tab::Editor => "Editor",
-            Tab::Files => "Files and links",
-            Tab::Hotkeys => "Hotkeys",
-            Tab::CorePlugins => "Core plugins",
-            Tab::CommunityPlugins => "Community plugins",
+            Tab::General => t("General"),
+            Tab::Appearance => t("Appearance"),
+            Tab::Interface => t("Interface"),
+            Tab::Editor => t("Editor"),
+            Tab::Files => t("Files and links"),
+            Tab::Hotkeys => t("Hotkeys"),
+            Tab::CorePlugins => t("Core plugins"),
+            Tab::CommunityPlugins => t("Community plugins"),
             Tab::Plugin(id) => PLUGIN_TABS
                 .iter()
                 .find(|(pid, _)| *pid == id)
@@ -2129,23 +2130,23 @@ impl SettingsView {
         vec![
             item(
                 &format!("Version {}", env!("CARGO_PKG_VERSION")),
-                "Silica reads this vault the way Obsidian 1.14.4 does.",
-                Control::Button("Check for updates".into()),
+                t("Silica reads this vault the way Obsidian 1.14.4 does."),
+                Control::Button(t("Check for updates").into()),
             ),
             choice(
-                "Language",
-                "Change the display language. The Settings window's labels follow it; notes and the other views are still English.",
+                t("Language"),
+                t("Change the display language. The Settings window's labels follow it; notes and the other views are still English."),
                 state,
                 LANGUAGE,
             ),
             item(
-                "Help",
-                "Learn how to use Obsidian and get help from the community.",
-                Control::Button("Open".into()),
+                t("Help"),
+                t("Learn how to use Obsidian and get help from the community."),
+                Control::Button(t("Open").into()),
             ),
-            heading("Vault"),
-            text("Vault name", "", vault.name()),
-            text("Vault folder", "", vault.root().display().to_string()),
+            heading(t("Vault")),
+            text(t("Vault name"), "", vault.name()),
+            text(t("Vault folder"), "", vault.root().display().to_string()),
         ]
     }
 
@@ -2576,20 +2577,25 @@ impl SettingsView {
         silica_plugins::live::ensure(&state.root, state.vault().config_dir(), &state.plugins);
         let mut items = vec![
             item(
-                "Community plugins",
-                "Browse and install community plugins made by the community.",
-                Control::Button("Browse".into()),
+                t("Community plugins"),
+                t("Browse and install community plugins made by the community."),
+                Control::Button(t("Browse").into()),
             ),
             item(
-                "Current plugins",
+                t("Current plugins"),
                 &match n {
-                    0 => "You currently have no plugins installed.".to_string(),
-                    1 => "You currently have 1 plugin installed.".to_string(),
+                    0 => t("You currently have no plugins installed.").to_string(),
+                    1 => t("You currently have 1 plugin installed.").to_string(),
                     n => format!(
-                        "You currently have {n} plugins installed, {compat} of which can run here."
+                        "{} {} {}, {} {}",
+                        t("You currently have"),
+                        n,
+                        t("plugins installed,"),
+                        compat,
+                        t("of which can run here.")
                     ),
                 },
-                Control::Button("Check for updates".into()),
+                Control::Button(t("Check for updates").into()),
             ),
         ];
         if n > 0 {

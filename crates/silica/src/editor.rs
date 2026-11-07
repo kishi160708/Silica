@@ -22,6 +22,7 @@
 //! `silica-text/tests/writer_roundtrip.rs` hold that over the corpus).
 
 use crate::fold::{self, Foldable};
+use crate::i18n::t;
 use crate::math::SpaceWidths;
 use crate::preview::{self, DisplayLine, Piece};
 use crate::properties::{self, Field, Part, PillStep, Target};
@@ -5025,23 +5026,23 @@ impl Editor {
         use EditorEvent as E;
         let item = |label, icon, event| MenuItem { label, icon, event };
         let mut items: Vec<MenuItem> = vec![
-            item("Cut", "scissors", E::Cut),
-            item("Copy", "copy", E::Copy),
-            item("Paste", "clipboard", E::Paste),
+            item(t("Cut"), "scissors", E::Cut),
+            item(t("Copy"), "copy", E::Copy),
+            item(t("Paste"), "clipboard", E::Paste),
         ];
-        items.push(item("Select all", "select-all", E::SelectAll));
-        items.push(item("Toggle bold", "bold", E::ToggleBold));
-        items.push(item("Toggle italic", "italic", E::ToggleItalic));
-        items.push(item("Toggle highlight", "highlighter", E::ToggleHighlight));
-        items.push(item("Insert link", "link", E::InsertLink));
-        items.push(item("Insert wikilink", "link-2", E::InsertWikilink));
-        items.push(item("Insert embed", "image", E::InsertEmbed));
-        items.push(item("Toggle checkbox", "check-square", E::ToggleCheckbox));
-        items.push(item("Heading 1", "type", E::SetHeading1));
-        items.push(item("Heading 2", "type", E::SetHeading2));
-        items.push(item("Bullet list", "list", E::ToggleBullet));
-        items.push(item("Numbered list", "list-ordered", E::ToggleNumbered));
-        items.push(item("Blockquote", "quote", E::ToggleBlockquote));
+        items.push(item(t("Select all"), "select-all", E::SelectAll));
+        items.push(item(t("Toggle bold"), "bold", E::ToggleBold));
+        items.push(item(t("Toggle italic"), "italic", E::ToggleItalic));
+        items.push(item(t("Toggle highlight"), "highlighter", E::ToggleHighlight));
+        items.push(item(t("Insert link"), "link", E::InsertLink));
+        items.push(item(t("Insert wikilink"), "link-2", E::InsertWikilink));
+        items.push(item(t("Insert embed"), "image", E::InsertEmbed));
+        items.push(item(t("Toggle checkbox"), "check-square", E::ToggleCheckbox));
+        items.push(item(t("Heading 1"), "type", E::SetHeading1));
+        items.push(item(t("Heading 2"), "type", E::SetHeading2));
+        items.push(item(t("Bullet list"), "list", E::ToggleBullet));
+        items.push(item(t("Numbered list"), "list-ordered", E::ToggleNumbered));
+        items.push(item(t("Blockquote"), "quote", E::ToggleBlockquote));
         items
     }
 

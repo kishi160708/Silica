@@ -21,6 +21,7 @@
 
 use crate::assets::icon;
 use crate::canvas::menu::tooltip;
+use crate::i18n::t;
 use crate::inline_field;
 use crate::theme::{Theme, ICON_SIZE};
 use gpui::{
@@ -514,11 +515,11 @@ pub enum ExplorerEvent {
     },
     /// A Ctrl+click: the file goes to a new tab.
     OpenInNewTab(String),
-    /// The header's "New note": what the `file-explorer:new-file` command
+    /// The header's t("New note"): what the `file-explorer:new-file` command
     /// does, the folder following `newFileLocation`.
     NewNoteFromHeader,
     /// Context-menu actions; paths are vault-relative, folders without a
-    /// trailing slash (`""` is the vault root). The header's "New folder"
+    /// trailing slash (`""` is the vault root). The header's t("New folder")
     /// is a `NewFolder` at the root.
     NewNote {
         folder: String,
@@ -526,7 +527,7 @@ pub enum ExplorerEvent {
     NewFolder {
         parent: String,
     },
-    /// "New canvas" and "New base" from a folder row, which take the folder
+    /// t("New canvas") and t("New base") from a folder row, which take the folder
     /// the click was on rather than the vault root the commands use.
     NewCanvas {
         folder: String,
@@ -543,27 +544,27 @@ pub enum ExplorerEvent {
     },
     Duplicate(String),
     Delete(String),
-    /// "Bookmark...": a file or folder for the Bookmarks pane.
+    /// t("Bookmark..."): a file or folder for the Bookmarks pane.
     Bookmark(String),
-    /// "Open to the right": a new tab group beside the active one showing
+    /// t("Open to the right"): a new tab group beside the active one showing
     /// this file.
     OpenToRight(String),
-    /// "Copy path": the vault-relative path onto the clipboard.
+    /// t("Copy path"): the vault-relative path onto the clipboard.
     CopyPath(String),
-    /// "Open in default app": hand the file to the desktop.
+    /// t("Open in default app"): hand the file to the desktop.
     OpenInDefaultApp(String),
-    /// "Open in new window": the file's reading view in a secondary window
+    /// t("Open in new window"): the file's reading view in a secondary window
     /// (popout).
     OpenInPopout(String),
-    /// "Show in system explorer": select the file in the desktop's file
+    /// t("Show in system explorer"): select the file in the desktop's file
     /// manager via D-Bus `FileManager1.ShowItems`, with opening the
     /// containing folder as fallback.
     ShowInSystemExplorer(String),
-    /// "Merge entire file with...": the note takes another note's changes.
+    /// t("Merge entire file with..."): the note takes another note's changes.
     Merge(String),
-    /// "Open version history": the snapshots this note was saved through.
+    /// t("Open version history"): the snapshots this note was saved through.
     VersionHistory(String),
-    /// "Search in folder": the Search pane scoped to this folder.
+    /// t("Search in folder"): the Search pane scoped to this folder.
     SearchInFolder(String),
     /// Escape in the tree: the keyboard goes back to the main area.
     LeaveFocus,
@@ -583,9 +584,9 @@ enum Section {
     /// The file row's "Open in..." items.
     Open,
     Action,
-    /// Obsidian leaves "Copy path" with no section at all.
+    /// Obsidian leaves t("Copy path") with no section at all.
     Unsectioned,
-    /// "Open version history" sits here in the capture, between the copy
+    /// t("Open version history") sits here in the capture, between the copy
     /// items and the system ones.
     View,
     System,
@@ -630,7 +631,7 @@ enum Target {
 /// here where the capture has it.
 ///
 /// Obsidian's file row has no creation items at all — Silica's menu used to
-/// offer "New note" and "New folder" on a file, which is the one thing here
+/// offer t("New note") and t("New folder") on a file, which is the one thing here
 /// that was wrong rather than missing.
 fn menu_items(target: &Target) -> Vec<MenuItem> {
     use ExplorerEvent as E;
@@ -644,80 +645,80 @@ fn menu_items(target: &Target) -> Vec<MenuItem> {
     match target {
         Target::File(path) => vec![
             item(
-                "Open in new tab",
+                t("Open in new tab"),
                 "file-plus",
                 S::Open,
                 E::OpenInNewTab(path.clone()),
             ),
             item(
-                "Open to the right",
+                t("Open to the right"),
                 "separator-vertical",
                 S::Open,
                 E::OpenToRight(path.clone()),
             ),
             item(
-                "Make a copy",
+                t("Make a copy"),
                 "files",
                 S::Action,
                 E::Duplicate(path.clone()),
             ),
             item(
-                "Move file to...",
+                t("Move file to..."),
                 "folder-tree",
                 S::Action,
                 E::Move(path.clone()),
             ),
             item(
-                "Bookmark...",
+                t("Bookmark..."),
                 "bookmark",
                 S::Action,
                 E::Bookmark(path.clone()),
             ),
             item(
-                "Copy path",
+                t("Copy path"),
                 "clipboard",
                 S::Unsectioned,
                 E::CopyPath(path.clone()),
             ),
             item(
-                "Merge entire file with...",
+                t("Merge entire file with..."),
                 "git-fork",
                 S::View,
                 E::Merge(path.clone()),
             ),
             item(
-                "Open version history",
+                t("Open version history"),
                 "clock",
                 S::View,
                 E::VersionHistory(path.clone()),
             ),
             item(
-                "Open in default app",
+                t("Open in default app"),
                 "arrow-up-right",
                 S::System,
                 E::OpenInDefaultApp(path.clone()),
             ),
             item(
-                "Open in new window",
+                t("Open in new window"),
                 "square",
                 S::System,
                 E::OpenInPopout(path.clone()),
             ),
             item(
-                "Show in system explorer",
+                t("Show in system explorer"),
                 "folder-open",
                 S::System,
                 E::ShowInSystemExplorer(path.clone()),
             ),
-            item("Rename...", "pen-line", S::Danger, E::Rename(path.clone())),
-            item("Delete", "trash-2", S::Danger, E::Delete(path.clone())),
+            item(t("Rename..."), "pen-line", S::Danger, E::Rename(path.clone())),
+            item(t("Delete"), "trash-2", S::Danger, E::Delete(path.clone())),
         ],
         Target::Folder(folder) => vec![
             // * Obsidian draws `lucide-edit` here, which is the current
             //   `square-pen`; `lucide-edit-3` on Rename is `pen-line`. Both
             //   renames come from Lucide's own alias data, not a guess.
             item(
-                "New note",
+                t("New note"),
                 "square-pen",
                 S::ActionPrimary,
                 E::NewNote {
@@ -725,7 +726,7 @@ fn menu_items(target: &Target) -> Vec<MenuItem> {
                 },
             ),
             item(
-                "New folder",
+                t("New folder"),
                 "folder-open",
                 S::ActionPrimary,
                 E::NewFolder {
@@ -733,7 +734,7 @@ fn menu_items(target: &Target) -> Vec<MenuItem> {
                 },
             ),
             item(
-                "New canvas",
+                t("New canvas"),
                 "layout-dashboard",
                 S::ActionPrimary,
                 E::NewCanvas {
@@ -741,7 +742,7 @@ fn menu_items(target: &Target) -> Vec<MenuItem> {
                 },
             ),
             item(
-                "New base",
+                t("New base"),
                 "layout-list",
                 S::ActionPrimary,
                 E::NewBase {
@@ -749,52 +750,52 @@ fn menu_items(target: &Target) -> Vec<MenuItem> {
                 },
             ),
             item(
-                "Move folder to...",
+                t("Move folder to..."),
                 "folder-tree",
                 S::Action,
                 E::Move(folder.clone()),
             ),
             item(
-                "Make a copy",
+                t("Make a copy"),
                 "files",
                 S::Action,
                 E::Duplicate(folder.clone()),
             ),
             item(
-                "Search in folder",
+                t("Search in folder"),
                 "folder-search",
                 S::Action,
                 E::SearchInFolder(folder.clone()),
             ),
             item(
-                "Bookmark...",
+                t("Bookmark..."),
                 "bookmark",
                 S::Action,
                 E::Bookmark(folder.clone()),
             ),
             item(
-                "Copy path",
+                t("Copy path"),
                 "clipboard",
                 S::Unsectioned,
                 E::CopyPath(folder.clone()),
             ),
             item(
-                "Show in system explorer",
+                t("Show in system explorer"),
                 "folder-open",
                 S::System,
                 E::ShowInSystemExplorer(folder.clone()),
             ),
             item(
-                "Rename...",
+                t("Rename..."),
                 "pen-line",
                 S::Danger,
                 E::Rename(folder.clone()),
             ),
-            item("Delete", "trash-2", S::Danger, E::Delete(folder.clone())),
+            item(t("Delete"), "trash-2", S::Danger, E::Delete(folder.clone())),
         ],
         Target::Blank => vec![
             item(
-                "New note",
+                t("New note"),
                 "square-pen",
                 S::ActionPrimary,
                 E::NewNote {
@@ -802,7 +803,7 @@ fn menu_items(target: &Target) -> Vec<MenuItem> {
                 },
             ),
             item(
-                "New folder",
+                t("New folder"),
                 "folder-open",
                 S::ActionPrimary,
                 E::NewFolder {
@@ -810,7 +811,7 @@ fn menu_items(target: &Target) -> Vec<MenuItem> {
                 },
             ),
             item(
-                "New canvas",
+                t("New canvas"),
                 "layout-dashboard",
                 S::ActionPrimary,
                 E::NewCanvas {
@@ -818,7 +819,7 @@ fn menu_items(target: &Target) -> Vec<MenuItem> {
                 },
             ),
             item(
-                "New base",
+                t("New base"),
                 "layout-list",
                 S::ActionPrimary,
                 E::NewBase {
@@ -1054,7 +1055,7 @@ impl FileExplorer {
     }
 
     /// Turns a row's own label into a field with the whole name selected:
-    /// what F2 on a focused row and the menu's "Rename..." both do in
+    /// what F2 on a focused row and the menu's t("Rename...") both do in
     /// Obsidian. The name is the one the row shows, so a file's extension
     /// is neither selected nor typed over.
     pub fn start_rename(&mut self, path: &str, cx: &mut Context<Self>) {
@@ -1385,7 +1386,7 @@ impl FileExplorer {
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.close_menu(cx);
                         if let Some(event) = event.take() {
-                            // * "Rename..." renames on the row, the way F2
+                            // * t("Rename...") renames on the row, the way F2
                             //   does; every other choice is the workspace's.
                             if let ExplorerEvent::Rename(path) = &event {
                                 this.start_rename(path, cx);
@@ -1463,14 +1464,14 @@ impl FileExplorer {
             .justify_center()
             .gap(px(2.))
             .child(
-                Self::header_button("explorer-new-note", "square-pen", "New note", false, &theme)
+                Self::header_button("explorer-new-note", "square-pen", t("New note"), false, &theme)
                     .on_click(cx.listener(|_, _, _, cx| cx.emit(ExplorerEvent::NewNoteFromHeader))),
             )
             .child(
                 Self::header_button(
                     "explorer-new-folder",
                     "folder-plus",
-                    "New folder",
+                    t("New folder"),
                     false,
                     &theme,
                 )
@@ -2386,65 +2387,65 @@ mod menu_tests {
     }
 
     /// [[Specification#The file explorer's context menus]], the file-row
-    /// table, minus "Merge entire file with..." and "Open version history"
-    /// (Silica has no merge or file history). "Open in new window" and
-    /// "Show in system explorer" are implemented; the `view` section's
-    /// separator stays because "Open version history" used to sit between
+    /// table, minus t("Merge entire file with...") and t("Open version history")
+    /// (Silica has no merge or file history). t("Open in new window") and
+    /// t("Show in system explorer") are implemented; the `view` section's
+    /// separator stays because t("Open version history") used to sit between
     /// them and Rename.
     #[test]
     fn the_file_rows_menu_is_obsidians_order_without_the_rows_it_cannot_run() {
         assert_eq!(
             drawn(&Target::File("Notes/Plan.md".into())),
             [
-                "Open in new tab",
-                "Open to the right",
+                t("Open in new tab"),
+                t("Open to the right"),
                 "---",
-                "Make a copy",
-                "Move file to...",
-                "Bookmark...",
+                t("Make a copy"),
+                t("Move file to..."),
+                t("Bookmark..."),
                 "---",
-                "Copy path",
+                t("Copy path"),
                 "---",
-                "Merge entire file with...",
-                "Open version history",
+                t("Merge entire file with..."),
+                t("Open version history"),
                 "---",
-                "Open in default app",
-                "Open in new window",
-                "Show in system explorer",
+                t("Open in default app"),
+                t("Open in new window"),
+                t("Show in system explorer"),
                 "---",
                 "---",
-                "Rename...",
-                "Delete",
+                t("Rename..."),
+                t("Delete"),
             ]
         );
     }
 
-    /// The folder-row table. "Show in system explorer" and "Make a copy"
+    /// The folder-row table. t("Show in system explorer") and t("Make a copy")
     /// are implemented (the copy is a recursive tree copy). A folder gets
-    /// no "Open in default app": the capture has that item on the file row
+    /// no t("Open in default app"): the capture has that item on the file row
     /// only.
     #[test]
     fn the_folder_rows_menu_is_obsidians_order() {
         assert_eq!(
             drawn(&Target::Folder("Notes".into())),
             [
-                "New note",
-                "New folder",
-                "New canvas",
-                "New base",
+                t("New note"),
+                t("New folder"),
+                t("New canvas"),
+                t("New base"),
                 "---",
-                "Move folder to...",
-                "Make a copy",
-                "Search in folder",
-                "Bookmark...",
+                t("Move folder to..."),
+                t("Make a copy"),
+                t("Search in folder"),
+                t("Bookmark..."),
                 "---",
-                "Copy path",
+                t("Copy path"),
                 "---",
-                "Show in system explorer",
+                t("Show in system explorer"),
                 "---",
                 "---",
-                "Rename...",
-                "Delete",
+                t("Rename..."),
+                t("Delete"),
             ]
         );
     }
@@ -2456,7 +2457,7 @@ mod menu_tests {
     fn the_empty_space_offers_the_four_creation_items_at_the_root() {
         assert_eq!(
             drawn(&Target::Blank),
-            ["New note", "New folder", "New canvas", "New base"]
+            [t("New note"), t("New folder"), t("New canvas"), t("New base")]
         );
         for item in menu_items(&Target::Blank) {
             assert_eq!(
@@ -2469,7 +2470,7 @@ mod menu_tests {
     }
 
     /// Obsidian's file row has no creation items. Silica's menu used to open
-    /// with "New note" and "New folder" on a file, which is the one thing in
+    /// with t("New note") and t("New folder") on a file, which is the one thing in
     /// the captured menus that was wrong rather than merely missing.
     #[test]
     fn a_file_row_offers_nothing_that_creates_a_file() {

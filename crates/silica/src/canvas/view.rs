@@ -19,6 +19,7 @@ use crate::canvas::cards::{Cards, TaskOrigin};
 use crate::canvas::menu::{self, IconItem, ListItem};
 use crate::editor::{Editor, EditorEvent};
 use crate::reading::TaskMarker;
+use crate::i18n::t;
 use crate::theme::Theme;
 use crate::workspace::VaultState;
 use gpui::{
@@ -2224,88 +2225,88 @@ impl CanvasView {
             ContextTarget::Card => &[
                 ListItem {
                     id: "zoom",
-                    label: "Zoom to selection",
+                    label: t("Zoom to selection"),
                 },
                 ListItem {
                     id: "edit",
-                    label: "Edit",
+                    label: t("Edit"),
                 },
                 SEP,
                 ListItem {
                     id: "cut",
-                    label: "Cut",
+                    label: t("Cut"),
                 },
                 ListItem {
                     id: "copy",
-                    label: "Copy",
+                    label: t("Copy"),
                 },
                 SEP,
                 ListItem {
                     id: "remove",
-                    label: "Remove",
+                    label: t("Remove"),
                 },
             ],
             ContextTarget::Cards => &[
                 ListItem {
                     id: "zoom",
-                    label: "Zoom to selection",
+                    label: t("Zoom to selection"),
                 },
                 ListItem {
                     id: "group",
-                    label: "Create group",
+                    label: t("Create group"),
                 },
                 SEP,
                 ListItem {
                     id: "cut",
-                    label: "Cut",
+                    label: t("Cut"),
                 },
                 ListItem {
                     id: "copy",
-                    label: "Copy",
+                    label: t("Copy"),
                 },
                 ListItem {
                     id: "paste",
-                    label: "Paste",
+                    label: t("Paste"),
                 },
                 SEP,
                 ListItem {
                     id: "remove",
-                    label: "Delete",
+                    label: t("Delete"),
                 },
             ],
             ContextTarget::Edge => &[
                 ListItem {
                     id: "follow",
-                    label: "Follow connection",
+                    label: t("Follow connection"),
                 },
                 SEP,
                 ListItem {
                     id: "remove",
-                    label: "Remove",
+                    label: t("Remove"),
                 },
             ],
             ContextTarget::Background => &[
                 ListItem {
                     id: "add-card",
-                    label: "Add card",
+                    label: t("Add card"),
                 },
                 ListItem {
                     id: "add-note",
-                    label: "Add note from vault",
+                    label: t("Add note from vault"),
                 },
                 ListItem {
                     id: "add-media",
-                    label: "Add media from vault",
+                    label: t("Add media from vault"),
                 },
                 SEP,
                 ListItem {
                     id: "undo",
-                    label: "Undo",
+                    label: t("Undo"),
                 },
                 SEP,
                 ListItem {
                     id: "paste",
-                    label: "Paste",
+                    label: t("Paste"),
                 },
             ],
         };
