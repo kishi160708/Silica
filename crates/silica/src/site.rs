@@ -15,10 +15,12 @@
 //! ceiling here is images, audio and video.
 
 use silica_formats::FileKind;
-use silica_vault::VaultFile;
+use silica_vault::{Vault, VaultFile};
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 /// What one export pass did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,16 +34,284 @@ pub struct SiteReport {
 /// Directories of the vault that are never published.
 const SKIPPED_DIRS: [&str; 3] = [".obsidian", ".trash", ".git"];
 
+/// Whether a vault path lives in a directory that is never published, at
+/// any depth.
+fn skipped_rel(rel: &str) -> bool {
+    rel.replace('\\', "/")
+        .to_lowercase()
+        .split('/')
+        .any(|seg| SKIPPED_DIRS.contains(&seg))
+}
+
+/// The notes to publish: markdown, minus the directories a vault keeps its
+/// own house in — Obsidian files, trashed notes and git metadata.
+fn publishable_notes(files: &[VaultFile]) -> Vec<&VaultFile> {
+    files
+        .iter()
+        .filter(|f| f.kind == FileKind::Markdown && !skipped_rel(&f.path))
+        .collect()
+}
+
+/// Whether `out` is a safe place to write a site: outside the vault (a
+/// folder inside it would be indexed and copied on every pass), and either
+/// new or holding nothing but what an earlier pass wrote.
+fn output_is_safe(out: &Path, root: &Path) -> Result<(), String> {
+    if out == root || out.starts_with(root) {
+        return Err(format!(
+            "{} is inside the vault — pick a folder outside it",
+            out.display()
+        ));
+    }
+    if !out.exists() {
+        return Ok(());
+    }
+    let foreign: Vec<String> = std::fs::read_dir(out)
+        .map_err(|e| format!("Cannot read {}: {e}", out.display()))?
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|name| !(name == "index.html" || name == "style.css" || name.ends_with(".html")))
+        .collect();
+    if !foreign.is_empty() {
+        return Err(format!(
+            "{} holds files that are not site output ({}); pick an empty folder or a previous export",
+            out.display(),
+            foreign[0]
+        ));
+    }
+    Ok(())
+}
+
+/// The raw HTML a note's body must not carry into a published site: active
+/// content survives the renderer untouched, and an export turns one vault
+/// into a site every reader of it visits.
+///
+/// This is a trust boundary — a note's raw HTML reaches here verbatim — so
+/// the match is case-insensitive (a browser runs `<SCRIPT>` like `<script>`)
+/// and the pass repeats until no opener survives: one pass leaves stitched
+/// pieces behind (`<scr<script>x</script>ipt>` emits `<scr` + `ipt>`, a
+/// whole live `<script>` in the output).
+fn strip_active(html: &str) -> String {
+    let mut out = html.to_string();
+    loop {
+        let stripped = strip_active_once(&out);
+        let done = stripped == out;
+        out = stripped;
+        if done {
+            return strip_event_attributes(&out);
+        }
+    }
+}
+
+/// One sweep: every `<script`/`<iframe` element found in `html`, dropped
+/// case-insensitively. `to_ascii_lowercase` maps only A-Z, so the copy has
+/// the same byte length and indices still slice the original.
+fn strip_active_once(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut rest = html;
+    loop {
+        let lower = rest.to_ascii_lowercase();
+        let open = ["<script", "<iframe"]
+            .iter()
+            .filter_map(|tag| lower.find(tag).map(|at| (at, *tag)))
+            .min_by_key(|(at, _)| *at);
+        let Some((at, tag)) = open else {
+            out.push_str(rest);
+            return out;
+        };
+        out.push_str(&rest[..at]);
+        // * The needle drops the leading `<` of the tag: `</<script`
+        //   matches nothing, so the element's content would survive as
+        //   visible (and patchable) text instead of disappearing.
+        let close = format!("</{}", &tag[1..]);
+        // ! An unterminated element drops the tag, not the rest of the
+        //   page: a truncated render must not swallow the note. Skipping
+        //   past the opening tag guarantees the walk makes progress.
+        let after = lower[at..]
+            .find(&close)
+            .map(|i| at + i + close.len())
+            .and_then(|i| lower[i..].find('>').map(|j| i + j + 1))
+            .or_else(|| lower[at..].find('>').map(|i| at + i + 1))
+            .unwrap_or(rest.len());
+        rest = &rest[after..];
+    }
+}
+
+/// Every tag that survived the element pass is walked again and its
+/// attributes cut, span by span, so untouched text keeps its exact bytes:
+/// the ordinary-links contract is byte equality, not "close enough".
+///
+/// Two things go: any `on*` attribute (every one of them is an event
+/// handler) and any URL-valued attribute whose value a browser would
+/// resolve to an active scheme. A `<` that opens no tag (`a < b`, `<!`,
+/// `</`) is copied as text, so a stray angle bracket never eats the note.
+fn strip_event_attributes(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut rest = html;
+    while let Some(at) = rest.find('<') {
+        out.push_str(&rest[..at]);
+        rest = &rest[at..];
+        let opener = rest.as_bytes().get(1);
+        if !opener.is_some_and(|b| b.is_ascii_alphabetic()) {
+            let end = rest.find('>').map(|i| i + 1).unwrap_or(1.min(rest.len()));
+            out.push_str(&rest[..end]);
+            rest = &rest[end.min(rest.len())..];
+            continue;
+        }
+        match cut_tag_attributes(rest) {
+            Some((end, kept)) => {
+                out.push_str(&kept);
+                rest = &rest[end..];
+            }
+            // No '>' outside quotes: the '<' was text, keep the byte.
+            None => {
+                out.push('<');
+                rest = &rest[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Walks one opening tag (`rest` starts at its `<`), returning the byte
+/// offset just past its closing `>` and the tag with its active
+/// attributes cut, or `None` when no closing `>` sits outside a quoted
+/// value.
+fn cut_tag_attributes(rest: &str) -> Option<(usize, String)> {
+    let bytes = rest.as_bytes();
+    let mut i = 1;
+    let mut cuts: Vec<(usize, usize)> = Vec::new();
+    loop {
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        match bytes.get(i) {
+            None => return None,
+            Some(b'>') => {
+                i += 1;
+                break;
+            }
+            // A trailing `/` (self-closing) closes the tag once its `>` lands.
+            Some(b'/') => {
+                i += 1;
+                continue;
+            }
+            _ => {}
+        }
+        let attr_start = i;
+        let name_start = i;
+        while i < bytes.len()
+            && !bytes[i].is_ascii_whitespace()
+            && !matches!(bytes[i], b'=' | b'/' | b'>')
+        {
+            i += 1;
+        }
+        let name = &rest[name_start..i];
+        let mut value = String::new();
+        if bytes.get(i) == Some(&b'=') {
+            i += 1;
+            match bytes.get(i) {
+                Some(q @ (b'"' | b'\'')) => {
+                    let quote = *q;
+                    i += 1;
+                    let val_start = i;
+                    while i < bytes.len() && bytes[i] != quote {
+                        i += 1;
+                    }
+                    value.push_str(&rest[val_start..i.min(bytes.len())]);
+                    if i < bytes.len() {
+                        i += 1;
+                    }
+                }
+                _ => {
+                    let val_start = i;
+                    while i < bytes.len() && !bytes[i].is_ascii_whitespace() && bytes[i] != b'>' {
+                        i += 1;
+                    }
+                    value.push_str(&rest[val_start..i]);
+                }
+            }
+        }
+        let attr_end = i;
+        if name.len() > 2 && name.len() <= 24 && name.to_ascii_lowercase().starts_with("on")
+            || is_active_url(&value)
+        {
+            cuts.push((attr_start, attr_end));
+        }
+    }
+    let mut kept = String::with_capacity(rest.len());
+    let mut last = 0;
+    for (from, to) in cuts {
+        kept.push_str(&rest[last..from]);
+        last = to;
+    }
+    kept.push_str(&rest[last..i]);
+    Some((i, kept))
+}
+
+/// Whether a browser resolving `value` as a URL lands on a scheme that
+/// runs code. The check runs on the value a browser would see: numeric
+/// character references decoded (`&#106;avascript:` is `javascript:`),
+/// `&colon;` spelled out, case and the ASCII whitespace/control bytes a
+/// URL parser drops (`java\tscript:`) normalized away.
+fn is_active_url(value: &str) -> bool {
+    let normalized = normalize_url(value);
+    normalized.starts_with("javascript:") || normalized.starts_with("data:text/html")
+}
+
+/// Decodes the entity forms a URL parser accepts, lowercases, and drops
+/// the bytes browsers ignore inside a scheme.
+fn normalize_url(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '&' {
+            if !c.is_ascii_whitespace() && !c.is_ascii_control() {
+                out.push(c.to_ascii_lowercase());
+            }
+            continue;
+        }
+        let mut refr = String::new();
+        while let Some(&next) = chars.peek() {
+            if next == ';' {
+                chars.next();
+                break;
+            }
+            if refr.len() > 10 {
+                break;
+            }
+            refr.push(chars.next().unwrap());
+        }
+        match refr.as_str() {
+            "colon" => out.push(':'),
+            "Tab" | "NewLine" | "sol" => out.push(' '),
+            other => {
+                let hex = other
+                    .strip_prefix("#x")
+                    .or_else(|| other.strip_prefix("#X"))
+                    .and_then(|h| u32::from_str_radix(h, 16).ok());
+                let dec = other.strip_prefix('#').and_then(|d| d.parse::<u32>().ok());
+                if let Some(cp) = hex.or(dec).and_then(char::from_u32) {
+                    out.push(cp.to_ascii_lowercase());
+                } else {
+                    out.push('&');
+                    out.push_str(other);
+                    out.push(';');
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Exports the vault at `root` (whose files are `files`) into `out`,
 /// replacing whatever an earlier pass wrote there.
 pub fn export(root: &Path, files: &[VaultFile], out: &Path) -> Result<SiteReport, String> {
-    let notes: Vec<&VaultFile> = files
-        .iter()
-        .filter(|f| f.kind == FileKind::Markdown)
-        .collect();
+    let notes: Vec<&VaultFile> = publishable_notes(files);
     if notes.is_empty() {
         return Err("The vault has no notes to export.".into());
     }
+    output_is_safe(out, root)?;
     let map = link_map(&notes);
     let assets = asset_paths(files);
     std::fs::create_dir_all(out).map_err(|e| format!("Cannot create {}: {e}", out.display()))?;
@@ -84,10 +354,11 @@ pub fn export(root: &Path, files: &[VaultFile], out: &Path) -> Result<SiteReport
     Ok(report)
 }
 
-/// Parses and renders one note the way the reading view would.
+/// Parses and renders one note the way the reading view would, minus the
+/// active content a published site must never carry.
 fn render(text: &str) -> String {
     let doc = silica_markdown::parse(text);
-    silica_markdown::html::render_html(&doc)
+    strip_active(&silica_markdown::html::render_html(&doc))
 }
 
 /// A page's `<title>`: its name without the extension.
@@ -355,14 +626,8 @@ fn next_tag(rest: &str) -> Option<usize> {
 }
 
 /// Replaces one attribute's value inside a tag, keeping the quotes.
-///
-/// The needle is anchored at a space: a bare `href="` also matches inside
-/// `data-href="`, which would rewrite the data attribute and leave the real
-/// href as the link text — a dead link on the exported page. The tags this
-/// pass rewrites always carry other attributes first (the renderer emits
-/// `class` before `href`, `alt` before `src`); the unanchored fallback only
-/// runs when the name is the first attribute, where no longer name can
-/// precede it.
+/// The needle is space-prefixed: a bare `href="` also matches inside
+/// `data-href="`, which would rewrite the wrong attribute.
 fn replace_attr(tag: &str, name: &str, value: &str) -> String {
     for needle in [format!(" {name}=\""), format!("{name}=\"")] {
         if let Some(at) = tag.find(&needle) {
@@ -433,6 +698,63 @@ th, td { border: 1px solid #8884; padding: 0.3rem 0.6rem; }
 a.internal-link[data-href]:not([href]) { color: #a33; }
 ";
 
+/// Keeps the export current: watches `root` and re-exports when a file
+/// changes, until `stop` is set. Meant to run on a thread the caller
+/// spawns — it owns the watcher, so returning ends the watching. The first
+/// pass is *not* done here: the caller exports once before starting this,
+/// so the folder exists even if nothing ever changes again.
+pub fn watch_loop(root: PathBuf, out: PathBuf, stop: Arc<AtomicBool>) {
+    use std::sync::mpsc::RecvTimeoutError;
+    use std::time::{Duration, Instant};
+
+    let Ok((_watcher, rx)) = crate::watch::start(&root) else {
+        return;
+    };
+    while !stop.load(Ordering::Relaxed) {
+        // * One change opens a pass; more changes inside the debounce
+        //   window fold into it, so a sync tool rewriting the vault
+        //   exports once instead of once per file.
+        match rx.recv_timeout(Duration::from_millis(400)) {
+            Ok(_) => {}
+            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Disconnected) => return,
+        }
+        let until = Instant::now() + Duration::from_millis(300);
+        while rx
+            .recv_timeout(until.saturating_duration_since(Instant::now()))
+            .is_ok()
+        {}
+        if stop.load(Ordering::Relaxed) {
+            return;
+        }
+        // * The export re-reads the vault itself: a new note exists only
+        //   on disk, and the workspace's index does not follow this thread.
+        if let Ok(vault) = Vault::open(&root) {
+            let _ = export(vault.root(), vault.files(), &out);
+        }
+    }
+}
+
+/// The `file://` URL of an export's index page — what
+/// "open exported site" hands to the browser. Only the characters that
+/// actually break a URL are encoded: a vault folder called
+/// "my notes" must not open "my%20notes"-less and land nowhere.
+pub fn index_url(out: &Path) -> String {
+    let raw = out.join("index.html").display().to_string();
+    let mut encoded = String::with_capacity(raw.len() + 8);
+    for ch in raw.chars() {
+        match ch {
+            ' ' => encoded.push_str("%20"),
+            '#' => encoded.push_str("%23"),
+            '?' => encoded.push_str("%3F"),
+            '%' => encoded.push_str("%25"),
+            '\\' => encoded.push('/'),
+            other => encoded.push(other),
+        }
+    }
+    format!("file://{encoded}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -451,6 +773,17 @@ mod tests {
 
     fn anchor(link: &str) -> String {
         ANCHOR.replace("{link}", link)
+    }
+
+    #[test]
+    fn a_link_rewrite_replaces_href_and_never_its_data_href() {
+        let map = link_map(&[&note("Target.md")]);
+        let empty = HashMap::new();
+        let r = rewrite(&anchor("Target"), &map, &empty, 0);
+        // The real href carries the URL; data-href keeps the link text.
+        assert!(r.html.contains(" href=\"Target.html\""), "{}", r.html);
+        assert!(r.html.contains("data-href=\"Target\""), "{}", r.html);
+        assert!(!r.html.contains("data-href=\"Target.html\""), "{}", r.html);
     }
 
     #[test]
@@ -532,21 +865,6 @@ mod tests {
     }
 
     #[test]
-    fn a_rewritten_href_survives_a_data_href_written_before_it() {
-        let map = link_map(&[&note("Target.md")]);
-        let empty = HashMap::new();
-        // The renderer writes aria-label, then data-href, then href — a
-        // bare `href="` needle matches inside `data-href="` and rewrites
-        // the wrong attribute, leaving the real href as the link text.
-        let src = "<a data-tooltip-position=\"top\" aria-label=\"Target\" data-href=\"Target\" href=\"Target\" class=\"internal-link\" target=\"_blank\" rel=\"noopener nofollow\">T</a>";
-        let r = rewrite(src, &map, &empty, 0);
-        assert_eq!((r.links, r.unresolved), (1, 0), "{}", r.html);
-        assert!(r.html.contains(" href=\"Target.html\""), "{}", r.html);
-        assert!(r.html.contains("data-href=\"Target\""), "{}", r.html);
-        assert!(!r.html.contains("_blank"), "{}", r.html);
-    }
-
-    #[test]
     fn the_page_title_escapes_the_three_hostile_characters() {
         assert_eq!(escape_title("A & B"), "A &amp; B");
         assert_eq!(escape_title("<script>"), "&lt;script&gt;");
@@ -554,5 +872,213 @@ mod tests {
         assert_eq!(unescape_attr("A &amp; B"), "A & B");
         assert_eq!(unescape_attr("A & B"), "A & B");
         assert_eq!(unescape_attr("&#39;q&#39;"), "'q'");
+    }
+
+    #[test]
+    fn a_script_elements_content_goes_with_it() {
+        // Dropping only the opening tag leaves the payload as patchable
+        // text on the published page.
+        let html = strip_active("<p>a</p><script>alert(1)</script><p>b</p>");
+        assert!(!html.contains("alert(1)"), "{html}");
+        assert!(html.contains("<p>a</p><p>b</p>"), "{html}");
+        // An embed that closes nowhere still drops only itself.
+        let cut = strip_active("<p>a</p><iframe src=\"x\"><p>b</p>");
+        assert!(!cut.contains("<iframe"), "{cut}");
+        assert!(cut.contains("<p>b</p>"), "{cut}");
+    }
+
+    #[test]
+    fn an_uppercased_script_tag_is_dropped_too() {
+        // The renderer passes the note's raw HTML through, and a browser
+        // runs <SCRIPT> exactly like <script>.
+        let html = strip_active("<p>keep</p><SCRIPT>alert(1)</SCRIPT><p>tail</p>");
+        assert!(!html.to_lowercase().contains("<script"), "{html}");
+        assert!(html.contains("keep"), "{html}");
+    }
+
+    #[test]
+    fn a_split_script_tag_cannot_reassemble_into_a_live_one() {
+        // <scr<script>x</script>ipt> leaves <scr + ipt> = a whole <script>
+        // in the output when the pass runs only once.
+        let html = strip_active("<scr<script>x</script>ipt>alert(1)</script>");
+        assert!(!html.to_lowercase().contains("<script"), "{html}");
+        assert!(!html.contains("alert(1)"), "{html}");
+    }
+
+    #[test]
+    fn a_render_drops_active_content_but_keeps_the_note_around_it() {
+        let html = strip_active(
+            "<p>before<script>alert(1)</script>after<iframe src=\"x\"></iframe>end</p>",
+        );
+        assert!(!html.contains("<script"), "{html}");
+        assert!(!html.contains("<iframe"), "{html}");
+        assert!(html.contains("before"), "{html}");
+        assert!(html.contains("after"), "{html}");
+        assert!(html.contains("end"), "{html}");
+        // A truncated tag drops itself, not the rest of the page.
+        let cut = strip_active("<p>keep</p><script>never closed");
+        assert!(cut.contains("<p>keep</p>"), "{cut}");
+        assert!(!cut.contains("<script"), "{cut}");
+    }
+
+    #[test]
+    fn the_export_skips_notes_in_the_vaults_own_directories() {
+        let files = [
+            note("Note.md"),
+            note(".trash/Old.md"),
+            note(".obsidian/config.md"),
+            note("Sub/.git/x.md"),
+            note("Sub/Deep/Plan.md"),
+        ];
+        let kept: Vec<&str> = publishable_notes(&files)
+            .iter()
+            .map(|f| f.path.as_str())
+            .collect();
+        assert_eq!(kept, ["Note.md", "Sub/Deep/Plan.md"]);
+    }
+
+    #[test]
+    fn the_output_folder_may_neither_live_in_the_vault_nor_hold_other_files() {
+        let root = std::env::temp_dir().join("silica-site-test-root");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("a root");
+        let inside = root.join("_site");
+        std::fs::create_dir_all(&inside).expect("a folder in the vault");
+        assert!(output_is_safe(&inside, &root).is_err());
+        assert!(output_is_safe(&root, &root).is_err());
+
+        let fresh = std::env::temp_dir().join("silica-site-test-fresh");
+        let _ = std::fs::remove_dir_all(&fresh);
+        assert!(output_is_safe(&fresh, &root).is_ok());
+
+        let foreign = std::env::temp_dir().join("silica-site-test-mixed");
+        let _ = std::fs::remove_dir_all(&foreign);
+        std::fs::create_dir_all(&foreign).expect("a folder");
+        std::fs::write(foreign.join("thesis.docx"), "x").expect("a foreign file");
+        assert!(output_is_safe(&foreign, &root).is_err());
+
+        // A previous pass's own output is accepted.
+        std::fs::remove_file(foreign.join("thesis.docx")).expect("clean it");
+        std::fs::write(foreign.join("index.html"), "x").expect("a page");
+        assert!(output_is_safe(&foreign, &root).is_ok());
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&fresh);
+        let _ = std::fs::remove_dir_all(&foreign);
+    }
+
+    #[test]
+#[test]
+    fn an_event_handler_attribute_does_not_survive() {
+        let html = strip_active("<p>a</p><img src=\"x\" onerror=\"alert(1)\"><p>b</p>");
+        assert!(!html.contains("onerror"), "onerror survived: {html}");
+        assert!(html.contains("<img src=\"x\""), "the img was lost: {html}");
+    }
+
+#[test]
+    fn a_javascript_url_does_not_survive() {
+        let html = strip_active("<a href=\"javascript:alert(1)\">x</a>");
+        assert!(
+            !html.to_ascii_lowercase().contains("javascript:"),
+            "javascript: survived: {html}"
+        );
+        assert!(html.contains(">x</a>"), "the link was lost: {html}");
+    }
+
+#[test]
+    fn a_cased_and_unquoted_handler_does_not_survive() {
+        let html = strip_active("<IMG ONERROR=alert(1) src=x>");
+        assert!(
+            !html.to_ascii_lowercase().contains("onerror"),
+            "ONERROR survived: {html}"
+        );
+        assert!(html.contains("src=x"), "src was lost: {html}");
+    }
+
+#[test]
+    fn ordinary_links_and_images_are_untouched() {
+        let src = "<a href=\"https://example.com/a?b=1&amp;c=2\">go</a>\
+<img src=\"pic.png\" alt=\"a>b\"><img src=\"data:image/png;base64,AAAA\">";
+        assert_eq!(strip_active(src), src);
+    }
+
+#[test]
+    fn a_gt_inside_a_value_does_not_end_the_tag() {
+        let html = strip_active("<a title=\"a>b\" href=\"javascript:alert(1)\">x</a>");
+        assert!(
+            !html.to_ascii_lowercase().contains("javascript:"),
+            "javascript: survived: {html}"
+        );
+        assert!(html.contains("title=\"a>b\""), "title was lost: {html}");
+    }
+
+#[test]
+    fn a_data_document_url_does_not_survive() {
+        let html = strip_active("<object data=\"data:text/html,<b>\"></object>");
+        assert!(
+            !html.to_ascii_lowercase().contains("data:text/html"),
+            "data:text/html survived: {html}"
+        );
+    }
+
+#[test]
+    fn a_watch_loop_that_is_already_stopped_exports_nothing() {
+        let stop = Arc::new(AtomicBool::new(true));
+        let root = std::env::temp_dir().join("silica-site-watch-stopped-root");
+        let out = std::env::temp_dir().join("silica-site-watch-stopped-out");
+        let _ = std::fs::remove_dir_all(&out);
+        watch_loop(root, out.clone(), stop);
+        assert!(!out.exists(), "a stopped loop must not write anything");
+    }
+
+#[test]
+    fn a_change_inside_the_vault_re_exports_the_site() {
+        // * Per-process dirs: parallel test binaries on one host must not
+        //   watch each other's vault.
+        let tag = format!("silica-site-watch-live-{}", std::process::id());
+        let root = std::env::temp_dir().join(&tag);
+        let out = std::env::temp_dir().join(format!("{tag}-out"));
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&out);
+        std::fs::create_dir_all(&root).expect("a vault");
+        std::fs::write(root.join("First.md"), "# First").expect("a note");
+        let stop = Arc::new(AtomicBool::new(false));
+        let watching = {
+            let (root, out, stop) = (root.clone(), out.clone(), stop.clone());
+            std::thread::spawn(move || watch_loop(root, out, stop))
+        };
+        // Let the watcher arm before the change, so the event is not lost.
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        std::fs::write(root.join("Second.md"), "# Second").expect("a new note");
+        let mut seen = false;
+        for _ in 0..80 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            if out.join("Second.html").exists() {
+                seen = true;
+                break;
+            }
+        }
+        stop.store(true, Ordering::Relaxed);
+        let _ = watching.join();
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&out);
+        assert!(seen, "writing a note inside the vault refreshes the export");
+    }
+
+#[test]
+    fn an_index_url_encodes_only_what_breaks_a_url() {
+        let plain = std::path::Path::new("/tmp/my-site");
+        assert_eq!(index_url(plain), "file:///tmp/my-site/index.html");
+
+        // A folder with a space, a hash and a percent must reach the
+        // browser as one path, not three fragments.
+        let messy = std::path::Path::new("/tmp/my notes #1 100%");
+        assert_eq!(
+            index_url(messy),
+            "file:///tmp/my%20notes%20%231%20100%25/index.html"
+        );
+
+        // Windows separators become URL separators.
+        let win = std::path::Path::new(r"C:\vaults\my site");
+        assert_eq!(index_url(win), "file://C:/vaults/my%20site/index.html");
     }
 }
