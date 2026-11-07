@@ -251,4 +251,4 @@ silica:export-site
 silica:export-site-watch
 silica:open-exported-site
 silica:toggle-graph-pane
-
+silica:vault-backup

@@ -233,4 +233,4 @@ silica:export-site	Export vault as site
 silica:export-site-watch	Export vault as site (watching)
 silica:open-exported-site	Open exported site
 silica:toggle-graph-pane	Toggle graph side pane
-
+silica:vault-backup	Back up the vault to a local folder
