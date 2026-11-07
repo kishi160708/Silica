@@ -900,6 +900,20 @@ function __silica_run(key, value) {
   return fn(value === undefined ? null : value);
 }
 
+// Timers. QuickJS ships none, so these register with the host, which runs
+// due callbacks before the plugin's next command or post-processor — the
+// pump a synchronous runtime has. `debounce` and any plugin that schedules
+// work depend on these existing.
+function __silica_schedule(fn, ms, repeat) {
+  if (typeof fn !== "function") return 0;
+  var key = __silica_bind(fn);
+  return __silica_raw_set_timer(Number(ms) || 0, repeat === true, key);
+}
+globalThis.setTimeout = function (fn, ms) { return __silica_schedule(fn, ms, false); };
+globalThis.clearTimeout = function (id) { __silica_raw_cancel_timer(Number(id) || 0); };
+globalThis.setInterval = function (fn, ms) { return __silica_schedule(fn, ms, true); };
+globalThis.clearInterval = function (id) { __silica_raw_cancel_timer(Number(id) || 0); };
+
 // Only the host and the plugin's own loader need these in the global scope;
 // everything the plugin is meant to see comes through `require`.
 globalThis.require = require;

@@ -486,3 +486,61 @@ module.exports = Counter;
         "nothing may be written outside the vault"
     );
 }
+
+/// QuickJS ships no `setTimeout`; the host provides one and pumps due
+/// callbacks before commands run. A plugin that debounces work — most do —
+/// crashed on load before this existed.
+#[test]
+fn a_set_timeout_callback_runs_when_pumped() {
+    let fixture = fixture(
+        r#"
+const { Plugin, Notice } = require('obsidian');
+module.exports = class Counter extends Plugin {
+  async onload() {
+    setTimeout(() => { new Notice("timer fired"); }, 1);
+  }
+}
+"#,
+    );
+    let host = load(&fixture, None);
+    assert!(!host.failed(), "{}", host.detail());
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    host.pump_timers();
+    let notices = host.take_notices();
+    assert!(
+        notices.iter().any(|n| n.contains("timer fired")),
+        "{notices:?}"
+    );
+    // A one-shot does not fire twice.
+    host.pump_timers();
+    assert!(host.take_notices().is_empty(), "one-shot refires");
+}
+
+#[test]
+fn a_set_interval_callback_reschedules_until_cleared() {
+    let fixture = fixture(
+        r#"
+const { Plugin, Notice } = require('obsidian');
+module.exports = class Counter extends Plugin {
+  async onload() {
+    const id = setInterval(() => {
+      new Notice("tick");
+      clearInterval(id);
+    }, 1);
+  }
+}
+"#,
+    );
+    let host = load(&fixture, None);
+    assert!(!host.failed(), "{}", host.detail());
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    host.pump_timers();
+    assert!(
+        host.take_notices().iter().any(|n| n.contains("tick")),
+        "interval fired once"
+    );
+    // The callback cleared its own interval; further pumps are silent.
+    host.pump_timers();
+    host.pump_timers();
+    assert!(host.take_notices().is_empty(), "cleared interval refires");
+}

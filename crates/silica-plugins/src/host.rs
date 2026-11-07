@@ -178,6 +178,71 @@ struct Shared {
     open_note: Option<String>,
     /// Post-processors the plugin registered, in the order it asked for them.
     post_processors: Vec<(i64, String)>,
+    /// Timers the plugin scheduled through `setTimeout`/`setInterval`, keyed
+    /// by the id handed back to JS. A slot is `None` once cancelled or, for
+    /// one-shot timers, once fired.
+    timers: Vec<Option<Timer>>,
+}
+
+/// One scheduled callback: the bound key to run, when it is due, and its
+/// repeat period (`None` for a one-shot `setTimeout`).
+struct Timer {
+    key: String,
+    at: Instant,
+    period: Option<Duration>,
+}
+
+impl Shared {
+    /// Registers a timer and returns its id. `delay_ms` clamps to zero, so a
+    /// plugin that passes a negative or NaN delay gets an immediate run
+    /// rather than an error.
+    fn add_timer(&mut self, delay_ms: f64, repeat: bool, key: String) -> u32 {
+        let delay = if delay_ms.is_finite() && delay_ms > 0.0 {
+            Duration::from_secs_f64(delay_ms / 1000.0)
+        } else {
+            Duration::ZERO
+        };
+        let timer = Timer {
+            key,
+            at: Instant::now() + delay,
+            period: repeat.then_some(delay),
+        };
+        // * Reuse cancelled slots so the id space stays small.
+        if let Some(slot) = self.timers.iter().position(|t| t.is_none()) {
+            self.timers[slot] = Some(timer);
+            return slot as u32;
+        }
+        self.timers.push(Some(timer));
+        (self.timers.len() - 1) as u32
+    }
+
+    fn cancel_timer(&mut self, id: u32) {
+        if let Some(slot) = self.timers.get_mut(id as usize) {
+            *slot = None;
+        }
+    }
+
+    /// The bound keys of timers that are due now, rescheduling the repeating
+    /// ones. Called with the borrow held briefly; the callbacks themselves
+    /// run through the context afterwards.
+    fn due_timers(&mut self) -> Vec<String> {
+        let now = Instant::now();
+        let mut due = Vec::new();
+        for slot in self.timers.iter_mut() {
+            let Some(timer) = slot else { continue };
+            if timer.at > now {
+                continue;
+            }
+            due.push(timer.key.clone());
+            match timer.period {
+                Some(period) => {
+                    timer.at = now + period;
+                }
+                None => *slot = None,
+            }
+        }
+        due
+    }
 }
 
 impl Shared {
@@ -413,6 +478,7 @@ impl PluginHost {
             active_file: open_note.clone(),
             open_note,
             post_processors: Vec::new(),
+            timers: Vec::new(),
         }));
 
         let runtime = match Runtime::new() {
@@ -611,6 +677,29 @@ impl PluginHost {
         result
     }
 
+    /// Runs every timer the plugin has scheduled that is due now, then
+    /// reschedules (or drops) it. Called before a command or post-processor
+    /// runs, which is the pump this synchronous runtime has: a debounced
+    /// callback or an interval fires on the plugin's next interaction rather
+    /// than on a background thread, which the context cannot leave.
+    pub fn pump_timers(&self) {
+        let due = self.shared.borrow_mut().due_timers();
+        if due.is_empty() {
+            return;
+        }
+        self.deadline.set(Instant::now() + CALL_DEADLINE);
+        self.context.with(|ctx| {
+            for key in due {
+                let call = format!("__silica_run({:?}, null)", key);
+                if let Err(error) = ctx.eval::<(), _>(call.as_bytes()) {
+                    let message = describe(&ctx, error);
+                    self.shared.borrow_mut().notices.push(message);
+                }
+            }
+        });
+        drain_jobs(&self._runtime);
+    }
+
     /// Runs a command the plugin registered, by id.
     /// The note the editor has open, as the app sees it. Set before a
     /// command runs, because the host is built long before any note is open
@@ -621,6 +710,7 @@ impl PluginHost {
     }
 
     pub fn run_command(&self, id: &str) -> Result<(), String> {
+        self.pump_timers();
         let command = self
             .registrations
             .commands
@@ -642,6 +732,7 @@ impl PluginHost {
     /// the method exists so registrations are real even before a frame
     /// consumes them.
     pub fn run_post_processor(&self, key: &str) -> Result<(), String> {
+        self.pump_timers();
         self.run(key, None)
     }
 
@@ -1129,6 +1220,20 @@ fn install<'js>(
         }
     );
 
+    // * Timers. QuickJS ships no event loop, so the host keeps the schedule
+    //   and pumps due callbacks before commands and post-processors run.
+    let s = Rc::clone(&shared);
+    set!("__silica_raw_set_timer", move |delay_ms: f64,
+                                         repeat: bool,
+                                         key: String|
+          -> u32 {
+        s.borrow_mut().add_timer(delay_ms, repeat, key)
+    });
+    let s = Rc::clone(&shared);
+    set!("__silica_raw_cancel_timer", move |id: u32| {
+        s.borrow_mut().cancel_timer(id);
+    });
+
     globals.set("__silica_manifest", manifest_json)?;
     Ok(())
 }
@@ -1461,6 +1566,7 @@ mod path_tests {
             active_file: None,
             open_note: open_note.map(str::to_string),
             post_processors: Vec::new(),
+            timers: Vec::new(),
         };
         (dir, Rc::new(RefCell::new(shared)))
     }
@@ -1584,6 +1690,7 @@ mod capability_tests {
             active_file: None,
             open_note: None,
             post_processors: Vec::new(),
+            timers: Vec::new(),
         }));
         context.with(|ctx| {
             // Inject the platform the tests run on, matching the host's cfg,
