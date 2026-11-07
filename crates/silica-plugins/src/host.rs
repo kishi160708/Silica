@@ -763,6 +763,22 @@ fn install<'js>(
     });
 
     let s = Rc::clone(&shared);
+    set!("__silica_raw_vault_read_bytes", move |ctx: Ctx<'js>,
+                                               path: String|
+          -> rquickjs::Result<
+        String,
+    > {
+        let resolved = s
+            .borrow()
+            .resolve(&path)
+            .map_err(|error| Exception::throw_message(&ctx, &error))?;
+        let bytes = std::fs::read(&resolved).map_err(|error| {
+            Exception::throw_message(&ctx, &format!("{path} could not be read: {error}"))
+        })?;
+        Ok(to_base64(&bytes))
+    });
+
+    let s = Rc::clone(&shared);
     set!(
         "__silica_raw_vault_write",
         move |ctx: Ctx<'js>, path: String, text: String| -> rquickjs::Result<()> {
@@ -1024,6 +1040,33 @@ fn describe(ctx: &Ctx<'_>, error: rquickjs::Error) -> String {
         }
     }
     error.to_string()
+}
+
+/// Base64-encode `bytes` so QuickJS can receive binary file contents as text.
+/// A plugin decodes with `atob()`. No external dependency: the alphabet is
+/// RFC 4648, output is padded with `=`.
+fn to_base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0];
+        let b1 = chunk.get(1).copied().unwrap_or(0);
+        let b2 = chunk.get(2).copied().unwrap_or(0);
+        let triple = ((b0 as u32) << 16) | ((b1 as u32) << 8) | (b2 as u32);
+        out.push(ALPHABET[((triple >> 18) & 63) as usize] as char);
+        out.push(ALPHABET[((triple >> 12) & 63) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(ALPHABET[((triple >> 6) & 63) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(ALPHABET[(triple & 63) as usize] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
 }
 
 /// The vault's files, as `TAbstractFile` reports them. Hidden folders are

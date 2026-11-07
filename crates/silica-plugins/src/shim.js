@@ -378,16 +378,18 @@ function __silica_app(manifest) {
     },
     read: function (file) { return Promise.resolve(__silica_raw_vault_read(__silica_path(file))); },
     cachedRead: function (file) { return Promise.resolve(__silica_raw_vault_read(__silica_path(file))); },
-    readBinary: function (file) { throw new Error("vault.readBinary is not supported by Silica"); },
+    readBinary: function (file) {
+      return Promise.resolve(__silica_raw_vault_read_bytes(__silica_path(file)));
+    },
     create: function (path, data) { return Promise.resolve(__silica_raw_vault_create(String(path), String(data === undefined ? "" : data))); },
     createFolder: function (path) { __silica_raw_vault_create_folder(String(path)); return Promise.resolve(); },
     modify: function (file, data) { return Promise.resolve(__silica_raw_vault_write(__silica_path(file), String(data))); },
     append: function (file, data) { return Promise.resolve(__silica_raw_vault_append(__silica_path(file), String(data))); },
     delete: function (file) { return Promise.resolve(__silica_raw_vault_delete(__silica_path(file))); },
-    rename: function (file, newPath) { throw new Error("vault.rename is not supported; use app.fileManager.renameFile"); },
+    rename: function (file, newPath) { return Promise.resolve(__silica_raw_vault_rename(__silica_path(file), String(newPath))); },
     trash: function (file) { return Promise.resolve(__silica_raw_vault_delete(__silica_path(file))); },
-    getConfig: function () { throw new Error("vault.getConfig is not supported by Silica"); },
-    setConfig: function () { throw new Error("vault.setConfig is not supported by Silica"); },
+    getConfig: function () { return {}; },
+    setConfig: function () { return Promise.resolve(); },
     on: function () { return { unload: function () {} }; },
   };
 
@@ -502,9 +504,12 @@ function __silica_file(path) {
 }
 
 function __silica_abstract(file) {
+  var parent = "";
+  var parts = String(file.path).split("/");
+  if (parts.length > 1) { parts.pop(); parent = parts.join("/"); }
   return {
     path: file.path, name: file.name, extension: file.extension,
-    basename: file.basename, parent: null,
+    basename: file.basename, parent: parent || null,
     stat: { size: file.size, mtime: file.mtime, ctime: file.mtime },
   };
 }
