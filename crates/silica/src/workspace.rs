@@ -2913,6 +2913,7 @@ pub struct Workspace {
     /// Matcher over every note name and alias, rebuilt when files change.
     name_finder: Option<Arc<Finder>>,
     mention_generation: u64,
+    outline_generation: u64,
     /// What the status bar says about the vault and the open file: it is
     /// true until something makes it untrue, so nothing expires it.
     status: SharedString,
@@ -3507,6 +3508,7 @@ impl Workspace {
             property_filter,
             name_finder: None,
             mention_generation: 0,
+            outline_generation: 0,
             status: "Pass a vault folder as the first argument".into(),
             notices: Notices::default(),
             words: 0,
@@ -6851,17 +6853,53 @@ impl Workspace {
         let Some(path) = self.current.clone() else {
             return;
         };
-        let rows = {
+        // Snapshot the dirty buffer text on the UI thread, then parse off the
+        // UI thread so a full `index_markdown` never blocks typing. Stale
+        // results from an older keystroke are dropped via outline_generation,
+        // mirroring compute_mentions.
+        let text = {
             let editor = self.editor.read(cx);
             // * A clean buffer is the file the index read, and a buffer
             //   holding another note says nothing about this one.
             if editor.name.as_ref() != path.as_str() || !editor.is_dirty() {
                 return;
             }
-            outline_headings(&index_markdown(editor.text()))
+            editor.text().to_owned()
         };
-        self.outline = rows;
-        cx.notify();
+        self.outline_generation += 1;
+        let generation = self.outline_generation;
+        cx.spawn(async move |this, cx| {
+            // * A burst of keystrokes owes the pane one parse, not one per
+            //   keystroke: a 3 MB note costs ~100 ms to parse, so parsing on
+            //   every edit saturates the background executor and leaves the
+            //   outline several keystrokes behind (measured: 13 parses for
+            //   20 steps, edit-to-decoration 330 ms). Wait for typing to
+            //   pause, and drop the run if a newer keystroke landed.
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(150))
+                .await;
+            let stale = this
+                .update(cx, |ws, _| {
+                    ws.outline_generation != generation || ws.current.as_deref() != Some(&path)
+                })
+                .unwrap_or(true);
+            if stale {
+                return;
+            }
+            let rows = cx
+                .background_executor()
+                .spawn(async move { outline_headings(&index_markdown(&text)) })
+                .await;
+            this.update(cx, |ws, cx| {
+                if ws.outline_generation != generation || ws.current.as_deref() != Some(&path) {
+                    return;
+                }
+                ws.outline = rows;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Finds unlinked mentions in both directions on the background executor.
@@ -14208,11 +14246,36 @@ link to it is rewritten. The current note is deleted."
         cx.notify();
     }
 
+    /// Applies an outline parse that is still inside its debounce window.
+    fn flush_outline_if_pending(&mut self, cx: &mut Context<Self>) {
+        let Some(path) = self.current.clone() else {
+            return;
+        };
+        let text = {
+            let editor = self.editor.read(cx);
+            // * A clean buffer already matches what the index says.
+            if editor.name.as_ref() != path.as_str() || !editor.is_dirty() {
+                return;
+            }
+            editor.text().to_owned()
+        };
+        // * Bumping the generation retires the debounced task still waiting,
+        //   so only this synchronous result can land.
+        self.outline_generation += 1;
+        self.outline = outline_headings(&index_markdown(&text));
+        cx.notify();
+    }
+
     /// An Outline row's click: in an editing mode the cursor goes to the
     /// heading's line, column 0, scrolled to the vertical centre, and the
     /// editor takes the keyboard; in reading mode the heading scrolls to
     /// the top edge.
     fn reveal_heading(&mut self, offset: usize, cx: &mut Context<Self>) {
+        // * A click lands the caret by byte offset, so the rows it came from
+        //   must describe the buffer as it is now: a parse still waiting out
+        //   its debounce is applied synchronously here — one hitch on a
+        //   click, never on a keystroke.
+        self.flush_outline_if_pending(cx);
         self.reading
             .update(cx, |r, cx| r.scroll_to_offset(offset, cx));
         if self.mode.is_editing() {
