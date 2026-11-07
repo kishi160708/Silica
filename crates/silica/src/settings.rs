@@ -2102,7 +2102,11 @@ impl SettingsView {
 
     fn items(&self, tab: Tab) -> Vec<Item> {
         let Some(state) = self.state.as_ref() else {
-            return vec![item("No vault is open", "", Control::None)];
+            return vec![item(
+                "No vault is open",
+                "Settings read and write a vault. Open one from the vault switcher in the left sidebar, then reopen Settings.",
+                Control::None,
+            )];
         };
         match tab {
             Tab::General => Self::general_items(state),
@@ -2676,7 +2680,11 @@ impl SettingsView {
                 let registry = commands;
                 let mut items = vec![heading("Pinned commands")];
                 if state.palette.pinned.is_empty() {
-                    items.push(item("No commands found.", "", Control::None));
+                    items.push(item(
+                        "No pinned commands yet",
+                        "Pin a command from the command palette (Ctrl+P) to show it here.",
+                        Control::None,
+                    ));
                 }
                 for id in &state.palette.pinned {
                     let name = registry
