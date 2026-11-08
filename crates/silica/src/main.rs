@@ -12,6 +12,7 @@ mod assets;
 mod backlinks;
 mod bases;
 mod bookmarks;
+mod calendar;
 mod canvas;
 mod chooser;
 mod clipboard_html;
@@ -478,6 +479,7 @@ pub fn bind_all_keys(cx: &mut App, registry: &CommandRegistry) {
     vaults::bind_keys(cx);
     prompt::bind_keys(cx);
     quick_note::bind_keys(cx);
+    calendar::bind_keys(cx);
     copy_results::bind_keys(cx);
     cx.bind_keys([KeyBinding::new("ctrl-q", Quit, None)]);
 }
