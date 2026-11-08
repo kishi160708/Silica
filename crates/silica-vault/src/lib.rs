@@ -50,6 +50,11 @@ pub enum VaultError {
     /// than asked for. Refuse before the OS rewrites anything.
     #[error("File name must not end with a dot or a space: {0}")]
     RefusedName(PathBuf),
+    /// The vault was opened for one note given on the command line, so its
+    /// folder is a folder and not a vault: nothing Obsidian keeps in
+    /// `.obsidian` may be created there.
+    #[error("{0} is read-only: this folder was opened for a note, not as a vault")]
+    ReadOnly(String),
 }
 
 /// Whether two paths name one file on disk, which on a case-insensitive
@@ -566,6 +571,10 @@ pub struct Vault {
     /// Every folder, vault-relative and sorted, empty ones included (the
     /// Files view shows them; the file list alone would not).
     folders: Vec<String>,
+    /// A vault opened for one note outside it: the folder is a folder, so
+    /// every configuration write is refused. The note itself is still
+    /// written, which is the note the vault was opened for.
+    read_only: bool,
 }
 
 /// Whether a metadata entry is a link that could redirect a path: a symlink
@@ -725,9 +734,27 @@ impl Vault {
             config_dir: config_dir.to_string(),
             files: Vec::new(),
             folders: Vec::new(),
+            read_only: false,
         };
         vault.rescan()?;
         Ok(vault)
+    }
+
+    /// Opens a vault for the one note a command line named, which lives
+    /// outside every vault: the note's own folder, scanned as a vault so
+    /// links, backlinks and the cache resolve, with every configuration
+    /// write refused. A folder that is not a vault gets no `.obsidian`
+    /// written into it — the note itself is still written.
+    pub fn open_read_only(root: impl AsRef<Path>) -> Result<Vault, VaultError> {
+        let mut vault = Vault::open_with_config_dir(root, DEFAULT_CONFIG_DIR)?;
+        vault.read_only = true;
+        Ok(vault)
+    }
+
+    /// Whether this vault was opened for one note outside it, so nothing
+    /// Obsidian keeps in `.obsidian` may be written.
+    pub fn read_only(&self) -> bool {
+        self.read_only
     }
 
     pub fn root(&self) -> &Path {
@@ -1130,6 +1157,14 @@ impl Vault {
         value: &T,
         merge: bool,
     ) -> Result<(), VaultError> {
+        // ! A vault opened for one note outside a vault is read-only: its
+        //   folder is a folder, and creating `.obsidian` in it would write
+        //   a configuration where the user had none. The note that was
+        //   opened is still written — that is the one file this vault was
+        //   opened for.
+        if self.read_only {
+            return Err(VaultError::ReadOnly(name.to_string()));
+        }
         let path = self.write_path(&format!("{}/{name}", self.config_dir))?;
         let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
         std::fs::create_dir_all(&dir).map_err(|source| VaultError::Io {
@@ -1380,6 +1415,64 @@ mod tests {
             assert!(result.is_err(), "an unreadable config must not be replaced");
             assert_eq!(fs::read(&path).unwrap(), original, "bytes preserved");
         }
+    }
+
+    /// A vault opened for one note outside a vault reads its folder and
+    /// refuses every configuration write: the folder is a folder, and
+    /// nothing may be written into it that the user did not put there.
+    #[test]
+    fn a_vault_opened_for_one_note_refuses_config_writes() {
+        let dir = sample_vault();
+        let before = fs::read_to_string(dir.path().join(".obsidian/app.json")).unwrap();
+        let vault = Vault::open_read_only(dir.path()).unwrap();
+        assert!(vault.read_only(), "opened for a note, so read-only");
+        // * Reading is untouched: the folder is scanned, its configs are
+        //   read, the note list is the folder's own.
+        assert!(vault.files().iter().any(|f| f.path == "Note.md"));
+        assert!(vault.app_config().unwrap().vim_mode == Some(true));
+
+        let error =
+            vault.write_config("appearance.json", &serde_json::json!({"theme": "obsidian"}));
+        assert!(
+            matches!(error, Err(VaultError::ReadOnly(ref name)) if name == "appearance.json"),
+            "a config write must be refused: {error:?}"
+        );
+        // * `write_bookmarks` and `graph.json` go through the same path, so
+        //   neither may create `.obsidian` in a folder that has none.
+        let error = vault.write_bookmarks(&silica_formats::bookmarks::Bookmarks::default());
+        assert!(matches!(error, Err(VaultError::ReadOnly(_))), "{error:?}");
+        assert!(
+            !dir.path().join(".obsidian/bookmarks.json").exists(),
+            "no config may be created"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join(".obsidian/app.json")).unwrap(),
+            before
+        );
+    }
+
+    /// A folder that is not a vault opens read-only for the note in it,
+    /// and no `.obsidian` appears: nothing is written into a folder the
+    /// user never made a vault.
+    #[test]
+    fn a_folder_that_is_not_a_vault_gains_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("Looser.md"), "# outside every vault\n").unwrap();
+        let vault = Vault::open_read_only(dir.path()).unwrap();
+        assert_eq!(
+            vault
+                .files()
+                .iter()
+                .map(|f| f.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Looser.md"]
+        );
+        let error = vault.write_config("app.json", &serde_json::json!({}));
+        assert!(matches!(error, Err(VaultError::ReadOnly(_))), "{error:?}");
+        assert!(!dir.path().join(".obsidian").exists(), "no config created");
+        // * A plain vault keeping everything writable is unchanged.
+        let plain = Vault::open(dir.path()).unwrap();
+        assert!(!plain.read_only());
     }
 
     /// `read_verified` refuses a path that could leave the vault before it
