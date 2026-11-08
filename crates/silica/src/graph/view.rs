@@ -22,7 +22,7 @@ use gpui::{
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Point, ScrollWheelEvent,
     ShapedLine, SharedString, Subscription, Task, TextAlign, Window,
 };
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use silica_formats::config::{GraphColor, GraphColorGroup, GraphConfig};
 use silica_formats::FileKind;
 use silica_search::{Search, SearchFile};
@@ -220,7 +220,7 @@ pub(crate) fn full_document(config: &GraphConfig) -> Value {
     };
     let mut groups = json!(config.color_groups);
     integerize(&mut groups);
-    json!({
+    let mut doc = json!({
         "collapse-filter": collapsed("collapse-filter"),
         "search": config.search.clone().unwrap_or_default(),
         "showTags": config.show_tags.unwrap_or(false),
@@ -241,7 +241,17 @@ pub(crate) fn full_document(config: &GraphConfig) -> Value {
         "linkDistance": number(config.link_distance, json!(250)),
         "scale": number(config.scale, json!(1)),
         "close": config.close.unwrap_or(false),
-    })
+    });
+    if let Some(positions) = &config.node_positions {
+        if !positions.is_empty() {
+            if let Some(map) = doc.as_object_mut() {
+                let mut positions = json!(positions);
+                integerize(&mut positions);
+                map.insert("nodePositions".into(), positions);
+            }
+        }
+    }
+    doc
 }
 
 /// The config as a value to merge into an existing `graph.json`. The
@@ -648,9 +658,26 @@ impl GraphView {
         let mut layout = Layout::new(built.nodes.len(), built.edges.clone(), self.forces());
         for (i, node) in built.nodes.iter().enumerate() {
             layout.bodies[i].mass = 1.0 + (node.degree as f32).sqrt() * 0.5;
-            if let Some((x, y)) = old.get(&node.id) {
-                layout.bodies[i].x = *x;
-                layout.bodies[i].y = *y;
+            let saved: Option<(f32, f32)> = self
+                .config
+                .node_positions
+                .as_ref()
+                .and_then(|positions| positions.get(&node.id))
+                .and_then(|value| value.as_array())
+                .and_then(|array| {
+                    let mut items = array.iter();
+                    match (items.next(), items.next()) {
+                        (Some(x), Some(y)) if x.is_number() && y.is_number() => Some((
+                            x.as_f64().unwrap_or(0.0) as f32,
+                            y.as_f64().unwrap_or(0.0) as f32,
+                        )),
+                        _ => None,
+                    }
+                });
+            let pos = old.get(&node.id).copied().or(saved);
+            if let Some((x, y)) = pos {
+                layout.bodies[i].x = x;
+                layout.bodies[i].y = y;
             }
         }
         self.index = built
@@ -908,6 +935,22 @@ impl GraphView {
                 .get_mut(ix)
             {
                 b.pinned = false;
+            }
+            if drag.moved {
+                let pos = self
+                    .layout
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .bodies
+                    .get(ix)
+                    .map(|b| [b.x, b.y]);
+                if let Some(p) = pos {
+                    self.config
+                        .node_positions
+                        .get_or_insert_with(Map::new)
+                        .insert(self.nodes[ix].id.clone(), json!([p[0], p[1]]));
+                }
+                self.schedule_save(cx);
             }
             if !drag.moved && event.button == MouseButton::Left {
                 if let Some(node) = self.nodes.get(ix) {
@@ -2177,7 +2220,6 @@ fn finish(
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::render::arrowhead;
@@ -2262,6 +2304,38 @@ mod tests {
             let text = serde_json::to_string(&doc).unwrap();
             assert!(text.contains("\"a\":1,\"rgb\":15282503"), "{text}");
         }
+    }
+
+    /// A node dragged in one session has to come back where it was left in
+    /// the next, so the positions are written into `graph.json` and read
+    /// back into the same field: whole numbers keep no decimal point.
+    #[test]
+    fn a_dragged_node_position_survives_the_write_and_the_next_read() {
+        let mut positions = Map::new();
+        positions.insert("Note.md".into(), json!([100.0, 12.5]));
+        let config = GraphConfig {
+            node_positions: Some(positions),
+            ..GraphConfig::default()
+        };
+        for doc in [merge_document(&config), full_document(&config)] {
+            let text = serde_json::to_string(&doc).unwrap();
+            assert!(text.contains("\"nodePositions\""), "{text}");
+            assert!(text.contains("\"Note.md\":[100,12.5]"), "{text}");
+            let back: GraphConfig = serde_json::from_str(&text).unwrap();
+            let pair = back.node_positions.as_ref().unwrap()["Note.md"]
+                .as_array()
+                .unwrap();
+            assert_eq!(
+                (pair[0].as_f64().unwrap(), pair[1].as_f64().unwrap()),
+                (100.0, 12.5)
+            );
+        }
+        // * A `graph.json` written before positions existed stays readable.
+        let before: GraphConfig =
+            serde_json::from_str("{\"collapse-filter\":true,\"linkDistance\":250}").unwrap();
+        assert_eq!(before.node_positions, None);
+        assert_eq!(before.link_distance, Some(250.0));
+        assert_eq!(before.extra["collapse-filter"], json!(true));
     }
 
     #[test]
