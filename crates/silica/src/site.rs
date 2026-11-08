@@ -95,7 +95,7 @@ fn strip_active(html: &str) -> String {
         let done = stripped == out;
         out = stripped;
         if done {
-            return out;
+            return strip_event_attributes(&out);
         }
     }
 }
@@ -132,6 +132,174 @@ fn strip_active_once(html: &str) -> String {
             .unwrap_or(rest.len());
         rest = &rest[after..];
     }
+}
+
+/// Every tag that survived the element pass is walked again and its
+/// attributes cut, span by span, so untouched text keeps its exact bytes:
+/// the ordinary-links contract is byte equality, not "close enough".
+///
+/// Two things go: any `on*` attribute (every one of them is an event
+/// handler) and any URL-valued attribute whose value a browser would
+/// resolve to an active scheme. A `<` that opens no tag (`a < b`, `<!`,
+/// `</`) is copied as text, so a stray angle bracket never eats the note.
+fn strip_event_attributes(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut rest = html;
+    while let Some(at) = rest.find('<') {
+        out.push_str(&rest[..at]);
+        rest = &rest[at..];
+        let opener = rest.as_bytes().get(1);
+        if !opener.is_some_and(|b| b.is_ascii_alphabetic()) {
+            let end = rest.find('>').map(|i| i + 1).unwrap_or(1.min(rest.len()));
+            out.push_str(&rest[..end]);
+            rest = &rest[end.min(rest.len())..];
+            continue;
+        }
+        match cut_tag_attributes(rest) {
+            Some((end, kept)) => {
+                out.push_str(&kept);
+                rest = &rest[end..];
+            }
+            // No '>' outside quotes: the '<' was text, keep the byte.
+            None => {
+                out.push('<');
+                rest = &rest[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Walks one opening tag (`rest` starts at its `<`), returning the byte
+/// offset just past its closing `>` and the tag with its active
+/// attributes cut, or `None` when no closing `>` sits outside a quoted
+/// value.
+fn cut_tag_attributes(rest: &str) -> Option<(usize, String)> {
+    let bytes = rest.as_bytes();
+    let mut i = 1;
+    let mut cuts: Vec<(usize, usize)> = Vec::new();
+    loop {
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        match bytes.get(i) {
+            None => return None,
+            Some(b'>') => {
+                i += 1;
+                break;
+            }
+            // A trailing `/` (self-closing) closes the tag once its `>` lands.
+            Some(b'/') => {
+                i += 1;
+                continue;
+            }
+            _ => {}
+        }
+        let attr_start = i;
+        let name_start = i;
+        while i < bytes.len()
+            && !bytes[i].is_ascii_whitespace()
+            && !matches!(bytes[i], b'=' | b'/' | b'>')
+        {
+            i += 1;
+        }
+        let name = &rest[name_start..i];
+        let mut value = String::new();
+        if bytes.get(i) == Some(&b'=') {
+            i += 1;
+            match bytes.get(i) {
+                Some(q @ (b'"' | b'\'')) => {
+                    let quote = *q;
+                    i += 1;
+                    let val_start = i;
+                    while i < bytes.len() && bytes[i] != quote {
+                        i += 1;
+                    }
+                    value.push_str(&rest[val_start..i.min(bytes.len())]);
+                    if i < bytes.len() {
+                        i += 1;
+                    }
+                }
+                _ => {
+                    let val_start = i;
+                    while i < bytes.len() && !bytes[i].is_ascii_whitespace() && bytes[i] != b'>' {
+                        i += 1;
+                    }
+                    value.push_str(&rest[val_start..i]);
+                }
+            }
+        }
+        let attr_end = i;
+        if name.len() > 2 && name.len() <= 24 && name.to_ascii_lowercase().starts_with("on")
+            || is_active_url(&value)
+        {
+            cuts.push((attr_start, attr_end));
+        }
+    }
+    let mut kept = String::with_capacity(rest.len());
+    let mut last = 0;
+    for (from, to) in cuts {
+        kept.push_str(&rest[last..from]);
+        last = to;
+    }
+    kept.push_str(&rest[last..i]);
+    Some((i, kept))
+}
+
+/// Whether a browser resolving `value` as a URL lands on a scheme that
+/// runs code. The check runs on the value a browser would see: numeric
+/// character references decoded (`&#106;avascript:` is `javascript:`),
+/// `&colon;` spelled out, case and the ASCII whitespace/control bytes a
+/// URL parser drops (`java\tscript:`) normalized away.
+fn is_active_url(value: &str) -> bool {
+    let normalized = normalize_url(value);
+    normalized.starts_with("javascript:") || normalized.starts_with("data:text/html")
+}
+
+/// Decodes the entity forms a URL parser accepts, lowercases, and drops
+/// the bytes browsers ignore inside a scheme.
+fn normalize_url(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '&' {
+            if !c.is_ascii_whitespace() && !c.is_ascii_control() {
+                out.push(c.to_ascii_lowercase());
+            }
+            continue;
+        }
+        let mut refr = String::new();
+        while let Some(&next) = chars.peek() {
+            if next == ';' {
+                chars.next();
+                break;
+            }
+            if refr.len() > 10 {
+                break;
+            }
+            refr.push(chars.next().unwrap());
+        }
+        match refr.as_str() {
+            "colon" => out.push(':'),
+            "Tab" | "NewLine" | "sol" => out.push(' '),
+            other => {
+                let hex = other
+                    .strip_prefix("#x")
+                    .or_else(|| other.strip_prefix("#X"))
+                    .and_then(|h| u32::from_str_radix(h, 16).ok());
+                let dec = other.strip_prefix('#').and_then(|d| d.parse::<u32>().ok());
+                if let Some(cp) = hex.or(dec).and_then(char::from_u32) {
+                    out.push(cp.to_ascii_lowercase());
+                } else {
+                    out.push('&');
+                    out.push_str(other);
+                    out.push(';');
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Exports the vault at `root` (whose files are `files`) into `out`,
@@ -738,5 +906,58 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&fresh);
         let _ = std::fs::remove_dir_all(&foreign);
+    }
+
+    #[test]
+    fn an_event_handler_attribute_does_not_survive() {
+        let html = strip_active("<p>a</p><img src=\"x\" onerror=\"alert(1)\"><p>b</p>");
+        assert!(!html.contains("onerror"), "onerror survived: {html}");
+        assert!(html.contains("<img src=\"x\""), "the img was lost: {html}");
+    }
+
+    #[test]
+    fn a_javascript_url_does_not_survive() {
+        let html = strip_active("<a href=\"javascript:alert(1)\">x</a>");
+        assert!(
+            !html.to_ascii_lowercase().contains("javascript:"),
+            "javascript: survived: {html}"
+        );
+        assert!(html.contains(">x</a>"), "the link was lost: {html}");
+    }
+
+    #[test]
+    fn a_cased_and_unquoted_handler_does_not_survive() {
+        let html = strip_active("<IMG ONERROR=alert(1) src=x>");
+        assert!(
+            !html.to_ascii_lowercase().contains("onerror"),
+            "ONERROR survived: {html}"
+        );
+        assert!(html.contains("src=x"), "src was lost: {html}");
+    }
+
+    #[test]
+    fn ordinary_links_and_images_are_untouched() {
+        let src = "<a href=\"https://example.com/a?b=1&amp;c=2\">go</a>\
+<img src=\"pic.png\" alt=\"a>b\"><img src=\"data:image/png;base64,AAAA\">";
+        assert_eq!(strip_active(src), src);
+    }
+
+    #[test]
+    fn a_gt_inside_a_value_does_not_end_the_tag() {
+        let html = strip_active("<a title=\"a>b\" href=\"javascript:alert(1)\">x</a>");
+        assert!(
+            !html.to_ascii_lowercase().contains("javascript:"),
+            "javascript: survived: {html}"
+        );
+        assert!(html.contains("title=\"a>b\""), "title was lost: {html}");
+    }
+
+    #[test]
+    fn a_data_document_url_does_not_survive() {
+        let html = strip_active("<object data=\"data:text/html,<b>\"></object>");
+        assert!(
+            !html.to_ascii_lowercase().contains("data:text/html"),
+            "data:text/html survived: {html}"
+        );
     }
 }
