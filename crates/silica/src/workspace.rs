@@ -469,6 +469,9 @@ pub const RUNNABLE: &[&str] = &[
     "bookmarks:bookmark-current-section",
     "bookmarks:bookmark-current-heading",
     "bookmarks:bookmark-all-tabs",
+    // * Silica's own addition, not an Obsidian id: lists the vault's `.trash/`
+    //   contents so a trashed note can be seen and restored from the palette.
+    "workspace:show-trash",
 ];
 
 /// Binds every runnable command's hotkeys in the Workspace context, and the
@@ -4860,6 +4863,26 @@ impl Workspace {
                     .as_nanos();
                 let ix = (nanos % notes.len() as u128) as usize;
                 self.open_file(notes[ix].clone(), None, cx);
+            }
+            // * `workspace:show-trash`: list the vault's `.trash/` contents so a
+            //   trashed note can be seen (and later restored). Reuses
+            //   `Vault::list_trash`; no new vault logic, just the command wire.
+            "workspace:show-trash" => {
+                let entries = {
+                    let Some(state) = self.state.as_ref() else {
+                        self.report("no vault loaded", cx);
+                        return;
+                    };
+                    state.vault().list_trash()
+                };
+                match entries {
+                    Ok(entries) if entries.is_empty() => self.report("Trash is empty", cx),
+                    Ok(entries) => self.report(
+                        format!("Trash ({}): {}", entries.len(), entries.join(", ")),
+                        cx,
+                    ),
+                    Err(err) => self.report(format!("Could not read trash: {err}", err = err), cx),
+                }
             }
             "command-palette:open" => self.open_palette("", window, cx),
             "editor:save-file" => self.flush_save(cx),
