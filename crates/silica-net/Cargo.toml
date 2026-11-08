@@ -1,8 +1,10 @@
 [package]
 name = "silica-net"
-version = "0.5.17"
-edition = "2021"
-license = "MIT"
+description = "What Silica may fetch, and how: the destination rules, the pinned resolution, and the guarded fetch one shared boundary"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
 
 [dependencies]
 url = { workspace = true }
