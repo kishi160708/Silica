@@ -616,9 +616,10 @@ fn the_task_dashboard_opens_a_clicked_task_at_its_own_line() {
         "no dashboard row opened its note: the keys never landed"
     );
 
-    // The note opened, and the viewport was scrolled to the task's own
-    // line: `scroll_to_line` moves the view, not the caret, so the scroll
-    // is what a click on the row is meant to leave behind.
+    // The note opened, and the task's own line is on screen: the row's
+    // click is meant to leave the reader looking at the task, which is the
+    // visible range — whether the viewport had to scroll at all depends on
+    // how tall the window is, which is not what is being asserted.
     let state = app.call("state", json!({"text": true}));
     let current = state
         .get("file")
@@ -626,15 +627,24 @@ fn the_task_dashboard_opens_a_clicked_task_at_its_own_line() {
         .and_then(|p| p.as_str())
         .unwrap_or_default()
         .to_string();
-    assert_eq!(current, "Tasks.md", "the click opened no note: {state:?}");
-    let line = state
+    assert_eq!(current, "Tasks.md", "the keys opened no note: {state:?}");
+    let visible: Vec<u64> = state
         .get("editor")
-        .and_then(|e| e.get("scroll"))
-        .and_then(|s| s.get("line"))
-        .and_then(|l| l.as_u64())
-        .unwrap_or(0);
+        .and_then(|e| e.get("visible_lines"))
+        .and_then(|v| v.as_array())
+        .map(|lines| lines.iter().filter_map(|l| l.as_u64()).collect())
+        .unwrap_or_default();
+    let task_line: u64 = state
+        .get("editor")
+        .and_then(|e| e.get("text"))
+        .and_then(|t| t.as_str())
+        .and_then(|text| text.lines().position(|l| l.contains("first task")))
+        .map(|ix| ix as u64)
+        .unwrap_or(u64::MAX);
+    let first = visible.first().copied().unwrap_or(0);
+    let last = visible.last().copied().unwrap_or(0);
     assert!(
-        line >= 41,
-        "the task's line was not scrolled into view: {state:?}"
+        first <= task_line && task_line <= last,
+        "the task's line {task_line} is not on screen: {state:?}"
     );
 }
