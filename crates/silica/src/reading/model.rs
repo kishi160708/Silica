@@ -99,6 +99,15 @@ pub struct InlineStyle {
     pub math: bool,
     pub footnote: bool,
     pub html: bool,
+    /// `<kbd>`: a key box — monospace run over a filled wash. gpui pins no
+    /// per-run border, so the box is fill only; an outline is a gpui limit.
+    pub kbd: bool,
+    /// `<sup>`: raised text, and `<sub>`: lowered text. This gpui's
+    /// `HighlightStyle` has no per-run font size or vertical offset, so the
+    /// run paints at base size for now; the flags stay on the run and the
+    /// offset is a reported gpui limit.
+    pub sup: bool,
+    pub sub: bool,
 }
 
 impl InlineStyle {
@@ -967,7 +976,9 @@ impl<'v> Builder<'v> {
             InlineKind::SoftBreak if self.opts.strict_line_breaks => acc.push(" "),
             InlineKind::SoftBreak | InlineKind::HardBreak => acc.push("\n"),
             InlineKind::Code(c) => acc.styled(|s| s.code = true, |a| a.push(c)),
-            InlineKind::Html(h) => raw_html::inline(acc, h),
+            InlineKind::Html(h) | InlineKind::HtmlInline { html: h, .. } => {
+                raw_html::inline(acc, h)
+            }
             InlineKind::Emphasis(c) => self.wrap(acc, c, |s| s.italic = true),
             InlineKind::Strong(c) => self.wrap(acc, c, |s| s.bold = true),
             InlineKind::Strikethrough(c) => self.wrap(acc, c, |s| s.strike = true),
