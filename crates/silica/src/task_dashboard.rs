@@ -18,15 +18,29 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-actions!(task_dashboard, [OpenTask, CloseTaskDashboard]);
+actions!(
+    task_dashboard,
+    [
+        OpenTask,
+        CloseTaskDashboard,
+        FocusNext,
+        FocusPrev,
+        OpenFocused
+    ]
+);
 
 /// Escape closes the dashboard.
+///
+/// The arrows move a selection ring and Enter opens it, the way the file
+/// tree's own keys work: a row is reachable without the pointer, which is
+/// also what makes a click-free test possible on a bare X server.
 pub fn bind_keys(cx: &mut App) {
-    cx.bind_keys([KeyBinding::new(
-        "escape",
-        CloseTaskDashboard,
-        Some("TaskDashboard"),
-    )]);
+    cx.bind_keys([
+        KeyBinding::new("escape", CloseTaskDashboard, Some("TaskDashboard")),
+        KeyBinding::new("down", FocusNext, Some("TaskDashboard")),
+        KeyBinding::new("up", FocusPrev, Some("TaskDashboard")),
+        KeyBinding::new("enter", OpenFocused, Some("TaskDashboard")),
+    ]);
 }
 
 /// Open the Task Dashboard window.
@@ -77,6 +91,7 @@ pub fn open(
                     skipped: 0,
                     scanning: true,
                     progress: 0,
+                    selected: None,
                     scroll: UniformListScrollHandle::new(),
                     state: state.clone(),
                     workspace,
@@ -226,6 +241,9 @@ pub struct TaskDashboardWindow {
     scanning: bool,
     /// Notes scanned so far, shown while the scan runs.
     progress: usize,
+    /// The row the keyboard's ring is on: a task row's index in `rows`,
+    /// so the arrows and Enter reach a task without the pointer.
+    selected: Option<usize>,
     scroll: UniformListScrollHandle,
     state: Arc<VaultState>,
     /// The workspace that opened this window: clicking a task asks it to
@@ -346,6 +364,47 @@ impl TaskDashboardWindow {
         window.remove_window();
     }
 
+    /// The arrows skip the section labels and stop at the ends.
+    fn move_selection(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let mut ix = self.selected;
+        loop {
+            let next = match ix {
+                None if forward => Some(0),
+                None => self.rows.len().checked_sub(1),
+                Some(ix) if forward => Some(ix + 1),
+                Some(ix) => ix.checked_sub(1),
+            };
+            let Some(next) = next.filter(|next| *next < self.rows.len()) else {
+                break;
+            };
+            if matches!(self.rows[next], Row::Task(_)) {
+                ix = Some(next);
+                break;
+            }
+            ix = Some(next);
+        }
+        if ix != self.selected {
+            self.selected = ix;
+            cx.notify();
+        }
+    }
+
+    fn focus_next(&mut self, _: &FocusNext, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_selection(true, cx);
+    }
+
+    fn focus_prev(&mut self, _: &FocusPrev, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_selection(false, cx);
+    }
+
+    /// Enter opens the selected task, like a click on its row.
+    fn open_focused(&mut self, _: &OpenFocused, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(Row::Task(task)) = self.selected.and_then(|ix| self.rows.get(ix)) {
+            let task = task.clone();
+            self.open_task(&task, cx);
+        }
+    }
+
     fn open_task(&mut self, task: &TaskItem, cx: &mut Context<Self>) {
         let path = task.path.to_string();
         let line = task.line;
@@ -435,7 +494,11 @@ impl Render for TaskDashboardWindow {
         div()
             .id("task-dashboard")
             .key_context("TaskDashboard")
+            .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::close))
+            .on_action(cx.listener(Self::focus_next))
+            .on_action(cx.listener(Self::focus_prev))
+            .on_action(cx.listener(Self::open_focused))
             .flex()
             .flex_col()
             .w_full()

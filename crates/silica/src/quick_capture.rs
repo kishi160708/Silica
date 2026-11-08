@@ -197,6 +197,7 @@ impl Render for QuickCaptureWindow {
         div()
             .id("quick-capture")
             .key_context("QuickCapture")
+            .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::close))
             .flex()
             .flex_col()

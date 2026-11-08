@@ -589,17 +589,15 @@ fn the_task_dashboard_opens_a_clicked_task_at_its_own_line() {
     app.run_command("task-dashboard:open");
     app.settle();
 
-    // * The scan lands on a background thread, and a slow machine paints
-    //   the empty window first: the click waits for a row to exist instead
-    //   of assuming the list is already filled. The list is virtualized at
-    //   a uniform row height, so the first task sits at a known offset:
-    //   the header, then the "Pending" label, then the first task row.
+    // * The scan lands on a background thread, so the rows can be a frame
+    //   behind the window: wait for one to answer the keyboard rather than
+    //   assuming the list is already filled. The arrows and Enter are the
+    //   pointer-free path to a row, which is what keeps this test honest on
+    //   a bare X server where a click's pixel offset means nothing.
     let mut opened = false;
     for _attempt in 0..5 {
-        app.call(
-            "click",
-            json!({"x": 60.0, "y": 68.0, "window": "dashboard"}),
-        );
+        app.call("keys", json!({"keys": ["down"], "window": "dashboard"}));
+        app.call("keys", json!({"keys": ["enter"], "window": "dashboard"}));
         app.settle();
         let current = app
             .call("state", json!({}))
@@ -615,7 +613,7 @@ fn the_task_dashboard_opens_a_clicked_task_at_its_own_line() {
     }
     assert!(
         opened,
-        "no dashboard row opened its note: the click never landed"
+        "no dashboard row opened its note: the keys never landed"
     );
 
     // The note opened, and the viewport was scrolled to the task's own
