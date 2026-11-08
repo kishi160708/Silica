@@ -84,6 +84,52 @@ struct TaskItem {
     done: bool,
 }
 
+/// Scan one note's content for task list items.
+///
+/// Split from `scan_vault_for_tasks` so the extraction and line-mapping
+/// rules are testable without a vault on disk.
+fn scan_note(path: &str, content: &str) -> Vec<TaskItem> {
+    let doc = parse(content);
+    let index = LineIndex::new(content);
+    let mut tasks = Vec::new();
+    // * `walk_blocks` descends into list children, so a task nested in
+    //   another list item is found too. Without it only top-level items
+    //   would show up.
+    walk_blocks(&doc.blocks, &mut |block| {
+        let BlockKind::List { items, .. } = &block.kind else {
+            return;
+        };
+        for item in items {
+            let Some(task_char) = item.task else {
+                continue;
+            };
+            // * `plain_text` walks every inline kind -- links, wikilinks,
+            //   emphasis, code, math, tags -- so a task is never shown
+            //   with its markup dropped.
+            let text = item
+                .children
+                .iter()
+                .map(|child| match &child.kind {
+                    BlockKind::Paragraph { content } => plain_text(content),
+                    _ => String::new(),
+                })
+                .filter(|t| !t.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join(" ");
+            tasks.push(TaskItem {
+                path: path.into(),
+                // * The item's own span, not the block's index: a block
+                //   index is not a line once a document has headings,
+                //   blank lines, or more than one block.
+                line: index.pos(item.span.start).line as usize,
+                text: text.trim().into(),
+                done: task_char.eq_ignore_ascii_case(&'x'),
+            });
+        }
+    });
+    tasks
+}
+
 /// Scan every markdown note in the vault for task list items.
 ///
 /// Returns the tasks and the number of files that could not be read, so the
@@ -103,43 +149,7 @@ fn scan_vault_for_tasks(state: &VaultState) -> (Vec<TaskItem>, usize) {
             }
         };
 
-        let doc = parse(&content);
-        let index = LineIndex::new(&content);
-        // * `walk_blocks` descends into list children, so a task nested in
-        //   another list item is found too. Without it only top-level items
-        //   would show up.
-        walk_blocks(&doc.blocks, &mut |block| {
-            let BlockKind::List { items, .. } = &block.kind else {
-                return;
-            };
-            for item in items {
-                let Some(task_char) = item.task else {
-                    continue;
-                };
-                // * `plain_text` walks every inline kind -- links, wikilinks,
-                //   emphasis, code, math, tags -- so a task is never shown
-                //   with its markup dropped.
-                let text = item
-                    .children
-                    .iter()
-                    .map(|child| match &child.kind {
-                        BlockKind::Paragraph { content } => plain_text(content),
-                        _ => String::new(),
-                    })
-                    .filter(|t| !t.trim().is_empty())
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                tasks.push(TaskItem {
-                    path: path.clone().into(),
-                    // * The item's own span, not the block's index: a block
-                    //   index is not a line once a document has headings,
-                    //   blank lines, or more than one block.
-                    line: index.pos(item.span.start).line as usize,
-                    text: text.trim().into(),
-                    done: task_char.eq_ignore_ascii_case(&'x'),
-                });
-            }
-        });
+        tasks.extend(scan_note(&path, &content));
     }
 
     (tasks, skipped)
@@ -355,3 +365,212 @@ impl TaskDashboardWindow {
 
 /// Window size.
 const WINDOW_SIZE: (f32, f32) = (700., 500.);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    /// What the scan found in one note, as (line, text, done).
+    fn found(path: &str, content: &str) -> Vec<(usize, String, bool)> {
+        scan_note(path, content)
+            .into_iter()
+            .map(|t| (t.line, t.text.to_string(), t.done))
+            .collect()
+    }
+
+    /// A task's line is the line it is written on, not the block's
+    /// enumerate index: headings, blank lines and paragraphs above a list
+    /// all shift a block index away from the source line.
+    #[test]
+    fn a_tasks_line_is_the_line_it_is_written_on() {
+        let content = "# Heading\n\nSome prose.\n\n- [ ] First task\n- [x] Second task\n";
+        assert_eq!(
+            found("N.md", content),
+            vec![
+                (4, "First task".to_string(), false),
+                (5, "Second task".to_string(), true),
+            ],
+            "both tasks sit below a heading, prose and a blank line"
+        );
+    }
+
+    /// Two lists separated by more prose: the second list's lines keep
+    /// counting from the top of the file.
+    #[test]
+    fn multiple_lists_in_one_note_share_one_line_counter() {
+        let content = "- [ ] One\n\nProse between.\n\n- [ ] Two\n- [x] Three\n";
+        assert_eq!(
+            found("N.md", content),
+            vec![
+                (0, "One".to_string(), false),
+                (4, "Two".to_string(), false),
+                (5, "Three".to_string(), true),
+            ],
+        );
+    }
+
+    /// A nested task is found too, with its own line, and the parent
+    /// appears before the child.
+    #[test]
+    fn nested_tasks_are_found_with_their_own_lines() {
+        let content = "- [ ] Parent\n  - [ ] Child\n  - [x] Grandchild\n";
+        let rows = found("N.md", content);
+        let lines: Vec<usize> = rows.iter().map(|r| r.0).collect();
+        assert_eq!(lines, vec![0, 1, 2], "parent, child, grandchild in order");
+        assert_eq!(rows[0].1, "Parent");
+        assert_eq!(rows[1].1, "Child");
+    }
+
+    /// Deeply indented tasks (four spaces) are still tasks.
+    #[test]
+    fn four_space_indented_tasks_are_found() {
+        let content = "- [ ] Outer\n    - [ ] Inner\n";
+        let rows = found("N.md", content);
+        assert_eq!(rows.len(), 2, "the four-space-indented task is found");
+        assert_eq!(rows[1].1, "Inner");
+    }
+
+    /// Links, wikilinks, emphasis and code keep their text: plain_text
+    /// walks every inline kind rather than dropping the node.
+    #[test]
+    fn inline_markup_survives_in_the_task_text() {
+        let content = "- [ ] Read [the docs](https://example.com)\n- [x] See [[Other Note]]\n- [ ] Fix **bold** and `code`\n";
+        let rows = found("N.md", content);
+        let texts: Vec<&str> = rows.iter().map(|r| r.1.as_str()).collect();
+        assert_eq!(texts[0], "Read the docs");
+        assert_eq!(texts[1], "See Other Note");
+        assert_eq!(texts[2], "Fix bold and code");
+    }
+
+    /// A checkbox with nothing after it is not a task: the parser's task
+    /// marker needs content past the `]`, so a stray `- [ ]` never shows
+    /// up as a nameless row.
+    #[test]
+    fn an_unlabelled_checkbox_is_not_a_task() {
+        assert!(
+            found("N.md", "- [ ]\n").is_empty(),
+            "an empty checkbox is not a task item"
+        );
+    }
+
+    /// Non-task list items are not tasks.
+    #[test]
+    fn plain_list_items_are_not_tasks() {
+        let content = "- one\n- two\n\ntext\n\n- [ ] real task\n";
+        assert_eq!(
+            found("N.md", content).len(),
+            1,
+            "only the checkbox is a task"
+        );
+    }
+
+    /// Uppercase X is a completed checkbox too.
+    #[test]
+    fn an_uppercase_x_is_done() {
+        let content = "- [X] shouted\n";
+        assert_eq!(
+            found("N.md", content),
+            vec![(0, "shouted".to_string(), true)]
+        );
+    }
+
+    /// Unicode titles and content survive both the path and the text.
+    #[test]
+    fn unicode_content_survives() {
+        let content = "- [ ] Check café ☕ 日本語\n- [x] Ünïcödé ✓\n";
+        let rows = found("Ünïcödé.md", content);
+        assert_eq!(rows[0].1, "Check café ☕ 日本語");
+        assert_eq!(rows[0].0, 0, "line 0");
+        assert_eq!(rows[1].1, "Ünïcödé ✓");
+        assert!(rows[1].2);
+    }
+
+    /// A note with no tasks at all yields nothing.
+    #[test]
+    fn a_note_without_tasks_yields_nothing() {
+        assert!(found("N.md", "# Just a note\n\nWith prose.\n").is_empty());
+    }
+
+    /// The path travels with each task: two notes scanned separately keep
+    /// their own rows.
+    #[test]
+    fn each_row_carries_its_notes_path() {
+        let a = scan_note("A.md", "- [ ] in a\n");
+        let b = scan_note("Sub/B.md", "- [ ] in b\n");
+        assert_eq!(a[0].path.as_ref(), "A.md");
+        assert_eq!(b[0].path.as_ref(), "Sub/B.md");
+    }
+
+    /// Both task notes are scanned, and a note that vanished between the
+    /// index and the scan is counted rather than silently dropped: that
+    /// is the race a real vault edit hits mid-scan.
+    #[test]
+    fn the_scan_counts_a_note_that_vanished_after_indexing() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join(".obsidian")).unwrap();
+        fs::write(
+            root.join(".obsidian/app.json"),
+            r#"{"trashOption":"local"}"#,
+        )
+        .unwrap();
+        // * Every entry is written before the load: the vault indexes at
+        //   load time, so a file created afterwards is invisible to the
+        //   scan no matter what the disk says.
+        fs::write(root.join("Tasks.md"), "- [ ] Buy milk\n").unwrap();
+        fs::write(root.join("Done.md"), "- [x] Ship it\n").unwrap();
+        fs::write(root.join("Gone.md"), "- [ ] removed mid-scan\n").unwrap();
+        let state = VaultState::load(&root.to_path_buf()).unwrap();
+        // Indexed at load, gone from disk by the time the scan reads it.
+        fs::remove_file(root.join("Gone.md")).unwrap();
+
+        let (tasks, skipped) = scan_vault_for_tasks(&state);
+        let rows: Vec<(String, usize, String)> = tasks
+            .iter()
+            .map(|t| (t.path.to_string(), t.line, t.text.to_string()))
+            .collect();
+        assert!(
+            rows.contains(&("Done.md".to_string(), 0, "Ship it".to_string())),
+            "the done task is scanned: {rows:?}"
+        );
+        assert!(
+            rows.contains(&("Tasks.md".to_string(), 0, "Buy milk".to_string())),
+            "the pending task is scanned: {rows:?}"
+        );
+        assert_eq!(skipped, 1, "the vanished note is counted, not dropped");
+    }
+
+    /// A vault with no task notes scans to nothing, not an error.
+    #[test]
+    fn an_empty_vault_scans_to_nothing() {
+        let (_dir, state) = vault_with(&[("A.md", "# A\n"), ("B.md", "# B\n")]);
+        let (tasks, skipped) = scan_vault_for_tasks(&state);
+        assert!(
+            tasks.is_empty(),
+            "prose-only notes hold no tasks: {tasks:?}"
+        );
+        assert_eq!(skipped, 0);
+    }
+
+    /// A temp vault holding `(relative path, content)` notes, written
+    /// before the load so the index sees them.
+    fn vault_with(notes: &[(&str, &str)]) -> (tempfile::TempDir, VaultState) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join(".obsidian")).unwrap();
+        fs::write(
+            root.join(".obsidian/app.json"),
+            r#"{"trashOption":"local"}"#,
+        )
+        .unwrap();
+        for (path, content) in notes {
+            if let Some(parent) = root.join(path).parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(root.join(path), content).unwrap();
+        }
+        let state = VaultState::load(&root.to_path_buf()).unwrap();
+        (dir, state)
+    }
+}

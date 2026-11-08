@@ -425,3 +425,126 @@ fn the_view_header_bookmark_action_prompts_for_a_title() {
         "the prompt bookmarks the current heading: {modal:?}"
     );
 }
+
+/// Quick Capture: the command opens the floating window, typing goes into
+/// its field, Enter saves the note to the vault, and Escape closes the
+/// window without writing anything. The window is driven through the
+/// `window` param, because input dispatch is bound to the main window by
+/// default and a second window is unreachable without naming it.
+#[test]
+fn quick_capture_saves_a_note_and_escape_closes_the_window() {
+    if !e2e_enabled() {
+        eprintln!("skipped: no display available for the graphical end-to-end tests");
+        return;
+    }
+    let vault = Vault::new();
+    let mut app = match App::launch(&vault.root) {
+        Some(a) => a,
+        None => {
+            eprintln!("skipped: no graphical session to launch silica in");
+            return;
+        }
+    };
+    app.settle();
+    app.run_command("quick-capture:open");
+    app.settle();
+
+    // The field holds the keyboard in the capture window, so the text
+    // lands in it rather than in the editor behind it.
+    app.call(
+        "type",
+        json!({"text": "Captured note", "window": "capture"}),
+    );
+    app.settle();
+    app.call("keys", json!({"keys": ["enter"], "window": "capture"}));
+    app.settle();
+
+    let vault_root = app.socket.parent().expect("the vault folder").to_path_buf();
+    assert_eq!(
+        fs::read_to_string(vault_root.join("Captured note.md")).expect("the captured note"),
+        "# Captured note\n",
+        "Enter saved the field's text as a note"
+    );
+
+    // Escape closes the window: a dispatch into a closed window is the
+    // error that proves it is gone, and nothing else was written.
+    app.call("keys", json!({"keys": ["escape"], "window": "capture"}));
+    app.settle();
+    let after = app
+        .client
+        .call("keys", json!({"keys": ["enter"], "window": "capture"}));
+    assert!(
+        after.is_err(),
+        "the capture window is still open after Escape: {after:?}"
+    );
+    let entries: Vec<String> = fs::read_dir(&vault_root)
+        .expect("the vault folder")
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        entries.iter().filter(|n| n.ends_with(".md")).count(),
+        2,
+        "Escape wrote nothing new: {entries:?}"
+    );
+}
+
+/// Task Dashboard: the command opens the window, every task in the vault
+/// is listed, and clicking a row opens its source note at the task's own
+/// line. The line is what the click is for.
+#[test]
+fn the_task_dashboard_opens_a_clicked_task_at_its_own_line() {
+    if !e2e_enabled() {
+        eprintln!("skipped: no display available for the graphical end-to-end tests");
+        return;
+    }
+    let vault = Vault::new();
+    // * The task sits below the fold: a scroll to a line that is already
+    //   visible cannot be told apart from no scroll at all.
+    let mut note = String::from("# Tasks\n\n");
+    for ix in 0..40 {
+        note.push_str(&format!("filler line {ix}\n\n"));
+    }
+    note.push_str("- [ ] first task\n- [x] second task\n");
+    fs::write(vault.root.join("Tasks.md"), &note).expect("a note with tasks");
+    let mut app = match App::launch(&vault.root) {
+        Some(a) => a,
+        None => {
+            eprintln!("skipped: no graphical session to launch silica in");
+            return;
+        }
+    };
+    app.settle();
+    app.run_command("task-dashboard:open");
+    app.settle();
+
+    // The first row sits under the header, then the "Pending" label. The
+    // click lands on its text, which is what opens the note.
+    app.call(
+        "click",
+        json!({"x": 60.0, "y": 90.0, "window": "dashboard"}),
+    );
+    app.settle();
+
+    // The note opened, and the viewport was scrolled to the task's own
+    // line: `scroll_to_line` moves the view, not the caret, so the scroll
+    // is what a click on the row is meant to leave behind.
+    let state = app.call("state", json!({"text": true}));
+    let current = state
+        .get("file")
+        .and_then(|f| f.get("path"))
+        .and_then(|p| p.as_str())
+        .unwrap_or_default()
+        .to_string();
+    assert_eq!(current, "Tasks.md", "the click opened no note: {state:?}");
+    let line = state
+        .get("editor")
+        .and_then(|e| e.get("scroll"))
+        .and_then(|s| s.get("line"))
+        .and_then(|l| l.as_u64())
+        .unwrap_or(0);
+    assert!(
+        line >= 41,
+        "the task's line was not scrolled into view: {state:?}"
+    );
+}

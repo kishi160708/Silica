@@ -202,22 +202,38 @@ pub const METHODS: &[MethodSpec] = &[
     m(
         "keys",
         "Dispatch keystrokes at whatever is focused, in order, and say which were handled.",
-        &[p(
-            "keys",
-            ParamType::StrList,
-            true,
-            "GPUI keystrokes, e.g. `[\"ctrl-shift-f\", \"enter\"]`.",
-        )],
+        &[
+            p(
+                "keys",
+                ParamType::StrList,
+                true,
+                "GPUI keystrokes, e.g. `[\"ctrl-shift-f\", \"enter\"]`.",
+            ),
+            p(
+                "window",
+                ParamType::Str,
+                false,
+                "Which window receives them: the main one when absent, or `capture` / `dashboard` to drive a floating feature window.",
+            ),
+        ],
     ),
     m(
         "type",
         "Type text into whatever is focused: the editor, a modal's input, or nothing.",
-        &[p(
-            "text",
-            ParamType::Str,
-            true,
-            "The text to insert at the cursor. Newlines insert lines.",
-        )],
+        &[
+            p(
+                "text",
+                ParamType::Str,
+                true,
+                "The text to insert at the cursor. Newlines insert lines.",
+            ),
+            p(
+                "window",
+                ParamType::Str,
+                false,
+                "Which window receives it: the main one when absent, or `capture` / `dashboard` to drive a floating feature window.",
+            ),
+        ],
     ),
     m(
         "click",
@@ -234,6 +250,12 @@ pub const METHODS: &[MethodSpec] = &[
                 ParamType::Num,
                 true,
                 "Window-local logical pixels from the top edge.",
+            ),
+            p(
+                "window",
+                ParamType::Str,
+                false,
+                "Which window receives it: the main one when absent, or `capture` / `dashboard` to drive a floating feature window.",
             ),
             p(
                 "button",
@@ -613,6 +635,15 @@ mod tests {
             .expect("click is a method");
         assert_eq!(click["params"][0]["name"], "x");
         assert_eq!(click["params"][0]["required"], true);
-        assert_eq!(click["params"][4]["type"], "string[]");
+        // * Found by name, not by index: a param added earlier in the
+        //   list shifts every later one, and an index would silently
+        //   start asserting about a different param.
+        let mods = click["params"]
+            .as_array()
+            .expect("an array")
+            .iter()
+            .find(|p| p["name"] == "mods")
+            .expect("click takes modifiers");
+        assert_eq!(mods["type"], "string[]");
     }
 }

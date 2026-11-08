@@ -27,7 +27,9 @@ use crate::panes::{self, PaneSort};
 use crate::pdf::view::{PdfEvent, PdfView};
 use crate::popout::PopoutWindow;
 use crate::prompt::{Prompt, PromptEvent, PromptSpec};
+use crate::quick_capture::QuickCaptureWindow;
 use crate::reading::{self, LinkTarget, ReadingEvent, ReadingView, TaskMarker, TaskToggled};
+use crate::task_dashboard::TaskDashboardWindow;
 use silica_bases::FileData;
 
 thread_local! {
@@ -62,8 +64,8 @@ use crate::vaults::VaultManager;
 use crate::watch;
 use gpui::{
     actions, anchored, canvas, deferred, div, fill, point, prelude::*, px, relative, rgb, rgba,
-    size, transparent_black, Action, Anchor, App, Bounds, BoxShadow, ClickEvent, ClipboardItem,
-    Context, CursorStyle, Decorations, DragMoveEvent, ElementInputHandler, Entity,
+    size, transparent_black, Action, Anchor, AnyWindowHandle, App, Bounds, BoxShadow, ClickEvent,
+    ClipboardItem, Context, CursorStyle, Decorations, DragMoveEvent, ElementInputHandler, Entity,
     EntityInputHandler, FocusHandle, Focusable, FontWeight, Global, HighlightStyle, HitboxBehavior,
     Hsla, KeyBinding, MouseButton, MouseDownEvent, PathBuilder, Pixels, ResizeEdge, ScrollHandle,
     ShapedLine, SharedString, StyledText, Subscription, Task, TextAlign, Tiling, UTF16Selection,
@@ -2859,6 +2861,11 @@ pub struct Workspace {
     vault_switcher_hovered: bool,
     /// The group whose tab-list menu (the strip's `chevron-down`) is open.
     tab_list_menu: Option<u64>,
+    /// The Quick Capture window while one is up; a stale handle means it
+    /// was closed.
+    capture_window: Option<gpui::WindowHandle<QuickCaptureWindow>>,
+    /// The Task Dashboard window, the same way.
+    dashboard_window: Option<gpui::WindowHandle<TaskDashboardWindow>>,
     /// The Help window while one is up; a stale handle means it was closed.
     help_window: Option<gpui::WindowHandle<HelpWindow>>,
     /// The vault manager while one is up, the same way.
@@ -3532,6 +3539,8 @@ impl Workspace {
             vault_menu_open: false,
             vault_switcher_hovered: false,
             tab_list_menu: None,
+            capture_window: None,
+            dashboard_window: None,
             help_window: None,
             vault_window: None,
             popout_windows: HashMap::new(),
@@ -4706,6 +4715,19 @@ impl Workspace {
         &self.editor
     }
 
+    /// The handle of a floating feature window, for the control socket's
+    /// input routing. `name` is `capture` or `dashboard`; anything else,
+    /// and a window that was never opened, read as no window. A handle
+    /// left stale by a closed window still comes back here: the caller's
+    /// `update_window` on it fails, which is how "it is closed" surfaces.
+    pub(crate) fn float_handle(&self, name: &str) -> Option<AnyWindowHandle> {
+        match name {
+            "capture" => self.capture_window.map(Into::into),
+            "dashboard" => self.dashboard_window.map(Into::into),
+            _ => None,
+        }
+    }
+
     pub fn mode(&self) -> ViewMode {
         self.mode
     }
@@ -5430,8 +5452,16 @@ impl Workspace {
                     self.report("Quick Capture: No vault open", cx);
                     return;
                 };
+                if let Some(handle) = self.capture_window {
+                    let up = handle
+                        .update(cx, |_, window, _| window.activate_window())
+                        .is_ok();
+                    if up {
+                        return;
+                    }
+                }
                 match crate::quick_capture::open(state, window.window_handle(), cx) {
-                    Ok(_) => {}
+                    Ok(handle) => self.capture_window = Some(handle),
                     Err(err) => self.report(format!("Quick Capture: {err}"), cx),
                 }
             }
@@ -5440,9 +5470,17 @@ impl Workspace {
                     self.report("Task Dashboard: No vault open", cx);
                     return;
                 };
+                if let Some(handle) = self.dashboard_window {
+                    let up = handle
+                        .update(cx, |_, window, _| window.activate_window())
+                        .is_ok();
+                    if up {
+                        return;
+                    }
+                }
                 let workspace = cx.entity().downgrade();
                 match crate::task_dashboard::open(state, workspace, window.window_handle(), cx) {
-                    Ok(_) => {}
+                    Ok(handle) => self.dashboard_window = Some(handle),
                     Err(err) => self.report(format!("Task Dashboard: {err}"), cx),
                 }
             }

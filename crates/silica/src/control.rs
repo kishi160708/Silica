@@ -15,9 +15,9 @@
 
 use crate::workspace::{context_names, ViewMode, Workspace};
 use gpui::{
-    point, prelude::*, px, size, App, AsyncApp, Keystroke, Modifiers, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, PlatformInput, Point, ScrollDelta, ScrollWheelEvent,
-    TouchPhase, Window, WindowHandle,
+    point, prelude::*, px, size, AnyWindowHandle, App, AsyncApp, Keystroke, Modifiers, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, PlatformInput, Point, ScrollDelta,
+    ScrollWheelEvent, TouchPhase, Window, WindowHandle,
 };
 use serde_json::{json, Value};
 use silica_control::net::{UnixListener, UnixStream};
@@ -243,22 +243,45 @@ impl Ctl<'_> {
         }
     }
 
-    /// Runs `f` with the window and the app, leaving the workspace where it
-    /// is. Input dispatch has to go through here: it re-enters whatever view
+    /// Dispatches into the window `handle` names, leaving the workspace's
+    /// own lease alone: input re-enters whatever view is focused, and gpui
+    /// panics on a circular lease if the workspace is already borrowed out
+    /// of the entity map.
+    fn window_at<R>(
+        &mut self,
+        handle: AnyWindowHandle,
+        f: impl FnOnce(&mut Window, &mut App) -> Result<R, String>,
+    ) -> Result<R, String> {
+        match self.cx.update_window(handle, |_, window, cx| f(window, cx)) {
+            Ok(result) => result,
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    /// Runs `f` with the window and the app, leaving the workspace where
+    /// it is. Input dispatch has to go through here: it re-enters whatever view
     /// is focused, and gpui panics on a circular lease if the workspace is
     /// already borrowed out of the entity map.
     fn window<R>(
         &mut self,
         f: impl FnOnce(&mut Window, &mut App) -> Result<R, String>,
     ) -> Result<R, String> {
-        match self
-            .cx
-            .update_window(self.win.into(), |_, window, cx| f(window, cx))
-        {
-            Ok(result) => result,
-            Err(error) => Err(error.to_string()),
-        }
+        self.window_at(self.win.into(), f)
     }
+}
+
+/// The window an input request is routed to.
+///
+/// Input dispatch is bound to the main window, so a floating window — the
+/// capture box, the dashboard — can only be driven by naming it. `None`
+/// names the main window; anything else must be a name the workspace
+/// knows, and a closed window fails here rather than at the dispatch.
+fn input_window(ctl: &mut Ctl<'_>, name: Option<&str>) -> Result<AnyWindowHandle, String> {
+    let Some(name) = name else {
+        return Ok(ctl.win.into());
+    };
+    let handle = ctl.workspace(|ws, _window, _cx| Ok(ws.float_handle(name)))?;
+    handle.ok_or_else(|| format!("no open window named: {name}"))
 }
 
 /// Answers one request. `Ok(None)` means the reply is deferred: the handler
@@ -373,7 +396,8 @@ fn handle(
                 .iter()
                 .map(|name| Keystroke::parse(name).map_err(|error| error.to_string()))
                 .collect::<Result<Vec<_>, String>>()?;
-            ctl.window(|window, cx| {
+            let win = input_window(ctl, request.opt_str("window"))?;
+            ctl.window_at(win, |window, cx| {
                 let handled = strokes
                     .into_iter()
                     .map(|stroke| window.dispatch_keystroke(stroke, cx))
@@ -384,6 +408,25 @@ fn handle(
         }
         "type" => {
             let text = request.str_param("text")?;
+            let named = request.opt_str("window");
+            // * A named floating window is driven directly: its focused
+            //   view is a field or the window's own root, and one
+            //   keystroke carrying the whole string is what an IME commit
+            //   looks like to gpui, delivered into whichever view holds
+            //   the keyboard there.
+            if named.is_some() {
+                let win = input_window(ctl, named)?;
+                return ctl
+                    .window_at(win, |window, cx| {
+                        let typed = Keystroke {
+                            key_char: Some(text.to_string()),
+                            ..Keystroke::default()
+                        };
+                        let handled = window.dispatch_keystroke(typed, cx);
+                        Ok(json!({"target": if handled { "input" } else { "none" }}))
+                    })
+                    .map(Some);
+            }
             match ctl.workspace(|ws, window, cx| Ok(ws.type_target(window, cx)))? {
                 "editor" | "canvas-editor" => ctl
                     .workspace(|ws, window, cx| {
@@ -412,7 +455,8 @@ fn handle(
             let button = button(request.opt_str("button"))?;
             let modifiers = modifiers(request)?;
             let click_count = request.opt_usize("count").unwrap_or(1);
-            ctl.window(|window, cx| {
+            let win = input_window(ctl, request.opt_str("window"))?;
+            ctl.window_at(win, |window, cx| {
                 // * The move goes first so gpui's hover state and the hitboxes
                 //   an `on_click` was registered against agree on what is under
                 //   the pointer when the press lands.
