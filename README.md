@@ -10,7 +10,7 @@
   <img alt="Rust" src="https://img.shields.io/badge/100%25-Rust-E8590C?style=flat-square&logo=rust&logoColor=white">
   <img alt="Linux, Windows, macOS" src="https://img.shields.io/badge/Linux%20%7C%20Windows%20%7C%20macOS-2b2b2b?style=flat-square">
   <img alt="MIT" src="https://img.shields.io/badge/license-MIT-2b2b2b?style=flat-square">
-  <img alt="v0.5.17" src="https://img.shields.io/badge/status-early%20alpha%20v0.5.17-f2545b?style=flat-square">
+  <img alt="v0.6.0" src="https://img.shields.io/badge/status-early%20alpha%20v0.6.0-f2545b?style=flat-square">
 </p>
 
 Silica is a native desktop knowledge base written in Rust on GPUI. It opens an Obsidian vault exactly as it sits on disk: the same `.obsidian` configuration, the same Markdown dialect, the same `.canvas` and `.base` files. Nothing is imported or converted, and the vault folder is the only source of truth. Silica is an independent, clean-room implementation and is not affiliated with Obsidian.
@@ -32,6 +32,23 @@ Reading view took the same pass: the properties block is editable there, text se
 `silica:export-site` publishes the vault as a static site in one command: every note renders to HTML through the same parser, links become relative URLs that work from disk with no server, attachments come along, and `index.html` is the note called README, index or Home.
 
 > Keep a backup of any vault you open with it. Reading is well covered; editing is newer code against files you cannot get back. Until the round-trip gate is met, let Silica read a vault that matters and let Obsidian write it.
+
+## Known limitations
+
+What is deliberately not here, and why. Each of these is a decision, not a gap in the work.
+
+| Not here | Why |
+| --- | --- |
+| Terminal pane | No PTY or ANSI engine yet; the audit's parity item stays open rather than half-built. |
+| Mobile clients, first-party sync | No app for them exists; a vault can still be synced by a file-sync tool, and the watcher sees its changes. |
+| A full CSS engine for themes | Themes are the variable and property subset Obsidian's own defaults need; a selector engine is a bigger project than the app. |
+| Audio in video embeds | The video transcode drops the audio track to keep playback inside the reader; remote media still opens in the system player with sound. |
+| Two-page PDF spreads | The viewer renders one page at a time by design. |
+| Code signing / notarization | Not configured for any platform yet. |
+| Custom views in plugins | `registerView` is recorded and reported, but there is no DOM for an `ItemView` to draw in; `Modal` throws rather than pretending. |
+
+Remote images fetch through one bounded, SSRF-guarded path: a validated destination, a pinned
+resolution per hop, and a 32 MB cap — the same boundary the plugin shim's `requestUrl` walks.
 
 ## Benchmarks
 

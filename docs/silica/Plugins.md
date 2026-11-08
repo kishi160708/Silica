@@ -119,10 +119,14 @@ interaction.
 **Registration surface**
 
 Commands, ribbon icons, settings tabs, post-processors, code-block processors, and
-`loadData`/`saveData` all work. `registerEvent` / `registerDomEvent` / `registerView` /
-`registerExtensions` are recorded no-ops: the app owns its layout and events, and a plugin
-that registers a custom view still runs — it just has nowhere to draw it, which classification
-reports up front.
+`loadData`/`saveData` all work. `registerEvent` keeps the event ref it is handed and releases
+it on unload, so a listener does not outlive its plugin, and the events the shim can truly
+deliver fire: the vault's own write paths emit `modify` / `create` / `delete` / `rename`, and
+the open note changing emits `workspace`'s `file-open`. `registerDomEvent` binds to the node it
+is given, which dispatches when it is clicked. `registerView` and `registerExtensions` are
+recorded in the registrations the host reads back — the app owns its layout and a custom view
+has nowhere to draw yet, so a plugin that registers one still runs with its declaration
+reported rather than dropped.
 
 **Timers**
 
@@ -146,10 +150,13 @@ matching; `prepareSimpleSearch` requires every word.
 
 **Refused — the deliberate boundary**
 
-`requestUrl` throws: the host makes no network calls from plugin code, which is the SSRF
-boundary the note-fetching code builds its own protections around. `Modal` and `ItemView`
-throw: they need a DOM. `htmlToMarkdown` and `sanitizeHTMLToDom` throw. These are answered
-loudly, so a plugin's failure names the method instead of dying on `undefined`.
+`requestUrl` answers, through the same boundary the note-fetching code walks: method, headers,
+body, Obsidian's response shape, and a 10-second budget, with the destination rules, the
+pinned resolution and the per-hop redirect revalidation shared with the image client in
+`silica-net` — a loopback or private destination is refused before any request exists.
+`Modal` and `ItemView` throw: they need a DOM. `htmlToMarkdown` and `sanitizeHTMLToDom` throw.
+These are answered loudly, so a plugin's failure names the method instead of dying on
+`undefined`.
 
 **Platform**
 
