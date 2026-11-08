@@ -737,6 +737,14 @@ impl Plugin for FileRecovery {
 /// attachment.
 pub struct AudioRecorder {
     state: Arc<Mutex<RecorderState>>,
+    /// The live stream, kept out of `RecorderState` on purpose: the audio
+    /// callback holds an `Arc` of that state, and a `cpal::Stream` is not
+    /// `Send` on every platform — on macOS a CoreAudio stream is bound to
+    /// the thread that made it, so a shared state holding one makes the
+    /// callback itself not `Send`, which `build_input_stream` requires.
+    /// The stream is touched only from start and stop, never from the
+    /// callback, so its own lock cannot deadlock against that state.
+    stream: Mutex<Option<cpal::Stream>>,
 }
 
 impl Default for AudioRecorder {
@@ -744,17 +752,16 @@ impl Default for AudioRecorder {
         Self {
             state: Arc::new(Mutex::new(RecorderState {
                 recording: false,
-                stream: None,
                 writer: None,
                 output_path: None,
             })),
+            stream: Mutex::new(None),
         }
     }
 }
 
 struct RecorderState {
     recording: bool,
-    stream: Option<cpal::Stream>,
     writer: Option<hound::WavWriter<BufWriter<std::fs::File>>>,
     output_path: Option<PathBuf>,
 }
@@ -861,7 +868,10 @@ impl AudioRecorder {
             .map_err(|e| format!("Cannot start stream: {e}"))?;
 
         state.recording = true;
-        state.stream = Some(stream);
+        *self
+            .stream
+            .lock()
+            .map_err(|e| format!("the recorder\u{2019}s stream lock failed: {e}"))? = Some(stream);
         state.writer = Some(writer);
         state.output_path = Some(output_path);
 
@@ -874,16 +884,25 @@ impl AudioRecorder {
     }
 
     fn stop_recording(&self, ctx: &PluginContext<'_>) -> Result<(), String> {
-        let mut state = self.state.lock().map_err(|e| format!("{e}"))?;
+        let state = self.state.lock().map_err(|e| format!("{e}"))?;
 
         if !state.recording {
             return Err("Not recording".to_string());
         }
 
-        // Stop and close the stream
-        if let Some(stream) = state.stream.take() {
+        // Stop and close the stream: it lives outside the state the audio
+        // callback holds, so pausing it here cannot touch the writer the
+        // callback may still be writing to.
+        drop(state);
+        if let Some(stream) = self
+            .stream
+            .lock()
+            .map_err(|e| format!("the recorder\u{2019}s stream lock failed: {e}"))?
+            .take()
+        {
             let _ = stream.pause();
         }
+        let mut state = self.state.lock().map_err(|e| format!("{e}"))?;
 
         // Finalize the WAV writer
         if let Some(writer) = state.writer.take() {

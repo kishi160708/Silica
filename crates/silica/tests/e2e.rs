@@ -589,14 +589,34 @@ fn the_task_dashboard_opens_a_clicked_task_at_its_own_line() {
     app.run_command("task-dashboard:open");
     app.settle();
 
-    // The list is virtualized at a uniform row height, so the first task
-    // sits at a known offset: the header, then the "Pending" label, then
-    // the first task row's own line.
-    app.call(
-        "click",
-        json!({"x": 60.0, "y": 68.0, "window": "dashboard"}),
+    // * The scan lands on a background thread, and a slow machine paints
+    //   the empty window first: the click waits for a row to exist instead
+    //   of assuming the list is already filled. The list is virtualized at
+    //   a uniform row height, so the first task sits at a known offset:
+    //   the header, then the "Pending" label, then the first task row.
+    let mut opened = false;
+    for _attempt in 0..5 {
+        app.call(
+            "click",
+            json!({"x": 60.0, "y": 68.0, "window": "dashboard"}),
+        );
+        app.settle();
+        let current = app
+            .call("state", json!({}))
+            .get("file")
+            .and_then(|f| f.get("path"))
+            .and_then(|p| p.as_str())
+            .unwrap_or_default()
+            .to_string();
+        if current == "Tasks.md" {
+            opened = true;
+            break;
+        }
+    }
+    assert!(
+        opened,
+        "no dashboard row opened its note: the click never landed"
     );
-    app.settle();
 
     // The note opened, and the viewport was scrolled to the task's own
     // line: `scroll_to_line` moves the view, not the caret, so the scroll
