@@ -11,6 +11,8 @@ use regex::{Regex, RegexBuilder};
 use std::collections::HashMap;
 use std::ops::Range;
 
+use crate::normalize::{normalize, NormText};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SearchError {
     Regex(String),
@@ -121,18 +123,32 @@ impl Search {
     /// Whether `file` matches; on success the ranges to highlight, sorted and
     /// merged (both empty when only the path, tags or properties matched).
     pub fn matches(&self, file: &SearchFile<'_>) -> Option<MatchSet> {
+        // * Konten dan nama difolding sekali per file: akcent dihilangkan di
+        // * keduanya, sehingga `cafe` temukan `café` dan `strasse` temukan
+        // * `straße`. Semua pencarian berjalan pada salinan terfolding, dan
+        // * range hasil dikonversi ke byte offset asli sebelum kembali.
+        let content = NormText::from(file.content);
+        let name = NormText::from(file.name());
         let scope = Scope {
-            text: file.content,
+            text: &content.text,
             base: 0,
             names_file: true,
+            norm: &content,
+            names: Some(&name),
         };
         let mut hits = MatchSet::default();
         if !eval(&self.node, file, scope, false, &mut hits) {
             return None;
         }
+        let remap = |norm: &NormText, ranges: Vec<Range<usize>>| {
+            ranges
+                .into_iter()
+                .map(|r| norm.origin_range(r.start, r.end))
+                .collect()
+        };
         Some(MatchSet {
-            content: merge(hits.content),
-            name: merge(hits.name),
+            content: merge(remap(&content, hits.content)),
+            name: merge(remap(&name, hits.name)),
         })
     }
 }
@@ -173,14 +189,14 @@ fn compile(q: &Query) -> Result<Node, SearchError> {
         Query::CaseInsensitive(c) => Node::Case(false, Box::new(compile(c)?)),
         Query::Field(Field::Tag, c) => match c.as_ref() {
             Query::Text(t) | Query::Exact(t) => Node::Tag(
-                t.trim_start_matches('#')
-                    .trim_end_matches('/')
+                normalize(t.trim_start_matches('#').trim_end_matches('/'))
+                    .0
                     .to_lowercase(),
             ),
             other => Node::Field(Field::Tag, Box::new(compile(other)?)),
         },
         Query::Field(f, c) => Node::Field(*f, Box::new(compile(c)?)),
-        Query::HasProperty(n) => Node::HasProperty(n.to_lowercase()),
+        Query::HasProperty(n) => Node::HasProperty(normalize(&n.to_lowercase()).0),
         Query::PropertyEmpty(n) => Node::PropertyEmpty(n.to_lowercase()),
         Query::PropertyBool(n, b) => Node::PropertyBool(n.to_lowercase(), *b),
         Query::PropertyCompare(n, op, v) => Node::PropertyCompare(n.to_lowercase(), *op, v.clone()),
@@ -189,7 +205,10 @@ fn compile(q: &Query) -> Result<Node, SearchError> {
 }
 
 fn literal(t: &str) -> Result<Node, SearchError> {
-    let escaped = regex::escape(t);
+    // * Folding query sekali di sini (parse time), bukan per karakter pada
+    // * hot path: `cafe` menjadi regex yang cocok `café`, `ß` cocok `ss`.
+    let t = normalize(t).0;
+    let escaped = regex::escape(&t);
     let build = |ci: bool| {
         RegexBuilder::new(&escaped)
             .case_insensitive(ci)
@@ -205,12 +224,17 @@ fn literal(t: &str) -> Result<Node, SearchError> {
 #[derive(Clone, Copy)]
 struct Scope<'a> {
     text: &'a str,
-    /// Offset of `text` inside the file content, for reported ranges.
+    /// Offset of `text` inside the fully normalized content, in normalized
+    /// bytes.
     base: usize,
     /// Whether a bare term here also matches the file name. True only for the
     /// unscoped top level: inside `content:`, `line:`, a property value or any
     /// other operator the user named a scope and the name is not it.
     names_file: bool,
+    /// Peta balik teks terfolding ke teks asli, untuk mengembalikan range.
+    norm: &'a NormText<'a>,
+    /// Peta balik untuk nama file (hanya digunakan pada top level).
+    names: Option<&'a NormText<'a>>,
 }
 
 /// Evaluates `node` in `scope`, appending the ranges it matched to `hits`.
@@ -332,16 +356,18 @@ fn eval_inner(
             if scope.names_file {
                 // * Obsidian matches a bare term against the file name as well
                 // * as the content, and highlights the hit in the result title.
-                found |= find_all(re, file.name(), 0, &mut hits.name);
+                if let Some(names) = scope.names {
+                    found |= find_all(re, &names.text, 0, &mut hits.name);
+                }
             }
             found || (re.as_str().is_empty())
         }
         Node::Case(sensitive, child) => eval(child, file, scope, *sensitive, hits),
         Node::Tag(tag) => {
-            let found = file
-                .tags
-                .iter()
-                .any(|t| t == tag || t.starts_with(&format!("{tag}/")));
+            let found = file.tags.iter().any(|t| {
+                let nt = NormText::from(t);
+                nt.text == *tag || nt.text.starts_with(&format!("{tag}/"))
+            });
             if found {
                 tag_occurrences(tag, scope.text, scope.base, &mut hits.content);
             }
@@ -363,14 +389,16 @@ fn eval_inner(
                 // * an explicit `file:` hit highlights the title the same way a
                 // * bare term's does.
                 let mut local = MatchSet::default();
-                let name = file.name();
+                let name = NormText::from(file.name());
                 let found = eval(
                     child,
                     file,
                     Scope {
-                        text: name,
+                        text: &name.text,
                         base: 0,
                         names_file: false,
+                        norm: &name,
+                        names: None,
                     },
                     case_sensitive,
                     &mut local,
@@ -382,14 +410,16 @@ fn eval_inner(
             }
             Field::Path => {
                 let mut local = MatchSet::default();
-                let path = file.path;
+                let path = NormText::from(file.path);
                 eval(
                     child,
                     file,
                     Scope {
-                        text: path,
+                        text: &path.text,
                         base: 0,
                         names_file: false,
+                        norm: &path,
+                        names: None,
                     },
                     case_sensitive,
                     &mut local,
@@ -399,13 +429,16 @@ fn eval_inner(
                 // * A non-literal tag query (regex, group): match against each tag.
                 file.tags.iter().any(|t| {
                     let mut local = MatchSet::default();
+                    let tn = NormText::from(t);
                     eval(
                         child,
                         file,
                         Scope {
-                            text: t,
+                            text: &tn.text,
                             base: 0,
                             names_file: false,
+                            norm: &tn,
+                            names: None,
                         },
                         case_sensitive,
                         &mut local,
@@ -422,6 +455,8 @@ fn eval_inner(
                         text: trimmed,
                         base: scope.base + at,
                         names_file: false,
+                        norm: scope.norm,
+                        names: None,
                     };
                     if eval(child, file, s, case_sensitive, &mut local) {
                         any = true;
@@ -473,14 +508,17 @@ fn eval_inner(
         }),
         Node::PropertyMatch(name, child) => property(file, name).is_some_and(|v| {
             value_strings(v).iter().any(|s| {
+                let value = NormText::from(s);
                 let mut local = MatchSet::default();
                 eval(
                     child,
                     file,
                     Scope {
-                        text: s,
+                        text: &value.text,
                         base: 0,
                         names_file: false,
+                        norm: &value,
+                        names: None,
                     },
                     case_sensitive,
                     &mut local,
@@ -555,21 +593,26 @@ fn eval_ranges(
     case_sensitive: bool,
     hits: &mut MatchSet,
 ) -> bool {
-    // * Ranges are in content coordinates; only those inside the current scope apply.
-    let scope_end = scope.base + scope.text.len();
+    // * Ranges di sini adalah byte offset teks asli, sementara scope.text
+    // * sudah terfolding: konversi setiap range ke indeks karakter teks
+    // * terfolding baru memotong.
+    let norm = scope.norm;
     let mut any = false;
     for r in ranges {
-        if r.start < scope.base || r.end > scope_end || r.start > r.end {
+        let ns = norm.map.partition_point(|&b| b < r.start);
+        let ne = norm.map.partition_point(|&b| b < r.end);
+        if ns >= ne {
             continue;
         }
-        let Some(text) = scope.text.get(r.start - scope.base..r.end - scope.base) else {
-            continue;
-        };
+        let end_voff = norm.voff.get(ne).copied().unwrap_or(norm.text.len());
+        let text = &norm.text[norm.voff[ns]..end_voff];
         let mut local = MatchSet::default();
         let s = Scope {
             text,
-            base: r.start,
+            base: norm.voff[ns],
             names_file: false,
+            norm,
+            names: None,
         };
         if eval(child, file, s, case_sensitive, &mut local) {
             any = true;
@@ -941,5 +984,94 @@ mod tests {
         for q in ["foo AND", "foo (", "OR", "("] {
             assert_eq!(results(q), Vec::<&str>::new(), "{q:?} should match nothing");
         }
+    }
+
+    fn run_on(content: &str, q: &str) -> Option<Vec<String>> {
+        let file = SearchFile {
+            path: "x.md",
+            content,
+            tags: &[],
+            frontmatter: None,
+            blocks: &[],
+            sections: &[],
+            tasks: &[],
+        };
+        Search::new(q).unwrap().matches(&file).map(|m| {
+            m.content
+                .iter()
+                .map(|r| content[r.clone()].to_string())
+                .collect()
+        })
+    }
+
+    #[test]
+    fn pencarian_abaikan_akcent_dari_kedua_sisi() {
+        // * Query tanpa akcent temukan dokumen dengan akcent, dan sebaliknya.
+        assert_eq!(run_on("café", "cafe"), Some(vec!["café".into()]));
+        assert_eq!(run_on("cafe", "café"), Some(vec!["cafe".into()]));
+        assert_eq!(
+            run_on("Straße über alles", "strasse"),
+            Some(vec!["Straße".into()])
+        );
+        assert_eq!(run_on("CAFÉ", "cafe"), Some(vec!["CAFÉ".into()]));
+        // * Case tetap dihormati: match-case tidak melintasi akcent yang beda huruf.
+        assert_eq!(run_on("café", "match-case:CAFE"), None);
+        // * ø → o, ł → l (dan ß → ss di kedua arah).
+        assert_eq!(run_on("høl", "hol"), Some(vec!["høl".into()]));
+        assert_eq!(run_on("holm", "høl"), Some(vec!["hol".into()]));
+        assert_eq!(
+            run_on("Straße über alles", "strasse"),
+            Some(vec!["Straße".into()])
+        );
+        assert_eq!(
+            run_on("Straße über alles", "uber"),
+            Some(vec!["über".into()])
+        );
+        assert_eq!(run_on("wisła", "wisla"), Some(vec!["wisła".into()]));
+        assert_eq!(run_on("wisla", "wisła"), Some(vec!["wisla".into()]));
+        assert_eq!(run_on("zebra", "café"), None);
+        assert_eq!(run_on("", "cafe"), None);
+    }
+
+    #[test]
+    fn pencarian_akcent_sama_juga_nama_dan_path_file() {
+        let file = SearchFile {
+            path: "Notes/Café.md",
+            content: "x",
+            tags: &[],
+            frontmatter: None,
+            blocks: &[],
+            sections: &[],
+            tasks: &[],
+        };
+        let m = Search::new("cafe").unwrap().matches(&file).unwrap();
+        assert!(m.content.is_empty());
+        // * Range nama relatif ke base name ("Café.md"), bukan path penuh.
+        assert_eq!(m.name, vec![0..5]);
+        assert_eq!(&"Café.md"[m.name[0].clone()], "Café");
+        assert_eq!(run_on("x", "notes"), None);
+    }
+
+    #[test]
+    fn tag_dengan_akcent_cocok_query_tanpa_akcent() {
+        let mut fm = serde_yaml::Value::Mapping(Default::default());
+        if let serde_yaml::Value::Mapping(map) = &mut fm {
+            map.insert(
+                serde_yaml::Value::String("tags".into()),
+                serde_yaml::Value::Sequence(vec![serde_yaml::Value::String("café".into())]),
+            );
+        }
+        let file = SearchFile {
+            path: "x.md",
+            content: "#café di sini dan #cafe di sana\\n",
+            tags: &["café".to_string()],
+            frontmatter: Some(&fm),
+            blocks: &[],
+            sections: &[],
+            tasks: &[],
+        };
+        assert!(Search::new("tag:cafe").unwrap().matches(&file).is_some());
+        assert!(Search::new("tag:café").unwrap().matches(&file).is_some());
+        assert!(Search::new("tag:coffee").unwrap().matches(&file).is_none());
     }
 }
