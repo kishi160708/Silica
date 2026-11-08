@@ -5,7 +5,17 @@
 
 use super::*;
 
-actions!(pane_keys, [PaneUp, PaneDown, PaneActivate, PaneLeaveFocus]);
+actions!(
+    pane_keys,
+    [
+        PaneUp,
+        PaneDown,
+        PaneActivate,
+        PaneLeaveFocus,
+        PaneFoldLeft,
+        PaneUnfoldRight
+    ]
+);
 
 impl Workspace {
     /// Obsidian's `nav-header`: 40 px, 8 px of padding, the buttons
@@ -910,7 +920,8 @@ impl Workspace {
                     })),
                 )
                 .on_click(cx.listener(move |this, _, window, cx| {
-                    this.show_search(&format!("[\\\"{name}\\\"]"), Some(window), cx);
+                    this.show_search(&format!("[\"{name}\"]"), Some(window), cx);
+                    this.focus_panes(window, cx);
                 })),
             );
         }
@@ -1206,6 +1217,8 @@ impl Workspace {
             .on_action(cx.listener(Self::pane_up))
             .on_action(cx.listener(Self::pane_down))
             .on_action(cx.listener(Self::pane_on_enter))
+            .on_action(cx.listener(Self::pane_on_left))
+            .on_action(cx.listener(Self::pane_on_right))
             .on_action(cx.listener(Self::pane_on_escape))
             .map(|d| self.corners.right().apply(d))
             .child(
@@ -1381,6 +1394,18 @@ impl Workspace {
         }
     }
 
+    fn pane_on_left(&mut self, _: &PaneFoldLeft, window: &mut Window, cx: &mut Context<Self>) {
+        if self.panes_focused(window) {
+            self.pane_fold_left(cx);
+        }
+    }
+
+    fn pane_on_right(&mut self, _: &PaneUnfoldRight, window: &mut Window, cx: &mut Context<Self>) {
+        if self.panes_focused(window) {
+            self.pane_fold_right(cx);
+        }
+    }
+
     /// How many rows the visible pane has, for clamping the arrow keys.
     pub(crate) fn pane_row_count(&self, cx: &App) -> usize {
         match self.right_tab {
@@ -1396,65 +1421,138 @@ impl Workspace {
     /// The selection of the pane that has the keyboard, moved by `delta`
     /// rows and clamped to the pane's row count.
     pub(crate) fn pane_move(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let count = self.pane_row_count(cx);
-        if count == 0 {
-            return;
-        }
-        let selected = match self.right_tab {
-            RightTab::Tags => &mut self.tag_state.selected,
-            RightTab::Properties => &mut self.property_state.selected,
-            RightTab::Outline => &mut self.outline_state.selected,
+        let current = match self.right_tab {
+            RightTab::Tags => self.tag_state.selected,
+            RightTab::Properties => self.property_state.selected,
+            RightTab::Outline => self.outline_state.selected,
             _ => return,
         };
-        let next = match selected {
-            Some(ix) => (*ix as isize + delta).clamp(0, count as isize - 1) as usize,
-            None => {
-                if delta >= 0 {
-                    0
-                } else {
-                    count - 1
+        let Some(next) = next_row_selection(current, self.pane_row_count(cx), delta) else {
+            return;
+        };
+        match self.right_tab {
+            RightTab::Tags => self.tag_state.selected = Some(next),
+            RightTab::Properties => self.property_state.selected = Some(next),
+            RightTab::Outline => self.outline_state.selected = Some(next),
+            _ => {}
+        }
+        cx.notify();
+    }
+
+    /// Left on the marked row: folds the group it sits on, or — a group
+    /// that is already folded hands the mark to its parent, as Obsidian's
+    /// `tree-item-self` keyboard contract has it. Properties have no
+    /// groups to fold, so Left does nothing there.
+    pub(crate) fn pane_fold_left(&mut self, cx: &mut Context<Self>) {
+        match self.right_tab {
+            RightTab::Tags => {
+                let rows = self.tag_rows(cx);
+                let Some(ix) = self.tag_state.selected else {
+                    return;
+                };
+                let Some(row) = rows.get(ix) else {
+                    return;
+                };
+                let depths: Vec<usize> = rows.iter().map(|row| row.depth).collect();
+                if row.has_children && !row.collapsed {
+                    let key = row.key.clone();
+                    self.toggle_tag_fold(key, cx);
+                } else if let Some(parent) = parent_row(&depths, ix) {
+                    self.tag_state.selected = Some(parent);
+                    cx.notify();
                 }
             }
-        };
-        *selected = Some(next);
-        cx.notify();
+            RightTab::Outline => {
+                let rows = self.outline_rows(cx);
+                let Some(ix) = self.outline_state.selected else {
+                    return;
+                };
+                let Some(row) = rows.get(ix) else {
+                    return;
+                };
+                let depths: Vec<usize> = rows.iter().map(|row| row.depth).collect();
+                if row.has_children && !row.collapsed {
+                    self.toggle_outline_fold(row.ix, cx);
+                } else if let Some(parent) = parent_row(&depths, ix) {
+                    self.outline_state.selected = Some(parent);
+                    cx.notify();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Right on the marked row: opens a folded group, or hands the mark to
+    /// the first child of one already open. A leaf has nothing to open,
+    /// so Right does nothing there.
+    pub(crate) fn pane_fold_right(&mut self, cx: &mut Context<Self>) {
+        match self.right_tab {
+            RightTab::Tags => {
+                let rows = self.tag_rows(cx);
+                let Some(ix) = self.tag_state.selected else {
+                    return;
+                };
+                let Some(row) = rows.get(ix) else {
+                    return;
+                };
+                let depths: Vec<usize> = rows.iter().map(|row| row.depth).collect();
+                if !row.has_children {
+                    return;
+                }
+                if row.collapsed {
+                    let key = row.key.clone();
+                    self.toggle_tag_fold(key, cx);
+                } else if let Some(child) = first_child_row(&depths, ix) {
+                    self.tag_state.selected = Some(child);
+                    cx.notify();
+                }
+            }
+            RightTab::Outline => {
+                let rows = self.outline_rows(cx);
+                let Some(ix) = self.outline_state.selected else {
+                    return;
+                };
+                let Some(row) = rows.get(ix) else {
+                    return;
+                };
+                let depths: Vec<usize> = rows.iter().map(|row| row.depth).collect();
+                if !row.has_children {
+                    return;
+                }
+                if row.collapsed {
+                    self.toggle_outline_fold(row.ix, cx);
+                } else if let Some(child) = first_child_row(&depths, ix) {
+                    self.outline_state.selected = Some(child);
+                    cx.notify();
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Enter on the selected row: the same thing a click on it does — a tag
     /// or property row searches for it, an outline row reveals its heading
     /// in the note.
     pub(crate) fn pane_activate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let ix = match self.right_tab {
-            RightTab::Tags => self.tag_state.selected,
-            RightTab::Properties => self.property_state.selected,
-            RightTab::Outline => self.outline_state.selected,
+        let action = match self.right_tab {
+            RightTab::Tags => self
+                .tag_state
+                .selected
+                .and_then(|ix| self.tag_rows(cx).get(ix).map(tag_row_action)),
+            RightTab::Properties => self
+                .property_state
+                .selected
+                .and_then(|ix| self.property_rows(cx).get(ix).map(property_row_action)),
+            RightTab::Outline => self
+                .outline_state
+                .selected
+                .and_then(|ix| self.outline_rows(cx).get(ix).map(outline_row_action)),
             _ => None,
         };
-        let Some(ix) = ix else {
-            return;
-        };
-        match self.right_tab {
-            RightTab::Tags => {
-                let rows = self.tag_rows(cx);
-                if let Some(row) = rows.get(ix) {
-                    let path = row.path.clone();
-                    self.show_search(&format!("tag:#{path}"), Some(window), cx);
-                }
-            }
-            RightTab::Properties => {
-                let rows = self.property_rows(cx);
-                if let Some(row) = rows.get(ix) {
-                    let name = row.name.clone();
-                    self.show_search(&format!("[\"{name}\"]"), Some(window), cx);
-                }
-            }
-            RightTab::Outline => {
-                let rows = self.outline_rows(cx);
-                if let Some(row) = rows.get(ix) {
-                    self.reveal_heading(row.offset, cx);
-                }
-            }
-            _ => {}
+        match action {
+            Some(PaneRowAction::Search(query)) => self.show_search(&query, Some(window), cx),
+            Some(PaneRowAction::Reveal(offset)) => self.reveal_heading(offset, cx),
+            None => {}
         }
     }
 
@@ -1470,15 +1568,210 @@ impl Workspace {
     }
 }
 
+/// Where the arrow keys put the pane's mark next: `current` moved by
+/// `delta` rows, clamped to the `count` rows on screen. Nothing is
+/// selected before the first press, so a downward stroke marks the first
+/// row and an upward one the last, as Obsidian's list navigation does.
+/// A pane with no rows has nothing to mark.
+pub(crate) fn next_row_selection(
+    current: Option<usize>,
+    count: usize,
+    delta: isize,
+) -> Option<usize> {
+    if count == 0 {
+        return None;
+    }
+    Some(match current {
+        Some(ix) => (ix as isize + delta).clamp(0, count as isize - 1) as usize,
+        None => {
+            if delta >= 0 {
+                0
+            } else {
+                count - 1
+            }
+        }
+    })
+}
+
+/// The nearest row before `ix` at a shallower depth: the group `ix` sits
+/// in, or none for a row at the root.
+pub(crate) fn parent_row(depths: &[usize], ix: usize) -> Option<usize> {
+    let depth = *depths.get(ix)?;
+    (0..ix).rev().find(|&k| depths[k] < depth)
+}
+
+/// The row just after `ix` when it is one level deeper: `ix`'s first
+/// child, or none when `ix` is a leaf or the last row.
+pub(crate) fn first_child_row(depths: &[usize], ix: usize) -> Option<usize> {
+    let depth = *depths.get(ix)?;
+    let next = ix + 1;
+    (depths.get(next)? > &depth).then_some(next)
+}
+
+/// What Enter does on a pane's marked row: the same thing a click on it
+/// does.
+pub(crate) enum PaneRowAction {
+    /// Search the vault for this query, the pane's own field's text set to
+    /// it, as a tag or property row's click does.
+    Search(String),
+    /// Reveal this byte offset in the note, as an outline row's click does.
+    Reveal(usize),
+}
+
+pub(crate) fn tag_row_action(row: &panes::TagRow) -> PaneRowAction {
+    PaneRowAction::Search(format!("tag:#{}", row.path))
+}
+
+pub(crate) fn property_row_action(row: &panes::PropertyRow) -> PaneRowAction {
+    PaneRowAction::Search(format!("[\"{}\"]", row.name))
+}
+
+pub(crate) fn outline_row_action(row: &panes::OutlineRow) -> PaneRowAction {
+    PaneRowAction::Reveal(row.offset)
+}
+
 /// Keys for the side panes, bound to the panes' own context beneath the
 /// workspace's: a row click (or the dock tab) focuses the panes, the
-/// arrows move the mark, Enter runs the row, Escape goes back to the note.
+/// arrows move the mark, Enter runs the row, Left/Right fold and open the
+/// group the mark is on, Escape goes back to the note.
 pub fn bind_pane_keys(cx: &mut App) {
     let ctx = Some("SidePane");
     cx.bind_keys([
         KeyBinding::new("up", PaneUp, ctx),
         KeyBinding::new("down", PaneDown, ctx),
         KeyBinding::new("enter", PaneActivate, ctx),
+        KeyBinding::new("left", PaneFoldLeft, ctx),
+        KeyBinding::new("right", PaneUnfoldRight, ctx),
         KeyBinding::new("escape", PaneLeaveFocus, ctx),
     ]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tag_row(path: &str, depth: usize, has_children: bool, collapsed: bool) -> panes::TagRow {
+        panes::TagRow {
+            name: path.rsplit('/').next().unwrap_or(path).to_string(),
+            parent: path
+                .rsplit_once('/')
+                .map(|(head, _)| format!("{head}/"))
+                .unwrap_or_default(),
+            path: path.to_string(),
+            key: path.to_lowercase(),
+            count: 1,
+            depth,
+            has_children,
+            collapsed,
+        }
+    }
+
+    fn property_row(name: &str) -> panes::PropertyRow {
+        panes::PropertyRow {
+            name: name.to_string(),
+            count: 1,
+            ty: None,
+            icon: "file-question",
+        }
+    }
+
+    fn outline_row(ix: usize, offset: usize, depth: usize) -> panes::OutlineRow {
+        panes::OutlineRow {
+            ix,
+            depth,
+            text: format!("Heading {ix}"),
+            level: depth as u8 + 1,
+            line: ix,
+            offset,
+            has_children: false,
+            collapsed: false,
+            active: false,
+            highlights: Vec::new(),
+        }
+    }
+
+    /// A downward key event on a pane with rows moves the mark down the
+    /// rows, one per stroke, and stops at the last one.
+    #[test]
+    fn a_down_key_moves_the_pane_mark_one_row_at_a_time() {
+        // * Nothing marked yet: the first downward stroke lands on the
+        //   first row, the way a list's first arrow does.
+        assert_eq!(next_row_selection(None, 3, 1), Some(0));
+        assert_eq!(next_row_selection(Some(0), 3, 1), Some(1));
+        assert_eq!(next_row_selection(Some(1), 3, 1), Some(2));
+        // * Clamped at the end: more strokes change nothing.
+        assert_eq!(next_row_selection(Some(2), 3, 1), Some(2));
+        assert_eq!(next_row_selection(Some(2), 5, 9), Some(4));
+    }
+
+    /// An upward key event walks the other way, and with nothing marked
+    /// yet lands on the last row.
+    #[test]
+    fn an_up_key_moves_the_pane_mark_the_other_way() {
+        assert_eq!(next_row_selection(None, 3, -1), Some(2));
+        assert_eq!(next_row_selection(Some(2), 3, -1), Some(1));
+        assert_eq!(next_row_selection(Some(1), 3, -1), Some(0));
+        // * Clamped at the top.
+        assert_eq!(next_row_selection(Some(0), 3, -1), Some(0));
+    }
+
+    /// A pane whose filter left no rows has no mark to move.
+    #[test]
+    fn an_arrow_on_a_pane_with_no_rows_moves_nothing() {
+        assert_eq!(next_row_selection(None, 0, 1), None);
+        assert_eq!(next_row_selection(Some(0), 0, -1), None);
+    }
+
+    /// Enter on a tag row searches `tag:#path`, the query a click on it
+    /// runs.
+    #[test]
+    fn enter_on_a_tag_row_searches_for_it() {
+        match tag_row_action(&tag_row("project/alpha", 1, true, false)) {
+            PaneRowAction::Search(query) => assert_eq!(query, "tag:#project/alpha"),
+            PaneRowAction::Reveal(_) => panic!("a tag row searches, it does not reveal"),
+        }
+    }
+
+    /// Enter on a property row searches `["key"]`, the query a click on it
+    /// runs.
+    #[test]
+    fn enter_on_a_property_row_searches_for_it() {
+        match property_row_action(&property_row("status")) {
+            PaneRowAction::Search(query) => assert_eq!(query, "[\"status\"]"),
+            PaneRowAction::Reveal(_) => panic!("a property row searches, it does not reveal"),
+        }
+    }
+
+    /// Enter on an outline row reveals the heading's offset in the note,
+    /// the jump a click on it makes.
+    #[test]
+    fn enter_on_an_outline_row_reveals_its_heading() {
+        match outline_row_action(&outline_row(2, 128, 1)) {
+            PaneRowAction::Reveal(offset) => assert_eq!(offset, 128),
+            PaneRowAction::Search(_) => panic!("an outline row reveals, it does not search"),
+        }
+    }
+
+    /// Left on a folded group hands the mark to the group it sits in, and
+    /// a root row has none to go to.
+    #[test]
+    fn left_hands_the_mark_to_the_parent_group() {
+        let depths = [0, 1, 2, 1];
+        assert_eq!(parent_row(&depths, 2), Some(1));
+        assert_eq!(parent_row(&depths, 3), Some(0));
+        // * A root row's parent is not on the list.
+        assert_eq!(parent_row(&depths, 0), None);
+        assert_eq!(parent_row(&depths, 9), None);
+    }
+
+    /// Right on an open group hands the mark to its first child; a leaf
+    /// and the last row have no child to go to.
+    #[test]
+    fn right_hands_the_mark_to_the_first_child() {
+        let depths = [0, 1, 1];
+        assert_eq!(first_child_row(&depths, 0), Some(1));
+        assert_eq!(first_child_row(&depths, 1), None);
+        assert_eq!(first_child_row(&depths, 2), None);
+        assert_eq!(first_child_row(&[], 0), None);
+    }
 }
