@@ -100,6 +100,236 @@ fn strip_active(html: &str) -> String {
     }
 }
 
+/// The attributes a browser acts on as a URL, whatever element carries
+/// them. `data-href` is deliberately absent: it is this crate's own
+/// bookkeeping, never a URL.
+const URL_ATTRS: [&str; 7] = [
+    "href",
+    "src",
+    "action",
+    "formaction",
+    "poster",
+    "background",
+    "xlink:href",
+];
+
+/// The schemes a published page may carry. `javascript:`, `vbscript:` and
+/// a `data:` document execute instead of navigate, and a note's markdown
+/// link or raw HTML block reaches this boundary verbatim, so anything
+/// outside the list loses its attribute rather than its reader.
+const URL_SCHEMES: [&str; 5] = ["http", "https", "mailto", "tel", "ftp"];
+
+/// Drops the two things a browser runs that are not an element: an
+/// event-handler attribute (`onerror=`, `onload=`, ...) and a URL attribute
+/// whose scheme is outside [`URL_SCHEMES`].
+///
+/// Like `strip_active`, the pass repeats until it stops changing anything:
+/// a tag split by a dropped element can stitch itself back together
+/// (`<img sr<iframe>c=x onerror=y>` reassembles into a live one), so the
+/// pair of passes loops as a unit in `render`.
+fn sanitize_attributes(html: &str) -> String {
+    let mut out = html.to_string();
+    loop {
+        let next = sanitize_attributes_once(&out);
+        let done = next == out;
+        out = next;
+        if done {
+            return out;
+        }
+    }
+}
+
+/// One sweep over every tag in `html`. Text between tags is copied through,
+/// and a `<` that no element name follows is text too.
+fn sanitize_attributes_once(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut rest = html;
+    while let Some(at) = rest.find('<') {
+        let opens_tag = rest[at + 1..]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic());
+        if !opens_tag {
+            out.push_str(&rest[..at + 1]);
+            rest = &rest[at + 1..];
+            continue;
+        }
+        let tag_end = tag_end(&rest[at..]);
+        out.push_str(&rest[..at]);
+        out.push_str(&sanitize_tag(&rest[at..tag_end]));
+        rest = &rest[tag_end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Where the tag that starts at `rest` ends: at its `>`, or at the end of
+/// the string when it is never closed. A `>` inside a quoted attribute
+/// value (`title="a>b"`) does not end the tag.
+fn tag_end(rest: &str) -> usize {
+    let bytes = rest.as_bytes();
+    let mut quote: Option<u8> = None;
+    for (ix, b) in bytes.iter().enumerate() {
+        match quote {
+            Some(q) => {
+                if *b == q {
+                    quote = None;
+                }
+            }
+            None if *b == b'"' || *b == b'\'' => quote = Some(*b),
+            None if *b == b'>' => return ix + 1,
+            None => {}
+        }
+    }
+    rest.len()
+}
+
+/// The tag with its unsafe attributes removed, everything else byte for
+/// byte as it was written.
+fn sanitize_tag(tag: &str) -> String {
+    let mut out = String::with_capacity(tag.len());
+    out.push('<');
+    let bytes = tag.as_bytes();
+    // The element's name, copied before any attribute is read.
+    let mut at = 1;
+    while at < bytes.len()
+        && !bytes[at].is_ascii_whitespace()
+        && bytes[at] != b'>'
+        && bytes[at] != b'/'
+    {
+        at += 1;
+    }
+    out.push_str(&tag[1..at]);
+    while at < tag.len() {
+        if bytes[at] == b'>' {
+            out.push('>');
+            break;
+        }
+        if bytes[at].is_ascii_whitespace() {
+            out.push(bytes[at] as char);
+            at += 1;
+            continue;
+        }
+        let name_start = at;
+        while at < tag.len()
+            && !bytes[at].is_ascii_whitespace()
+            && bytes[at] != b'='
+            && bytes[at] != b'>'
+        {
+            at += 1;
+        }
+        let name = tag[name_start..at].to_ascii_lowercase();
+        // An `= value` after the name, quoted or bare.
+        let mut peek = at;
+        while peek < tag.len() && bytes[peek].is_ascii_whitespace() {
+            peek += 1;
+        }
+        let mut value: Option<&str> = None;
+        if peek < tag.len() && bytes[peek] == b'=' {
+            peek += 1;
+            while peek < tag.len() && bytes[peek].is_ascii_whitespace() {
+                peek += 1;
+            }
+            if peek < tag.len() && (bytes[peek] == b'"' || bytes[peek] == b'\'') {
+                let quote = bytes[peek];
+                let start = peek + 1;
+                let mut end = tag.len();
+                for (ix, b) in bytes[start..].iter().enumerate() {
+                    if *b == quote {
+                        end = start + ix;
+                        break;
+                    }
+                }
+                value = Some(&tag[start..end]);
+                at = (end + 1).min(tag.len());
+            } else {
+                let start = peek;
+                let mut end = start;
+                while end < tag.len() && !bytes[end].is_ascii_whitespace() && bytes[end] != b'>' {
+                    end += 1;
+                }
+                value = Some(&tag[start..end]);
+                at = end;
+            }
+        }
+        let handler = name.len() > 2 && name.starts_with("on");
+        let bad_url = value.is_some_and(|v| {
+            URL_ATTRS.contains(&name.as_str()) && !scheme_is_safe(&decode_entities(v))
+        });
+        if !handler && !bad_url {
+            out.push_str(&tag[name_start..at]);
+        }
+    }
+    out
+}
+
+/// Whether `value` navigates rather than executes. A colon before any `/`,
+/// `?` or `#` names a scheme; a value with no scheme — a page of the site,
+/// an anchor, a query — has none to refuse. The scheme is read with the
+/// tab/newline characters a browser ignores removed and its entities
+/// decoded, so `java\tscript:` and `&#106;avascript:` cannot sneak through.
+fn scheme_is_safe(value: &str) -> bool {
+    let v: String = value
+        .trim()
+        .chars()
+        .filter(|c| !matches!(c, '\t' | '\n' | '\r'))
+        .collect();
+    let Some(colon) = v.find(':') else {
+        return true;
+    };
+    let head = &v[..colon];
+    if head.is_empty() || head.contains(['/', '?', '#']) {
+        return true;
+    }
+    if !head.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) {
+        return true;
+    }
+    URL_SCHEMES.contains(&head.to_ascii_lowercase().as_str())
+}
+
+/// The decimal and hex character references of `value`, so a scheme hidden
+/// behind `&#106;avascript:` is read as written. Anything unrecognised is
+/// left alone.
+fn decode_entities(value: &str) -> String {
+    if !value.contains("&#") {
+        return value.to_string();
+    }
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(at) = rest.find("&#") {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + 2..];
+        let semi = after.find(';');
+        let digits = match semi {
+            Some(end) => &after[..end],
+            None => {
+                out.push_str(&rest[at..]);
+                return out;
+            }
+        };
+        let code = if let Some(hex) = digits
+            .strip_prefix('x')
+            .or_else(|| digits.strip_prefix('X'))
+        {
+            u32::from_str_radix(hex, 16).ok()
+        } else {
+            digits.parse::<u32>().ok()
+        };
+        match code.and_then(char::from_u32) {
+            Some(ch) => {
+                out.push(ch);
+                rest = &after[semi.unwrap() + 1..];
+            }
+            None => {
+                out.push_str("&#");
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// One sweep: every `<script`/`<iframe` element found in `html`, dropped
 /// case-insensitively. `to_ascii_lowercase` maps only A-Z, so the copy has
 /// the same byte length and indices still slice the original.
@@ -188,7 +418,19 @@ pub fn export(root: &Path, files: &[VaultFile], out: &Path) -> Result<SiteReport
 /// active content a published site must never carry.
 fn render(text: &str) -> String {
     let doc = silica_markdown::parse(text);
-    strip_active(&silica_markdown::html::render_html(&doc))
+    let html = silica_markdown::html::render_html(&doc);
+    // * Both passes loop as a unit until nothing changes: an element one
+    //   drops can leave the pieces of a live tag behind
+    //   (`<img sr<iframe>c=x onerror=y>`), so the pair has to settle before
+    //   the page is written.
+    let mut out = strip_active(&html);
+    loop {
+        let next = strip_active(&sanitize_attributes(&out));
+        if next == out {
+            return out;
+        }
+        out = next;
+    }
 }
 
 /// A page's `<title>`: its name without the extension.
@@ -693,6 +935,101 @@ mod tests {
         let cut = strip_active("<p>keep</p><script>never closed");
         assert!(cut.contains("<p>keep</p>"), "{cut}");
         assert!(!cut.contains("<script"), "{cut}");
+    }
+
+    /// A raw HTML block reaches the export verbatim, so an event-handler
+    /// attribute in one is live script on every published page.
+    #[test]
+    fn a_raw_html_event_handler_attribute_is_dropped() {
+        let html =
+            render("<div class=\"x\">\n<img src=\"pic.png\" onerror=\"alert(1)\">\n</div>\n");
+        let lower = html.to_lowercase();
+        assert!(!lower.contains("onerror"), "{html}");
+        assert!(!lower.contains("alert(1)"), "{html}");
+        // The element and its safe attributes stay.
+        assert!(html.contains("<img"), "{html}");
+        assert!(html.contains("pic.png"), "{html}");
+    }
+
+    /// Obsidian renders a `javascript:` link as an ordinary external anchor,
+    /// so the scheme must be dropped at the export boundary rather than
+    /// shipped to every reader of the site. The URL as *text* (the
+    /// renderer's `aria-label`) is inert; the attribute a browser acts on
+    /// is what must go.
+    #[test]
+    fn a_javascript_url_never_reaches_a_published_page() {
+        let html = render("[click](javascript:alert(1))\n");
+        for attr in URL_ATTRS {
+            assert!(
+                !html
+                    .to_lowercase()
+                    .contains(&format!("{attr}=\"javascript:")),
+                "{attr} kept the scheme: {html}"
+            );
+        }
+        // The link text stays; a scheme that is not a URL is no href at all.
+        assert!(html.contains("click"), "{html}");
+    }
+
+    /// The other schemes that execute, plus the `data:` document one, with
+    /// the allowlist's safe members kept. Also the two ways a scheme hides:
+    /// tab characters a browser ignores, and character references.
+    #[test]
+    fn only_web_and_mail_schemes_survive() {
+        for url in [
+            "javascript:alert(1)",
+            "JAVASCRIPT:alert(1)",
+            "vbscript:msgbox(1)",
+            "data:text/html;base64,PHNjcmlwdD4=",
+        ] {
+            let html = render(&format!("[x]({url})\n"));
+            for attr in URL_ATTRS {
+                assert!(
+                    !html.to_lowercase().contains(&format!("{attr}=\"{url}")),
+                    "{attr} kept {url}: {html}"
+                );
+            }
+        }
+        let hidden = render("<a href=\"java\tscript:alert(1)\">x</a>\n");
+        assert!(
+            !hidden.to_lowercase().contains("javascript:alert"),
+            "a tab hid the scheme: {hidden}"
+        );
+        let entity = render("<a href=\"&#106;avascript:alert(1)\">x</a>\n");
+        assert!(
+            !entity.to_lowercase().contains("javascript:alert"),
+            "a character reference hid the scheme: {entity}"
+        );
+        for url in [
+            "https://example.com",
+            "http://example.com",
+            "mailto:a@b.c",
+            "/local/page",
+            "../up/page",
+            "page.html",
+        ] {
+            let html = render(&format!("[x]({url})\n"));
+            assert!(html.contains(url), "kept {url}: {html}");
+        }
+    }
+
+    /// A tag the sanitizer has to read past a quoted `>` in, and one whose
+    /// dropped element stitched a handler back together.
+    #[test]
+    fn a_tag_with_a_quoted_gt_or_a_stitched_handler_is_handled() {
+        let kept = sanitize_attributes("<a title=\"a>b\" href=\"https://x.c\">t</a>");
+        assert!(kept.contains("title=\"a>b\""), "{kept}");
+        assert!(kept.contains("href=\"https://x.c\""), "{kept}");
+        // * strip_active leaves the pieces of a live tag behind when the
+        //   element it drops sat inside one; the sanitizer catches the
+        //   handler in the reassembled tag.
+        let stitched = strip_active("<img sr<script>x</script>c=x onerror=y>alert(1)</script>");
+        assert!(stitched.contains("<img src=x onerror=y>"), "{stitched}");
+        let clean = sanitize_attributes(&stitched);
+        assert!(!clean.to_lowercase().contains("onerror"), "{clean}");
+        assert!(clean.contains("src=x"), "{clean}");
+        // `alert(1)` here was text *outside* the dropped element, so it
+        // stays as inert text; only executable content has to go.
     }
 
     #[test]
