@@ -7,7 +7,6 @@
 use super::*;
 
 impl Workspace {
-
     /// The whole shell as JSON, for the control socket's `state` method: a
     /// test driving the app over the socket reads this instead of a
     /// screenshot. Every key is always there, `null` when there is nothing
@@ -160,6 +159,7 @@ impl Workspace {
                 RightTab::Backlinks => "backlinks",
                 RightTab::Outgoing => "outgoing",
                 RightTab::Outline => "outline",
+                RightTab::Graph => "graph",
                 RightTab::Tags => "tags",
                 RightTab::Properties => "properties",
             }),

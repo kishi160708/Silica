@@ -7,7 +7,6 @@
 use super::*;
 
 impl Workspace {
-
     /// Whether a `workspace.json` was read at load. The startup flags then
     /// leave the first note alone: with nothing recorded Obsidian shows the
     /// empty state rather than picking a note.
@@ -144,6 +143,7 @@ impl Workspace {
             Some("backlink") => self.right_tab = RightTab::Backlinks,
             Some("outgoing-link") => self.right_tab = RightTab::Outgoing,
             Some("outline") => self.right_tab = RightTab::Outline,
+            Some("graph") => self.right_tab = RightTab::Graph,
             Some("tag") => self.right_tab = RightTab::Tags,
             Some("all-properties") => self.right_tab = RightTab::Properties,
             _ => {}

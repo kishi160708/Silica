@@ -491,6 +491,7 @@ pub const RUNNABLE: &[&str] = &[
     "app:increase-font-size",
     "app:decrease-font-size",
     "silica:vault-backup",
+    "silica:toggle-graph-pane",
     "workspace:copy-path",
     "workspace:copy-full-path",
     "app:open-settings",
@@ -1459,6 +1460,9 @@ pub(crate) enum RightTab {
     Backlinks,
     Outgoing,
     Tags,
+    /// The graph, in the dock: the same view the ribbon opens full screen,
+    /// kept beside the note.
+    Graph,
     /// All properties: every key in the vault with its type and count.
     Properties,
     Outline,
@@ -5509,6 +5513,7 @@ impl Workspace {
                 self.step_font_size(up, window, cx);
             }
             "silica:vault-backup" => self.backup_vault(window, cx),
+            "silica:toggle-graph-pane" => self.toggle_graph_pane(cx),
             "workspace:copy-path" => self.copy_current_path(false, cx),
             "workspace:copy-full-path" => self.copy_current_path(true, cx),
             "app:toggle-left-sidebar" => {
@@ -5871,6 +5876,20 @@ impl Workspace {
             current
         };
         cx.write_to_clipboard(ClipboardItem::new_string(text));
+    }
+
+    /// `silica:toggle-graph-pane`: the graph in the right dock, beside the
+    /// note — Obsidian's graph side pane. Asked for with the pane already
+    /// showing it, the command is a toggle, because a command that opens
+    /// without a way back is only half a command.
+    fn toggle_graph_pane(&mut self, cx: &mut Context<Self>) {
+        if self.right_tab == RightTab::Graph && self.right_visible {
+            self.right_visible = false;
+            cx.notify();
+        } else {
+            self.right_visible = true;
+            self.select_right_tab(RightTab::Graph, cx);
+        }
     }
 
     /// "Open help": the Help window, brought forward if it is already up.

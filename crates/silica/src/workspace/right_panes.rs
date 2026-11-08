@@ -8,7 +8,6 @@ use super::*;
 actions!(pane_keys, [PaneUp, PaneDown, PaneActivate, PaneLeaveFocus]);
 
 impl Workspace {
-
     /// Obsidian's `nav-header`: 40 px, 8 px of padding, the buttons
     /// centred 2 px apart.
     pub(crate) fn pane_header() -> gpui::Div {
@@ -44,7 +43,12 @@ impl Workspace {
 
     /// "Show search filter": shows the box and puts the keyboard in it, or
     /// hides it again, leaving the query (and the rows) as they were.
-    pub(crate) fn toggle_pane_search(&mut self, which: RightTab, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_pane_search(
+        &mut self,
+        which: RightTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let flag = self.pane_show_search(which);
         *flag = !*flag;
         if *flag {
@@ -56,7 +60,12 @@ impl Workspace {
 
     /// Escape in the box: hides it and clears the query, so every row is
     /// back, and the keyboard goes to the note.
-    pub(crate) fn hide_pane_search(&mut self, which: RightTab, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn hide_pane_search(
+        &mut self,
+        which: RightTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         *self.pane_show_search(which) = false;
         self.pane_filter(which)
             .update(cx, |input, cx| input.set_text("", cx));
@@ -65,7 +74,12 @@ impl Workspace {
     }
 
     /// The box's clear button: empties it and keeps the keyboard there.
-    pub(crate) fn clear_pane_filter(&mut self, which: RightTab, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn clear_pane_filter(
+        &mut self,
+        which: RightTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let input = self.pane_filter(which).clone();
         input.update(cx, |input, cx| input.set_text("", cx));
         window.focus(&input.focus_handle(cx), cx);
@@ -99,7 +113,12 @@ impl Workspace {
         cx.notify();
     }
 
-    pub(crate) fn set_pane_sort(&mut self, which: RightTab, order: PaneSort, cx: &mut Context<Self>) {
+    pub(crate) fn set_pane_sort(
+        &mut self,
+        which: RightTab,
+        order: PaneSort,
+        cx: &mut Context<Self>,
+    ) {
         match which {
             RightTab::Tags => {
                 self.tag_state.sort = order;
@@ -407,7 +426,11 @@ impl Workspace {
     }
 
     /// The right-click context menu over a side-pane row.
-    pub(crate) fn render_side_menu(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+    pub(crate) fn render_side_menu(
+        &self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
         let menu = self.side_menu.as_ref()?;
         let items = side_menu_items(&menu.target);
         let mut list = div()
@@ -465,7 +488,12 @@ impl Workspace {
 
     /// Handles a side-pane context menu action: searches for tags/properties,
     /// copies paths, or opens outline headings.
-    pub(crate) fn handle_side_menu_action(&mut self, action: &SidePaneAction, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn handle_side_menu_action(
+        &mut self,
+        action: &SidePaneAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         match action {
             SidePaneAction::SearchTag(tag) => {
                 self.show_search(&format!("tag:#{tag}"), None, cx);
@@ -679,7 +707,11 @@ impl Workspace {
     /// The Tags pane: sort, nested, expand-all and search buttons, the
     /// filter when shown, then the tags as a tree (or a flat list) with
     /// their counts; a row's click searches `tag:#path`.
-    pub(crate) fn render_tags_pane(&mut self, theme: &Theme, cx: &mut Context<Self>) -> gpui::AnyElement {
+    pub(crate) fn render_tags_pane(
+        &mut self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         let (hierarchy, show_search) = (self.tag_state.use_hierarchy, self.tag_state.show_search);
         let sort_menu = self.render_pane_sort_menu(RightTab::Tags, theme, cx);
         let header = Self::pane_header()
@@ -895,7 +927,11 @@ impl Workspace {
     /// The Outline pane: search, auto-scroll and collapse-all buttons, the
     /// filter when shown, then the headings as a structural tree with the
     /// one holding the cursor marked, or "No headings found.".
-    pub(crate) fn render_outline_pane(&mut self, theme: &Theme, cx: &mut Context<Self>) -> gpui::AnyElement {
+    pub(crate) fn render_outline_pane(
+        &mut self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         // * The mark follows the cursor and the reading view; a mode or note
         //   switch lands here before anything else can notice it.
         let active = self.current_heading(cx);
@@ -1069,13 +1105,20 @@ impl Workspace {
             RightTab::Tags => "tag-pane",
             RightTab::Properties => "properties",
             RightTab::Outline => "outline",
+            // * The graph's own plugin id, so a vault with the graph core
+            //   plugin off takes the tab away with it.
+            RightTab::Graph => "graph",
         };
         self.state
             .as_ref()
             .is_none_or(|state| state.core_plugin_enabled(id))
     }
 
-    pub(crate) fn render_right_dock(&mut self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn render_right_dock(
+        &mut self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         // * The pane whose plugin was just turned off has no tab any more,
         //   so it cannot be the one on screen either: the first that is
         //   still on takes over, as Obsidian moves to a neighbouring leaf.
@@ -1086,6 +1129,7 @@ impl Workspace {
                 RightTab::Tags,
                 RightTab::Properties,
                 RightTab::Outline,
+                RightTab::Graph,
             ]
             .into_iter()
             .find(|t| self.pane_enabled(*t))
@@ -1100,6 +1144,26 @@ impl Workspace {
             RightTab::Outline => self.render_outline_pane(theme, cx),
             RightTab::Tags => self.render_tags_pane(theme, cx),
             RightTab::Properties => self.render_properties_pane(theme, cx),
+            // * The graph side pane: the GraphView entity the ribbon opens
+            //   full screen, kept in the dock. While a group's area already
+            //   paints it, the dock says so rather than painting it twice.
+            RightTab::Graph if self.graph_group().is_some() => div()
+                .flex()
+                .items_center()
+                .justify_center()
+                .size_full()
+                .min_h_0()
+                .px(px(12.))
+                .py(px(12.))
+                .text_size(px(12.))
+                .text_color(theme.text_muted)
+                .child("The graph is already open in the main area")
+                .into_any_element(),
+            RightTab::Graph => div()
+                .size_full()
+                .min_h_0()
+                .child(self.graph.clone())
+                .into_any_element(),
         };
         // * A pane whose core plugin is off is not offered: Obsidian takes
         //   the view away with the plugin.
@@ -1182,6 +1246,7 @@ impl Workspace {
                         cx,
                     ))
                     .children(tab_button(self, "Outline", "list", RightTab::Outline, cx))
+                    .children(tab_button(self, "Graph", "git-fork", RightTab::Graph, cx))
                     .child(window_handle(
                         div().id("right-dock-space").flex_1().h_full(),
                         frameless,
