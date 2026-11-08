@@ -488,6 +488,11 @@ pub const RUNNABLE: &[&str] = &[
     "audio-recorder:stop",
     "quick-capture:open",
     "task-dashboard:open",
+    "app:increase-font-size",
+    "app:decrease-font-size",
+    "silica:vault-backup",
+    "workspace:copy-path",
+    "workspace:copy-full-path",
     "app:open-settings",
     "app:open-help",
     "app:open-vault",
@@ -5499,6 +5504,13 @@ impl Workspace {
                     Err(err) => self.report(format!("Task Dashboard: {err}"), cx),
                 }
             }
+            "app:increase-font-size" | "app:decrease-font-size" => {
+                let up = id == "app:increase-font-size";
+                self.step_font_size(up, window, cx);
+            }
+            "silica:vault-backup" => self.backup_vault(window, cx),
+            "workspace:copy-path" => self.copy_current_path(false, cx),
+            "workspace:copy-full-path" => self.copy_current_path(true, cx),
             "app:toggle-left-sidebar" => {
                 self.left_visible = !self.left_visible;
                 if !self.left_visible {
@@ -5783,6 +5795,82 @@ impl Workspace {
             Err(err) => self.report(format!("Could not open the vault manager: {err}"), cx),
         }
         cx.notify();
+    }
+
+    /// Obsidian's `app:increase-font-size` and `app:decrease-font-size`,
+    /// stepped against the base size the appearance settings hold: a
+    /// reader's zoom is a setting like any other, so it lands in
+    /// appearance.json rather than in a number this struct forgets.
+    fn step_font_size(&mut self, up: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        const MIN: u32 = 10;
+        const MAX: u32 = 30;
+        let mut next = state.appearance().clone();
+        let current = next.base_font_size.unwrap_or(16);
+        let next_size = if up {
+            current + 1
+        } else {
+            current.saturating_sub(1)
+        };
+        let next_size = next_size.clamp(MIN, MAX);
+        if next_size == current {
+            return;
+        }
+        next.base_font_size = Some(next_size);
+        self.change_setting(SettingChange::Appearance(next), window, cx);
+    }
+
+    /// `silica:vault-backup`: a copy of the vault's own files into a folder
+    /// beside it. Silica's answer to the most common request a
+    /// files-first app gets — a backup that is not a sync — and the
+    /// keysteps go through the vault's own op so the same guards (paths,
+    /// symlinks, the files that are actually files) hold here too.
+    ///
+    /// ponytail: a fixed seven kept, no settings row yet; surface a row
+    /// when someone asks for a different retention.
+    fn backup_vault(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            self.report("No vault is open", cx);
+            return;
+        };
+        let root = state.root.clone();
+        let backups = root.join(".silica").join("backups");
+        let outcome = silica_vault::ops::backup_vault(&root, &backups, 7);
+        match outcome {
+            Ok(report) => self.report(
+                format!(
+                    "Backed up {} file(s), {} byte(s), into {}",
+                    report.files,
+                    report.bytes,
+                    backups.display()
+                ),
+                cx,
+            ),
+            Err(err) => self.report(format!("Backup failed: {err}"), cx),
+        }
+    }
+
+    /// Obsidian's `workspace:copy-path` and `workspace:copy-full-path`:
+    /// the open note's path, vault-relative or the host path. Obsidian
+    /// offers them only as menu items, but a command in every sense —
+    /// and a spoken refusal with no note open, rather than a clipboard
+    /// holding the last thing it held.
+    fn copy_current_path(&mut self, full: bool, cx: &mut Context<Self>) {
+        let Some(current) = self.current.clone() else {
+            self.report("No note is open", cx);
+            return;
+        };
+        let text = if full {
+            match self.vault_path(&current) {
+                Ok(path) => path.display().to_string(),
+                Err(_) => current,
+            }
+        } else {
+            current
+        };
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
     }
 
     /// "Open help": the Help window, brought forward if it is already up.

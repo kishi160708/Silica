@@ -161,6 +161,155 @@ pub fn attachment_path(setting: Option<&str>, note: &str, name: &str) -> String 
     join(&attachment_folder(setting, note), name)
 }
 
+/// What one backup run produced.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct BackupReport {
+    /// Files copied into the new backup folder.
+    pub files: usize,
+    /// Bytes those files hold.
+    pub bytes: u64,
+    /// The backup folder that was written.
+    pub dir: std::path::PathBuf,
+}
+
+/// Copies the whole vault into a new folder under `backups` and prunes all
+/// but the newest `keep`.
+///
+/// Obsidian never backs a vault up -- that is Sync's job and Sync is paid --
+/// so this is Silica's own answer to the most common request the app gets: a
+/// local copy that outlives a bad edit. The one rule it keeps is that a
+/// backup must never eat the vault it is a copy of: `.git` and `.silica` are
+/// skipped (the first is the user's own history, the second is where the
+/// backups themselves live), `backups` itself is skipped wherever it sits,
+/// and `keep` is at least one so a run cannot delete the only copy that
+/// exists.
+pub fn backup_vault(root: &Path, backups: &Path, keep: usize) -> Result<BackupReport, OpError> {
+    let dest = unique_backup_dir(backups)?;
+    std::fs::create_dir_all(&dest).map_err(io("create folder", &dest))?;
+    let mut report = BackupReport {
+        dir: dest.clone(),
+        ..Default::default()
+    };
+    copy_backup_tree(root, root, &dest, backups, &mut report)?;
+    let keep = keep.max(1);
+    prune_backups(backups, keep);
+    Ok(report)
+}
+
+/// The next `vault-<epoch seconds>` folder inside `backups`, never one that
+/// already exists: two runs in the same second get `-2`, `-3`, ... which is
+/// what keeps the sort the prune does chronological. Unix time rather than a
+/// date because the vault crate has no clock-to-civil conversion of its own,
+/// and borrowing the templates crate's for a folder name is not worth the
+/// dependency.
+fn unique_backup_dir(backups: &Path) -> Result<PathBuf, OpError> {
+    std::fs::create_dir_all(backups).map_err(io("create folder", backups))?;
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let base = format!("vault-{secs}");
+    let mut n = 1;
+    loop {
+        let name = if n == 1 {
+            base.clone()
+        } else {
+            format!("{base}-{n}")
+        };
+        let candidate = backups.join(name);
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+        n += 1;
+    }
+}
+
+/// Copies everything under `from` into `to`, keeping the folder structure and
+/// skipping what a backup must not hold.
+fn copy_backup_tree(
+    root: &Path,
+    from: &Path,
+    to: &Path,
+    backups: &Path,
+    report: &mut BackupReport,
+) -> Result<(), OpError> {
+    let entries = match std::fs::read_dir(from) {
+        Ok(entries) => entries,
+        // ! A vault that loses a folder between the walk and the read is not
+        //   a failed backup: the rest of it is still worth having.
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(io("read folder", from)(err)),
+    };
+    let mut entries: Vec<_> = entries.filter_map(|e| e.ok()).collect();
+    entries.sort_by_key(|e| e.file_name());
+    for entry in entries {
+        let path = entry.path();
+        let rel = match path.strip_prefix(root) {
+            Ok(rel) => rel.to_path_buf(),
+            Err(_) => continue,
+        };
+        if path.starts_with(backups) {
+            continue;
+        }
+        // * Silica's own scratch space and the user's own history: both are
+        //   already copies of something.
+        if matches!(
+            rel.components().next().and_then(|c| c.as_os_str().to_str()),
+            Some(".git") | Some(".silica")
+        ) {
+            continue;
+        }
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(_) => continue,
+        };
+        // ! The destination is the mirror of this level, not of the root: the
+        //   walk carries the root-relative path, and joining that onto the
+        //   level's own folder would nest `Sub/Sub`.
+        let local = match path.strip_prefix(from) {
+            Ok(local) => local.to_path_buf(),
+            Err(_) => continue,
+        };
+        let dest = to.join(&local);
+        if file_type.is_dir() {
+            std::fs::create_dir_all(&dest).map_err(io("create folder", &dest))?;
+            copy_backup_tree(root, &path, &dest, backups, report)?;
+        } else if file_type.is_file() {
+            let bytes = std::fs::copy(&path, &dest).map_err(io("copy file", &path))?;
+            report.files += 1;
+            report.bytes += bytes;
+        }
+        // ! A symlink is left alone: following one could copy a file the
+        //   vault only borrows, and the app's write path refuses them anyway.
+    }
+    Ok(())
+}
+
+/// Deletes every backup folder but the newest `keep`, by name: the timestamp
+/// prefix is fixed width, so the sort is chronological.
+fn prune_backups(backups: &Path, keep: usize) {
+    let Ok(entries) = std::fs::read_dir(backups) else {
+        return;
+    };
+    let mut dirs: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.is_dir()
+                && p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("vault-"))
+        })
+        .collect();
+    dirs.sort();
+    if dirs.len() <= keep {
+        return;
+    }
+    for stale in &dirs[..dirs.len() - keep] {
+        let _ = std::fs::remove_dir_all(stale);
+    }
+}
+
 /// Checks every segment of a new path the way Obsidian's rename does.
 fn validate_path(path: &str) -> Result<(), OpError> {
     if path.is_empty() {
@@ -949,6 +1098,102 @@ mod tests {
             TrashOption::System
         );
         assert_eq!(TrashOption::from_config(Some("Local")), TrashOption::System);
+    }
+
+    // * A backup is a copy with its own folder: every note lands in it, and
+    //   the vault it came from is untouched by both the copy and the prune.
+    //   It works on a plain folder, so the tests need no `Vault` at all.
+    fn plain_vault() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fs::create_dir_all(root.join("Sub/Deep")).unwrap();
+        fs::write(root.join("A.md"), "aa").unwrap();
+        fs::write(root.join("Sub/B.md"), "bbb").unwrap();
+        fs::write(root.join("Sub/Deep/C.md"), "cccc").unwrap();
+        (dir, root)
+    }
+
+    #[test]
+    fn a_backup_copies_the_notes_and_leaves_the_vault_alone() {
+        let (_dir, root) = plain_vault();
+        let backups = root.join(".silica").join("backups");
+        let report = super::backup_vault(&root, &backups, 7).unwrap();
+
+        assert_eq!(report.files, 3);
+        assert_eq!(report.bytes, 9);
+        assert!(
+            report
+                .dir
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("vault-")),
+            "named {}",
+            report.dir.display()
+        );
+        assert_eq!(fs::read_to_string(report.dir.join("A.md")).unwrap(), "aa");
+        assert_eq!(
+            fs::read_to_string(report.dir.join("Sub/Deep/C.md")).unwrap(),
+            "cccc"
+        );
+        // * The vault is the same vault it was.
+        assert_eq!(fs::read_to_string(root.join("A.md")).unwrap(), "aa");
+        assert!(root.join("Sub").is_dir());
+    }
+
+    // * The repo, the backup folder itself and a note that vanished mid-walk
+    //   are all outside a backup's remit, and none of them may stop it.
+    #[test]
+    fn a_backup_skips_the_repo_and_its_own_folder() {
+        let (_dir, root) = plain_vault();
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::write(root.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        let backups = root.join(".silica").join("backups");
+        fs::create_dir_all(backups.join("vault-1")).unwrap();
+        fs::write(backups.join("vault-1/A.md"), "old").unwrap();
+
+        let report = super::backup_vault(&root, &backups, 7).unwrap();
+
+        assert_eq!(report.files, 3);
+        assert!(!report.dir.join(".git").exists());
+        assert!(!report.dir.join(".silica").exists());
+        assert!(!report.dir.join("vault-1").exists());
+    }
+
+    #[test]
+    fn a_second_backup_in_the_same_second_gets_its_own_folder() {
+        let (_dir, root) = plain_vault();
+        let backups = root.join(".silica").join("backups");
+        let first = super::backup_vault(&root, &backups, 7).unwrap().dir;
+        let second = super::backup_vault(&root, &backups, 7).unwrap().dir;
+
+        assert_ne!(first, second);
+        assert!(first.exists() && second.exists());
+    }
+
+    #[test]
+    fn backups_are_pruned_to_the_cap_without_eating_the_newest() {
+        let (_dir, root) = plain_vault();
+        let backups = root.join(".silica").join("backups");
+        let first = super::backup_vault(&root, &backups, 2).unwrap().dir;
+        let second = super::backup_vault(&root, &backups, 2).unwrap().dir;
+        let third = super::backup_vault(&root, &backups, 2).unwrap().dir;
+
+        // * Three runs with a cap of two: the oldest goes, the newest two stay.
+        assert!(!first.exists(), "{first:?} should have been pruned");
+        assert!(second.exists());
+        assert!(third.exists());
+        // * The vault's own note was never touched by any of it.
+        assert_eq!(fs::read_to_string(root.join("A.md")).unwrap(), "aa");
+    }
+
+    #[test]
+    fn a_cap_of_zero_still_keeps_the_backup_it_just_made() {
+        let (_dir, root) = plain_vault();
+        let backups = root.join(".silica").join("backups");
+        let report = super::backup_vault(&root, &backups, 0).unwrap();
+
+        assert!(report.dir.exists());
+        assert_eq!(report.files, 3);
     }
 }
 
