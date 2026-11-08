@@ -972,6 +972,11 @@ impl Editor {
         self.spellcheck = on;
     }
 
+    /// Toggles spellchecking on or off (`editor:toggle-spellcheck`).
+    pub fn toggle_spellcheck(&mut self) {
+        self.spellcheck = !self.spellcheck;
+    }
+
     pub fn set_right_to_left(&mut self, on: bool) {
         self.right_to_left = on;
     }
