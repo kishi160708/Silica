@@ -19,6 +19,7 @@ use crate::copy_results::{CopyResults, CopyResultsEvent};
 use crate::editor::{Editor, EditorEvent};
 use crate::explorer::{display_name, kind_name, ExplorerEvent, FileExplorer, FileTree, SortOrder};
 use crate::fold;
+use crate::footnotes::footnote_rows;
 use crate::graph::{GraphEvent, GraphView};
 use crate::help::HelpWindow;
 use crate::mentions::{Finder, Name};
@@ -445,6 +446,7 @@ pub const RUNNABLE: &[&str] = &[
     // * Silica's own extension, not an Obsidian id: the `silica:` prefix is
     //   what the repo marks its native additions with.
     "silica:export-site",
+    "silica:footnotes",
     "canvas:new-file",
     "canvas:export-as-image",
     "canvas:jump-to-group",
@@ -1466,6 +1468,9 @@ pub(crate) enum RightTab {
     /// All properties: every key in the vault with its type and count.
     Properties,
     Outline,
+    /// Footnotes of the active note: one row per footnote, numbered in
+    /// section order; a row reveals its definition's line.
+    Footnotes,
 }
 
 /// The Outline pane's headings for one note's metadata, whether that
@@ -5212,6 +5217,7 @@ impl Workspace {
             "global-search:open" => self.open_search_action(&OpenSearch, window, cx),
             "graph:open" => self.open_graph_action(&OpenGraph, window, cx),
             "silica:export-site" => self.start_export_site(window, cx),
+            "silica:footnotes" => self.select_right_tab(RightTab::Footnotes, cx),
             // * Asked for by id with no file open -- the palette does not offer
             //   it, and `can_run` says so -- this opens nothing, which is what
             //   Obsidian's `checkCallback` does rather than falling back to the

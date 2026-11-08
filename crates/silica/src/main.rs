@@ -21,6 +21,7 @@ mod css_watcher;
 mod editor;
 mod explorer;
 mod fold;
+mod footnotes;
 mod graph;
 mod help;
 mod history;

@@ -159,6 +159,7 @@ impl Workspace {
                 RightTab::Backlinks => "backlinks",
                 RightTab::Outgoing => "outgoing",
                 RightTab::Outline => "outline",
+                RightTab::Footnotes => "footnotes",
                 RightTab::Graph => "graph",
                 RightTab::Tags => "tags",
                 RightTab::Properties => "properties",
