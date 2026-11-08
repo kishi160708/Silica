@@ -41,6 +41,7 @@ mod popout;
 mod preview;
 mod prompt;
 mod properties;
+mod quick_note;
 mod reading;
 mod search;
 mod settings;
@@ -476,6 +477,7 @@ pub fn bind_all_keys(cx: &mut App, registry: &CommandRegistry) {
     help::bind_keys(cx);
     vaults::bind_keys(cx);
     prompt::bind_keys(cx);
+    quick_note::bind_keys(cx);
     copy_results::bind_keys(cx);
     cx.bind_keys([KeyBinding::new("ctrl-q", Quit, None)]);
 }
