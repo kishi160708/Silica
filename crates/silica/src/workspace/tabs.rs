@@ -22,6 +22,7 @@ impl Workspace {
             mode: self.mode,
             history: self.history.clone(),
             history_ix: self.history_ix,
+            pinned: slot.map(|t| t.pinned).unwrap_or(false),
             leaf,
             view_state,
         };
@@ -392,6 +393,7 @@ impl Workspace {
                     mode: self.mode,
                     history: self.history.clone(),
                     history_ix: self.history_ix,
+                    pinned: false,
                     leaf: None,
                     view_state: self
                         .tabs
@@ -408,6 +410,7 @@ impl Workspace {
                         mode,
                         history: Vec::new(),
                         history_ix: 0,
+                        pinned: false,
                         leaf: None,
                         view_state: None,
                     },

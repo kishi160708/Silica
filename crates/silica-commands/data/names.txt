@@ -230,6 +230,7 @@ webviewer:zoom-out	Web viewer: Zoom out
 webviewer:search	Web viewer: Search the web
 webviewer:save-to-vault	Web viewer: Save to vault
 silica:toggle-graph-pane	Toggle the graph side pane
+silica:pin-tab	Pin the active tab
 silica:vault-backup	Back up the vault to a local folder
 silica:export-site	Export vault as site
 quick-capture:open	Quick Capture: New note

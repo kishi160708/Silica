@@ -492,6 +492,7 @@ pub const RUNNABLE: &[&str] = &[
     "app:decrease-font-size",
     "silica:vault-backup",
     "silica:toggle-graph-pane",
+    "silica:pin-tab",
     "workspace:copy-path",
     "workspace:copy-full-path",
     "app:open-settings",
@@ -1765,6 +1766,9 @@ pub(crate) struct Tab {
     mode: ViewMode,
     history: Vec<HistoryEntry>,
     history_ix: usize,
+    /// Pinned from the header's "More options" menu: kept in the strip for
+    /// the session. Not written to workspace.json yet.
+    pinned: bool,
     /// The `workspace.json` leaf this tab was restored from, so a layout
     /// nothing changed is written back with the keys Obsidian gave it.
     leaf: Option<Value>,
@@ -1785,6 +1789,7 @@ impl Tab {
             mode,
             history: Vec::new(),
             history_ix: 0,
+            pinned: false,
             leaf: None,
             view_state: None,
         }
@@ -2986,6 +2991,8 @@ pub struct Workspace {
     title_focus: FocusHandle,
     /// The header title being renamed in place, if any.
     title_edit: Option<TitleEdit>,
+    /// The active group's header "More options" menu is open.
+    header_more_options: bool,
     /// The right-dock context menu: the file path it was opened on, for
     /// backlinks/outgoing links/tags/outline rows.
     right_dock_context_menu: Option<String>,
@@ -3608,6 +3615,7 @@ impl Workspace {
             tab_bounds: HashMap::new(),
             title_focus: cx.focus_handle(),
             title_edit: None,
+            header_more_options: false,
             right_dock_context_menu: None,
             title_layout: HashMap::new(),
             layout: None,
@@ -5530,6 +5538,7 @@ impl Workspace {
             "silica:toggle-graph-pane" => self.toggle_graph_pane(cx),
             "workspace:copy-path" => self.copy_current_path(false, cx),
             "workspace:copy-full-path" => self.copy_current_path(true, cx),
+            "silica:pin-tab" => self.pin_tab(cx),
             "app:toggle-left-sidebar" => {
                 self.left_visible = !self.left_visible;
                 if !self.left_visible {
@@ -5890,6 +5899,22 @@ impl Workspace {
             current
         };
         cx.write_to_clipboard(ClipboardItem::new_string(text));
+    }
+
+    /// `silica:pin-tab`: the active tab of the group, pinned for the
+    /// session. Toggled from the header's "More options" menu.
+    fn pin_tab(&mut self, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get_mut(self.active_tab) else {
+            return;
+        };
+        tab.pinned = !tab.pinned;
+        cx.notify();
+    }
+
+    /// The active group's header "More options" menu: open or closed.
+    fn toggle_header_more_options(&mut self, cx: &mut Context<Self>) {
+        self.header_more_options = !self.header_more_options;
+        cx.notify();
     }
 
     /// `silica:toggle-graph-pane`: the graph in the right dock, beside the
@@ -8019,6 +8044,7 @@ fn tab_from_leaf(
                 mode,
                 history: vec![HistoryEntry::new(file.to_string(), mode)],
                 history_ix: 1,
+                pinned: false,
                 leaf: Some(leaf.clone()),
                 view_state: inner.and_then(|s| s.get("viewState")).cloned(),
             }
@@ -9493,6 +9519,7 @@ mod tests {
                 ViewMode::LivePreview,
             )],
             history_ix: 1,
+            pinned: false,
             leaf: Some(read.clone()),
             view_state: None,
         };
@@ -9507,6 +9534,7 @@ mod tests {
             mode: ViewMode::Reading,
             history: Vec::new(),
             history_ix: 0,
+            pinned: false,
             leaf: Some(read.clone()),
             view_state: None,
         };
@@ -9534,6 +9562,7 @@ mod tests {
             mode: ViewMode::LivePreview,
             history: Vec::new(),
             history_ix: 0,
+            pinned: false,
             leaf: None,
             view_state: Some(json!({"x": 100, "y": -20, "zoom": -1})),
         };
@@ -9564,6 +9593,7 @@ mod tests {
             mode: ViewMode::LivePreview,
             history: Vec::new(),
             history_ix: 0,
+            pinned: false,
             leaf: None,
             view_state: None,
         };
@@ -9606,6 +9636,7 @@ mod tests {
             mode: ViewMode::LivePreview,
             history: Vec::new(),
             history_ix: 0,
+            pinned: false,
             leaf: None,
             view_state: None,
         };
@@ -9647,6 +9678,7 @@ mod tests {
             mode: ViewMode::LivePreview,
             history: Vec::new(),
             history_ix: 0,
+            pinned: false,
             leaf: Some(read),
             view_state: None,
         };
