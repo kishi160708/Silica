@@ -50,6 +50,13 @@ thread_local! {
     /// render pass reports it like any other notice.
     static PLUGIN_NOTICE_QUEUE: std::cell::RefCell<Vec<String>> =
         const { std::cell::RefCell::new(Vec::new()) };
+
+    /// Teks yang akan ditempelkan ke kursor editor aktif oleh perintah plugin
+    /// native (misalnya embed catatan suara). Dipush oleh `insert_text` dan
+    /// di-insert ke editor aktif di akhir `run_command`, di mana `cx` dan
+    /// `window` masih tersedia.
+    static PLUGIN_INSERT_QUEUE: std::cell::RefCell<Vec<String>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 use crate::search::{CopyEntry, SearchEvent, SearchPane};
 use crate::settings::{self, SettingChange, SettingsEvent, SettingsView};
@@ -463,6 +470,7 @@ pub const RUNNABLE: &[&str] = &[
     "insert-template",
     "insert-current-date",
     "insert-current-time",
+    "silica:voice-note",
     "daily-notes",
     "daily-notes:goto-prev",
     "daily-notes:goto-next",
@@ -486,6 +494,7 @@ pub const RUNNABLE: &[&str] = &[
     "app:reload",
     "audio-recorder:start",
     "audio-recorder:stop",
+    "silica:voice-note",
     "quick-capture:open",
     "task-dashboard:open",
     "app:increase-font-size",
@@ -5045,9 +5054,28 @@ impl Workspace {
             notify: Box::new(|line: &str| {
                 PLUGIN_NOTICE_QUEUE.with(|q| q.borrow_mut().push(line.to_string()));
             }),
+            insert_text: Box::new(|text| {
+                PLUGIN_INSERT_QUEUE.with(|q| q.borrow_mut().push(text.to_string()));
+                Ok(())
+            }),
         };
 
         if let Some((outcome, _notices)) = silica_plugins::live::run(id, None, &ctx) {
+            // * Teks yang di-antre oleh `insert_text` (misalnya embed
+            //   catatan suara) ditulis ke editor aktif di sini, tepat setelah
+            //   perintah selesai, di mana `cx` dan `window` masih tersedia.
+            PLUGIN_INSERT_QUEUE.with(|q| {
+                let mut queue = q.borrow_mut();
+                if !queue.is_empty() {
+                    let texts = std::mem::take(&mut *queue);
+                    drop(queue);
+                    self.editor.update(cx, |e, cx| {
+                        for text in texts {
+                            e.insert_at_cursors(&text, window, cx);
+                        }
+                    });
+                }
+            });
             if let Err(reason) = outcome {
                 self.report(reason, cx);
             }

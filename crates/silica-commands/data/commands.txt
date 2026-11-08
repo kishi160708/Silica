@@ -250,5 +250,6 @@ random-note
 silica:export-site
 silica:toggle-graph-pane
 silica:vault-backup
+silica:voice-note
 quick-capture:open
 task-dashboard:open
