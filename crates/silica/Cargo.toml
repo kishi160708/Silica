@@ -17,6 +17,7 @@ name = "silica"
 path = "src/main.rs"
 
 [dependencies]
+silica-net.workspace = true
 silica-vault.workspace = true
 silica-markdown.workspace = true
 silica-cache.workspace = true

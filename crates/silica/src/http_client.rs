@@ -7,15 +7,14 @@ use http_client::{
     http::{HeaderValue, Response, StatusCode},
     AsyncBody, HttpClient, Url,
 };
+use silica_net::{
+    allows_destination, extract_location, is_redirect_status, resolve_redirect, resolve_target,
+};
 
-/// The largest remote image Silica will keep. A note's picture is a picture;
-/// anything past this is not one, and the disk is not the place to find out.
-pub const MAX_BYTES: u64 = 32 * 1024 * 1024;
-
-/// How many redirects a fetch may follow. Each hop is revalidated against the
-/// private-network rules before the connection is made, so a hostile redirect
-/// chain cannot reach an address the original URL was refused.
-pub const MAX_REDIRECTS: u32 = 5;
+// * The response cap and the redirect budget come from the shared network
+//   crate: the image client and the plugin shim's requestUrl are bound by
+//   the same numbers, and those numbers are the boundary.
+pub use silica_net::{MAX_BYTES, MAX_REDIRECTS};
 
 /// The largest remote-image cache Silica will keep on disk. A note's picture
 /// is a picture; the cache is a cache, not an archive, and it is not the
@@ -105,139 +104,6 @@ fn sweep_temp_files(dir: &Path) {
 
 pub struct SilicaHttpClient {
     cache_dir: PathBuf,
-}
-
-/// Whether `url` may be fetched at all.
-///
-/// A note can name any image it likes, so the request goes where the note
-/// says. That makes the note able to probe whatever the app can reach, which
-/// on a laptop includes the router's admin page and anything on `localhost`.
-/// A literal private or loopback host is refused here, before any request.
-///
-/// A hostname that resolves to a private address is refused here, before any
-/// request: the name is resolved and every candidate address is checked, so
-/// DNS rebinding cannot reach the local network through a look-alike name.
-pub fn allows_destination(url: &str) -> bool {
-    let Some((scheme, rest)) = url.split_once("://") else {
-        return false;
-    };
-    if !matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https") {
-        return false;
-    }
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    // * Drop any userinfo, then any port.
-    let host = authority.rsplit('@').next().unwrap_or(authority);
-    let host = if host.starts_with('[') {
-        // * A bracketed IPv6 literal.
-        host.split(']')
-            .next()
-            .unwrap_or(host)
-            .trim_start_matches('[')
-    } else {
-        host.split(':').next().unwrap_or(host)
-    };
-    let host = host.trim_end_matches('.').to_ascii_lowercase();
-    if host.is_empty() || host == "localhost" || host.ends_with(".localhost") {
-        return false;
-    }
-    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
-        return !is_private(ip);
-    }
-    // ! A DNS name: resolve it and refuse if every address it could reach is
-    //   private. curl resolves again at connect time, but this check catches the
-    //   common rebinding case and the `--resolve` argument below pins the one we
-    //   validated.
-    match std::net::ToSocketAddrs::to_socket_addrs(&format!("{host}:80")) {
-        Ok(mut addrs) => addrs.any(|a| !is_private(a.ip())),
-        Err(_) => false,
-    }
-}
-
-/// The `--resolve host:port:ip` argument for curl, pinning the connection to
-/// the first public address the name resolves to. Returns `None` when the
-/// name cannot be resolved or every address is private, so the caller can
-/// refuse the request rather than let curl resolve on its own.
-pub fn resolve_target(url: &str) -> Option<String> {
-    let (scheme, rest) = url.split_once("://")?;
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    let host_port = authority.rsplit('@').next().unwrap_or(authority);
-    let (host, port) = match host_port.rsplit_once(':') {
-        Some((h, p)) if p.parse::<u16>().is_ok() => (h, p.parse::<u16>().ok()?),
-        _ => (
-            host_port,
-            match scheme.to_ascii_lowercase().as_str() {
-                "https" => 443,
-                _ => 80,
-            },
-        ),
-    };
-    let ip = std::net::ToSocketAddrs::to_socket_addrs(&format!("{host}:{port}"))
-        .ok()?
-        .find(|a| !is_private(a.ip()))?;
-    Some(format!("{host}:{port}:{}", ip.ip()))
-}
-
-/// Loopback, link-local, private, and the other ranges that mean "this
-/// machine or its network" rather than "the internet".
-fn is_private(ip: std::net::IpAddr) -> bool {
-    use std::net::IpAddr;
-    match ip {
-        IpAddr::V4(v4) => {
-            v4.is_loopback()
-                || v4.is_private()
-                || v4.is_link_local()
-                || v4.is_broadcast()
-                || v4.is_unspecified()
-                || v4.is_documentation()
-                // * 100.64/10, carrier-grade NAT, which is a LAN in practice.
-                || (v4.octets()[0] == 100 && (64..128).contains(&v4.octets()[1]))
-                // * 169.254 metadata endpoints are link-local and already
-                //   covered; 0/8 and 240/4 are not routable either.
-                || v4.octets()[0] == 0
-                || v4.octets()[0] >= 240
-        }
-        IpAddr::V6(v6) => {
-            v6.is_loopback()
-                || v6.is_unspecified()
-                // * Unique local (fc00::/7) and link-local (fe80::/10).
-                || (v6.segments()[0] & 0xfe00) == 0xfc00
-                || (v6.segments()[0] & 0xffc0) == 0xfe80
-                // * An IPv4-mapped address is private if the IPv4 is.
-                || v6.to_ipv4_mapped().is_some_and(|v4| is_private(v4.into()))
-        }
-    }
-}
-
-/// Whether an HTTP status code is a redirect that we follow and revalidate,
-/// so a redirect chain cannot bounce to a private address the original URL
-/// passed.
-fn is_redirect_status(code: u16) -> bool {
-    matches!(code, 301 | 302 | 303 | 307 | 308)
-}
-
-/// Extracts the `Location` header value from the headers dump curl writes
-/// with `-D`.
-fn extract_location(headers: &str) -> Option<String> {
-    headers
-        .lines()
-        .find(|line| line.to_ascii_lowercase().starts_with("location:"))
-        .and_then(|line| line.split_once(':'))
-        .map(|(_, value)| value.trim().to_string())
-}
-
-/// Resolves a `Location` header value against the current URL, so relative
-/// redirects such as `/images/file.png` or `//example.com/x` become absolute
-/// `http`/`https` URLs before they are validated against the destination and
-/// DNS rules. Returns `None` when the location cannot be resolved to an
-/// absolute http/https URL.
-fn resolve_redirect(base: &str, location: &str) -> Option<String> {
-    let base_url = Url::parse(base).ok()?;
-    let resolved = base_url.join(location).ok()?;
-    let scheme = resolved.scheme();
-    if scheme != "http" && scheme != "https" {
-        return None;
-    }
-    Some(resolved.to_string())
 }
 
 impl SilicaHttpClient {
@@ -549,6 +415,7 @@ mod destination_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use silica_net::is_private;
 
     #[test]
     fn cache_path_deterministic_and_preserves_ext() {

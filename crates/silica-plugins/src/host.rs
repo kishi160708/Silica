@@ -138,8 +138,69 @@ pub struct Registrations {
     pub code_blocks: Vec<CodeBlockRegistration>,
     #[serde(default)]
     pub post_processors: Vec<PostProcessorRegistration>,
+    /// Views a plugin declared with `registerView`, kept so the host can
+    /// report them: Silica has no DOM to build one in, so the declaration
+    /// is the part that survives.
+    #[serde(default)]
+    pub views: Vec<ViewRegistration>,
+    /// Extension→view declarations from `registerExtensions`.
+    #[serde(default)]
+    pub extensions: Vec<ExtensionRegistration>,
     #[serde(default)]
     pub failure: Option<String>,
+}
+
+/// A `registerView` declaration: the view's type and, when it was a
+/// function, the key Rust would call it back through.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ViewRegistration {
+    pub view_type: String,
+    pub callback: Option<String>,
+}
+
+/// One `registerExtensions` call: the extensions and the view type they
+/// open in.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExtensionRegistration {
+    pub extensions: Vec<String>,
+    pub view_type: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for ViewRegistration {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Raw {
+            #[serde(rename = "type")]
+            view_type: String,
+            callback: Option<String>,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        Ok(ViewRegistration {
+            view_type: raw.view_type,
+            callback: raw.callback,
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for ExtensionRegistration {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Raw {
+            extensions: Vec<String>,
+            view_type: Option<String>,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        Ok(ExtensionRegistration {
+            extensions: raw.extensions,
+            view_type: raw.view_type,
+        })
+    }
 }
 
 /// A vault file as a plugin sees it: path, name, size, mtime.
@@ -705,8 +766,41 @@ impl PluginHost {
     /// command runs, because the host is built long before any note is open
     /// and the protection has to hold at the moment of the write, not at the
     /// moment of loading.
+    ///
+    /// A change to it is also the one workspace event the host can truly
+    /// deliver, so `file-open` fires here — once per change, not once per
+    /// command.
     pub fn set_open_note(&self, note: Option<String>) {
-        self.shared.borrow_mut().open_note = note;
+        let changed = self.shared.borrow().open_note.as_deref() != note.as_deref();
+        self.shared.borrow_mut().open_note = note.clone();
+        if changed {
+            self.emit("workspace", "file-open", &note_json(note.as_deref()));
+        }
+    }
+
+    /// Delivers one event to the plugin's own listeners: the domain is
+    /// `vault`, `metadataCache` or `workspace`, and the payload is JSON.
+    /// A plugin with no listener for it is no error, which is what makes
+    /// the caller's life simple.
+    pub fn emit(&self, domain: &str, event: &str, payload: &str) {
+        // * The payload is JSON text, so it is embedded as a quoted JS
+        //   string the emitter parses: passing it raw would put it in the
+        //   expression, where it is a syntax error rather than a value.
+        let call = format!(
+            "__silica_emit({}, {}, {})",
+            js_string(domain),
+            js_string(event),
+            js_string(payload),
+        );
+        let result = self.context.with(|ctx| {
+            ctx.eval::<(), _>(call.as_bytes())
+                .map_err(|error| describe(&ctx, error))
+        });
+        if let Err(error) = result {
+            self.shared.borrow_mut().notices.push(format!(
+                "the {domain} {event} event could not be delivered: {error}"
+            ));
+        }
     }
 
     pub fn run_command(&self, id: &str) -> Result<(), String> {
@@ -743,6 +837,24 @@ impl PluginHost {
         let text = std::fs::read_to_string(&resolved).map_err(|error| error.to_string())?;
         Ok(obsidian_metadata(&silica_cache::index_markdown(&text)))
     }
+}
+
+/// The open note, as the JSON the emitter parses: a `TFile`-shaped object
+/// with its path, or null when nothing is open. A plugin's `file-open`
+/// listener reads `file.path`, so a bare string would read as `undefined`.
+fn note_json(note: Option<&str>) -> String {
+    match note {
+        Some(path) => {
+            serde_json::to_string(&json!({ "path": path })).unwrap_or_else(|_| "null".to_string())
+        }
+        None => "null".to_string(),
+    }
+}
+
+/// A JS string literal holding `text`: JSON's quoting is JS's, so the
+/// serialised form is already a valid literal.
+fn js_string(text: &str) -> String {
+    serde_json::to_string(text).unwrap_or_else(|_| "\"\"".to_string())
 }
 
 /// Installs the `__silica_raw_*` globals. These are the whole boundary: each
@@ -899,7 +1011,9 @@ fn install<'js>(
                 .collect();
             for link in links {
                 if vault_link_target(&root, link, &path).is_none() {
-                    let entry = out.entry(link.to_string()).or_insert_with(|| Value::from(0));
+                    let entry = out
+                        .entry(link.to_string())
+                        .or_insert_with(|| Value::from(0));
                     *entry = Value::from(entry.as_u64().unwrap_or(0) + 1);
                 }
             }
@@ -912,79 +1026,139 @@ fn install<'js>(
     //   Ponytail: for large vaults the app should hand its backlink index
     //   over instead of re-scanning here.
     let s = Rc::clone(&shared);
-    set!(
-        "__silica_raw_backlinks",
-        move |path: String| -> String {
-            let root = s.borrow().root.clone();
-            drop(s.borrow());
-            let mut out: Vec<Value> = Vec::new();
-            if let Ok(entries) = walk_markdown_files(&root) {
-                for entry in entries {
-                    let Ok(text) = std::fs::read_to_string(&entry) else {
-                        continue;
-                    };
-                    let meta = silica_cache::index_markdown(&text);
-                    let source = entry.to_string_lossy().replace('\\', "/");
-                    let hits: Vec<String> = meta
-                        .links
-                        .iter()
-                        .map(|l| l.link.as_str())
-                        .chain(meta.embeds.iter().map(|l| l.link.as_str()))
-                        .chain(meta.frontmatter_links.iter().map(|l| l.link.as_str()))
-                        .filter(|link| {
-                            vault_link_target(&root, link, &source)
-                                .as_deref()
-                                == Some(path.as_str())
-                        })
-                        .map(|s| s.to_string())
-                        .collect();
-                    if !hits.is_empty() {
-                        out.push(json!({
-                            "source": source,
-                            "links": hits,
-                        }));
-                    }
+    set!("__silica_raw_backlinks", move |path: String| -> String {
+        let root = s.borrow().root.clone();
+        drop(s.borrow());
+        let mut out: Vec<Value> = Vec::new();
+        if let Ok(entries) = walk_markdown_files(&root) {
+            for entry in entries {
+                let Ok(text) = std::fs::read_to_string(&entry) else {
+                    continue;
+                };
+                let meta = silica_cache::index_markdown(&text);
+                let source = entry.to_string_lossy().replace('\\', "/");
+                let hits: Vec<String> = meta
+                    .links
+                    .iter()
+                    .map(|l| l.link.as_str())
+                    .chain(meta.embeds.iter().map(|l| l.link.as_str()))
+                    .chain(meta.frontmatter_links.iter().map(|l| l.link.as_str()))
+                    .filter(|link| {
+                        vault_link_target(&root, link, &source).as_deref() == Some(path.as_str())
+                    })
+                    .map(|s| s.to_string())
+                    .collect();
+                if !hits.is_empty() {
+                    out.push(json!({
+                        "source": source,
+                        "links": hits,
+                    }));
                 }
             }
-            serde_json::to_string(&out).unwrap_or_default()
         }
-    );
+        serde_json::to_string(&out).unwrap_or_default()
+    });
+
+    // * The one network door a plugin has. The destination rules, the
+    //   pinned resolution and the redirect revalidation all live in the
+    //   shared crate so this is the same boundary the image client walks,
+    //   and the timeout is the command budget, not the fetch default.
+    set!("__silica_raw_request_url", move |ctx: Ctx<'js>,
+                                           method: String,
+                                           url: String,
+                                           headers_json: String,
+                                           body_b64: String|
+          -> rquickjs::Result<
+        String,
+    > {
+        let headers: Vec<String> = if headers_json.trim().is_empty() {
+            Vec::new()
+        } else {
+            let parsed: Value = serde_json::from_str(&headers_json).map_err(|error| {
+                Exception::throw_message(&ctx, &format!("headers must be JSON: {error}"))
+            })?;
+            match parsed {
+                Value::Object(map) => map
+                    .into_iter()
+                    .map(|(name, value)| {
+                        // * A header line, not a JSON blob: curl takes
+                        //   `Name: value` and a folded array of them is
+                        //   what the shared crate reads back.
+                        let value = match value {
+                            Value::String(text) => text,
+                            other => other.to_string(),
+                        };
+                        format!("{name}: {value}")
+                    })
+                    .collect(),
+                Value::Array(items) => items
+                    .iter()
+                    .map(|item| item.as_str().unwrap_or_default().to_string())
+                    .collect(),
+                _ => Vec::new(),
+            }
+        };
+        let body =
+            if body_b64.trim().is_empty() {
+                None
+            } else {
+                Some(from_base64(&body_b64).ok_or_else(|| {
+                    Exception::throw_message(&ctx, "the request body is not base64")
+                })?)
+            };
+        let request = silica_net::Request {
+            method: &method,
+            url: &url,
+            headers: &headers,
+            body: body.as_deref(),
+            timeout_secs: 10,
+        };
+        let response =
+            silica_net::fetch(&request).map_err(|error| Exception::throw_message(&ctx, &error))?;
+        let header_map: serde_json::Map<String, Value> = response
+            .headers
+            .iter()
+            .map(|(name, value)| (name.clone(), Value::String(value.clone())))
+            .collect();
+        serde_json::to_string(&json!({
+            "status": response.status,
+            "headers": header_map,
+            "text": String::from_utf8_lossy(&response.body),
+            "arrayBuffer": to_base64(&response.body),
+        }))
+        .map_err(|error| Exception::throw_message(&ctx, &error.to_string()))
+    });
 
     // * All tags across the vault: name, occurrence count, files containing it.
     //   Scans all markdown notes — O(vault).
     //   Ponytail: the app should hand its tag index over for large vaults.
     let s = Rc::clone(&shared);
-    set!(
-        "__silica_raw_get_tags",
-        move || -> String {
-            let root = s.borrow().root.clone();
-            drop(s.borrow());
-            let mut tags: std::collections::BTreeMap<String, (usize, Vec<String>)> =
-                std::collections::BTreeMap::new();
-            if let Ok(entries) = walk_markdown_files(&root) {
-                for entry in entries {
-                    let Ok(text) = std::fs::read_to_string(&entry) else {
-                        continue;
-                    };
-                    let meta = silica_cache::index_markdown(&text);
-                    let source = entry.to_string_lossy().replace('\\', "/");
-                    for tag in &meta.tags {
-                        let name = tag.tag.as_str();
-                        let entry = tags.entry(name.to_string()).or_default();
-                        entry.0 += 1;
-                        entry.1.push(source.clone());
-                    }
+    set!("__silica_raw_get_tags", move || -> String {
+        let root = s.borrow().root.clone();
+        drop(s.borrow());
+        let mut tags: std::collections::BTreeMap<String, (usize, Vec<String>)> =
+            std::collections::BTreeMap::new();
+        if let Ok(entries) = walk_markdown_files(&root) {
+            for entry in entries {
+                let Ok(text) = std::fs::read_to_string(&entry) else {
+                    continue;
+                };
+                let meta = silica_cache::index_markdown(&text);
+                let source = entry.to_string_lossy().replace('\\', "/");
+                for tag in &meta.tags {
+                    let name = tag.tag.as_str();
+                    let entry = tags.entry(name.to_string()).or_default();
+                    entry.0 += 1;
+                    entry.1.push(source.clone());
                 }
             }
-            let out: Vec<Value> = tags
-                .into_iter()
-                .map(|(name, (count, files))| {
-                    json!({"name": name, "count": count, "files": files})
-                })
-                .collect();
-            serde_json::to_string(&out).unwrap_or_default()
         }
-    );
+        let out: Vec<Value> = tags
+            .into_iter()
+            .map(|(name, (count, files))| json!({"name": name, "count": count, "files": files}))
+            .collect();
+        serde_json::to_string(&out).unwrap_or_default()
+    });
 
     let s = Rc::clone(&shared);
     set!("__silica_raw_vault_read", move |ctx: Ctx<'js>,
@@ -1002,20 +1176,19 @@ fn install<'js>(
     });
 
     let s = Rc::clone(&shared);
-    set!("__silica_raw_vault_read_bytes", move |ctx: Ctx<'js>,
-                                               path: String|
-          -> rquickjs::Result<
-        String,
-    > {
-        let resolved = s
-            .borrow()
-            .resolve(&path)
-            .map_err(|error| Exception::throw_message(&ctx, &error))?;
-        let bytes = std::fs::read(&resolved).map_err(|error| {
-            Exception::throw_message(&ctx, &format!("{path} could not be read: {error}"))
-        })?;
-        Ok(to_base64(&bytes))
-    });
+    set!(
+        "__silica_raw_vault_read_bytes",
+        move |ctx: Ctx<'js>, path: String| -> rquickjs::Result<String> {
+            let resolved = s
+                .borrow()
+                .resolve(&path)
+                .map_err(|error| Exception::throw_message(&ctx, &error))?;
+            let bytes = std::fs::read(&resolved).map_err(|error| {
+                Exception::throw_message(&ctx, &format!("{path} could not be read: {error}"))
+            })?;
+            Ok(to_base64(&bytes))
+        }
+    );
 
     let s = Rc::clone(&shared);
     set!(
@@ -1320,6 +1493,47 @@ fn to_base64(bytes: &[u8]) -> String {
         }
     }
     out
+}
+
+/// Base64-decode what a plugin handed over as a body. `None` for anything
+/// that is not the RFC 4648 alphabet this crate itself emits, so a malformed
+/// body is refused rather than decoded into half the bytes it claims.
+fn from_base64(text: &str) -> Option<Vec<u8>> {
+    fn value(byte: u8) -> Option<u8> {
+        match byte {
+            b'A'..=b'Z' => Some(byte - b'A'),
+            b'a'..=b'z' => Some(byte - b'a' + 26),
+            b'0'..=b'9' => Some(byte - b'0' + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+    let mut packed = Vec::new();
+    for line in text.lines() {
+        for &byte in line.as_bytes() {
+            if byte == b'=' || byte.is_ascii_whitespace() {
+                continue;
+            }
+            packed.push(value(byte)?);
+        }
+    }
+    let mut out = Vec::with_capacity(packed.len() / 4 * 3 + 3);
+    for chunk in packed.chunks(4) {
+        let b0 = *chunk.first()? as u32;
+        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+        let b3 = *chunk.get(3).unwrap_or(&0) as u32;
+        let triple = (b0 << 18) | (b1 << 12) | (b2 << 6) | b3;
+        out.push((triple >> 16) as u8);
+        if chunk.len() > 2 {
+            out.push((triple >> 8) as u8);
+        }
+        if chunk.len() > 3 {
+            out.push(triple as u8);
+        }
+    }
+    Some(out)
 }
 
 /// The vault's files, as `TAbstractFile` reports them. Hidden folders are

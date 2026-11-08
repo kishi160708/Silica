@@ -141,6 +141,17 @@ impl Vault {
     }
 }
 
+/// One display, one app at a time: two graphical tests launching together
+/// collide on the focus the keystrokes need, so every test holds this for
+/// its whole body whatever harness flags are in play.
+static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn serial() -> std::sync::MutexGuard<'static, ()> {
+    SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// Whether the graphical end-to-end tests should run.
 ///
 /// They run by default whenever a display exists, so an ordinary `cargo test`
@@ -162,6 +173,7 @@ fn open_save_and_reopen_round_trips_bytes() {
         eprintln!("skipped: no display available for the graphical end-to-end tests");
         return;
     }
+    let _serial = serial();
     let vault = Vault::new();
     let mut app = match App::launch(&vault.root) {
         Some(a) => a,
@@ -211,6 +223,7 @@ fn overwriting_a_note_snapshots_its_previous_bytes() {
         eprintln!("skipped: no display available for the graphical end-to-end tests");
         return;
     }
+    let _serial = serial();
     let vault = Vault::new();
     let mut app = match App::launch(&vault.root) {
         Some(a) => a,
@@ -280,6 +293,7 @@ fn renaming_a_tree_row_renames_the_file_in_place() {
         eprintln!("skipped: no display available for the graphical end-to-end tests");
         return;
     }
+    let _serial = serial();
     let vault = Vault::new();
     fs::write(vault.root.join("Beta.md"), "beta\n").expect("a second note");
     let mut app = match App::launch(&vault.root) {
@@ -341,6 +355,7 @@ fn the_reading_model_is_built_on_the_way_into_reading_view() {
         eprintln!("skipped: no display available for the graphical end-to-end tests");
         return;
     }
+    let _serial = serial();
     let vault = Vault::new();
     let mut app = match App::launch(&vault.root) {
         Some(a) => a,
@@ -372,6 +387,7 @@ fn the_view_header_bookmark_action_prompts_for_a_title() {
         eprintln!("skipped: no display available for the graphical end-to-end tests");
         return;
     }
+    let _serial = serial();
     let vault = Vault::new();
     let mut app = match App::launch(&vault.root) {
         Some(a) => a,
@@ -437,6 +453,7 @@ fn quick_capture_saves_a_note_and_escape_closes_the_window() {
         eprintln!("skipped: no display available for the graphical end-to-end tests");
         return;
     }
+    let _serial = serial();
     let vault = Vault::new();
     let mut app = match App::launch(&vault.root) {
         Some(a) => a,
@@ -499,6 +516,7 @@ fn a_second_capture_command_reuses_the_open_window() {
         eprintln!("skipped: no display available for the graphical end-to-end tests");
         return;
     }
+    let _serial = serial();
     let vault = Vault::new();
     let mut app = match App::launch(&vault.root) {
         Some(a) => a,
@@ -550,6 +568,7 @@ fn the_task_dashboard_opens_a_clicked_task_at_its_own_line() {
         eprintln!("skipped: no display available for the graphical end-to-end tests");
         return;
     }
+    let _serial = serial();
     let vault = Vault::new();
     // * The task sits below the fold: a scroll to a line that is already
     //   visible cannot be told apart from no scroll at all.

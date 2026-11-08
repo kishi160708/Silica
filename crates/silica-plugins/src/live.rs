@@ -11,8 +11,8 @@
 //! beside the per-vault compatibility hosts.
 
 use std::cell::RefCell;
-use std::rc::Rc;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use crate::host::{collect_files, FileEntry};
 use crate::native::PluginContext;

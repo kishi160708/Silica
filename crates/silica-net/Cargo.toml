@@ -1,0 +1,8 @@
+[package]
+name = "silica-net"
+version = "0.5.17"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+url = { workspace = true }

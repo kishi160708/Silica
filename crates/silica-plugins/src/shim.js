@@ -13,6 +13,9 @@
 (function () {
 
 var __silica_registrations = {
+  events: [],
+  views: [],
+  extensions: [],
   commands: [],
   ribbon: [],
   tabs: [],
@@ -145,6 +148,28 @@ function __silica_node(kind, text) {
     setAttr: function () { return node; },
     setText: function (t) { node.textContent = String(t); return node; },
     setCssProps: function () { return node; },
+    // * A DOM event a plugin registered against this node: the app owns
+    //   its own document, but a node it renders can be clicked, and the
+    //   click is what this dispatches.
+    _listeners: {},
+    addEventListener: function (type, callback) {
+      var key = String(type);
+      if (!node._listeners[key]) node._listeners[key] = [];
+      node._listeners[key].push(callback);
+      return node;
+    },
+    dispatchEvent: function (type, event) {
+      var list = (node._listeners[String(type)] || []).slice();
+      for (var i = 0; i < list.length; i++) {
+        try {
+          list[i](event || { type: String(type), target: node });
+        } catch (error) {
+          __silica_fail("a " + type + " listener threw: " + __silica_message(error));
+        }
+      }
+      return true;
+    },
+    click: function () { return node.dispatchEvent("click", { type: "click", target: node }); },
   };
   return node;
 }
@@ -343,11 +368,33 @@ Plugin.prototype.registerMarkdownCodeBlockProcessor = function (language, fn, or
 // Registration surfaces that exist so a plugin's own code does not fall over,
 // but that change nothing here: the app owns its layout, its workspace events
 // and its DOM events.
-Plugin.prototype.registerEvent = function () {};
-Plugin.prototype.registerDomEvent = function () {};
+// * The event refs a plugin registers are kept and released on unload:
+// * the listener outliving the plugin that made it is the bug the audit
+// * names, and the ref is the handle that fixes it.
+Plugin.prototype.registerEvent = function (ref) {
+  if (ref) __silica_registrations.events.push(ref);
+};
+// * A DOM event binds to the node it is given. Silica's nodes carry the
+//   listener, so a click on a rendered one dispatches: the host owns its
+//   own DOM, which is why there is no document-wide listener here.
+Plugin.prototype.registerDomEvent = function (el, type, callback) {
+  if (el && typeof el.addEventListener === "function") {
+    el.addEventListener(String(type), callback);
+  }
+};
 Plugin.prototype.registerInterval = function (id) { return id; };
-Plugin.prototype.registerView = function () {};
-Plugin.prototype.registerExtensions = function () {};
+// * Views and extensions are declared, not built: Silica has no DOM to put
+//   an ItemView in, so the declaration is recorded for the host to report
+//   rather than silently dropped.
+Plugin.prototype.registerView = function (type, callback) {
+  __silica_registrations.views.push({ type: String(type), callback: callback ? __silica_bind(callback) : null });
+};
+Plugin.prototype.registerExtensions = function (extensions, viewType) {
+  __silica_registrations.extensions.push({
+    extensions: Array.isArray(extensions) ? extensions.map(String) : [String(extensions)],
+    view_type: viewType === undefined ? null : String(viewType),
+  });
+};
 Plugin.prototype.addStatusBarItem = function () { return __silica_node("div", ""); };
 
 Plugin.prototype.loadData = function () {
@@ -381,16 +428,42 @@ function __silica_app(manifest) {
     readBinary: function (file) {
       return Promise.resolve(__silica_raw_vault_read_bytes(__silica_path(file)));
     },
-    create: function (path, data) { return Promise.resolve(__silica_raw_vault_create(String(path), String(data === undefined ? "" : data))); },
+    create: function (path, data) {
+      var target = String(path);
+      __silica_raw_vault_create(target, String(data === undefined ? "" : data));
+      __silica_bus.emit("vault", "create", JSON.stringify({ path: target }));
+      return Promise.resolve();
+    },
     createFolder: function (path) { __silica_raw_vault_create_folder(String(path)); return Promise.resolve(); },
-    modify: function (file, data) { return Promise.resolve(__silica_raw_vault_write(__silica_path(file), String(data))); },
-    append: function (file, data) { return Promise.resolve(__silica_raw_vault_append(__silica_path(file), String(data))); },
-    delete: function (file) { return Promise.resolve(__silica_raw_vault_delete(__silica_path(file))); },
-    rename: function (file, newPath) { return Promise.resolve(__silica_raw_vault_rename(__silica_path(file), String(newPath))); },
+    modify: function (file, data) {
+      var path = __silica_path(file);
+      __silica_raw_vault_write(path, String(data));
+      __silica_bus.emit("vault", "modify", JSON.stringify({ path: path }));
+      return Promise.resolve();
+    },
+    append: function (file, data) {
+      var path = __silica_path(file);
+      __silica_raw_vault_append(path, String(data));
+      __silica_bus.emit("vault", "modify", JSON.stringify({ path: path }));
+      return Promise.resolve();
+    },
+    delete: function (file) {
+      var path = __silica_path(file);
+      __silica_raw_vault_delete(path);
+      __silica_bus.emit("vault", "delete", JSON.stringify({ path: path }));
+      return Promise.resolve();
+    },
+    rename: function (file, newPath) {
+      var path = __silica_path(file);
+      var target = String(newPath);
+      __silica_raw_vault_rename(path, target);
+      __silica_bus.emit("vault", "rename", JSON.stringify({ path: path, newPath: target }));
+      return Promise.resolve();
+    },
     trash: function (file) { return Promise.resolve(__silica_raw_vault_delete(__silica_path(file))); },
     getConfig: function () { return {}; },
     setConfig: function () { return Promise.resolve(); },
-    on: function () { return { unload: function () {} }; },
+    on: function (name, callback) { return __silica_bus.on("vault", String(name), callback); },
   };
 
   var metadataCache = {
@@ -446,7 +519,7 @@ function __silica_app(manifest) {
         return raw === "" ? {} : JSON.parse(raw);
       },
     }),
-    on: function () { return { unload: function () {} }; },
+    on: function (name, callback) { return __silica_bus.on("metadataCache", String(name), callback); },
   };
 
   var commands = {
@@ -490,7 +563,7 @@ function __silica_app(manifest) {
 
   var workspace = {
     onLayoutReady: function (fn) { __silica_delay(fn); },
-    on: function () { return { unload: function () {} }; },
+    on: function (name, callback) { return __silica_bus.on("workspace", String(name), callback); },
     getActiveFile: function () {
       var path = __silica_raw_active_file();
       return path === "" ? null : vault.getAbstractFileByPath(path);
@@ -809,8 +882,48 @@ var __silica_obsidian = {
     if (out.length > 1) out = out.replace(/\/$/, "");
     return out === "" ? "/" : out;
   },
-  requestUrl: function () {
-    throw new Error("requestUrl is not supported by Silica; the compatibility host makes no network calls");
+  // * Synchronous because the host function is: the shared crate's fetch
+  //   blocks until curl exits, bounded by the command budget. The response
+  //   is Obsidian's shape — status, headers, text, arrayBuffer — and a
+  //   refused destination (loopback, a private range, a name resolving to
+  //   one) rejects like any other failure.
+  requestUrl: function (request) {
+    var r = request || {};
+    var method = String(r.method || "GET").toUpperCase();
+    var url = String(r.url || "");
+    var body = r.body;
+    var body_b64 = "";
+    if (body !== undefined && body !== null) {
+      if (typeof body === "string") {
+        body_b64 = btoa(body);
+      } else if (typeof Uint8Array !== "undefined" && body instanceof Uint8Array) {
+        var binary = "";
+        for (var i = 0; i < body.length; i++) binary += String.fromCharCode(body[i]);
+        body_b64 = btoa(binary);
+      } else {
+        body_b64 = btoa(String(body));
+      }
+    }
+    var raw = __silica_raw_request_url(
+      method,
+      url,
+      JSON.stringify(r.headers || {}),
+      body_b64
+    );
+    var parsed = JSON.parse(raw);
+    var buffer = null;
+    if (parsed.arrayBuffer) {
+      var binary = atob(parsed.arrayBuffer);
+      buffer = new Uint8Array(binary.length);
+      for (var i = 0; i < binary.length; i++) buffer[i] = binary.charCodeAt(i);
+    }
+    return Promise.resolve({
+      status: parsed.status,
+      headers: parsed.headers || {},
+      text: parsed.text || "",
+      arrayBuffer: buffer ? buffer.buffer : null,
+      json: function () { return Promise.resolve(JSON.parse(parsed.text || "null")); }
+    });
   },
   setIcon: function () {},
   getIcon: function () { return null; },
@@ -874,6 +987,42 @@ var __silica_obsidian = {
   ItemView: function ItemView() { throw new Error("an ItemView needs the DOM, which Silica does not have"); },
 };
 
+// The event bus. Obsidian's plugins listen through `vault.on`,
+// `metadataCache.on` and `workspace.on`; the emitter is the shared part,
+// and `__silica_emit` is the door the host knocks on to deliver one.
+var __silica_bus = {
+  listeners: {},
+  on: function (domain, name, callback) {
+    var key = domain + ":" + name;
+    if (!this.listeners[key]) this.listeners[key] = [];
+    this.listeners[key].push(callback);
+    var self = this;
+    return {
+      unload: function () {
+        var list = self.listeners[key] || [];
+        var at = list.indexOf(callback);
+        if (at >= 0) list.splice(at, 1);
+      },
+    };
+  },
+  emit: function (domain, name, payload) {
+    var key = domain + ":" + name;
+    var list = (this.listeners[key] || []).slice();
+    var value = payload === undefined || payload === "" ? null : JSON.parse(payload);
+    for (var i = 0; i < list.length; i++) {
+      try {
+        list[i](value);
+      } catch (error) {
+        __silica_fail("a " + key + " listener threw: " + __silica_message(error));
+      }
+    }
+  },
+};
+
+function __silica_emit(domain, name, payload) {
+  __silica_bus.emit(domain, name, payload);
+}
+
 // ---------------------------------------------------------------------------
 // Called once, from Rust, after the plugin has loaded: run what the plugin
 // deferred to `onLayoutReady`, then hand the registrations back as JSON.
@@ -888,6 +1037,8 @@ function __silica_take() {
     tabs: __silica_registrations.tabs,
     code_blocks: __silica_registrations.code_blocks,
     post_processors: __silica_registrations.post_processors,
+    views: __silica_registrations.views,
+    extensions: __silica_registrations.extensions,
     failure: __silica_registrations.failure,
   });
 }
@@ -920,6 +1071,7 @@ globalThis.require = require;
 globalThis.module = module;
 globalThis.exports = exports;
 globalThis.__silica_app = __silica_app;
+globalThis.__silica_emit = __silica_emit;
 globalThis.__silica_fail = __silica_fail;
 globalThis.__silica_take = __silica_take;
 globalThis.__silica_run = __silica_run;

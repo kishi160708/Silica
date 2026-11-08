@@ -12,6 +12,7 @@ publish.workspace = true
 # The local calendar day, in the user's zone: a daily note is named for
 # the day the user is having, not for UTC's.
 chrono.workspace = true
+silica-net.workspace = true
 silica-templates.workspace = true
 silica-vault.workspace = true
 silica-formats.workspace = true

@@ -5,12 +5,12 @@
 
 use crate::live::register_native;
 use crate::native::{NativeCommand, Plugin, PluginContext};
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use serde_json::Value;
 use std::io::BufWriter;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 /// Today's civil date, in the local zone, as `YYYY-MM-DD`.
 ///
@@ -807,7 +807,10 @@ impl AudioRecorder {
         let vault_root = ctx.vault_root;
         let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
         let file_name = format!("recording-{timestamp}.wav");
-        let output_path = vault_root.join(".obsidian").join("attachments").join(&file_name);
+        let output_path = vault_root
+            .join(".obsidian")
+            .join("attachments")
+            .join(&file_name);
 
         // Ensure the attachments folder exists
         (ctx.create_folder)(".obsidian/attachments")?;
@@ -853,7 +856,9 @@ impl AudioRecorder {
             )
             .map_err(|e| format!("Cannot build input stream: {e}"))?;
 
-        stream.play().map_err(|e| format!("Cannot start stream: {e}"))?;
+        stream
+            .play()
+            .map_err(|e| format!("Cannot start stream: {e}"))?;
 
         state.recording = true;
         state.stream = Some(stream);
@@ -882,16 +887,15 @@ impl AudioRecorder {
 
         // Finalize the WAV writer
         if let Some(writer) = state.writer.take() {
-            writer.finalize().map_err(|e| format!("Cannot finalize WAV: {e}"))?;
+            writer
+                .finalize()
+                .map_err(|e| format!("Cannot finalize WAV: {e}"))?;
         }
 
         let output_path = state.output_path.take().unwrap();
         state.recording = false;
 
-        (ctx.notify)(&format!(
-            "Recording saved: {}",
-            output_path.display()
-        ));
+        (ctx.notify)(&format!("Recording saved: {}", output_path.display()));
 
         Ok(())
     }

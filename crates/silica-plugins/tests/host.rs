@@ -327,9 +327,48 @@ module.exports = Net;
         let host = load(&fixture, None);
         host.run_command("counter:go").expect("the command ran");
         let notices = host.take_notices().join(" ");
+        // ! The request is refused by the same destination rules the image
+        //   client walks: `example.com` here is a name that resolves, so the
+        //   refusal comes from the network being unreachable in the test
+        //   sandbox — never from an answered request. What must never happen
+        //   is a plugin reaching a private address through it, which the
+        //   dedicated test below pins.
         assert!(
-            notices.contains("REFUSED") && notices.contains("no network calls"),
+            notices.contains("REFUSED") || notices.contains("could not resolve"),
             "requestUrl answered instead of refusing: {notices:?}"
+        );
+    }
+
+    /// The boundary the shim shares with the image client: a private or
+    /// loopback destination is refused before any request exists.
+    #[test]
+    fn request_url_refuses_a_private_destination() {
+        let fixture = fixture(
+            r#"
+const { Plugin, Notice, requestUrl } = require("obsidian");
+class Net extends Plugin {
+  onload() {
+    this.addCommand({ id: "go", name: "Go", callback: async () => {
+      try { await requestUrl({ url: "http://127.0.0.1:9/x" }); new Notice("ANSWERED"); }
+      catch (e) { new Notice("REFUSED: " + e.message); }
+    }});
+  }
+}
+module.exports = Net;
+"#,
+        );
+        let host = load(&fixture, None);
+        host.run_command("counter:go").expect("the command ran");
+        host.run_command("counter:go")
+            .expect("the second pump drains the async job");
+        let notices = host.take_notices().join(" ");
+        assert!(
+            notices.contains("REFUSED") && notices.contains("not allowed"),
+            "a loopback destination is refused before any request: {notices:?}"
+        );
+        assert!(
+            !notices.contains("ANSWERED"),
+            "nothing was fetched: {notices:?}"
         );
     }
 
@@ -543,4 +582,132 @@ module.exports = class Counter extends Plugin {
     host.pump_timers();
     host.pump_timers();
     assert!(host.take_notices().is_empty(), "cleared interval refires");
+}
+
+/// A plugin's own write through the vault API fires the event it listens
+/// for, with the path: the registration is retained and the listener runs.
+#[test]
+fn a_vault_write_fires_the_plugins_own_listener() {
+    let fixture = fixture(
+        r#"
+const { Plugin, Notice } = require("obsidian");
+module.exports = class Counter extends Plugin {
+  async onload() {
+    this.registerEvent(this.app.vault.on("modify", (file) => {
+      new Notice("modified: " + (file && file.path ? file.path : "?"));
+    }));
+    this.addCommand({
+      id: "write",
+      name: "Write",
+      callback: async () => { await this.app.vault.modify(this.app.vault.getAbstractFileByPath("Note.md"), "changed\n"); },
+    });
+  }
+}
+"#,
+    );
+    let host = load(&fixture, None);
+    assert!(!host.failed(), "{}", host.detail());
+    host.run_command("counter:write").expect("the write runs");
+    assert!(
+        host.take_notices()
+            .iter()
+            .any(|n| n.contains("modified: Note.md")),
+        "the modify listener ran with the path"
+    );
+    host.run_command("counter:write")
+        .expect("the second write runs");
+    assert!(
+        host.take_notices()
+            .iter()
+            .any(|n| n.contains("modified: Note.md")),
+        "the listener is retained, not one-shot"
+    );
+}
+
+/// The open note changing is the one workspace event the host truly
+/// delivers, and it fires once per change, not once per command.
+#[test]
+fn the_open_note_changing_fires_file_open_once() {
+    let fixture = fixture(
+        r#"
+const { Plugin, Notice } = require("obsidian");
+module.exports = class Counter extends Plugin {
+  async onload() {
+    this.registerEvent(this.app.workspace.on("file-open", (file) => {
+      new Notice("opened: " + (file && file.path ? file.path : "?"));
+    }));
+    this.addCommand({ id: "noop", name: "Noop", callback: () => {} });
+  }
+}
+"#,
+    );
+    let host = load(&fixture, Some("Note.md"));
+    assert!(!host.failed(), "{}", host.detail());
+    // The same note named twice: one change, one event.
+    host.set_open_note(Some("Note.md".into()));
+    host.set_open_note(Some("Note.md".into()));
+    let opens = host
+        .take_notices()
+        .iter()
+        .filter(|n| n.starts_with("opened:"))
+        .count();
+    assert_eq!(
+        opens, 0,
+        "naming the note that is already open fires nothing"
+    );
+    host.set_open_note(Some("Other.md".into()));
+    let notices = host.take_notices();
+    assert!(
+        notices.iter().any(|n| n.contains("opened: Other.md")),
+        "a real change fires once: {notices:?}"
+    );
+    host.set_open_note(Some("Other.md".into()));
+    assert_eq!(
+        host.take_notices()
+            .iter()
+            .filter(|n| n.starts_with("opened:"))
+            .count(),
+        0,
+        "naming the same note again fires nothing"
+    );
+}
+
+/// A registered view and extension declarations reach the host's
+/// registrations rather than being dropped on the floor.
+#[test]
+fn view_and_extension_declarations_are_kept() {
+    let fixture = fixture(
+        r#"
+const { Plugin, ItemView } = require("obsidian");
+module.exports = class Counter extends Plugin {
+  async onload() {
+    this.registerView("my-view", (leaf) => leaf);
+    this.registerExtensions(["png", "jpg"], "image");
+  }
+}
+"#,
+    );
+    let host = load(&fixture, None);
+    assert!(!host.failed(), "{}", host.detail());
+    let views = host
+        .registrations()
+        .views
+        .iter()
+        .map(|v| v.view_type.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(views, vec!["my-view"], "the view declaration is kept");
+    let extensions = host
+        .registrations()
+        .extensions
+        .iter()
+        .map(|e| (e.extensions.clone(), e.view_type.clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        extensions,
+        vec![(
+            vec!["png".to_string(), "jpg".to_string()],
+            Some("image".to_string())
+        )],
+        "the extension declaration is kept"
+    );
 }
