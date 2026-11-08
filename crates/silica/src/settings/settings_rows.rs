@@ -6,17 +6,26 @@
 use super::*;
 
 impl SettingsView {
-
     /// Waits for the next chord to bind to `id`. The keyboard goes to the
     /// view's own handle so the filter field does not eat it.
-    pub(crate) fn start_capture(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn start_capture(
+        &mut self,
+        id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.capturing = Some(id);
         window.focus(&self.focus_handle, cx);
         cx.notify();
     }
 
     /// The chord pressed while capturing, as the binding for that command.
-    pub(crate) fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(id) = self.capturing.clone() else {
             return;
         };
@@ -619,6 +628,12 @@ impl SettingsView {
                 "What happens to a file after you delete it.",
                 state,
                 TRASH_OPTION,
+            ),
+            choice(
+                "Delete attachments",
+                "Move attachments that no other note refers to into .trash when a note is deleted.",
+                state,
+                ATTACHMENT_DELETE,
             ),
             heading("Advanced"),
             field(
