@@ -4583,6 +4583,21 @@ impl Workspace {
         } else {
             format!("{n} files changed").into()
         };
+        // * The dashboard holds one scan of the whole vault, so a change
+        //   is a small update to it rather than a reason to reopen it: a
+        //   full rescan on every save is the repeated work the audit names.
+        if let Some(handle) = self.dashboard_window {
+            let paths: Vec<String> = changes
+                .files
+                .iter()
+                .map(|change| change.path().to_string())
+                .collect();
+            handle
+                .update(cx, |dashboard, _window, cx| {
+                    dashboard.refresh_changed(&paths, cx)
+                })
+                .ok();
+        }
         // * A card showing one of these files is rebuilt from it, whichever
         //   group's canvas holds it.
         for change in &changes.files {

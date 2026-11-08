@@ -10,9 +10,10 @@
 use crate::text_input::{InputEvent, TextInput};
 use crate::workspace::VaultState;
 use gpui::{
-    actions, div, prelude::*, px, size, AnyWindowHandle, App, Bounds, Context, Entity, FocusHandle,
-    Focusable, KeyBinding, Render, SharedString, Subscription, TitlebarOptions, Window,
-    WindowBackgroundAppearance, WindowBounds, WindowDecorations, WindowHandle, WindowOptions,
+    actions, div, point, prelude::*, px, size, AnyWindowHandle, App, Bounds, Context, Entity,
+    FocusHandle, Focusable, KeyBinding, Render, SharedString, Subscription, TitlebarOptions,
+    Window, WindowBackgroundAppearance, WindowBounds, WindowDecorations, WindowHandle,
+    WindowOptions,
 };
 use std::sync::Arc;
 
@@ -29,13 +30,29 @@ pub fn bind_keys(cx: &mut App) {
 }
 
 /// Open a Quick Capture window, bringing it forward if it is already open.
+///
+/// The window is centred over the main window rather than on the display:
+/// a capture box that lands on another monitor is a capture box nobody
+/// sees.
 pub fn open(
     state: Arc<VaultState>,
-    _main: gpui::AnyWindowHandle,
+    main: gpui::AnyWindowHandle,
     cx: &mut App,
 ) -> anyhow::Result<WindowHandle<QuickCaptureWindow>> {
     let (w, h) = WINDOW_SIZE;
-    let bounds = Bounds::centered(None, size(px(w), px(h)), cx);
+    // * The main window's own bounds, falling back to the display's centre
+    //   when it has none (it was closed between the command and the open).
+    let bounds = main
+        .update(cx, |_, window, _| window.bounds())
+        .ok()
+        .map(|main_bounds| {
+            let centre = main_bounds.center();
+            Bounds {
+                origin: point(centre.x - px(w / 2.), centre.y - px(h / 2.)),
+                size: size(px(w), px(h)),
+            }
+        })
+        .unwrap_or_else(|| Bounds::centered(None, size(px(w), px(h)), cx));
     cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -132,7 +149,13 @@ impl QuickCaptureWindow {
         }
         let (path, body) = saved_note(&self.state, &text);
         self.status = Some(match self.state.create_note(&path, &body) {
-            Ok(_) => Ok(SharedString::from("Saved. Escape closes.")),
+            Ok(_) => {
+                // * The field is emptied on success: the window stays open
+                //   (Escape closes, as the hint says), so a second capture
+                //   is a fresh title, not an append to the first one.
+                self.input.update(cx, |input, cx| input.set_text("", cx));
+                Ok(SharedString::from("Saved. Escape closes."))
+            }
             Err(err) => Err(SharedString::from(format!("Save failed: {err}"))),
         });
         cx.notify();

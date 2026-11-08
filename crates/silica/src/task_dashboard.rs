@@ -7,12 +7,16 @@
 
 use crate::workspace::{VaultState, Workspace};
 use gpui::{
-    actions, div, prelude::*, px, size, AnyWindowHandle, App, Bounds, Context, FocusHandle,
-    Focusable, KeyBinding, Render, SharedString, TitlebarOptions, WeakEntity, Window,
-    WindowBackgroundAppearance, WindowBounds, WindowDecorations, WindowHandle, WindowOptions,
+    actions, div, point, prelude::*, px, size, uniform_list, AnyWindowHandle, App, Bounds, Context,
+    FocusHandle, Focusable, KeyBinding, Render, SharedString, TitlebarOptions,
+    UniformListScrollHandle, WeakEntity, Window, WindowBackgroundAppearance, WindowBounds,
+    WindowDecorations, WindowHandle, WindowOptions,
 };
 use silica_markdown::{parse, plain_text, walk_blocks, BlockKind, LineIndex};
+use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 actions!(task_dashboard, [OpenTask, CloseTaskDashboard]);
 
@@ -33,7 +37,21 @@ pub fn open(
     cx: &mut App,
 ) -> anyhow::Result<WindowHandle<TaskDashboardWindow>> {
     let (w, h) = WINDOW_SIZE;
-    let bounds = Bounds::centered(None, size(px(w), px(h)), cx);
+    // * Centred over the main window rather than on the display: the
+    //   dashboard is a side glance at the vault, not a window on another
+    //   monitor. A main window that has gone since falls back to the
+    //   display's centre.
+    let bounds = main
+        .update(cx, |_, window, _| window.bounds())
+        .ok()
+        .map(|main_bounds| {
+            let centre = main_bounds.center();
+            Bounds {
+                origin: point(centre.x - px(w / 2.), centre.y - px(h / 2.)),
+                size: size(px(w), px(h)),
+            }
+        })
+        .unwrap_or_else(|| Bounds::centered(None, size(px(w), px(h)), cx));
     cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -55,11 +73,15 @@ pub fn open(
                 let mut view = TaskDashboardWindow {
                     focus_handle: cx.focus_handle(),
                     tasks: Vec::new(),
+                    rows: Vec::new(),
                     skipped: 0,
                     scanning: true,
+                    progress: 0,
+                    scroll: UniformListScrollHandle::new(),
                     state: state.clone(),
                     workspace,
                     main,
+                    cancel: Arc::new(AtomicBool::new(false)),
                 };
                 view.start_scan(cx);
                 view
@@ -132,66 +154,192 @@ fn scan_note(path: &str, content: &str) -> Vec<TaskItem> {
 
 /// Scan every markdown note in the vault for task list items.
 ///
-/// Returns the tasks and the number of files that could not be read, so the
-/// caller can say so rather than silently dropping them.
-fn scan_vault_for_tasks(state: &VaultState) -> (Vec<TaskItem>, usize) {
+/// Reads from the vault's in-memory note texts — the same map the search
+/// and backlink panes use — with the disk as a fallback, so the scan does
+/// not re-read what the vault already holds. Returns the tasks, the number
+/// of notes neither source had (so the caller can say so rather than
+/// silently dropping them), and stops early when `cancel` is raised: a
+/// window closed mid-scan must not leave a thread walking the vault.
+fn scan_vault_for_tasks(
+    state: &VaultState,
+    cancel: &AtomicBool,
+    scanned: &AtomicUsize,
+) -> (Vec<TaskItem>, usize) {
     let mut tasks = Vec::new();
     let mut skipped = 0usize;
-    let vault = state.vault();
+    let paths: Vec<String> = state
+        .vault()
+        .markdown_files()
+        .map(|file| file.path.clone())
+        .collect();
 
-    for file in vault.markdown_files() {
-        let path = file.path.clone();
-        let content = match std::fs::read_to_string(vault.absolute(&path)) {
-            Ok(c) => c,
-            Err(_) => {
-                skipped += 1;
-                continue;
-            }
-        };
-
-        tasks.extend(scan_note(&path, &content));
+    for (ix, path) in paths.iter().enumerate() {
+        // * Checked every note rather than per block: the flag is read
+        //   once per note and the cost is one atomic load.
+        if ix % 64 == 0 && cancel.load(Ordering::Relaxed) {
+            return (tasks, skipped);
+        }
+        match note_text(state, path) {
+            Some(content) => tasks.extend(scan_note(path, &content)),
+            None => skipped += 1,
+        }
+        scanned.store(ix + 1, Ordering::Relaxed);
     }
 
     (tasks, skipped)
+}
+
+/// Re-scans only the named notes: the incremental half of the dashboard,
+/// for a change that lands while it is open. A note with no text anywhere
+/// contributes nothing, which is how a deleted note leaves the list.
+fn scan_notes(state: &VaultState, paths: &[String]) -> Vec<TaskItem> {
+    paths
+        .iter()
+        .filter_map(|path| note_text(state, path).map(|text| (path.clone(), text)))
+        .flat_map(|(path, text)| scan_note(&path, &text))
+        .collect()
+}
+
+/// The text of one note: the vault's in-memory copy first, the disk as a
+/// fallback, so a note the index knows but memory has not caught up with
+/// is still scanned. `None` means neither had it.
+fn note_text(state: &VaultState, path: &str) -> Option<String> {
+    if let Some(text) = state.texts().get(path) {
+        return Some(text.as_str().to_string());
+    }
+    // ponytail: the disk read is the fallback for a note the in-memory
+    // index has not caught up with; drop it if `texts` is ever made to
+    // hold every indexed note eagerly.
+    std::fs::read_to_string(state.vault().absolute(path)).ok()
 }
 
 /// The Task Dashboard window's root view.
 pub struct TaskDashboardWindow {
     focus_handle: FocusHandle,
     tasks: Vec<TaskItem>,
+    /// The rendered rows, flattened so the list can be virtualized: a
+    /// 50k-task vault must not build 50k elements per frame.
+    rows: Vec<Row>,
     /// Files the scan could not read, reported in the header.
     skipped: usize,
     /// Whether a scan is still running.
     scanning: bool,
+    /// Notes scanned so far, shown while the scan runs.
+    progress: usize,
+    scroll: UniformListScrollHandle,
     state: Arc<VaultState>,
     /// The workspace that opened this window: clicking a task asks it to
     /// open the note, since opening files is the workspace's job.
     workspace: WeakEntity<Workspace>,
     /// The main window, where that workspace lives.
     main: AnyWindowHandle,
+    /// Raised when the window is dropped: a scan still running walks the
+    /// vault for nobody otherwise.
+    cancel: Arc<AtomicBool>,
+}
+
+impl Drop for TaskDashboardWindow {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
 }
 
 impl TaskDashboardWindow {
     /// Runs the vault scan off the UI thread and fills the list when it
-    /// lands. ponytail: one full scan per window open, no watcher-driven
-    /// refresh; add an incremental update when the dashboard is meant to
-    /// stay open beside the editor.
+    /// lands, with a progress count on the header while it runs and a
+    /// cancel the window's own Drop raises.
     fn start_scan(&mut self, cx: &mut Context<Self>) {
         let state = self.state.clone();
+        let cancel = self.cancel.clone();
+        let scanned = Arc::new(AtomicUsize::new(0));
+        let progress = scanned.clone();
         cx.spawn(async move |this, cx| {
             let (tasks, skipped) = cx
                 .background_executor()
-                .spawn(async move { scan_vault_for_tasks(&state) })
+                .spawn(async move { scan_vault_for_tasks(&state, &cancel, &scanned) })
                 .await;
             this.update(cx, |this, cx| {
                 this.tasks = tasks;
                 this.skipped = skipped;
                 this.scanning = false;
+                this.rebuild_rows();
                 cx.notify();
             })
             .ok();
         })
         .detach();
+        // * The count is polled rather than pushed: the scan is on another
+        //   thread, and one timer tick per repaint is cheaper than a
+        //   channel per note.
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(120))
+                .await;
+            let alive = this
+                .update(cx, |this, cx| {
+                    this.progress = progress.load(Ordering::Relaxed);
+                    let running = this.scanning;
+                    if running {
+                        cx.notify();
+                    }
+                    running
+                })
+                .unwrap_or(false);
+            if !alive {
+                break;
+            }
+        })
+        .detach();
+    }
+
+    /// Re-scans only the notes that changed while the dashboard is open.
+    ///
+    /// ponytail: one incremental path per changed note, merged by
+    /// replacing the note's rows; a full vault scan runs once at open.
+    pub(crate) fn refresh_changed(&mut self, paths: &[String], cx: &mut Context<Self>) {
+        if paths.is_empty() || self.scanning {
+            return;
+        }
+        let state = self.state.clone();
+        let changed: Vec<String> = paths.to_vec();
+        let stale: HashSet<String> = changed.iter().cloned().collect();
+        cx.spawn(async move |this, cx| {
+            let scanned = cx
+                .background_executor()
+                .spawn(async move { scan_notes(&state, &changed) })
+                .await;
+            this.update(cx, |this, cx| {
+                let gone: HashSet<&str> = stale.iter().map(String::as_str).collect();
+                this.tasks.retain(|task| !gone.contains(task.path.as_ref()));
+                this.tasks.extend(scanned);
+                this.rebuild_rows();
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Flattens the tasks into section labels and task rows, in one list.
+    fn rebuild_rows(&mut self) {
+        let mut rows = Vec::with_capacity(self.tasks.len() + 2);
+        rows.push(Row::Label("Pending"));
+        rows.extend(
+            self.tasks
+                .iter()
+                .filter(|task| !task.done)
+                .cloned()
+                .map(Row::Task),
+        );
+        rows.push(Row::Label("Completed"));
+        rows.extend(
+            self.tasks
+                .iter()
+                .filter(|task| task.done)
+                .cloned()
+                .map(Row::Task),
+        );
+        self.rows = rows;
     }
 
     fn close(&mut self, _: &CloseTaskDashboard, window: &mut Window, _: &mut Context<Self>) {
@@ -220,6 +368,12 @@ impl TaskDashboardWindow {
     }
 }
 
+/// One row of the flattened list: a section label, or a task.
+enum Row {
+    Label(&'static str),
+    Task(TaskItem),
+}
+
 impl Focusable for TaskDashboardWindow {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -228,19 +382,18 @@ impl Focusable for TaskDashboardWindow {
 
 impl Render for TaskDashboardWindow {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // * Cloned out of the global: the sections below need `&mut cx`, and
-        //   a borrow of the theme through `cx` would still be live.
+        // * Cloned out of the global: the rows below need `&mut cx`, and a
+        //   borrow of the theme through `cx` would still be live.
         let theme = cx.global::<crate::theme::Theme>().clone();
-        let pending: Vec<&TaskItem> = self.tasks.iter().filter(|t| !t.done).collect();
-        let done: Vec<&TaskItem> = self.tasks.iter().filter(|t| t.done).collect();
+        let pending = self.tasks.iter().filter(|t| !t.done).count();
+        let done = self.tasks.iter().filter(|t| t.done).count();
 
-        let mut header = format!(
-            "Task Dashboard ({} pending, {} done)",
-            pending.len(),
-            done.len()
-        );
+        let mut header = format!("Task Dashboard ({pending} pending, {done} done)");
         if self.scanning {
-            header.push_str(" \u{2014} scanning\u{2026}");
+            header.push_str(&format!(
+                " \u{2014} scanning\u{2026} {} notes",
+                self.progress
+            ));
         }
         if self.skipped > 0 {
             header.push_str(&format!(
@@ -249,13 +402,16 @@ impl Render for TaskDashboardWindow {
             ));
         }
 
+        // * A uniform list, not a child per task: the explorer's own list
+        //   is the same shape, and a 50k-task vault would otherwise build
+        //   50k elements per frame for the twenty that are on screen.
         let mut body = div()
             .id("task-dashboard-body")
             .flex()
             .flex_col()
             .flex_1()
             .overflow_y_scroll();
-        if self.tasks.is_empty() && !self.scanning {
+        if self.rows.is_empty() && !self.scanning {
             body = body.child(
                 div()
                     .px_4()
@@ -265,9 +421,15 @@ impl Render for TaskDashboardWindow {
                     .child("No tasks in this vault yet. Write `- [ ] something` in any note."),
             );
         } else {
-            body = body
-                .child(self.section("Pending", &pending, &theme, cx))
-                .child(self.section("Completed", &done, &theme, cx));
+            body = body.child(
+                uniform_list(
+                    "task-dashboard-rows",
+                    self.rows.len(),
+                    cx.processor(Self::render_rows),
+                )
+                .track_scroll(&self.scroll)
+                .size_full(),
+            );
         }
 
         div()
@@ -293,73 +455,71 @@ impl Render for TaskDashboardWindow {
 }
 
 impl TaskDashboardWindow {
-    fn section(
-        &self,
-        title: &'static str,
-        tasks: &[&TaskItem],
-        theme: &crate::theme::Theme,
+    /// The visible slice of the flattened list: a section label, or a task
+    /// row whose click opens the note at the task's own line.
+    fn render_rows(
+        &mut self,
+        range: std::ops::Range<usize>,
+        _window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let mut section = div().flex().flex_col();
-        if !tasks.is_empty() {
-            section = section.child(
-                div()
-                    .px_4()
-                    .py_1()
-                    .text_size(px(11.))
-                    .text_color(theme.text_muted)
-                    .child(title),
-            );
-        }
-        section.children(tasks.iter().map(|t| self.task_row(t, theme, cx)))
-    }
-
-    fn task_row(
-        &self,
-        task: &TaskItem,
-        theme: &crate::theme::Theme,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let checkbox = if task.done { "[x]" } else { "[ ]" };
-        let row = task.clone();
-        div()
-            .id(SharedString::from(format!(
-                "task-{}:{}",
-                task.path, task.line
-            )))
-            .flex()
-            .items_center()
-            .px_4()
-            .py_1()
-            .border_b_1()
-            .border_color(theme.border)
-            .cursor_pointer()
-            .hover(|s| s.bg(theme.bg_alt))
-            .on_click(cx.listener(move |this, _, _, cx| this.open_task(&row, cx)))
-            .child(
-                div()
-                    .text_size(px(13.))
-                    .text_color(if task.done {
-                        theme.text_faint
-                    } else {
-                        theme.text
-                    })
-                    .child(checkbox),
-            )
-            .child(
-                div()
-                    .text_size(px(13.))
-                    .text_color(theme.text)
-                    .ml(px(4.))
-                    .child(task.text.clone()),
-            )
-            .child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(theme.text_muted)
-                    .ml_auto()
-                    .child(format!("{}:{}", task.path, task.line + 1)),
-            )
+    ) -> Vec<gpui::Stateful<gpui::Div>> {
+        let theme = cx.global::<crate::theme::Theme>().clone();
+        range
+            .filter_map(|ix| {
+                Some(match self.rows.get(ix)? {
+                    Row::Label(title) => div()
+                        .id(SharedString::from(format!("task-section-{ix}")))
+                        .px_4()
+                        .py_1()
+                        .text_size(px(11.))
+                        .text_color(theme.text_muted)
+                        .child(*title),
+                    Row::Task(task) => {
+                        let row = task.clone();
+                        let checkbox = if task.done { "[x]" } else { "[ ]" };
+                        div()
+                            .id(SharedString::from(format!(
+                                "task-{}:{}",
+                                task.path, task.line
+                            )))
+                            .flex()
+                            .items_center()
+                            .px_4()
+                            .py_1()
+                            .h(px(22.))
+                            .border_b_1()
+                            .border_color(theme.border)
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme.bg_alt))
+                            .on_click(cx.listener(move |this, _, _, cx| this.open_task(&row, cx)))
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .text_color(if task.done {
+                                        theme.text_faint
+                                    } else {
+                                        theme.text
+                                    })
+                                    .child(checkbox),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .text_color(theme.text)
+                                    .ml(px(4.))
+                                    .child(task.text.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(theme.text_muted)
+                                    .ml_auto()
+                                    .child(format!("{}:{}", task.path, task.line + 1)),
+                            )
+                    }
+                })
+            })
+            .collect()
     }
 }
 
@@ -370,6 +530,10 @@ const WINDOW_SIZE: (f32, f32) = (700., 500.);
 mod tests {
     use super::*;
     use std::fs;
+
+    /// A progress counter nothing reads, for a test that only wants the
+    /// scan's results.
+    static NO_PROGRESS: AtomicUsize = AtomicUsize::new(0);
 
     /// What the scan found in one note, as (line, text, done).
     fn found(path: &str, content: &str) -> Vec<(usize, String, bool)> {
@@ -502,11 +666,11 @@ mod tests {
         assert_eq!(b[0].path.as_ref(), "Sub/B.md");
     }
 
-    /// Both task notes are scanned, and a note that vanished between the
-    /// index and the scan is counted rather than silently dropped: that
-    /// is the race a real vault edit hits mid-scan.
+    /// Both task notes are scanned from the vault's in-memory texts — the
+    /// disk is the fallback, not the source — so a note deleted from disk
+    /// after the load is still scanned from memory.
     #[test]
-    fn the_scan_counts_a_note_that_vanished_after_indexing() {
+    fn the_scan_reads_the_vaults_own_texts() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         fs::create_dir_all(root.join(".obsidian")).unwrap();
@@ -522,10 +686,11 @@ mod tests {
         fs::write(root.join("Done.md"), "- [x] Ship it\n").unwrap();
         fs::write(root.join("Gone.md"), "- [ ] removed mid-scan\n").unwrap();
         let state = VaultState::load(&root.to_path_buf()).unwrap();
-        // Indexed at load, gone from disk by the time the scan reads it.
+        // Indexed at load, gone from disk by the time the scan reads it:
+        // the in-memory text is the copy that counts.
         fs::remove_file(root.join("Gone.md")).unwrap();
 
-        let (tasks, skipped) = scan_vault_for_tasks(&state);
+        let (tasks, skipped) = scan_vault_for_tasks(&state, &AtomicBool::new(false), &NO_PROGRESS);
         let rows: Vec<(String, usize, String)> = tasks
             .iter()
             .map(|t| (t.path.to_string(), t.line, t.text.to_string()))
@@ -538,14 +703,63 @@ mod tests {
             rows.contains(&("Tasks.md".to_string(), 0, "Buy milk".to_string())),
             "the pending task is scanned: {rows:?}"
         );
-        assert_eq!(skipped, 1, "the vanished note is counted, not dropped");
+        assert!(
+            rows.contains(&("Gone.md".to_string(), 0, "removed mid-scan".to_string())),
+            "scanned from memory even though the disk copy is gone: {rows:?}"
+        );
+        assert_eq!(skipped, 0, "every note had text: in memory if not on disk");
+    }
+
+    /// A cancel raised before the scan starts stops it: a window closed
+    /// while its scan is still walking the vault must not leave the walk
+    /// running for nobody.
+    #[test]
+    fn a_cancelled_scan_stops_immediately() {
+        let (_dir, state) = vault_with(&[("A.md", "- [ ] in a\n"), ("B.md", "- [ ] in b\n")]);
+        let (tasks, skipped) = scan_vault_for_tasks(&state, &AtomicBool::new(true), &NO_PROGRESS);
+        assert!(
+            tasks.is_empty(),
+            "a cancelled scan finds nothing: {tasks:?}"
+        );
+        assert_eq!(skipped, 0);
+    }
+
+    /// A note the index knows and neither source has is counted, not
+    /// dropped silently.
+    #[test]
+    fn a_note_with_no_text_anywhere_is_counted() {
+        let (_dir, state) = vault_with(&[("A.md", "- [ ] in a\n")]);
+        assert_eq!(
+            note_text(&state, "NoSuch.md"),
+            None,
+            "an unknown path has no text"
+        );
+        assert_eq!(
+            note_text(&state, "A.md").as_deref(),
+            Some("- [ ] in a\n"),
+            "a known note reads from memory"
+        );
+    }
+
+    /// The incremental path re-scans only the notes named, and a deleted
+    /// note leaves the list: nothing to add is nothing to add.
+    #[test]
+    fn the_incremental_path_scans_only_the_named_notes() {
+        let (_dir, state) = vault_with(&[("A.md", "- [ ] in a\n"), ("B.md", "- [ ] in b\n")]);
+        let fresh = scan_notes(&state, &["A.md".to_string()]);
+        assert_eq!(fresh.len(), 1, "only the named note is re-scanned");
+        assert_eq!(fresh[0].text.as_ref(), "in a");
+        assert!(
+            scan_notes(&state, &["Gone.md".to_string()]).is_empty(),
+            "a note with no text adds nothing, which is how a removed note leaves"
+        );
     }
 
     /// A vault with no task notes scans to nothing, not an error.
     #[test]
     fn an_empty_vault_scans_to_nothing() {
         let (_dir, state) = vault_with(&[("A.md", "# A\n"), ("B.md", "# B\n")]);
-        let (tasks, skipped) = scan_vault_for_tasks(&state);
+        let (tasks, skipped) = scan_vault_for_tasks(&state, &AtomicBool::new(false), &NO_PROGRESS);
         assert!(
             tasks.is_empty(),
             "prose-only notes hold no tasks: {tasks:?}"
@@ -572,5 +786,70 @@ mod tests {
         }
         let state = VaultState::load(&root.to_path_buf()).unwrap();
         (dir, state)
+    }
+
+    /// A vault of `count` one-task notes, spread over folders the way a
+    /// real vault is. Returns it with the load timed out separately, so a
+    /// benchmark reading the printout can tell the two costs apart.
+    fn vault_of(count: usize) -> (tempfile::TempDir, VaultState) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join(".obsidian")).unwrap();
+        fs::write(
+            root.join(".obsidian/app.json"),
+            r#"{"trashOption":"local"}"#,
+        )
+        .unwrap();
+        let started = std::time::Instant::now();
+        for ix in 0..count {
+            let folder = root.join(format!("Notes{:02}", ix % 20));
+            fs::create_dir_all(&folder).unwrap();
+            fs::write(
+                folder.join(format!("Note{ix:06}.md")),
+                format!("# Note {ix}\n\nprose\n\n- [ ] task {ix}\n"),
+            )
+            .unwrap();
+        }
+        let written = started.elapsed();
+        let state = VaultState::load(&root.to_path_buf()).unwrap();
+        println!(
+            "{count} notes: load {written:?}, total {:?}",
+            started.elapsed()
+        );
+        (dir, state)
+    }
+
+    /// The scan must cost the same per note at every vault size: a per-note
+    /// cost that grows with the vault means the scan is re-doing work it
+    /// already did — reading a file twice, or walking an index per note.
+    ///
+    /// Ignored because it writes tens of thousands of files and is a
+    /// release check, not a unit test. Run it with
+    /// `cargo test -p silica -- --ignored --nocapture task_dashboard::tests::scan_cost`.
+    #[test]
+    #[ignore = "writes up to 50k files; opt in for a release check"]
+    fn scan_cost_stays_flat_as_the_vault_grows() {
+        let mut costs: Vec<(usize, f64)> = Vec::new();
+        for count in [1_000, 10_000, 50_000] {
+            let (_dir, state) = vault_of(count);
+            let started = std::time::Instant::now();
+            let (tasks, skipped) =
+                scan_vault_for_tasks(&state, &AtomicBool::new(false), &AtomicUsize::new(0));
+            let scan = started.elapsed();
+            assert_eq!(skipped, 0, "every note in the vault is readable");
+            assert_eq!(tasks.len(), count, "every note holds one task");
+            let per_note_ms = scan.as_secs_f64() * 1000.0 / count as f64;
+            println!("{count} notes: scan {scan:?} = {per_note_ms:.4} ms/note");
+            costs.push((count, per_note_ms));
+        }
+        // * The ceiling is generous — a debug build on a busy disk — but
+        //   flat: a quadratic scan shows up as the largest vault costing
+        //   many times the smallest per note.
+        let (_, smallest) = costs[0];
+        let (largest_count, largest) = costs[costs.len() - 1];
+        assert!(
+            largest < smallest * 3.0 + 0.05,
+            "{largest_count} notes cost {largest:.4} ms/note against {smallest:.4} at 1000: {costs:?}"
+        );
     }
 }

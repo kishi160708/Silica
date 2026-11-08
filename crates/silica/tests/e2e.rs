@@ -489,6 +489,58 @@ fn quick_capture_saves_a_note_and_escape_closes_the_window() {
     );
 }
 
+/// The command run while the window is still open does not stack a second
+/// capture box: typing still lands in the live window and saves, which is
+/// what a stacked duplicate would break (the newest window holds the
+/// keyboard, the older one keeps its stale field).
+#[test]
+fn a_second_capture_command_reuses_the_open_window() {
+    if !e2e_enabled() {
+        eprintln!("skipped: no display available for the graphical end-to-end tests");
+        return;
+    }
+    let vault = Vault::new();
+    let mut app = match App::launch(&vault.root) {
+        Some(a) => a,
+        None => {
+            eprintln!("skipped: no graphical session to launch silica in");
+            return;
+        }
+    };
+    app.settle();
+    app.run_command("quick-capture:open");
+    app.settle();
+    app.call(
+        "type",
+        json!({"text": "first capture", "window": "capture"}),
+    );
+    app.call("keys", json!({"keys": ["enter"], "window": "capture"}));
+    app.settle();
+
+    // The window stays open after a save — the hint says Escape closes, so
+    // the second command is meant to raise it, not open a twin.
+    app.run_command("quick-capture:open");
+    app.settle();
+    app.call(
+        "type",
+        json!({"text": "second capture", "window": "capture"}),
+    );
+    app.settle();
+    app.call("keys", json!({"keys": ["enter"], "window": "capture"}));
+    app.settle();
+
+    let vault_root = app.socket.parent().expect("the vault folder").to_path_buf();
+    assert_eq!(
+        fs::read_to_string(vault_root.join("first capture.md")).expect("the first note"),
+        "# first capture\n",
+    );
+    assert_eq!(
+        fs::read_to_string(vault_root.join("second capture.md")).expect("the second note"),
+        "# second capture\n",
+        "the raised window still holds the keyboard: a stacked twin would not"
+    );
+}
+
 /// Task Dashboard: the command opens the window, every task in the vault
 /// is listed, and clicking a row opens its source note at the task's own
 /// line. The line is what the click is for.
@@ -518,11 +570,12 @@ fn the_task_dashboard_opens_a_clicked_task_at_its_own_line() {
     app.run_command("task-dashboard:open");
     app.settle();
 
-    // The first row sits under the header, then the "Pending" label. The
-    // click lands on its text, which is what opens the note.
+    // The list is virtualized at a uniform row height, so the first task
+    // sits at a known offset: the header, then the "Pending" label, then
+    // the first task row's own line.
     app.call(
         "click",
-        json!({"x": 60.0, "y": 90.0, "window": "dashboard"}),
+        json!({"x": 60.0, "y": 68.0, "window": "dashboard"}),
     );
     app.settle();
 
