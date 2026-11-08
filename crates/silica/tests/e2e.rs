@@ -628,23 +628,23 @@ fn the_task_dashboard_opens_a_clicked_task_at_its_own_line() {
         .unwrap_or_default()
         .to_string();
     assert_eq!(current, "Tasks.md", "the keys opened no note: {state:?}");
-    let visible: Vec<u64> = state
-        .get("editor")
-        .and_then(|e| e.get("visible_lines"))
-        .and_then(|v| v.as_array())
-        .map(|lines| lines.iter().filter_map(|l| l.as_u64()).collect())
-        .unwrap_or_default();
-    let task_line: u64 = state
+    // The caret is on the task's own line: reveal_offset puts it there and
+    // brings it into view on the next paint.
+    let task_line = state
         .get("editor")
         .and_then(|e| e.get("text"))
         .and_then(|t| t.as_str())
         .and_then(|text| text.lines().position(|l| l.contains("first task")))
         .map(|ix| ix as u64)
         .unwrap_or(u64::MAX);
-    let first = visible.first().copied().unwrap_or(0);
-    let last = visible.last().copied().unwrap_or(0);
-    assert!(
-        first <= task_line && task_line <= last,
-        "the task's line {task_line} is not on screen: {state:?}"
+    let caret = state
+        .get("editor")
+        .and_then(|e| e.get("cursor"))
+        .and_then(|c| c.get("line"))
+        .and_then(|l| l.as_u64())
+        .unwrap_or(u64::MAX);
+    assert_eq!(
+        caret, task_line,
+        "the caret is not on the task's line: {state:?}"
     );
 }

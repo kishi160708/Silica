@@ -215,6 +215,18 @@ fn scan_notes(state: &VaultState, paths: &[String]) -> Vec<TaskItem> {
         .collect()
 }
 
+/// The byte offset where `line` starts, in `text`.
+fn line_offset(text: &str, line: usize) -> usize {
+    if line == 0 {
+        return 0;
+    }
+    // * split_inclusive keeps the terminator on each line, so summing the
+    //   lengths of the first `line` lines lands exactly on the start of the
+    //   next one — and a text with fewer lines sums to its own length,
+    //   which the editor's clamp turns into its last offset.
+    text.split_inclusive('\n').take(line).map(str::len).sum()
+}
+
 /// The text of one note: the vault's in-memory copy first, the disk as a
 /// fallback, so a note the index knows but memory has not caught up with
 /// is still scanned. `None` means neither had it.
@@ -407,7 +419,12 @@ impl TaskDashboardWindow {
 
     fn open_task(&mut self, task: &TaskItem, cx: &mut Context<Self>) {
         let path = task.path.to_string();
-        let line = task.line;
+        // * The task's byte offset, from the vault's own copy of the note:
+        //   `reveal_offset` clamps against the buffer as it is, so the
+        //   offset has to be the destination's, not the old note's.
+        let offset = note_text(&self.state, &path)
+            .map(|text| line_offset(&text, task.line))
+            .unwrap_or(0);
         let workspace = self.workspace.clone();
         let main = self.main;
         // * Opening a note is the workspace's job and it lives in the main
@@ -418,7 +435,11 @@ impl TaskDashboardWindow {
                 .update(cx, |ws, cx| {
                     ws.open_file(path, None, cx);
                     let editor = ws.editor().clone();
-                    editor.update(cx, |editor, cx| editor.scroll_to_line(line, window, cx));
+                    // * reveal_offset, not a scroll: it puts the caret on the
+                    //   line and reveals it on the next paint, so it survives
+                    //   the editor not having laid the new note out yet —
+                    //   which is the race a scroll set at this moment loses.
+                    editor.update(cx, |editor, cx| editor.reveal_offset(offset, cx));
                     window.activate_window();
                 })
                 .ok();
@@ -771,6 +792,24 @@ mod tests {
             "scanned from memory even though the disk copy is gone: {rows:?}"
         );
         assert_eq!(skipped, 0, "every note had text: in memory if not on disk");
+    }
+
+    /// A task's line becomes the byte offset that line starts at, so the
+    /// caret can be put there without the editor having laid out the note.
+    #[test]
+    fn a_line_becomes_the_offset_it_starts_at() {
+        let text = "# Heading\n\nSome prose.\n\n- [ ] First task\n- [x] Second\n";
+        assert_eq!(line_offset(text, 0), 0);
+        // "# Heading\n" (10) + "\n" (1) + "Some prose.\n" (12) + "\n" (1).
+        assert_eq!(line_offset(text, 4), 24);
+        // Plus "- [ ] First task\n" (17).
+        assert_eq!(line_offset(text, 5), 41);
+        // * Beyond the end: the total length, which an editor clamps.
+        assert_eq!(line_offset(text, 99), text.len());
+        // * With \r\n line endings the offset lands after the terminator.
+        let crlf = "a\r\nb\r\nc\r\n";
+        assert_eq!(line_offset(crlf, 1), 3);
+        assert_eq!(line_offset(crlf, 2), 6);
     }
 
     /// A cancel raised before the scan starts stops it: a window closed
