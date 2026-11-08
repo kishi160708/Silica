@@ -162,6 +162,7 @@ impl Workspace {
                 RightTab::Graph => "graph",
                 RightTab::Tags => "tags",
                 RightTab::Properties => "properties",
+                RightTab::Calendar => "calendar",
             }),
         );
         put_capped(

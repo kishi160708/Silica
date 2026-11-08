@@ -231,6 +231,7 @@ webviewer:search	Web viewer: Search the web
 webviewer:save-to-vault	Web viewer: Save to vault
 silica:toggle-graph-pane	Toggle the graph side pane
 silica:vault-backup	Back up the vault to a local folder
+silica:calendar	Kalender
 silica:export-site	Export vault as site
 quick-capture:open	Quick Capture: New note
 task-dashboard:open	Task Dashboard: Open

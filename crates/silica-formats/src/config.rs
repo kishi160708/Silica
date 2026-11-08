@@ -490,6 +490,11 @@ pub struct DailyNotesConfig {
     /// A template applied to a note the plugin creates.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub template: Option<String>,
+    /// Apakah pane Kalender ditawarkan di dock kanan; `true` kalau tidak
+    /// ada, sehingga `daily-notes.json` yang ditulis Silica lama tetap dibaca
+    /// dengan kalender hidup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calendar: Option<bool>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
