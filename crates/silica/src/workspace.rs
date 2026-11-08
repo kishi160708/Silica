@@ -137,6 +137,26 @@ pub(crate) enum SidePaneTarget {
 /// view's own context, and mutates the view in place.
 type RightClickHandler<V> = Box<dyn Fn(&mut V, gpui::Point<Pixels>, &mut Context<V>)>;
 
+/// A match's \"Show more context\" text: its line with the lines either
+/// side of it, the match's range moved into the expanded text. `None` when
+/// the match has no range to grow from (a property key, say).
+fn expand_match(text: &str, m: &PaneMatch) -> Option<PaneMatch> {
+    let range = m.ranges.first().cloned().or(m.mention.clone())?;
+    let len = range.end - range.start;
+    if len == 0 {
+        return None;
+    }
+    let offset = m.offset?;
+    let (expanded, mapped) = backlinks::context(text, offset..offset.saturating_add(len), true);
+    (!expanded.is_empty()).then_some(PaneMatch {
+        text: expanded,
+        ranges: vec![mapped],
+        offset: Some(offset),
+        mention: m.mention.clone(),
+        target: m.target.clone(),
+    })
+}
+
 /// One row of a side-pane context menu: what Obsidian draws, and the action
 /// Silica emits when it is clicked.
 struct SidePaneMenuItem {
@@ -1581,6 +1601,10 @@ struct BacklinkState {
     /// Groups toggled away from what `collapse_all` says, by
     /// [`Section::group_key`].
     toggled: HashSet<String>,
+    /// Matches whose \"Show more context\" chevron is on: the match's line
+    /// with the lines either side of it, keyed by file and byte offset.
+    /// Ephemeral: cleared whenever the panes are rebuilt for a note.
+    expanded: HashMap<(String, usize), PaneMatch>,
     sort_menu_open: bool,
 }
 
@@ -1595,6 +1619,7 @@ impl Default for BacklinkState {
             // * Obsidian's fresh leaf starts with the section folded.
             unlinked_collapsed: true,
             toggled: HashSet::new(),
+            expanded: HashMap::new(),
             sort_menu_open: false,
         }
     }
@@ -6897,6 +6922,7 @@ impl Workspace {
         self.outline_state.active = None;
         self.backlink_sections.clear();
         self.outgoing_sections.clear();
+        self.backlink_state.expanded.clear();
         let current = self.current.clone();
         self.bookmarks.update(cx, |b, cx| b.set_active(current, cx));
         cx.notify();
@@ -6932,6 +6958,9 @@ impl Workspace {
         //   it was written in; Links: the ones this file writes, properties
         //   included. Unlinked mentions take a search of every note and come
         //   in from the background executor.
+        // * A match expanded per note has no meaning once the sections are
+        //   rebuilt: drop every per-match expansion first.
+        self.backlink_state.expanded.clear();
         let extra = self.backlink_state.extra_context;
         let linked = backlinks::linked_mentions(&cache, &texts, &path, extra);
         let links = backlinks::outgoing_links(&cache, &path);
@@ -6970,6 +6999,45 @@ impl Workspace {
         if let Some(state) = self.state.clone() {
             self.refresh_panes(&state, cx);
         }
+        cx.notify();
+    }
+
+    /// The match at `offset` in the file at `path`, across the sections
+    /// currently drawn; `None` while the sections are still being built.
+    fn backlink_match(&self, path: &str, offset: usize) -> Option<&PaneMatch> {
+        self.backlink_sections
+            .iter()
+            .flat_map(|section| section.groups.iter())
+            .filter(|group| group.path.as_deref() == Some(path))
+            .flat_map(|group| group.matches.iter())
+            .find(|m| m.offset == Some(offset))
+    }
+
+    /// One match's "Show more context": its line with the lines either
+    /// side of it, kept only until the panes are rebuilt for this note.
+    fn toggle_backlink_match(&mut self, path: String, offset: usize, cx: &mut Context<Self>) {
+        let key = (path.clone(), offset);
+        if self.backlink_state.expanded.remove(&key).is_some() {
+            cx.notify();
+            return;
+        }
+        let Some(m) = self.backlink_match(&path, offset) else {
+            cx.notify();
+            return;
+        };
+        let Some(texts) = self.state.as_ref().map(|state| state.texts()) else {
+            cx.notify();
+            return;
+        };
+        let Some(text) = texts.get(&path).map(|text| text.as_str()) else {
+            cx.notify();
+            return;
+        };
+        let Some(expanded) = expand_match(text, m) else {
+            cx.notify();
+            return;
+        };
+        self.backlink_state.expanded.insert(key, expanded);
         cx.notify();
     }
 
@@ -11280,5 +11348,38 @@ mod tests {
         n.clear();
         assert!(n.latest().is_none());
         assert_eq!(n.push("three".into()), 3, "ids keep counting up");
+    }
+
+    /// A match's \"Show more context\" chevron grows the match to its line
+    /// with the lines either side of it, the match's range moved into the
+    /// expanded text; a match without a range cannot grow.
+    #[test]
+    fn a_match_expands_to_its_line_with_the_lines_either_side() {
+        let text = "intro\nabove\nthe [[Plan]] line\nbelow\ntail";
+        let at = text.find("[[Plan]]").unwrap();
+        let m = PaneMatch {
+            text: "the [[Plan]] line".into(),
+            ranges: vec![Range { start: 4, end: 12 }],
+            offset: Some(at),
+            mention: None,
+            target: None,
+        };
+        let expanded = expand_match(text, &m).unwrap();
+        assert_eq!(expanded.text, "above\nthe [[Plan]] line\nbelow");
+        assert_eq!(expanded.ranges, vec![10..18]);
+        assert_eq!(expanded.offset, Some(at));
+    }
+
+    #[test]
+    fn a_match_without_a_range_does_not_expand() {
+        let text = "see the key\n";
+        let m = PaneMatch {
+            text: "related".into(),
+            ranges: vec![],
+            offset: Some(4),
+            mention: None,
+            target: None,
+        };
+        assert!(expand_match(text, &m).is_none());
     }
 }
