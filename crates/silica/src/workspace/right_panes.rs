@@ -558,6 +558,26 @@ impl Workspace {
             SidePaneAction::CopyLinkPath(path) => {
                 self.copy_path(path, cx);
             }
+            // * The file menu's own items: each one opens the prompt the
+            //   workspace already asks with, so a row's Rename... is the
+            //   same rename with the same link rewriting the command
+            //   behind it would do.
+            SidePaneAction::RenameFile(path) => {
+                self.start_rename(path, window, cx);
+            }
+            SidePaneAction::MoveFile(path) => {
+                self.start_move(path, window, cx);
+            }
+            SidePaneAction::BookmarkFile(path) => {
+                let draft = BookmarkDraft::File {
+                    path: path.clone(),
+                    subpath: None,
+                };
+                self.start_bookmark(draft, window, cx);
+            }
+            SidePaneAction::DeleteFile(path) => {
+                self.start_delete(path, window, cx);
+            }
         }
     }
 
