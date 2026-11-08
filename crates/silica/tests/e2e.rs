@@ -648,3 +648,40 @@ fn the_task_dashboard_opens_a_clicked_task_at_its_own_line() {
         "the caret is not on the task's line: {state:?}"
     );
 }
+
+/// The graph export writes inside the vault only: a socket caller naming a
+/// path outside it gets an error, not picture bytes over an arbitrary file.
+#[test]
+fn a_graph_export_cannot_leave_the_vault() {
+    if !e2e_enabled() {
+        eprintln!("skipped: no display available for the graphical end-to-end tests");
+        return;
+    }
+    let _serial = serial();
+    let vault = Vault::new();
+    let mut app = match App::launch(&vault.root) {
+        Some(a) => a,
+        None => {
+            eprintln!("skipped: no graphical session to launch silica in");
+            return;
+        }
+    };
+    app.settle();
+    let vault_root = app.socket.parent().expect("the vault folder").to_path_buf();
+    let escaped = vault_root
+        .parent()
+        .expect("the temp folder outside the vault")
+        .join("escaped-graph.png");
+
+    // * The raw client call, not `app.call`: an error is the answer being
+    //   asserted here, and `app.call` turns one into a panic.
+    let refused = app.client.call("graph_png", json!({"path": escaped}));
+    assert!(
+        refused.is_err(),
+        "an export naming a path outside the vault must be refused: {refused:?}"
+    );
+    assert!(
+        !escaped.exists(),
+        "the refused export still wrote the file: {escaped:?}"
+    );
+}
