@@ -5,6 +5,7 @@
 //! per run of text, with the styled ranges from the model and clickable
 //! ranges for links, tags and footnote references.
 
+use super::folds::ReadingFoldStore;
 use super::model::{
     Embed, EmbedKind, InlineStyle, LinkTarget, Model, RBlock, RItem, RichText, Segment, TaskMarker,
 };
@@ -279,6 +280,9 @@ pub struct ReadingView {
     pub path: Option<String>,
     model: Arc<Model>,
     list: ListState,
+    /// The fold store of this vault's notes, opened once at startup. The
+    /// record lives outside the vault, keyed by vault-relative path.
+    fold_store: ReadingFoldStore,
     /// Callouts whose fold state the reader flipped, by title id.
     toggled: HashSet<usize>,
     /// The note's heading and list folds, by key — the same keys the
@@ -409,6 +413,7 @@ impl ReadingView {
             list: ListState::new(0, ListAlignment::Top, px(1200.)),
             toggled: HashSet::new(),
             folds: Vec::new(),
+            fold_store: ReadingFoldStore::open(),
             fold_headings: true,
             hidden: Vec::new(),
             readable_line_length: true,
@@ -1106,6 +1111,7 @@ impl ReadingView {
         let top = self.list.logical_scroll_top();
         self.path = path;
         self.list.reset(model.blocks.len());
+        let real_model = !model.blocks.is_empty();
         if same {
             // * A reload after a change on disk keeps the reader's place.
             self.list.scroll_to(top);
@@ -1121,10 +1127,57 @@ impl ReadingView {
             //   expanded callout 1.5 s after any save of the note being read.
             self.toggled.clear();
             self.folds.clear();
+            if real_model {
+                // * The real model landed: restore this note's saved folds.
+                self.load_folds();
+            }
+        } else if real_model && self.folds.is_empty() {
+            // * A placeholder model was replaced by the real one for the
+            //   same note (a mode switch into Reading): restore what was
+            //   saved for it.
+            self.load_folds();
         }
         self.recompute_hidden();
         self.copied = None;
         cx.notify();
+    }
+
+    /// The saved folded headings of the note on screen, by their index in
+    /// the view's heading order. A heading that moved or went away simply
+    /// fails to resolve and stays unfolded; nothing is written to the note.
+    fn load_folds(&mut self) {
+        let Some(path) = self.path.as_deref() else {
+            return;
+        };
+        let heads = self.headings();
+        self.folds = self
+            .fold_store
+            .get(path)
+            .map(|saved| {
+                heads
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(ix, (_, _, key))| saved.contains(&ix).then_some(key.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+    }
+
+    /// The indexes of this note's currently folded headings, written to
+    /// the store outside the vault whenever a fold changes. An empty set
+    /// drops the note's entry.
+    fn save_folds(&mut self) {
+        let Some(path) = self.path.as_deref() else {
+            return;
+        };
+        let heads = self.headings();
+        let saved: HashSet<usize> = heads
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, _, key))| self.folds.contains(key))
+            .map(|(ix, _)| ix)
+            .collect();
+        self.fold_store.put(path, saved);
     }
 
     // ----- heading folds --------------------------------------------------------
@@ -1179,6 +1232,7 @@ impl ReadingView {
             None => self.folds.push(key),
         }
         self.recompute_hidden();
+        self.save_folds();
         cx.notify();
     }
 
@@ -1190,6 +1244,7 @@ impl ReadingView {
     pub fn set_fold_keys(&mut self, keys: Vec<FoldKey>, cx: &mut Context<Self>) {
         self.folds = keys;
         self.recompute_hidden();
+        self.save_folds();
         cx.notify();
     }
 
@@ -1239,6 +1294,7 @@ impl ReadingView {
                 .collect();
             self.folds.retain(|k| !hiding.contains(k));
             self.recompute_hidden();
+            self.save_folds();
         }
         if ix < self.model.blocks.len() {
             self.list.scroll_to(ListOffset {
@@ -1686,7 +1742,6 @@ impl ReadingView {
         cx.notify();
     }
 }
-
 
 #[cfg(test)]
 mod tests {
