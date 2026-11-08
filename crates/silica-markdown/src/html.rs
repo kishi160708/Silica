@@ -284,7 +284,7 @@ impl<'r, 'a> Renderer<'r, 'a> {
                 escape_html(content, &mut self.out);
                 self.out.push_str("</code></pre>\n");
             }
-            BlockKind::HtmlBlock { content } => {
+            BlockKind::HtmlBlock { content, .. } => {
                 self.cr();
                 self.out.push_str(content);
                 self.cr();

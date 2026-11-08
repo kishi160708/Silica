@@ -272,7 +272,12 @@ pub enum RBlock {
         /// exactly one trailing newline removed, as Obsidian's copies.
         copy: String,
     },
-    Html(RichText),
+    Html {
+        /// Promoted tags become runs and text; source blocks keep their raw
+        /// text with an `html` run so the renderer paints them as source.
+        text: RichText,
+        kind: HtmlBlockKind,
+    },
     Quote(Vec<RBlock>),
     Callout {
         /// Canonical type, one of Obsidian's built-ins.
@@ -300,6 +305,16 @@ pub enum RBlock {
     },
     /// `(number, body)` in reference order, rendered after a rule.
     Footnotes(Vec<(usize, Vec<RBlock>)>),
+}
+
+/// How the reading view treats an HTML block: `div` and `pre` are promoted
+/// to real blocks, everything else (comments, scripts, unknown tags) stays
+/// raw source painted monospace and muted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HtmlBlockKind {
+    Div,
+    Pre,
+    Source,
 }
 
 /// A built note.
@@ -476,7 +491,7 @@ pub fn build_widgets(
             // * Only the raw HTML the renderer can actually draw earns a
             //   widget. Anything else -- a comment, a script, a bare `<div>` --
             //   would fold its source lines away to show the same muted text.
-            BlockKind::HtmlBlock { content } => html_images(content).is_some(),
+            BlockKind::HtmlBlock { content, .. } => html_images(content).is_some(),
             BlockKind::Paragraph { content } => match content.as_slice() {
                 [one] => matches!(
                     &one.kind,
@@ -665,7 +680,7 @@ impl<'v> Builder<'v> {
                     copy: body.strip_suffix('\n').unwrap_or(&body).to_string(),
                 }
             }
-            BlockKind::HtmlBlock { content } => match html_images(content) {
+            BlockKind::HtmlBlock { content, kind } => match html_images(content) {
                 // * Obsidian resolves a raw `<img src>` like a wikilink target
                 //   and renders the run of them as one block, so they go
                 //   through the same embeds a markdown image does.
@@ -687,20 +702,39 @@ impl<'v> Builder<'v> {
                     if let Some(table) = raw_html::parse_table(src) {
                         return Some(self.html_table(table));
                     }
-                    match raw_html::block(src, self.id()) {
-                        Some(rich) => RBlock::Html(rich),
-                        None => RBlock::Html(RichText {
-                            id: self.id(),
-                            text: src.to_string(),
-                            runs: vec![(
-                                0..src.len(),
-                                InlineStyle {
-                                    html: true,
-                                    ..Default::default()
-                                },
-                            )],
-                            links: Vec::new(),
-                        }),
+                    // * Promotion is limited to the safe block containers
+                    //   that become real elements: `div` (CommonMark kind 6)
+                    //   and `pre` (kind 8). A comment (2) and `script` (1),
+                    //   like anything else, stay source: their lines are not
+                    //   folded and not pointed at a rendered tag.
+                    let promotable = matches!(*kind, 6 | 8);
+                    let drawn = promotable
+                        .then_some(())
+                        .and_then(|()| raw_html::block(src, self.id()));
+                    match drawn {
+                        Some(rich) => RBlock::Html {
+                            text: rich,
+                            kind: if *kind == 8 {
+                                HtmlBlockKind::Pre
+                            } else {
+                                HtmlBlockKind::Div
+                            },
+                        },
+                        None => RBlock::Html {
+                            text: RichText {
+                                id: self.id(),
+                                text: src.to_string(),
+                                runs: vec![(
+                                    0..src.len(),
+                                    InlineStyle {
+                                        html: true,
+                                        ..Default::default()
+                                    },
+                                )],
+                                links: Vec::new(),
+                            },
+                            kind: HtmlBlockKind::Source,
+                        },
                     }
                 }
             },
@@ -2201,9 +2235,53 @@ mod tests {
             assert!(widgets(src, &stub()).is_empty(), "{src:?} became a widget");
             let m = build("Self.md", src, &stub());
             assert!(
-                matches!(&m.blocks[0], RBlock::Html(_)),
+                matches!(&m.blocks[0], RBlock::Html { .. }),
                 "{src:?} -> {:?}",
                 m.blocks[0]
+            );
+        }
+    }
+
+    #[test]
+    fn div_and_pre_are_promoted_comment_and_script_stay_source() {
+        // * `div` (CommonMark kind 6) and `pre` (kind 8) are promoted
+        //   into drawn blocks; a comment (2) and `script` (1) — a
+        //   different kind entirely — stay source: the raw text whole as
+        //   one `html` run, its lines never folded.
+        let div = build("Self.md", "<div>one</div>\n", &stub());
+        let RBlock::Html { text, kind } = &div.blocks[0] else {
+            panic!("{:?}", div.blocks[0])
+        };
+        assert_eq!(*kind, HtmlBlockKind::Div);
+        assert_eq!(text.text, "one\n");
+        assert!(!text.runs.iter().any(|(_, s)| s.html));
+
+        let pre = build("Self.md", "<pre>line one\nline two</pre>\n", &stub());
+        let RBlock::Html { text, kind } = &pre.blocks[0] else {
+            panic!("{:?}", pre.blocks[0])
+        };
+        assert_eq!(*kind, HtmlBlockKind::Pre);
+        assert_eq!(text.text, "line one\nline two");
+        assert!(text.runs.iter().all(|(_, s)| s.code));
+
+        for src in ["<!-- comment -->\n", "<script>window.x = 1</script>\n"] {
+            let m = build("Self.md", src, &stub());
+            let RBlock::Html { text, kind } = &m.blocks[0] else {
+                panic!("{src:?} -> {:?}", m.blocks[0])
+            };
+            assert_eq!(*kind, HtmlBlockKind::Source, "{src:?}");
+            let want = src.trim_end();
+            assert_eq!(text.text, want, "{src:?}");
+            assert_eq!(
+                text.runs,
+                vec![(
+                    0..want.len(),
+                    InlineStyle {
+                        html: true,
+                        ..Default::default()
+                    }
+                )],
+                "{src:?}"
             );
         }
     }
@@ -2271,7 +2349,7 @@ mod tests {
             "<table><tr><td><table><tr><td>x</td></tr></table></td></tr></table>\n",
             &stub(),
         );
-        assert!(matches!(&m.blocks[0], RBlock::Html(_)));
+        assert!(matches!(&m.blocks[0], RBlock::Html { .. }));
     }
 
     #[test]

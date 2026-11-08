@@ -364,16 +364,24 @@ impl<'a> Renderer<'a> {
                     )
                     .into_any_element()
             }
-            RBlock::Html(text) => {
-                // * Run every registered markdown post-processor so a plugin
+            RBlock::Html { text, kind } => {
+                // * Run every registered markdown post-processors so a plugin
                 //   can inspect the rendered output. The hook is in place;
                 //   the DOM element itself is not yet available to a native
                 //   renderer, so the callback receives no element.
                 let _ = live::run_all_post_processors();
-                // * Tags the renderer drew are prose now; a fragment it kept
-                //   as source carries the `html` style on its run, which is
-                //   what still paints it mono and muted.
-                div().mb(gap).child(self.rich(text)).into_any_element()
+                // * Source blocks (comments, scripts, unknown tags) keep
+                //   their raw text: its `html` run paints it monospace and
+                //   muted. `div` is drawn as a real block container; `pre`
+                //   keeps its newlines and stays monospace at the code-block
+                //   size, the way a `<pre>` block reads.
+                let mut block = div().mb(gap);
+                if matches!(kind, HtmlBlockKind::Pre) {
+                    block = block
+                        .font_family(t.mono_font.clone())
+                        .text_size(px(base * 0.875));
+                }
+                block.child(self.rich(text)).into_any_element()
             }
             RBlock::Quote(children) => div()
                 .mb(gap)
