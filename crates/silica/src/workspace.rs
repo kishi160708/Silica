@@ -556,6 +556,7 @@ pub const RUNNABLE: &[&str] = &[
     "silica:toggle-graph-pane",
     "silica:pin-tab",
     "silica:palette-verify",
+    "silica:template-gallery",
     "workspace:copy-path",
     "workspace:copy-full-path",
     "app:open-settings",
@@ -2097,6 +2098,9 @@ enum ChooserPurpose {
     CanvasGroup,
     /// `bases:change-view`: the showing base's views, by index.
     BasesView,
+    /// `silica:template-gallery`: one of Silica's own built-in templates,
+    /// to install into the template folder and possibly insert into a note.
+    TemplateGallery,
 }
 
 /// How Obsidian names a split's axis: a `vertical` split lays its children
@@ -3822,6 +3826,12 @@ impl Workspace {
                             this.focus_main(window, cx);
                             cx.notify();
                         }
+                        ChooserPurpose::TemplateGallery => {
+                            this.modal = Modal::None;
+                            this.install_template_gallery(value, window, cx);
+                            this.focus_main(window, cx);
+                            cx.notify();
+                        }
                     },
                     ChooserEvent::Close => {
                         this.modal = Modal::None;
@@ -4534,6 +4544,51 @@ impl Workspace {
         cx.notify();
     }
 
+    /// The offline template gallery: Silica's own generic templates (a daily
+    /// note, a meeting note, a project brief), offered for picking. A pick
+    /// installs the template into the vault's template folder
+    /// (`templates.json`'s `folder`) as `{id}.md` unless it exists already,
+    /// and inserts its expanded text at the cursor exactly like
+    /// `insert-template`. An unset folder is reported instead.
+    fn open_template_gallery(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.mode.is_editing() {
+            return;
+        }
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let folder = state
+            .templates()
+            .folder
+            .clone()
+            .unwrap_or_default()
+            .trim_matches('/')
+            .to_string();
+        if folder.is_empty() {
+            return self.report("No template folder is set in Settings", cx);
+        }
+        let rows: Vec<ChooserRow> = silica_templates::GALLERY
+            .iter()
+            .map(|t| ChooserRow {
+                label: t.name.to_string(),
+                value: t.id.to_string(),
+            })
+            .collect();
+        self.close_editor_suggest(cx);
+        self.chooser_purpose = ChooserPurpose::TemplateGallery;
+        self.modal = Modal::Chooser;
+        self.chooser.update(cx, |c, cx| {
+            c.open(
+                rows,
+                "Type name of a template...",
+                "No templates in the gallery",
+                window,
+                cx,
+            )
+        });
+        cx.notify();
+    }
+
     /// "Add note from vault" and "Add media from vault": the chooser over
     /// the vault's notes, or its images, PDFs, audio and video; the pick
     /// becomes a file card at the middle of the canvas.
@@ -4835,6 +4890,39 @@ impl Workspace {
         self.editor
             .update(cx, |e, cx| e.insert_at_cursors(&expanded, window, cx));
         window.focus(&self.editor.focus_handle(cx), cx);
+        cx.notify();
+    }
+
+    /// Installs gallery template `id` into the vault's template folder and,
+    /// when a note is being edited, expands it and inserts it at the cursor.
+    /// A template already in the folder is left as it is.
+    fn install_template_gallery(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(template) = silica_templates::find(id) else {
+            return self.report(format!("Template {id} is not in the gallery"), cx);
+        };
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let root = state.root.clone();
+        let folder = state
+            .templates()
+            .folder
+            .clone()
+            .unwrap_or_default()
+            .trim_matches('/')
+            .to_string();
+        let installed = match silica_templates::install(template, &folder, &root) {
+            Ok(dest) => dest,
+            Err(err) => {
+                self.report(format!("Could not install {id}: {err}"), cx);
+                return;
+            }
+        };
+        if self.mode.is_editing() {
+            self.insert_template(installed.to_string_lossy().to_string(), window, cx);
+        } else {
+            self.report(format!("Installed {id} to {folder}"), cx);
+        }
         cx.notify();
     }
 
@@ -5969,6 +6057,7 @@ impl Workspace {
             "silica:reminder-add" => self.add_reminder(window, cx),
             "silica:toggle-graph-pane" => self.toggle_graph_pane(cx),
             "silica:palette-verify" => self.verify_palette(window, cx),
+            "silica:template-gallery" => self.open_template_gallery(window, cx),
             "workspace:copy-path" => self.copy_current_path(false, cx),
             "workspace:copy-full-path" => self.copy_current_path(true, cx),
             "silica:pin-tab" => self.pin_tab(cx),
