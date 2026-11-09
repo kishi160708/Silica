@@ -249,7 +249,11 @@ random-note
 # Silica ids that are not Obsidian commands (marked by the `silica:` prefix).
 silica:calendar
 silica:export-site
+<<<<<<< HEAD
 silica:footnotes
+=======
+silica:file-recovery
+>>>>>>> burst/v6/file-recovery
 silica:toggle-graph-pane
 silica:vault-backup
 quick-capture:open

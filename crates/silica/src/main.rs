@@ -20,6 +20,7 @@ mod copy_results;
 mod css_watcher;
 mod editor;
 mod explorer;
+mod file_recovery;
 mod fold;
 mod footnotes;
 mod graph;

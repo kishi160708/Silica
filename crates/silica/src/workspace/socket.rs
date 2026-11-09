@@ -163,7 +163,11 @@ impl Workspace {
                 RightTab::Graph => "graph",
                 RightTab::Tags => "tags",
                 RightTab::Properties => "properties",
+<<<<<<< HEAD
                 RightTab::Calendar => "calendar",
+=======
+                RightTab::FileRecovery => "file-recovery",
+>>>>>>> burst/v6/file-recovery
             }),
         );
         put_capped(

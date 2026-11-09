@@ -450,7 +450,11 @@ pub const RUNNABLE: &[&str] = &[
     //   what the repo marks its native additions with.
     "silica:calendar",
     "silica:export-site",
+<<<<<<< HEAD
     "silica:footnotes",
+=======
+    "silica:file-recovery",
+>>>>>>> burst/v6/file-recovery
     "canvas:new-file",
     "canvas:export-as-image",
     "canvas:jump-to-group",
@@ -1474,9 +1478,15 @@ pub(crate) enum RightTab {
     /// All properties: every key in the vault with its type and count.
     Properties,
     Outline,
+<<<<<<< HEAD
     /// Footnotes of the active note: one row per footnote, numbered in
     /// section order; a row reveals its definition's line.
     Footnotes,
+=======
+    /// File recovery: every snapshot Silica has taken of every note, with a
+    /// way to restore one. Silica's own pane, not an Obsidian core plugin.
+    FileRecovery,
+>>>>>>> burst/v6/file-recovery
 }
 
 /// The Outline pane's headings for one note's metadata, whether that
@@ -4778,6 +4788,7 @@ impl Workspace {
             "outline" => RightTab::Outline,
             "tags" => RightTab::Tags,
             "properties" => RightTab::Properties,
+            "file-recovery" => RightTab::FileRecovery,
             _ => RightTab::Backlinks,
         };
         self.select_right_tab(which, cx);
@@ -5585,6 +5596,7 @@ impl Workspace {
                 self.step_font_size(up, window, cx);
             }
             "silica:vault-backup" => self.backup_vault(window, cx),
+            "silica:file-recovery" => self.open_file_recovery(window, cx),
             "silica:toggle-graph-pane" => self.toggle_graph_pane(cx),
             "workspace:copy-path" => self.copy_current_path(false, cx),
             "workspace:copy-full-path" => self.copy_current_path(true, cx),
@@ -5964,6 +5976,7 @@ impl Workspace {
         }
     }
 
+<<<<<<< HEAD
     /// `silica:calendar`: Kalender di dock kanan — grid bulan yang tanggal
     /// tanggalnya membuka daily note. Toggle seperti pane graph.
     fn toggle_calendar_pane(&mut self, cx: &mut Context<Self>) {
@@ -5973,6 +5986,28 @@ impl Workspace {
         } else {
             self.right_visible = true;
             self.select_right_tab(RightTab::Calendar, cx);
+=======
+    /// `silica:file-recovery`: opens the file-recovery pane in the right dock,
+    /// listing every snapshot Silica has taken of every note so one can be
+    /// reviewed and restored.
+    fn open_file_recovery(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.right_visible = true;
+        self.select_right_tab(RightTab::FileRecovery, cx);
+    }
+
+    /// Restores the snapshot taken at `at` of `path` through the vault's own
+    /// write path, reporting the outcome in the status bar.
+    fn file_recovery_restore(&mut self, path: &str, at: u64, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            self.report("No vault is open", cx);
+            return;
+        };
+        let root = state.root.clone();
+        let vault = state.vault();
+        match crate::file_recovery::restore(&vault, &root, path, at) {
+            Ok(p) => self.report(format!("Restored {p}"), cx),
+            Err(err) => self.report(format!("Restore failed: {err}"), cx),
+>>>>>>> burst/v6/file-recovery
         }
     }
 

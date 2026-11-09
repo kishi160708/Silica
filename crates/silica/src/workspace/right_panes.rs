@@ -1089,6 +1089,121 @@ impl Workspace {
             .into_any_element()
     }
 
+    /// The File recovery pane: every markdown note that has at least one
+    /// snapshot, newest snapshot first, each with a button that restores
+    /// that snapshot through the vault's own write path.
+    pub(crate) fn render_file_recovery_pane(
+        &mut self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let Some(state) = self.state.clone() else {
+            return div()
+                .flex_1()
+                .px(px(12.))
+                .child(
+                    div()
+                        .my(px(8.))
+                        .px(px(16.))
+                        .py(px(24.))
+                        .text_size(px(FONT_UI_SMALL))
+                        .text_color(theme.text_faint)
+                        .text_center()
+                        .child("No vault is open.")
+                        .into_any_element(),
+                )
+                .into_any_element();
+        };
+        let root = state.root.clone();
+        let vault = state.vault();
+        let entries =
+            crate::file_recovery::collect(&root, vault.markdown_files().map(|f| f.path.as_str()));
+        drop(vault);
+
+        if entries.is_empty() {
+            return div()
+                .flex_1()
+                .px(px(12.))
+                .child(
+                    div()
+                        .my(px(8.))
+                        .px(px(16.))
+                        .py(px(24.))
+                        .text_size(px(FONT_UI_SMALL))
+                        .text_color(theme.text_faint)
+                        .text_center()
+                        .child("No snapshots yet. Save a note to create one.")
+                        .into_any_element(),
+                )
+                .into_any_element();
+        }
+
+        let header = Self::pane_header().child(SharedString::from("File recovery"));
+
+        let mut list = div()
+            .id("file-recovery")
+            .flex()
+            .flex_col()
+            .flex_1()
+            .overflow_y_scroll()
+            .px(px(12.))
+            .pt(px(12.))
+            .pb(px(32.));
+        for entry in &entries {
+            let path = entry.path.clone();
+            list = list.child(
+                div()
+                    .text_size(px(FONT_UI_SMALL))
+                    .text_color(theme.text_muted)
+                    .mb(px(6.))
+                    .child(SharedString::from(path.clone())),
+            );
+            for version in &entry.versions {
+                let path = path.clone();
+                let at = version.at;
+                let label = version.label();
+                let bytes = version.bytes;
+                list = list.child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(6.))
+                        .px(px(8.))
+                        .py(px(4.))
+                        .mb(px(2.))
+                        .rounded(px(6.))
+                        .hover(|s| s.bg(theme.bg_alt))
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_size(px(FONT_UI_SMALL))
+                                .child(SharedString::from(format!("{label}  ·  {bytes} bytes"))),
+                        )
+                        .child(
+                            Self::nav_button(
+                                "file-recovery-restore",
+                                "clock",
+                                "Restore",
+                                false,
+                                theme,
+                            )
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| this.file_recovery_restore(&path, at, cx),
+                            )),
+                        ),
+                );
+            }
+        }
+        div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .child(header)
+            .child(list)
+            .into_any_element()
+    }
+
     /// Whether a left-dock pane's core plugin is on, by its id.
     pub(crate) fn left_pane_enabled(&self, id: &str) -> bool {
         self.state
@@ -1100,6 +1215,11 @@ impl Workspace {
     /// its own plugin in `core-plugins.json`, and a vault with no file has
     /// them all, so the default is what `CORE_PLUGINS` says.
     pub(crate) fn pane_enabled(&self, tab: RightTab) -> bool {
+        // * File recovery is Silica's own pane, not an Obsidian core plugin,
+        //   so it is always on.
+        if matches!(tab, RightTab::FileRecovery) {
+            return true;
+        }
         let id = match tab {
             RightTab::Backlinks => "backlink",
             RightTab::Outgoing => "outgoing-link",
@@ -1110,6 +1230,7 @@ impl Workspace {
             // * The graph's own plugin id, so a vault with the graph core
             //   plugin off takes the tab away with it.
             RightTab::Graph => "graph",
+<<<<<<< HEAD
             // * Kalender bukan core plugin dengan id di `core-plugins.json`;
             //   ia dihidupkan oleh kunci `calendar` di `daily-notes.json`
             //   (default on, berkas lama tetap).
@@ -1119,6 +1240,9 @@ impl Workspace {
                     .as_ref()
                     .is_none_or(|state| state.daily_notes().calendar.unwrap_or(true));
             }
+=======
+            RightTab::FileRecovery => unreachable!("handled above"),
+>>>>>>> burst/v6/file-recovery
         };
         self.state
             .as_ref()
@@ -1180,6 +1304,7 @@ impl Workspace {
                 .min_h_0()
                 .child(self.graph.clone())
                 .into_any_element(),
+            RightTab::FileRecovery => self.render_file_recovery_pane(theme, cx),
         };
         // * A pane whose core plugin is off is not offered: Obsidian takes
         //   the view away with the plugin.
@@ -1274,6 +1399,13 @@ impl Workspace {
                         cx,
                     ))
                     .children(tab_button(self, "Graph", "git-fork", RightTab::Graph, cx))
+                    .children(tab_button(
+                        self,
+                        "File recovery",
+                        "clock",
+                        RightTab::FileRecovery,
+                        cx,
+                    ))
                     .child(window_handle(
                         div().id("right-dock-space").flex_1().h_full(),
                         frameless,
