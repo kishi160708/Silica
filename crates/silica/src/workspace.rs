@@ -75,7 +75,7 @@ use rayon::prelude::*;
 use serde_json::{json, Map, Value};
 use silica_cache::{
     basename, frontmatter_aliases, index_markdown, CachedMetadata, LinkFormat, MetadataCache,
-    PropertyEntry,
+    PropertyEntry, index::TermIndex,
 };
 use silica_commands::{hotkey_label, keystroke, CommandRegistry};
 use silica_formats::bookmarks::{Bookmark, Bookmarks};
@@ -588,6 +588,9 @@ pub struct VaultState {
     cache: RwLock<MetadataCache>,
     /// Note text as indexed, for search and mentions.
     texts: RwLock<HashMap<String, Arc<String>>>,
+    /// Inverted term index: term → set of paths containing it. Used by
+    /// `run_search` to avoid scanning the whole vault on every query.
+    pub(crate) index: RwLock<TermIndex>,
     /// Vault-relative path → the scan row. Built once at load and kept in
     /// step with changes, so `file_data` is O(1) instead of a linear scan
     /// over every file in the vault.
@@ -738,11 +741,18 @@ impl VaultState {
             .iter()
             .map(|f| (f.path.clone(), Arc::new(f.clone())))
             .collect();
+        // * Term index: every indexed note's terms, so search narrows to
+        //   candidate files instead of scanning the whole vault.
+        let mut index = TermIndex::new();
+        for (path, text) in &texts {
+            index.insert(path, text);
+        }
         Ok(VaultState {
             root: vault.root().to_path_buf(),
             vault: RwLock::new(vault),
             cache: RwLock::new(cache),
             texts: RwLock::new(texts),
+            index: RwLock::new(index),
             file_index: RwLock::new(file_index),
             file_data_cache: RwLock::new(HashMap::new()),
             app: RwLock::new(app),
@@ -1002,16 +1012,19 @@ impl VaultState {
         {
             let mut cache = self.cache.write().unwrap_or_else(|e| e.into_inner());
             let mut texts = self.texts.write().unwrap_or_else(|e| e.into_inner());
+            let mut index = self.index.write().unwrap_or_else(|e| e.into_inner());
             for (c, (path, indexed)) in files.iter().zip(reread) {
                 match (c, indexed) {
                     (FileChange::Removed(_), _) => {
                         if texts.remove(&path).is_some() {
                             changes.removed_notes.push(path.clone());
                         }
+                        index.remove(&path);
                         cache.forget_path(&path);
                     }
                     (_, Some((meta, text))) => {
                         cache.insert_file(path.clone(), meta);
+                        index.insert(path.as_str(), text.as_str());
                         texts.insert(path.clone(), text);
                         changes.notes.push(path.clone());
                     }

@@ -10,6 +10,7 @@ pub mod links;
 pub mod properties;
 pub mod resolver;
 pub mod vault;
+pub mod index;
 
 pub use links::{basename, link_path, rewrite_note, LinkFormat, Rewrite};
 pub use properties::note_properties;

@@ -1898,6 +1898,28 @@ pub fn run_search(search: &Search, state: &VaultState) -> Vec<FileResult> {
         .map(|f| (f.path.clone(), (f.mtime, f.ctime)))
         .collect();
     let files: Vec<(&str, &CachedMetadata)> = cache.files().collect();
+
+    // * Term index: narrow the candidate set before the full matcher.
+    //   Only simple AND queries over content terms use it; anything with
+    //   `OR`, `NOT`, field scoping, or regex falls back to the full scan.
+    let candidates: Option<HashSet<String>> = index_terms(search.query()).map(|terms| {
+        let set: HashSet<String> = state
+            .index
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .candidates(&terms.iter().map(|s| s.as_str()).collect::<Vec<&str>>())
+            .into_iter()
+            .collect();
+        set
+    });
+
+    let files: Vec<(&str, &CachedMetadata)> = match &candidates {
+        Some(paths) => files
+            .into_iter()
+            .filter(|(p, _)| paths.contains(*p))
+            .collect(),
+        None => files,
+    };
     let mut results: Vec<FileResult> = files
         .par_iter()
         .filter_map(|(path, meta)| {
@@ -1939,6 +1961,31 @@ pub fn run_search(search: &Search, state: &VaultState) -> Vec<FileResult> {
         .collect();
     sort_results(&mut results, SortOrder::Alphabetical);
     results
+}
+
+/// Extract content search terms from a query if it's safe to use AND
+/// semantics over the term index. Returns `None` when the query has `OR`,
+/// `NOT`, field scoping, or regex — those fall back to a full scan.
+///
+/// `All` of bare `Text`/`Exact` terms is safe: a file must contain every
+/// term, so intersecting posting lists is a correct superset filter. The
+/// full matcher still runs on every candidate, so false positives are
+/// harmless; false negatives are the only risk, avoided by refusing
+/// complex queries.
+fn index_terms(query: &Query) -> Option<Vec<String>> {
+    match query {
+        Query::Text(s) | Query::Exact(s) => Some(vec![s.clone()]),
+        Query::All(children) => {
+            let mut terms = Vec::new();
+            for c in children {
+                let t = index_terms(c)?;
+                terms.extend(t);
+            }
+            Some(terms)
+        }
+        Query::Not(_) | Query::Any(_) | Query::Field(_, _) => None,
+        _ => Some(Vec::new()),
+    }
 }
 
 /// Puts results in `order`. The name orders are Obsidian's alphabetical
