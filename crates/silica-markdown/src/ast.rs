@@ -71,6 +71,9 @@ pub enum BlockKind<'a> {
     HtmlBlock {
         /// Raw lines, newline-terminated, written to the output verbatim.
         content: Cow<'a, str>,
+        /// CommonMark HTML block kind (1–8): 1 raw (`script`/`style`/`textarea`),
+        /// 2 comment, 6 block tag (`div`…), 8 preformatted (`pre`).
+        kind: u8,
     },
     BlockQuote {
         children: Vec<Block<'a>>,

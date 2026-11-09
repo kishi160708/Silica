@@ -6,7 +6,8 @@
 //! ranges for links, tags and footnote references.
 
 use super::model::{
-    Embed, EmbedKind, InlineStyle, LinkTarget, Model, RBlock, RItem, RichText, Segment, TaskMarker,
+    Embed, EmbedKind, HtmlBlockKind, InlineStyle, LinkTarget, Model, RBlock, RItem, RichText,
+    Segment, TaskMarker,
 };
 use crate::assets::{callout_icon, icon};
 use crate::fold::{self, FoldKey};
@@ -765,7 +766,7 @@ impl ReadingView {
             }
             RBlock::ThematicBreak => {}
             RBlock::Code { .. } => {}
-            RBlock::Html(rt) => {
+            RBlock::Html { text: rt, .. } => {
                 out.push((ix, rt.id, 0, rt.text.len()));
             }
             RBlock::Quote(children) => {
@@ -848,7 +849,7 @@ impl ReadingView {
             RBlock::Heading { text, .. } => out.push_str(&text.text),
             RBlock::ThematicBreak => out.push_str("---"),
             RBlock::Code { text, .. } => out.push_str(text),
-            RBlock::Html(rt) => out.push_str(&rt.text),
+            RBlock::Html { text: rt, .. } => out.push_str(&rt.text),
             RBlock::Quote(children) => {
                 for child in children {
                     out.push_str("> ");
@@ -926,7 +927,7 @@ impl ReadingView {
             RBlock::Heading { text, .. } => {
                 return text.text.get(start..end).map(|s| s.to_string());
             }
-            RBlock::Html(rt) => {
+            RBlock::Html { text: rt, .. } => {
                 return rt.text.get(start..end).map(|s| s.to_string());
             }
             _ => {}
@@ -1686,7 +1687,6 @@ impl ReadingView {
         cx.notify();
     }
 }
-
 
 #[cfg(test)]
 mod tests {
