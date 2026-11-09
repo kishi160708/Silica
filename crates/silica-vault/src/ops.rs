@@ -191,6 +191,14 @@ pub fn backup_vault(root: &Path, backups: &Path, keep: usize) -> Result<BackupRe
         ..Default::default()
     };
     copy_backup_tree(root, root, &dest, backups, &mut report)?;
+    // * Mark the backup complete only after every file copied: a torn run
+    //   (crash, power loss, drive unmounted mid-copy) leaves no marker, so
+    //   prune can tell a useless half-copy from a good one.
+    std::fs::File::create(dest.join(".complete"))
+        .map_err(io("create completion marker", &dest))?;
+    // fsync the directory so the marker and its entries are durable.
+    let dir = std::fs::File::open(&dest).map_err(io("open backup dir", &dest))?;
+    dir.sync_all().map_err(io("sync backup dir", &dest))?;
     let keep = keep.max(1);
     prune_backups(backups, keep);
     Ok(report)
@@ -285,29 +293,51 @@ fn copy_backup_tree(
     Ok(())
 }
 
-/// Deletes every backup folder but the newest `keep`, by name: the timestamp
-/// prefix is fixed width, so the sort is chronological.
+/// Deletes every incomplete backup (torn: no completion marker) and then all
+/// but the newest `keep` complete backups, by name: the timestamp prefix is
+/// fixed width, so the sort is chronological. An incomplete backup is worse
+/// than no backup — it promises safety a half-copied vault cannot deliver —
+/// so incomplete folders are always removed, never counted toward `keep`.
 fn prune_backups(backups: &Path, keep: usize) {
     let Ok(entries) = std::fs::read_dir(backups) else {
         return;
     };
-    let mut dirs: Vec<PathBuf> = entries
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| {
-            p.is_dir()
-                && p.file_name()
-                    .and_then(|n| n.to_str())
-                    .is_some_and(|n| n.starts_with("vault-"))
-        })
-        .collect();
-    dirs.sort();
-    if dirs.len() <= keep {
+    let mut complete: Vec<PathBuf> = Vec::new();
+    let mut incomplete: Vec<PathBuf> = Vec::new();
+    for e in entries.filter_map(|e| e.ok()).map(|e| e.path()) {
+        if !e.is_dir() {
+            continue;
+        }
+        let Some(name) = e.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !name.starts_with("vault-") {
+            continue;
+        }
+        if is_complete(&e) {
+            complete.push(e);
+        } else {
+            incomplete.push(e);
+        }
+    }
+    // * A torn backup (crash mid-copy, no completion marker) is deleted first
+    //   and never counts toward `keep`.
+    for stale in incomplete {
+        let _ = std::fs::remove_dir_all(&stale);
+    }
+    complete.sort();
+    if complete.len() <= keep {
         return;
     }
-    for stale in &dirs[..dirs.len() - keep] {
+    for stale in &complete[..complete.len() - keep] {
         let _ = std::fs::remove_dir_all(stale);
     }
+}
+
+/// True once `backup_vault` has finished copying every file and written its
+/// completion marker; a folder without it is a torn run and is not trusted.
+fn is_complete(dir: &Path) -> bool {
+    dir.join(".complete").is_file()
 }
 
 /// Checks every segment of a new path the way Obsidian's rename does.
@@ -1780,6 +1810,40 @@ mod tests {
 
         assert!(report.dir.exists());
         assert_eq!(report.files, 3);
+    }
+
+    // * A torn run (crash mid-copy, no completion marker) is worse than no
+    //   backup: prune deletes every incomplete folder and never counts it
+    //   toward `keep`, so complete backups survive instead of being eaten by
+    //   a useless half-copy that sorts newest.
+    #[test]
+    fn prune_deletes_torn_backups_and_keeps_only_complete_newest() {
+        let (_dir, root) = plain_vault();
+        let backups = root.join(".silica").join("backups");
+        fs::create_dir_all(&backups).unwrap();
+
+        // Oldest complete backup.
+        let old_complete = backups.join("vault-100");
+        fs::create_dir_all(&old_complete).unwrap();
+        fs::write(old_complete.join(".complete"), "").unwrap();
+        fs::write(old_complete.join("A.md"), "aa").unwrap();
+
+        // Torn backup that sorts newest: copied partway, never finished.
+        let torn = backups.join("vault-200");
+        fs::create_dir_all(&torn).unwrap();
+        fs::write(torn.join("A.md"), "half").unwrap(); // no .complete marker
+
+        // Newest complete backup.
+        let new_complete = backups.join("vault-300");
+        fs::create_dir_all(&new_complete).unwrap();
+        fs::write(new_complete.join(".complete"), "").unwrap();
+        fs::write(new_complete.join("A.md"), "aa").unwrap();
+
+        super::prune_backups(&backups, 1);
+
+        assert!(!torn.exists(), "torn backup should be deleted");
+        assert!(!old_complete.exists(), "oldest complete should be pruned");
+        assert!(new_complete.exists(), "newest complete should survive");
     }
 }
 
