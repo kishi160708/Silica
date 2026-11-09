@@ -536,6 +536,88 @@ impl Workspace {
             SidePaneAction::CopyProperty(key) => {
                 self.copy_path(key, cx);
             }
+            SidePaneAction::RenameProperty(key) => {
+                let count = self
+                    .property_entries
+                    .iter()
+                    .find(|e| e.name == *key)
+                    .map(|e| e.count)
+                    .unwrap_or(0);
+                let s = if count == 1 { "" } else { "s" };
+                self.open_prompt(
+                    PendingOp::RenameProperty { from: key.clone() },
+                    PromptSpec {
+                        title: crate::i18n::t("Rename property").into(),
+                        detail: Some(
+                            format!(
+                                "Rename \"{key}\" to what? ({count} note{s} with this property)",
+                                s = s
+                            )
+                            .into(),
+                        ),
+                        input: None,
+                        placeholder: crate::i18n::t("Property name").into(),
+                        confirm: "Rename".into(),
+                        ..PromptSpec::default()
+                    },
+                    window,
+                    cx,
+                );
+            }
+            SidePaneAction::SetPropertyType(key) => {
+                let Some(state) = self.state.clone() else {
+                    return;
+                };
+                let current = state
+                    .property_types()
+                    .types
+                    .get(key)
+                    .cloned()
+                    .unwrap_or_default();
+                let suggestions: Vec<String> =
+                    silica_formats::properties::PropertyType::selectable()
+                        .iter()
+                        .map(|ty| ty.as_str().to_string())
+                        .collect();
+                self.open_prompt(
+                    PendingOp::SetPropertyType { key: key.clone() },
+                    PromptSpec {
+                        title: crate::i18n::t("Property type").into(),
+                        detail: Some(format!("Set the type of \"{key}\"").into()),
+                        input: None,
+                        placeholder: current.into(),
+                        suggestions,
+                        confirm: "Set".into(),
+                        ..PromptSpec::default()
+                    },
+                    window,
+                    cx,
+                );
+            }
+            SidePaneAction::DeleteProperty(key) => {
+                let count = self
+                    .property_entries
+                    .iter()
+                    .find(|e| e.name == *key)
+                    .map(|e| e.count)
+                    .unwrap_or(0);
+                let s = if count == 1 { "" } else { "s" };
+                self.open_prompt(
+                    PendingOp::DeleteProperty { key: key.clone() },
+                    PromptSpec {
+                        title: crate::i18n::t("Delete property").into(),
+                        detail: Some(
+                            format!("Delete \"{key}\" from {count} note{s}", s = s).into(),
+                        ),
+                        input: None,
+                        placeholder: "".into(),
+                        confirm: crate::i18n::t("Delete").into(),
+                        ..PromptSpec::default()
+                    },
+                    window,
+                    cx,
+                );
+            }
             SidePaneAction::OpenHeading(path, offset) => {
                 self.open_file(path.clone(), None, cx);
                 self.reveal_offset(*offset, cx);

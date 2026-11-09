@@ -7,7 +7,6 @@
 use super::*;
 
 impl Workspace {
-
     pub(crate) fn open_prompt(
         &mut self,
         op: PendingOp,
@@ -96,7 +95,12 @@ impl Workspace {
     /// keeps `Notes/` from also matching `Notes archive/`. What Obsidian puts
     /// in its own box here was not captured, so the query is marked OBSERVE in
     /// [[Specification#The file explorer's context menus]].
-    pub(crate) fn search_in_folder(&mut self, folder: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn search_in_folder(
+        &mut self,
+        folder: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let query = match folder.is_empty() {
             true => String::new(),
             false => format!("path:\"{folder}/\""),
@@ -615,7 +619,12 @@ impl Workspace {
     }
 
     /// Creates the note a link or the switcher names and opens it.
-    pub(crate) fn create_note_for(&mut self, name: &str, window: Option<&mut Window>, cx: &mut Context<Self>) {
+    pub(crate) fn create_note_for(
+        &mut self,
+        name: &str,
+        window: Option<&mut Window>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(state) = self.state.clone() else {
             return;
         };
@@ -634,7 +643,12 @@ impl Workspace {
         }
     }
 
-    pub(crate) fn create_from_link(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn create_from_link(
+        &mut self,
+        name: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.create_note_for(name, Some(window), cx);
     }
 
@@ -744,7 +758,12 @@ impl Workspace {
         );
     }
 
-    pub(crate) fn start_new_folder(&mut self, parent: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn start_new_folder(
+        &mut self,
+        parent: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let initial = self
             .state
             .as_ref()
@@ -905,7 +924,12 @@ impl Workspace {
     /// was saved through, newest first. Picking one loads those bytes into
     /// the buffer, unsaved, so the restore is reviewed before it lands --
     /// the same rule the merge follows.
-    pub(crate) fn start_version_history(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn start_version_history(
+        &mut self,
+        path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(state) = self.state.clone() else {
             return;
         };
@@ -1201,7 +1225,12 @@ link to it is rewritten. The current note is deleted."
     }
 
     /// Enter in the prompt: finish the pending operation with `value`.
-    pub(crate) fn prompt_submitted(&mut self, value: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn prompt_submitted(
+        &mut self,
+        value: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(op) = self.pending.clone() else {
             self.close_modal(window, cx);
             return;
@@ -1349,7 +1378,10 @@ link to it is rewritten. The current note is deleted."
                     self.report("Tag name cannot be empty", cx);
                     return;
                 }
-                if !new_tag.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '/') {
+                if !new_tag
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '/')
+                {
                     self.report("Tag name contains invalid characters", cx);
                     return;
                 }
@@ -1375,8 +1407,7 @@ link to it is rewritten. The current note is deleted."
                     };
                     let next = rename_tag_in_content(&content, &from, new_tag);
                     if next != content {
-                        if let Err(err) =
-                            silica_vault::write_no_follow(&absolute, next.as_bytes())
+                        if let Err(err) = silica_vault::write_no_follow(&absolute, next.as_bytes())
                         {
                             self.report(format!("Could not write {path}: {err}"), cx);
                             return;
@@ -1388,10 +1419,7 @@ link to it is rewritten. The current note is deleted."
                     let count = changed.len();
                     self.after_changes(
                         Changes {
-                            files: changed
-                                .into_iter()
-                                .map(FileChange::Modified)
-                                .collect(),
+                            files: changed.into_iter().map(FileChange::Modified).collect(),
                             notes: Vec::new(),
                             removed_notes: Vec::new(),
                         },
@@ -1407,6 +1435,85 @@ link to it is rewritten. The current note is deleted."
                     );
                 } else {
                     self.report("No files to rename", cx);
+                }
+            }
+            PendingOp::RenameProperty { from } => {
+                self.pending = None;
+                self.close_modal(window, cx);
+                let Some(state) = self.state.clone() else {
+                    return;
+                };
+                let new = value.trim();
+                if new.is_empty() {
+                    self.report("Property name cannot be empty", cx);
+                    return;
+                }
+                if new == from {
+                    return;
+                }
+                match state.rename_property(&from, new) {
+                    Ok(changed) => {
+                        let n = changed.len();
+                        self.after_changes(
+                            Changes {
+                                files: changed.into_iter().map(FileChange::Modified).collect(),
+                                notes: Vec::new(),
+                                removed_notes: Vec::new(),
+                            },
+                            cx,
+                        );
+                        let s = if n == 1 { "" } else { "s" };
+                        self.report(
+                            format!(
+                                "Renamed property \"{from}\" to \"{new}\" in {n} note{s}",
+                                s = s
+                            ),
+                            cx,
+                        );
+                    }
+                    Err(err) => self.report(format!("Could not rename property: {err}"), cx),
+                }
+            }
+            PendingOp::SetPropertyType { key } => {
+                let ty = match silica_formats::properties::PropertyType::parse(value.trim()) {
+                    Some(ty) => ty,
+                    None => {
+                        self.report(crate::i18n::t("Invalid property type"), cx);
+                        return;
+                    }
+                };
+                self.pending = None;
+                self.close_modal(window, cx);
+                let Some(state) = self.state.clone() else {
+                    return;
+                };
+                match state.assign_property_type(&key, ty) {
+                    Ok(_) => {
+                        self.refresh_property_rows(&state);
+                        self.report(format!("Set \"{key}\" to {}", ty.as_str()), cx);
+                    }
+                    Err(err) => self.report(format!("Could not write types.json: {err}"), cx),
+                }
+            }
+            PendingOp::DeleteProperty { key } => {
+                self.pending = None;
+                self.close_modal(window, cx);
+                let Some(state) = self.state.clone() else {
+                    return;
+                };
+                match state.remove_property(&key) {
+                    Ok(changed) => {
+                        self.after_changes(
+                            Changes {
+                                files: changed.into_iter().map(FileChange::Modified).collect(),
+                                notes: Vec::new(),
+                                removed_notes: Vec::new(),
+                            },
+                            cx,
+                        );
+                        self.report(format!("Deleted property \"{key}\""), cx);
+                    }
+                    Err(err) => self.report(format!("Could not delete property: {err}"), cx),
                 }
             }
         }
