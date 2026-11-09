@@ -253,6 +253,7 @@ silica:export-site
 silica:footnotes
 silica:file-recovery
 silica:export-pdf
+silica:reminder-add
 silica:toggle-graph-pane
 silica:pin-tab
 silica:vault-backup

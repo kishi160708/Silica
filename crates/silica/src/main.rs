@@ -46,6 +46,7 @@ mod prompt;
 mod properties;
 mod quick_capture;
 mod reading;
+mod reminder;
 mod search;
 mod settings;
 mod site;
