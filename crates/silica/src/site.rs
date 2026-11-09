@@ -89,15 +89,15 @@ fn output_is_safe(out: &Path, root: &Path) -> Result<(), String> {
 /// pieces behind (`<scr<script>x</script>ipt>` emits `<scr` + `ipt>`, a
 /// whole live `<script>` in the output).
 fn strip_active(html: &str) -> String {
-    let mut out = html.to_string();
-    loop {
-        let stripped = strip_active_once(&out);
-        let done = stripped == out;
-        out = stripped;
-        if done {
-            return strip_event_attributes(&out);
-        }
+let mut out = html.to_string();
+loop {
+    let stripped = strip_active_once(&out);
+    let done = stripped == out;
+    out = stripped;
+    if done {
+        return strip_meta_refresh(&strip_event_attributes(&out));
     }
+}
 }
 
 /// One sweep: every `<script`/`<iframe` element found in `html`, dropped
@@ -108,7 +108,7 @@ fn strip_active_once(html: &str) -> String {
     let mut rest = html;
     loop {
         let lower = rest.to_ascii_lowercase();
-        let open = ["<script", "<iframe"]
+        let open = ["<script", "<iframe", "<object", "<embed", "<applet", "<style", "<base"]
             .iter()
             .filter_map(|tag| lower.find(tag).map(|at| (at, *tag)))
             .min_by_key(|(at, _)| *at);
@@ -233,6 +233,7 @@ fn cut_tag_attributes(rest: &str) -> Option<(usize, String)> {
         let attr_end = i;
         if name.len() > 2 && name.len() <= 24 && name.to_ascii_lowercase().starts_with("on")
             || is_active_url(&value)
+            || name.to_ascii_lowercase() == "style"
         {
             cuts.push((attr_start, attr_end));
         }
@@ -247,6 +248,55 @@ fn cut_tag_attributes(rest: &str) -> Option<(usize, String)> {
     Some((i, kept))
 }
 
+/// Removes `<meta http-equiv="refresh" ...>` tags, which a browser treats as
+/// a timed redirect (open redirect / phishing vector). Case-insensitive on
+/// both the attribute name and the `refresh` value, quoted or unquoted.
+fn strip_meta_refresh(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut rest = html;
+    while let Some(at) = rest.find("<meta") {
+        let lower = rest[at..].to_ascii_lowercase();
+        if !lower.starts_with("<meta") {
+            out.push_str(&rest[..at + 1]);
+            rest = &rest[at + 1..];
+            continue;
+        }
+        // Find the end of the tag (outside quotes).
+        let bytes = rest[at..].as_bytes();
+        let mut i = 5; // skip "<meta"
+        let mut in_quote: Option<u8> = None;
+        let mut end = None;
+        while i < bytes.len() {
+            match (in_quote, bytes[i]) {
+                (Some(q), b) if b == q => in_quote = None,
+                (None, b'"' | b'\'') => in_quote = Some(bytes[i]),
+                (None, b'>') => {
+                    end = Some(at + i + 1);
+                    break;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        let Some(end) = end else {
+            out.push_str(&rest[at..]);
+            break;
+        };
+        let tag = &rest[at..end];
+        let tag_lower = tag.to_ascii_lowercase();
+        let is_refresh = tag_lower.contains("http-equiv")
+            && tag_lower.contains("refresh");
+        if is_refresh {
+            // Drop the whole tag.
+        } else {
+            out.push_str(tag);
+        }
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Whether a browser resolving `value` as a URL lands on a scheme that
 /// runs code. The check runs on the value a browser would see: numeric
 /// character references decoded (`&#106;avascript:` is `javascript:`),
@@ -254,7 +304,10 @@ fn cut_tag_attributes(rest: &str) -> Option<(usize, String)> {
 /// URL parser drops (`java\tscript:`) normalized away.
 fn is_active_url(value: &str) -> bool {
     let normalized = normalize_url(value);
-    normalized.starts_with("javascript:") || normalized.starts_with("data:text/html")
+    normalized.starts_with("javascript:")
+        || normalized.starts_with("vbscript:")
+        || normalized.starts_with("data:text/html")
+        || normalized.starts_with("data:image/svg+xml")
 }
 
 /// Decodes the entity forms a URL parser accepts, lowercases, and drops
@@ -302,6 +355,11 @@ fn normalize_url(value: &str) -> String {
     out
 }
 
+/// How many bytes of a single note the export will read before refusing.
+/// A published site must never carry a multi-gigabyte note; 10 MB is ample
+/// for any reasonable note and bounds the render's memory.
+pub const EXPORT_MAX_BYTES: u64 = 10 << 20;
+
 /// Exports the vault at `root` (whose files are `files`) into `out`,
 /// replacing whatever an earlier pass wrote there.
 pub fn export(root: &Path, files: &[VaultFile], out: &Path) -> Result<SiteReport, String> {
@@ -326,7 +384,7 @@ pub fn export(root: &Path, files: &[VaultFile], out: &Path) -> Result<SiteReport
     for note in &notes {
         let rel = note.path.replace('\\', "/");
         let depth = rel.matches('/').count();
-        let text = silica_vault::read_verified(root, Path::new(&rel), u64::MAX)
+        let text = silica_vault::read_verified(root, Path::new(&rel), EXPORT_MAX_BYTES)
             .map_err(|e| format!("Cannot read {rel}: {e}"))?;
         let body = rewrite(&render(&text), &map, &assets, depth);
         report.links += body.links;
@@ -345,7 +403,7 @@ pub fn export(root: &Path, files: &[VaultFile], out: &Path) -> Result<SiteReport
         .iter()
         .find_map(|name| notes.iter().find(|n| n.path.eq_ignore_ascii_case(name)))
         .unwrap_or(&notes[0]);
-    let text = silica_vault::read_verified(root, Path::new(&home.path), u64::MAX)
+    let text = silica_vault::read_verified(root, Path::new(&home.path), EXPORT_MAX_BYTES)
         .map_err(|e| format!("Cannot read {}: {e}", home.path))?;
     let body = rewrite(&render(&text), &map, &assets, 0);
     write_page(out, "index.html", &title_of(&home.path), 0, &body.html)?;
