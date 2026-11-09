@@ -1233,6 +1233,7 @@ pub fn register_all() {
     register_native(Box::new(TagPane));
     register_native(Box::new(Workspaces));
     register_native(Box::new(SlashCommand));
+    register_native(Box::new(crate::link_backlinks::LinksBacklinks));
     register_native(Box::new(crate::vault_doctor::VaultDoctor));
 }
 
