@@ -18,7 +18,7 @@
 //! and `/` and `""` both mean the root ([`attachment_path`], observed on
 //! 1.14.5).
 
-use crate::{FileChange, Vault};
+use crate::{create_dir_all_at, FileChange, Vault};
 use silica_formats::validate_file_name;
 use std::path::{Path, PathBuf};
 
@@ -541,8 +541,8 @@ impl Vault {
         if to.starts_with(&format!("{from}/")) {
             return Err(OpError::InvalidName("Cannot move a folder into itself."));
         }
-        if let Some(parent) = to_abs.parent() {
-            std::fs::create_dir_all(parent).map_err(io("create folder", parent))?;
+        if let Some(parent) = Path::new(to).parent() {
+            create_dir_all_at(&self.root, parent).map_err(io("create folder", &self.root.join(parent)))?;
         }
         let moved = self.rename_plan(from, to);
         std::fs::rename(&from_abs, &to_abs).map_err(io("rename", &from_abs))?;
