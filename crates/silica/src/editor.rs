@@ -64,6 +64,7 @@ use std::time::Instant;
 
 mod search;
 mod movement;
+pub(crate) mod attach;
 mod actions;
 mod folding;
 mod scrolling;
