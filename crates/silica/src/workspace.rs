@@ -511,6 +511,9 @@ pub const RUNNABLE: &[&str] = &[
     "silica:footnotes",
     "silica:file-recovery",
     "silica:export-pdf",
+    "silica:workspace-save",
+    "silica:workspace-load",
+    "silica:workspace-delete",
     "canvas:new-file",
     "canvas:export-as-image",
     "canvas:jump-to-group",
@@ -1993,6 +1996,14 @@ pub(crate) enum PendingOp {
     /// `silica:export-site`: the folder the site is written to. An empty
     /// box takes the vault's sibling default.
     ExportSite,
+    /// `silica:workspace-save`: the name the layout on screen is recorded
+    /// under.
+    SaveWorkspace,
+    /// `silica:workspace-load`: the saved layout the session switches to.
+    LoadWorkspace,
+    /// `silica:workspace-delete`: the saved layout taken out of the
+    /// vault's `workspaces.json`.
+    DeleteWorkspace,
     /// "Merge entire file with...": the open note takes `other` in.
     Merge {
         file: String,
@@ -6086,6 +6097,9 @@ impl Workspace {
             "silica:toggle-graph-pane" => self.toggle_graph_pane(cx),
             "silica:palette-verify" => self.verify_palette(window, cx),
             "silica:template-gallery" => self.open_template_gallery(window, cx),
+            "silica:workspace-save" => self.save_workspace_prompt(window, cx),
+            "silica:workspace-load" => self.load_workspace_prompt(window, cx),
+            "silica:workspace-delete" => self.delete_workspace_prompt(window, cx),
             "workspace:copy-path" => self.copy_current_path(false, cx),
             "workspace:copy-full-path" => self.copy_current_path(true, cx),
             "silica:pin-tab" => self.pin_tab(cx),

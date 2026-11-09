@@ -1517,6 +1517,9 @@ link to it is rewritten. The current note is deleted."
                     Err(err) => self.report(err, cx),
                 }
             }
+            PendingOp::SaveWorkspace => self.commit_workspace_save(value, window, cx),
+            PendingOp::LoadWorkspace => self.commit_workspace_load(value, window, cx),
+            PendingOp::DeleteWorkspace => self.commit_workspace_delete(value, window, cx),
             PendingOp::NewFolder { parent } => {
                 let path = if parent.is_empty() {
                     value.to_string()

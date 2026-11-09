@@ -241,6 +241,9 @@ silica:palette-verify	Verify the command palette
 silica:reminder-add	Reminder: add for the task at the cursor
 silica:template-gallery	Open the template gallery
 silica:voice-note	Voice note: Record audio and insert it into the active note
+silica:workspace-save	Save workspace layout
+silica:workspace-load	Load workspace layout
+silica:workspace-delete	Delete workspace layout
 quick-capture:open	Quick Capture: New note
 task-dashboard:open	Task Dashboard: Open
 silica:insert-image	Insert image

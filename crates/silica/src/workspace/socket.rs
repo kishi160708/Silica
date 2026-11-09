@@ -392,6 +392,9 @@ impl Workspace {
                 Some(PendingOp::DeleteAttachments { path }) => {
                     json!({"op": "delete-attachments", "path": path})
                 }
+                Some(PendingOp::SaveWorkspace) => json!({"op": "save-workspace"}),
+                Some(PendingOp::LoadWorkspace) => json!({"op": "load-workspace"}),
+                Some(PendingOp::DeleteWorkspace) => json!({"op": "delete-workspace"}),
             },
         );
         Value::Object(modal)
