@@ -33,23 +33,6 @@ Reading view took the same pass: the properties block is editable there, text se
 
 > Keep a backup of any vault you open with it. Reading is well covered; editing is newer code against files you cannot get back. Until the round-trip gate is met, let Silica read a vault that matters and let Obsidian write it.
 
-## Known limitations
-
-What is deliberately not here, and why. Each of these is a decision, not a gap in the work.
-
-| Not here | Why |
-| --- | --- |
-| Terminal pane | No PTY or ANSI engine yet; the audit's parity item stays open rather than half-built. |
-| Mobile clients, first-party sync | No app for them exists; a vault can still be synced by a file-sync tool, and the watcher sees its changes. |
-| A full CSS engine for themes | Themes are the variable and property subset Obsidian's own defaults need; a selector engine is a bigger project than the app. |
-| Audio in video embeds | The video transcode drops the audio track to keep playback inside the reader; remote media still opens in the system player with sound. |
-| Two-page PDF spreads | The viewer renders one page at a time by design. |
-| Code signing / notarization | Not configured for any platform yet. |
-| Custom views in plugins | `registerView` is recorded and reported, but there is no DOM for an `ItemView` to draw in; `Modal` throws rather than pretending. |
-
-Remote images fetch through one bounded, SSRF-guarded path: a validated destination, a pinned
-resolution per hop, and a 32 MB cap — the same boundary the plugin shim's `requestUrl` walks.
-
 ## Benchmarks
 
 Measured on a Lenovo Legion 5 (CachyOS, AMD Ryzen 5 4600H, 12 threads) with `crates/silica-bench` on a synthetic vault of 20,000 notes, 2,000 attachments, and 35.3 MB of Markdown.
@@ -113,7 +96,7 @@ Factual gaps versus Obsidian, tracked rather than hidden:
 - Math uses a KaTeX-compatible engine rather than MathJax; genuinely unsupported TeX still shows source in red.
 - HTML is drawn where it can be drawn faithfully and left as source where it cannot. `<sup>` and `<sub>` are among the tags drawn without a baseline shift, because the text layer carries no vertical-offset attribute.
 - Local video plays without sound or seeking; remote media opens in the system player.
-- Two of 1,009 corpus notes do not match Obsidian's output (degenerate delimiter runs, a wikilink inside link text).
+- One of 1,009 corpus notes does not match Obsidian's output (a degenerate delimiter-run edge case in inline parsing).
 
 Obsidian Sync, Publish, and the commercial services are Obsidian's products, not file formats; Silica has nothing to do with them. Any file-level sync (git, Syncthing, Dropbox) works because files are all Silica needs.
 
