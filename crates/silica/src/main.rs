@@ -56,6 +56,7 @@ mod vaults;
 mod video;
 mod watch;
 mod workspace;
+mod workspaces;
 
 use crate::css_watcher::CssWatcher;
 use gpui::{
