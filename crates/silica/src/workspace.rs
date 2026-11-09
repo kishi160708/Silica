@@ -943,6 +943,16 @@ impl VaultState {
         self.texts.read().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Note text for `path`, from the in-memory cache when present and
+    /// from disk otherwise. Evicted notes (tabs closed this session) are
+    /// still searchable and link-rewritable because their text is read
+    /// back from the vault rather than skipped.
+    pub fn text_for(&self, path: &str) -> Option<Arc<String>> {
+        self.texts.read().unwrap_or_else(|e| e.into_inner()).get(path).cloned().or_else(|| {
+            std::fs::read_to_string(self.root.join(path)).ok().map(Arc::new)
+        })
+    }
+
     pub fn build_options(&self) -> reading::BuildOptions {
         reading::BuildOptions {
             strict_line_breaks: self.app().strict_line_breaks.unwrap_or(false),
@@ -1144,11 +1154,10 @@ impl VaultState {
     /// `(files, links)`.
     pub fn rename_preview(&self, from: &str, to: &str) -> (usize, usize) {
         let plan = self.vault().rename_plan(from, to);
-        let texts = self.texts();
         let rewrites = self
             .cache()
             .plan_rename_rewrites(&plan, self.link_format(), &|p| {
-                texts.get(p).map(|t| t.to_string())
+                self.text_for(p).map(|t| t.to_string())
             });
         (
             rewrites.len(),
@@ -1196,10 +1205,9 @@ impl VaultState {
             //   get the sentence rather than the path and the errno.
             .map_err(|e| e.user_message())?;
         let plan = if update_links {
-            let texts = self.texts();
             self.cache()
                 .plan_rename_rewrites(&moved, self.link_format(), &|p| {
-                    texts.get(p).map(|t| t.to_string())
+                    self.text_for(p).map(|t| t.to_string())
                 })
         } else {
             Vec::new()
@@ -1216,13 +1224,12 @@ impl VaultState {
         //   and reported once, rather than leaving the vault half-rewritten
         //   and the index stale.
         let mut write_errors: Vec<String> = Vec::new();
-        let texts = self.texts();
         for rw in &plan {
             let absolute = self
                 .vault()
                 .write_path(&rw.new_path)
                 .map_err(|e| e.to_string())?;
-            let planned_from = texts.get(&rw.old_path).map(|t| t.to_string());
+            let planned_from = self.text_for(&rw.old_path).map(|t| t.to_string());
             match (std::fs::read_to_string(&absolute), planned_from) {
                 (Ok(on_disk), Some(was)) if on_disk != was => {
                     stale.push(rw.new_path.clone());
@@ -1234,7 +1241,6 @@ impl VaultState {
                 write_errors.push(format!("Could not update links in {}: {e}", rw.new_path));
             }
         }
-        drop(texts);
         let moved_from: HashMap<&str, &str> = moved
             .iter()
             .map(|(a, b)| (a.as_str(), b.as_str()))
@@ -6606,6 +6612,10 @@ impl Workspace {
             },
             FileKind::Markdown => match std::fs::read_to_string(state.vault().absolute(path)) {
                 Ok(text) => {
+                    // * Cache the note's text so search, backlinks, and link
+                    //   rewriting can find it even after a previous tab close
+                    //   evicted it from the unbounded map.
+                    state.texts.write().unwrap_or_else(|e| e.into_inner()).insert(path.to_string(), Arc::new(text.clone()));
                     self.words = text.split_whitespace().count();
                     self.chars = text.chars().count();
                     // * The reading view's model is built for the mode
@@ -7086,7 +7096,7 @@ impl Workspace {
         let Some(state) = self.state.clone() else {
             return;
         };
-        let Some(text) = state.texts().get(&source).cloned() else {
+        let Some(text) = state.text_for(&source) else {
             return;
         };
         let Some(mentioned) = text.get(mention.clone()) else {
@@ -7719,8 +7729,8 @@ fn mention_sections(
     let own_refs: Vec<Name<'_>> = own.iter().map(|t| Name { text: t, path }).collect();
     let own_finder = Finder::new(&own_refs);
     let incoming = backlinks::unlinked_incoming(&texts, path, own_finder.as_ref(), extra);
-    let outgoing = match texts.get(path) {
-        Some(text) => backlinks::unlinked_outgoing(text, path, finder, extra),
+    let outgoing = match state.text_for(path) {
+        Some(text) => backlinks::unlinked_outgoing(&text, path, finder, extra),
         None => Section::empty(backlinks::UNLINKED),
     };
     MentionSections {

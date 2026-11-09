@@ -1901,11 +1901,18 @@ pub fn run_search(search: &Search, state: &VaultState) -> Vec<FileResult> {
     let mut results: Vec<FileResult> = files
         .par_iter()
         .filter_map(|(path, meta)| {
-            let text = texts.get(*path)?;
-            let (tags, blocks, sections, tasks) = inputs(meta, text);
+            let text: Arc<String> = match texts.get(*path).cloned() {
+                Some(t) => t,
+                None => match std::fs::read_to_string(state.root.join(path)) {
+                    Ok(t) => Arc::new(t),
+                    Err(_) => return None,
+                },
+            };
+            let text_ref: &str = &text;
+            let (tags, blocks, sections, tasks) = inputs(meta, text_ref);
             let file = SearchFile {
                 path,
-                content: text,
+                content: text_ref,
                 tags: &tags,
                 frontmatter: meta.frontmatter.as_ref(),
                 blocks: &blocks,
@@ -1923,7 +1930,7 @@ pub fn run_search(search: &Search, state: &VaultState) -> Vec<FileResult> {
                 path: path.to_string(),
                 name: name.to_string(),
                 name_ranges: clamp(&hits.name, name.len()),
-                matches: match_lines(text, &hits.content),
+                matches: match_lines(text_ref, &hits.content),
                 hits: hits.content.clone(),
                 mtime,
                 ctime,

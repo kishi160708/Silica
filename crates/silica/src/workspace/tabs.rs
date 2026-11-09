@@ -172,6 +172,14 @@ impl Workspace {
             return;
         }
         let tab = self.tabs.remove(ix);
+        // Evict the note's full text from the unbounded `texts` map so
+        // long sessions with many opened/closed notes don't leak memory.
+        // Search falls back to a disk read for evicted notes (see run_search).
+        if let Some(ref path) = tab.path {
+            if let Some(state) = &self.state {
+                let _ = state.texts.write().unwrap_or_else(|e| e.into_inner()).remove(path);
+            }
+        }
         self.remember_closed(ix, tab);
         if self.tabs.is_empty() {
             // * A group whose last tab closes goes with it, as Obsidian's
@@ -212,6 +220,15 @@ impl Workspace {
         self.stash_active_tab();
         let keep = self.tabs.remove(self.active_tab);
         let others = std::mem::take(&mut self.tabs);
+        // Evict closed tabs' texts from the unbounded map.
+        if let Some(state) = &self.state {
+            let mut texts = state.texts.write().unwrap_or_else(|e| e.into_inner());
+            for tab in others.iter() {
+                if let Some(ref path) = tab.path {
+                    texts.remove(path);
+                }
+            }
+        }
         for (ix, tab) in others.into_iter().enumerate() {
             self.remember_closed(ix, tab);
         }
