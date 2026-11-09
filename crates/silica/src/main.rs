@@ -21,6 +21,7 @@ mod css_watcher;
 mod editor;
 mod explorer;
 mod file_recovery;
+mod export_pdf;
 mod fold;
 mod footnotes;
 mod graph;

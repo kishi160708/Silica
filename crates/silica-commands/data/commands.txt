@@ -252,6 +252,7 @@ silica:calendar
 silica:export-site
 silica:footnotes
 silica:file-recovery
+silica:export-pdf
 silica:toggle-graph-pane
 silica:vault-backup
 quick-capture:open

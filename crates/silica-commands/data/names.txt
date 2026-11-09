@@ -235,6 +235,7 @@ silica:calendar	Kalender
 silica:export-site	Export vault as site
 silica:footnotes	Footnotes view: Show footnotes
 silica:file-recovery	File recovery: Recover a note from a snapshot
+silica:export-pdf	Export active note to PDF
 quick-capture:open	Quick Capture: New note
 task-dashboard:open	Task Dashboard: Open
 silica:insert-image	Insert image
