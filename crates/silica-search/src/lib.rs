@@ -14,6 +14,7 @@
 pub mod collate;
 pub mod fuzzy;
 pub mod matcher;
+pub mod normalize;
 pub mod query;
 pub mod snippet;
 
