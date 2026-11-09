@@ -843,9 +843,11 @@ impl<'a> Renderer<'a> {
         };
         let on_frame = handler.clone();
         let on_toggle = handler.clone();
+        let on_toggle_skip = on_toggle.clone();
         let _on_bar = handler;
         let frame_path = path.to_path_buf();
         let toggle_path = path.to_path_buf();
+        let toggle_path_skip = toggle_path.clone();
         div()
             .my_2()
             .flex()
@@ -909,6 +911,21 @@ impl<'a> Renderer<'a> {
                             })
                             .child(SharedString::from(if playing { "⏸" } else { "▶" })),
                     )
+                    .child(
+                        div()
+                            .w(px(14.))
+                            .cursor_pointer()
+                            .id(("video-skip-back", label.len()))
+                            .on_click({
+                                let on_toggle = on_toggle_skip.clone();
+                                let toggle_path = toggle_path_skip.clone();
+                                move |_, window, cx| {
+                                    let seek = (at - 10.0).max(0.0);
+                                    on_toggle(&toggle_path, Some(seek / duration), window, cx)
+                                }
+                            })
+                            .child(SharedString::from("⏮")),
+                    )
                     .child(SharedString::from(clock(at)))
                     .child(
                         // * The position bar: the share played so far.
@@ -932,6 +949,21 @@ impl<'a> Renderer<'a> {
                                         0.0
                                     })),
                             ),
+                    )
+                    .child(
+                        div()
+                            .w(px(14.))
+                            .cursor_pointer()
+                            .id(("video-skip-forward", label.len()))
+                            .on_click({
+                                let on_toggle = on_toggle_skip.clone();
+                                let toggle_path = toggle_path_skip.clone();
+                                move |_, window, cx| {
+                                    let seek = (at + 10.0).min(duration);
+                                    on_toggle(&toggle_path, Some(seek / duration), window, cx)
+                                }
+                            })
+                            .child(SharedString::from("⏭")),
                     )
                     .child(SharedString::from(clock(duration))),
             )

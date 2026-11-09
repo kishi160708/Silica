@@ -215,7 +215,102 @@ impl Decoder {
     }
 }
 
-/// RGBA bytes as gpui's texture: `RenderImage` is BGRA, so red and blue
+/// PCM audio decoded from a video file by a second ffmpeg process.
+///
+/// `ffmpeg` outputs raw f32le stereo PCM at 44.1 kHz; this struct reads
+/// chunks from its stdout and hands them to a rodio [`Sink`] so the video's
+/// soundtrack plays in sync with the frames.
+pub struct AudioDecoder {
+    child: Child,
+    buffer: Vec<u8>,
+}
+
+impl AudioDecoder {
+    /// Spawns `ffmpeg` to decode the audio stream of `path` from `start`
+    /// seconds, outputting f32le stereo PCM at 44.1 kHz to stdout.
+    pub fn spawn(path: &Path, start: f32) -> Option<AudioDecoder> {
+        let mut command = Command::new("ffmpeg");
+        command.args(["-v", "error", "-nostdin"]);
+        if start > 0.0 {
+            command.args(["-ss", &format!("{start:.3}")]);
+        }
+        command
+            .args(["-re", "-i"])
+            .arg(path)
+            .args(["-vn", "-f", "f32le", "-ar", "44100", "-ac", "2", "-"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        let child = command.spawn().ok()?;
+        Some(AudioDecoder {
+            child,
+            buffer: vec![0; 16384],
+        })
+    }
+
+    /// Reads the next chunk of PCM samples, or `None` at EOF or error.
+    /// Blocks until data is available — call on the background executor.
+    pub fn next_chunk(&mut self) -> Option<Vec<f32>> {
+        let stdout = self.child.stdout.as_mut()?;
+        let n = stdout.read(&mut self.buffer).ok()?;
+        if n == 0 {
+            return None;
+        }
+        Some(
+            self.buffer[..n]
+                .chunks_exact(4)
+                .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                .collect(),
+        )
+    }
+
+    /// Stops ffmpeg now; dropping the handle reaps it.
+    pub fn stop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// A rodio [`Source`] wrapping a slice of f32le stereo PCM samples.
+pub(crate) struct PcmSource {
+    pub(crate) data: Vec<f32>,
+    pub(crate) pos: usize,
+}
+
+impl PcmSource {
+    pub(crate) fn new(data: Vec<f32>) -> Self {
+        Self { data, pos: 0 }
+    }
+}
+
+impl rodio::Source for PcmSource {
+    fn current_frame_len(&self) -> Option<usize> {
+        None
+    }
+    fn channels(&self) -> u16 {
+        2
+    }
+    fn sample_rate(&self) -> u32 {
+        44100
+    }
+    fn total_duration(&self) -> Option<std::time::Duration> {
+        None
+    }
+}
+
+impl Iterator for PcmSource {
+    type Item = f32;
+    fn next(&mut self) -> Option<f32> {
+        if self.pos < self.data.len() {
+            let v = self.data[self.pos];
+            self.pos += 1;
+            Some(v)
+        } else {
+            None
+        }
+    }
+}
+
 /// swap. A video frame is opaque, so the swap is the whole conversion.
 fn to_image(rgba: &[u8], (width, height): (u32, u32)) -> Arc<RenderImage> {
     let mut bytes = rgba.to_vec();

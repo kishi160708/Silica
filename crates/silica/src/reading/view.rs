@@ -1025,7 +1025,9 @@ impl ReadingView {
     }
 
     /// The read loop: one frame at a time, installed only while the cell
-    /// still holds this file and is still playing.
+    /// still holds this file and is still playing. Audio is decoded by a
+    /// second ffmpeg process and played through rodio in sync with the
+    /// frames when an audio output device is available.
     fn play_loop(
         view: gpui::WeakEntity<ReadingView>,
         slot: Rc<RefCell<Option<VideoState>>>,
@@ -1040,6 +1042,19 @@ impl ReadingView {
                 return;
             };
             let mut decoder = Some(decoder);
+            // Audio is optional: without ffmpeg audio output or rodio, video
+            // still plays silently.
+            let mut audio_decoder = crate::video::AudioDecoder::spawn(&path, start);
+            let sink = match rodio::OutputStream::try_default() {
+                Ok((_stream, handle)) => match rodio::Sink::try_new(&handle) {
+                    Ok(sink) => {
+                        sink.set_volume(1.0);
+                        Some(sink)
+                    }
+                    Err(_) => None,
+                },
+                Err(_) => None,
+            };
             loop {
                 let wanted = slot
                     .borrow()
@@ -1051,14 +1066,25 @@ impl ReadingView {
                 let Some(mut taken) = decoder.take() else {
                     break;
                 };
-                let (frame, back) = cx
+                let mut audio_taken = audio_decoder.take();
+                let (frame, back, audio_chunk, audio_back) = cx
                     .background_executor()
                     .spawn(async move {
                         let frame = taken.next_frame();
-                        (frame, taken)
+                        let chunk = audio_taken.as_mut().and_then(|d| d.next_chunk());
+                        (frame, taken, chunk, audio_taken)
                     })
                     .await;
                 decoder = Some(back);
+                audio_decoder = audio_back;
+                // Feed decoded PCM audio to rodio so the soundtrack plays.
+                if let Some(sink) = &sink {
+                    if let Some(chunk) = audio_chunk {
+                        if !chunk.is_empty() {
+                            sink.append(crate::video::PcmSource::new(chunk));
+                        }
+                    }
+                }
                 let Some(frame) = frame else {
                     // * End of file: the last frame stays up, stopped.
                     if let Some(video) = slot.borrow_mut().as_mut().filter(|v| v.path == path) {
@@ -1098,6 +1124,10 @@ impl ReadingView {
             if let Some(mut decoder) = decoder {
                 decoder.stop();
             }
+            if let Some(mut audio_decoder) = audio_decoder {
+                audio_decoder.stop();
+            }
+            drop(sink);
         })
     }
 

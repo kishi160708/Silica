@@ -666,6 +666,12 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
             let bottom = *openers_bottom.entry(key).or_insert(stack_bottom);
             let mut opener = self.delims[c].prev;
             let mut found = None;
+            // * `==` and `~~` runs longer than 2 are split into adjacent
+            //   delimiter pairs (e.g. `====` -> `==` + `==`). Those adjacent
+            //   pairs must not match each other, or they'd produce empty
+            //   highlights. Obsidian treats the first char(s) as literal text
+            //   and only the final pair as a delimiter.
+            let is_double = ch == b'~' || ch == b'=';
             while let Some(o) = opener {
                 if Some(o) == stack_bottom || Some(o) == bottom {
                     break;
@@ -674,7 +680,12 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
                 let odd_match = (c_open || od.can_close)
                     && c_orig % 3 != 0
                     && (od.orig_count + c_orig) % 3 == 0;
-                if od.ch == ch && od.can_open && !odd_match {
+                let adjacent_nodes = self.delims[o].node + 1 == self.delims[c].node;
+                if od.ch == ch
+                    && od.can_open
+                    && !odd_match
+                    && !(is_double && adjacent_nodes)
+                {
                     found = Some(o);
                     break;
                 }
