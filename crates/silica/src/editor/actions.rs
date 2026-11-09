@@ -14,7 +14,7 @@ use crate::properties::{Field, Part, Target};
 use crate::workspace::VaultState;
 
 use super::{
-    attach, Editor, EditorEvent, Backspace, Copy, Cut, Delete, DeleteWordLeft, DeleteWordRight,
+    attach, Backspace, Copy, Cut, Delete, DeleteWordLeft, DeleteWordRight, Editor, EditorEvent,
     Newline, NewlinePlain, Outdent, Paste, Redo, Tab, Undo,
 };
 
@@ -445,7 +445,14 @@ impl Editor {
             files: true,
             directories: false,
             multiple: true,
-            prompt: Some(if images_only { "Insert image" } else { "Attach file" }.into()),
+            prompt: Some(
+                if images_only {
+                    "Insert image"
+                } else {
+                    "Attach file"
+                }
+                .into(),
+            ),
         });
         cx.spawn_in(window, async move |this, cx| {
             let paths = match picked.await {
@@ -533,8 +540,12 @@ impl Editor {
                 }
             }
             let resolver = state.vault().link_resolver();
-            let written =
-                silica_cache::links::link_path(&resolver, &target, &self.name, self.link_options.format);
+            let written = silica_cache::links::link_path(
+                &resolver,
+                &target,
+                &self.name,
+                self.link_options.format,
+            );
             embeds.push(attach::embed(&self.link_options, &written));
         }
         if embeds.is_empty() {
@@ -598,7 +609,12 @@ impl Editor {
             }
         };
         let range = attach::removal_range(self.buf.text(), embed.span);
-        self.edit_all(vec![(range, String::new())], EditKind::Other, Some(window), cx);
+        self.edit_all(
+            vec![(range, String::new())],
+            EditKind::Other,
+            Some(window),
+            cx,
+        );
         cx.emit(EditorEvent::FilesChanged(changes));
     }
 }

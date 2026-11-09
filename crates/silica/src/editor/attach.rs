@@ -24,7 +24,11 @@
 use std::ops::Range;
 use std::path::Path;
 
+use gpui::{div, prelude::*, px, Context, IntoElement, ParentElement, Styled};
 use silica_suggest::Options;
+
+use crate::editor::Editor;
+use crate::theme::Theme;
 
 /// Extensions the "Insert image" row accepts. Everything else is a plain
 /// attachment, which the same toolbar stores but embeds as a file.
@@ -98,7 +102,8 @@ pub fn check_relative(rel: &str) -> Result<(), NameRefusal> {
 
 /// `C:something` and `\\server\share` both reach outside the vault.
 fn is_windows_absolute(path: &str) -> bool {
-    let drive = path.len() >= 2 && path.as_bytes()[1] == b':' && path.as_bytes()[0].is_ascii_alphabetic();
+    let drive =
+        path.len() >= 2 && path.as_bytes()[1] == b':' && path.as_bytes()[0].is_ascii_alphabetic();
     drive || path.starts_with("//")
 }
 
@@ -224,23 +229,26 @@ pub fn embeds(text: &str) -> Vec<Embed> {
     out
 }
 
-/// The embed `at` sits on: the one whose span holds it, or the first on
-/// its line. `None` when the cursor is between embeds.
+/// The embed `at` sits on: the one whose span holds it, or the first one
+/// on its line that does not end before it. `None` when the cursor sits
+/// past the last embed on its line, or on a line with none at all.
 pub fn attachment_at(text: &str, at: usize) -> Option<Embed> {
     let at = at.min(text.len());
-    for embed in embeds(text) {
-        if embed.span.contains(&at) {
-            return Some(embed);
-        }
+    let found = embeds(text);
+    if let Some(embed) = found.iter().find(|e| e.span.contains(&at)) {
+        return Some(embed.clone());
     }
     let line = line_range(text, at);
-    embeds(text).into_iter().find(|e| {
-        e.span.start >= line.start && e.span.start < line.end && e.span.end <= line.end
+    found.into_iter().find(|e| {
+        e.span.end >= at
+            && e.span.start >= line.start
+            && e.span.start < line.end
+            && e.span.end <= line.end
     })
 }
 
 /// The bytes the embed occupies: the whole line when the embed is alone on
-/// it, the embed and the spaces around it otherwise. Removing just the
+/// it, the embed and the spaces after it otherwise. Removing just the
 /// span would leave a blank line, or a lone `!` and its brackets.
 pub fn removal_range(text: &str, span: Range<usize>) -> Range<usize> {
     let line = line_range(text, span.start);
@@ -254,15 +262,11 @@ pub fn removal_range(text: &str, span: Range<usize>) -> Range<usize> {
         }
         return line.start..end;
     }
-    let mut start = span.start;
     let mut end = span.end;
-    while start > line.start && text[start - 1..].starts_with(' ') {
-        start -= 1;
-    }
     while end < line.end && text[end..].starts_with(' ') {
         end += 1;
     }
-    start..end
+    span.start..end
 }
 
 /// The link an embed points at: no alias, no subpath, and the percent
@@ -279,9 +283,15 @@ pub fn embed_target(embed: &Embed) -> Option<String> {
         let dest = if let Some(angled) = inner.strip_prefix('<') {
             angled.split('>').next().unwrap_or(angled)
         } else {
-            inner.split_whitespace().next().unwrap_or(inner)
+            // * `![label](a/b.png "A picture")`: the label sits in front of
+            //   the destination, between `![` and `](`, and the inner of a
+            //   markdown embed holds both. A destination that holds a space
+            //   it did not encode cannot be told from its title here, which
+            //   is why the toolbar percent-encodes what it writes.
+            let after_label = inner.split_once("](").map_or(inner, |(_, dest)| dest);
+            after_label.split_whitespace().next().unwrap_or(after_label)
         };
-        return (dest != "").then(|| percent_decode(dest));
+        return (!dest.is_empty()).then(|| percent_decode(dest));
     };
     (!target.is_empty()).then(|| target.to_string())
 }
@@ -315,6 +325,67 @@ pub fn line_range(text: &str, at: usize) -> Range<usize> {
         .map(|ix| start + ix)
         .unwrap_or(text.len());
     start..end
+}
+
+impl Editor {
+    /// The attachment toolbar above the text: the two inserts and, when the
+    /// cursor sits on an embed, the removal for that embed.
+    ///
+    /// The removal row asks the same question the button asks — the embed
+    /// under the cursor — so what the row can do is decided in one place.
+    /// With the cursor off every embed it is drawn grey and inert rather
+    /// than hidden: a toolbar whose rows come and go moves the rest of the
+    /// row with them.
+    pub(crate) fn render_attach_toolbar(
+        &self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let removable = self.attachment_under_cursor().is_some();
+        let row = |id: &'static str, label: &'static str, theme: &Theme| {
+            div()
+                .id(id)
+                .px_2()
+                .py_px()
+                .rounded_sm()
+                .text_size(px(12.))
+                .text_color(theme.text)
+                .bg(theme.bg_alt)
+                .child(label)
+        };
+        let insert = row("attach-image", "Insert image", theme)
+            .cursor_pointer()
+            .hover(|s| s.bg(theme.bg_active))
+            .on_click(cx.listener(|this, _, window, cx| this.attach_image(window, cx)));
+        let attach = row("attach-file", "Attach file", theme)
+            .cursor_pointer()
+            .hover(|s| s.bg(theme.bg_active))
+            .on_click(cx.listener(|this, _, window, cx| this.attach_file(window, cx)));
+        let mut remove = row("attach-remove", "Remove", theme);
+        remove = if removable {
+            remove
+                .cursor_pointer()
+                .hover(|s| s.bg(theme.bg_active))
+                .on_click(cx.listener(|this, _, window, cx| this.remove_attachment(window, cx)))
+        } else {
+            remove.text_color(theme.text_muted)
+        };
+        div()
+            .id("attach-toolbar")
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_1()
+            .px_2()
+            .py_1()
+            .bg(theme.bg_secondary)
+            .border_b_1()
+            .border_color(theme.border)
+            .font_family(theme.ui_font.clone())
+            .child(insert)
+            .child(attach)
+            .child(remove)
+    }
 }
 
 #[cfg(test)]
@@ -353,7 +424,13 @@ mod tests {
 
     #[test]
     fn a_path_outside_the_vault_is_refused() {
-        for refused in ["/etc/passwd", "C:/Windows/x", "\\\\server\\share\\x", "../escape.png", "Sub/../../x.png"] {
+        for refused in [
+            "/etc/passwd",
+            "C:/Windows/x",
+            "\\\\server\\share\\x",
+            "../escape.png",
+            "Sub/../../x.png",
+        ] {
             assert_eq!(
                 check_relative(refused).err(),
                 Some(NameRefusal::Escapes(refused.to_string())),
@@ -445,8 +522,14 @@ mod tests {
             markdown_links: false,
             ..markdown
         };
-        assert_eq!(embed(&wikilink, "Attachments/photo.png"), "![[Attachments/photo.png]]");
-        assert_eq!(embed(&markdown, "Attachments/my photo.png"), "![](Attachments/my%20photo.png)");
+        assert_eq!(
+            embed(&wikilink, "Attachments/photo.png"),
+            "![[Attachments/photo.png]]"
+        );
+        assert_eq!(
+            embed(&markdown, "Attachments/my photo.png"),
+            "![](Attachments/my%20photo.png)"
+        );
     }
 
     #[test]
@@ -470,9 +553,18 @@ mod tests {
     fn the_embed_under_the_cursor_is_the_one_found() {
         let text = "one ![[a.png]] two ![[b.png]] three";
         let in_b = text.find("![[b.png]]").unwrap() + 4;
-        assert_eq!(attachment_at(text, in_b).map(|e| e.inner), Some("b.png".to_string()));
-        // * A cursor in the gap between the two takes the line's first.
-        assert_eq!(attachment_at(text, 5).map(|e| e.inner), Some("a.png".to_string()));
+        assert_eq!(
+            attachment_at(text, in_b).map(|e| e.inner),
+            Some("b.png".to_string())
+        );
+        // * A cursor in the gap between the two names the second one: the
+        //   first that does not already end behind the cursor.
+        let gap = text.find(" two ").unwrap() + 1;
+        assert_eq!(
+            attachment_at(text, gap).map(|e| e.inner),
+            Some("b.png".to_string())
+        );
+        // * Past the last embed on the line, nothing is named.
         assert!(attachment_at(text, 30).is_none());
     }
 
@@ -480,14 +572,8 @@ mod tests {
     fn a_target_drops_its_alias_subpath_and_encoding() {
         let text = "![[Attach/a.png#thumb|A picture]] ![x](Attach/my%20a.png \"t\")";
         let found = embeds(text);
-        assert_eq!(
-            embed_target(&found[0]),
-            Some("Attach/a.png".to_string())
-        );
-        assert_eq!(
-            embed_target(&found[1]),
-            Some("Attach/my a.png".to_string())
-        );
+        assert_eq!(embed_target(&found[0]), Some("Attach/a.png".to_string()));
+        assert_eq!(embed_target(&found[1]), Some("Attach/my a.png".to_string()));
     }
 
     #[test]
@@ -503,7 +589,7 @@ mod tests {
     #[test]
     fn an_embed_alone_on_its_line_takes_the_line_with_it() {
         let text = "before\n![[a.png]]\nafter";
-        let span = 7..16;
+        let span = 7..17;
         assert_eq!(&text[span.clone()], "![[a.png]]");
         let range = removal_range(text, span);
         assert_eq!(&text[range.clone()], "![[a.png]]\n");
@@ -513,7 +599,8 @@ mod tests {
     #[test]
     fn an_embed_sharing_its_line_keeps_the_line() {
         let text = "See ![[a.png]] here";
-        let span = 4..13;
+        let span = 4..14;
+        assert_eq!(&text[span.clone()], "![[a.png]]");
         let range = removal_range(text, span);
         assert_eq!(&text[range.clone()], "![[a.png]] ");
         assert_eq!(text.replacen("![[a.png]] ", "", 1), "See here");
@@ -524,5 +611,27 @@ mod tests {
         assert_eq!(line_range("a\nbc\n", 3), 2..4);
         assert_eq!(line_range("a\nbc\n", 0), 0..1);
         assert_eq!(line_range("abc", 99), 0..3);
+    }
+
+    // ----- the toolbar's rows ----------------------------------------------
+
+    #[test]
+    fn the_remove_row_is_offered_only_on_an_embed() {
+        // * The row asks the same question the button asks: the embed under
+        //   the cursor. On one it can act; between two it names the next.
+        let text = "one ![[a.png]] two ![[b.png]] three";
+        let on_a = text.find("![[a.png]]").unwrap() + 4;
+        assert!(attachment_at(text, on_a).is_some());
+        let gap = text.find(" two ").unwrap() + 1;
+        assert!(
+            attachment_at(text, gap).is_some(),
+            "a cursor between two embeds on a line still names one of them"
+        );
+        assert!(attachment_at("plain text, no embeds", 3).is_none());
+        // * An embed of the note itself has no file behind it, so the row
+        //   finds an embed and the removal then has nothing to point at.
+        let found = embeds("![[#Heading]]");
+        assert!(attachment_at("![[#Heading]]", 3).is_some());
+        assert_eq!(embed_target(&found[0]), None);
     }
 }

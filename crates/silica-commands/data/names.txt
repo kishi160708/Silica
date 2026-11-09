@@ -234,3 +234,6 @@ silica:vault-backup	Back up the vault to a local folder
 silica:export-site	Export vault as site
 quick-capture:open	Quick Capture: New note
 task-dashboard:open	Task Dashboard: Open
+silica:insert-image	Insert image
+silica:attach-file	Attach file
+silica:remove-attachment	Remove attachment
