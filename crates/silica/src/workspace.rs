@@ -66,16 +66,16 @@ use gpui::{
     actions, anchored, canvas, deferred, div, fill, point, prelude::*, px, relative, rgb, rgba,
     size, transparent_black, Action, Anchor, AnyWindowHandle, App, Bounds, BoxShadow, ClickEvent,
     ClipboardItem, Context, CursorStyle, Decorations, DragMoveEvent, ElementInputHandler, Entity,
-    EntityInputHandler, FocusHandle, Focusable, FontWeight, Global, HighlightStyle, HitboxBehavior,
-    Hsla, KeyBinding, MouseButton, MouseDownEvent, PathBuilder, Pixels, ResizeEdge, ScrollHandle,
-    ShapedLine, SharedString, StyledText, Subscription, Task, TextAlign, Tiling, UTF16Selection,
-    Window, WindowAppearance, WindowControlArea,
+    EntityInputHandler, EventEmitter, FocusHandle, Focusable, FontWeight, Global, HighlightStyle,
+    HitboxBehavior, Hsla, KeyBinding, MouseButton, MouseDownEvent, PathBuilder, Pixels, ResizeEdge,
+    ScrollHandle, ShapedLine, SharedString, StyledText, Subscription, Task, TextAlign, Tiling,
+    UTF16Selection, Window, WindowAppearance, WindowControlArea,
 };
 use rayon::prelude::*;
 use serde_json::{json, Map, Value};
 use silica_cache::{
-    basename, frontmatter_aliases, index_markdown, CachedMetadata, LinkFormat, MetadataCache,
-    PropertyEntry, index::TermIndex,
+    basename, frontmatter_aliases, index::TermIndex, index_markdown, CachedMetadata, LinkFormat,
+    MetadataCache, PropertyEntry,
 };
 use silica_commands::{hotkey_label, keystroke, CommandRegistry};
 use silica_formats::bookmarks::{Bookmark, Bookmarks};
@@ -88,6 +88,7 @@ use silica_formats::properties::{Change, PropertiesInDocument};
 use silica_formats::{validate_renamed_file, FileKind};
 use silica_markdown::Subpath;
 use silica_plugins::native::PluginContext;
+use silica_search::{natural_cmp, FindReplace, PreviewLine};
 use silica_templates as templates;
 use silica_text::table::TableCommand;
 use silica_text::{BlockInsert, LinePrefix, LinkSyntax};
@@ -110,6 +111,8 @@ actions!(
     workspace,
     [ToggleMode, GoBack, GoForward, OpenSearch, OpenGraph]
 );
+
+actions!(find_replace_vault, [Dismiss]);
 
 /// Runs the command with this Obsidian id (bound from the registry's hotkeys).
 #[derive(Debug, Clone, PartialEq, Action)]
@@ -492,6 +495,7 @@ pub const RUNNABLE: &[&str] = &[
     "app:decrease-font-size",
     "silica:vault-backup",
     "silica:toggle-graph-pane",
+    "silica:find-replace-vault",
     "workspace:copy-path",
     "workspace:copy-full-path",
     "app:open-settings",
@@ -576,6 +580,9 @@ pub fn bind_keys(cx: &mut App, registry: &CommandRegistry) {
         })
         .collect();
     cx.bind_keys(bindings);
+    // * The vault-wide find-and-replace panel's own Escape, in its context:
+    //   the workspace's own bindings would take it while the panel is up too.
+    cx.bind_keys([KeyBinding::new("escape", Dismiss, Some("FindReplace"))]);
     crate::reading::view::bind_keys(cx);
     right_panes::bind_pane_keys(cx);
 }
@@ -958,9 +965,16 @@ impl VaultState {
     /// still searchable and link-rewritable because their text is read
     /// back from the vault rather than skipped.
     pub fn text_for(&self, path: &str) -> Option<Arc<String>> {
-        self.texts.read().unwrap_or_else(|e| e.into_inner()).get(path).cloned().or_else(|| {
-            std::fs::read_to_string(self.root.join(path)).ok().map(Arc::new)
-        })
+        self.texts
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(path)
+            .cloned()
+            .or_else(|| {
+                std::fs::read_to_string(self.root.join(path))
+                    .ok()
+                    .map(Arc::new)
+            })
     }
 
     pub fn build_options(&self) -> reading::BuildOptions {
@@ -1715,6 +1729,8 @@ enum Modal {
     Chooser,
     /// The Search pane's "Copy search results".
     CopyResults,
+    /// `silica:find-replace-vault`: the vault-wide find and replace.
+    FindReplace,
 }
 
 /// The file operation the open prompt will finish.
@@ -2926,6 +2942,8 @@ pub struct Workspace {
     settings: Entity<SettingsView>,
     prompt: Entity<Prompt>,
     copy_results: Entity<CopyResults>,
+    /// The vault-wide find and replace panel.
+    find_replace: Entity<FindReplaceVault>,
     pending: Option<PendingOp>,
     modal: Modal,
     /// Command ids run this session, most recent first.
@@ -3221,6 +3239,7 @@ impl Workspace {
         let settings = cx.new(SettingsView::new);
         let prompt = cx.new(Prompt::new);
         let copy_results = cx.new(CopyResults::new);
+        let find_replace = cx.new(FindReplaceVault::new);
         let reading = cx.new(ReadingView::new);
         let editor = cx.new(|cx| Editor::new(window, cx));
         let canvas = cx.new(CanvasView::new);
@@ -3414,6 +3433,23 @@ impl Workspace {
                 },
             ),
             cx.subscribe_in(
+                &find_replace,
+                window,
+                |this, _, event: &FindReplaceEvent, window, cx| match event {
+                    // * What the rewrite wrote reaches the index and every
+                    //   pane through the same path a save does.
+                    FindReplaceEvent::FilesChanged(changes) => {
+                        this.after_changes(changes.clone(), cx);
+                    }
+                    // * The notice names the number of files written, which is
+                    //   what a vault-wide replace is judged by.
+                    FindReplaceEvent::Rewritten(files) => {
+                        this.report(format!("Rewrite selesai: {files} file"), cx);
+                    }
+                    FindReplaceEvent::Close => this.close_modal(window, cx),
+                },
+            ),
+            cx.subscribe_in(
                 &search,
                 window,
                 |this, _, event: &SearchEvent, window, cx| match event {
@@ -3586,6 +3622,7 @@ impl Workspace {
             loading: None,
             explorer,
             search,
+            find_replace,
             bookmarks,
             switcher,
             chooser,
@@ -4518,6 +4555,8 @@ impl Workspace {
             .update(cx, |s, cx| s.set_state(state.clone(), cx));
         self.search
             .update(cx, |s, cx| s.set_state(state.clone(), cx));
+        self.find_replace
+            .update(cx, |p, cx| p.set_state(state.clone(), cx));
         self.graph
             .update(cx, |g, cx| g.set_state(state.clone(), cx));
         self.settings
@@ -5558,6 +5597,7 @@ impl Workspace {
             }
             "silica:vault-backup" => self.backup_vault(window, cx),
             "silica:toggle-graph-pane" => self.toggle_graph_pane(cx),
+            "silica:find-replace-vault" => self.find_replace_vault(window, cx),
             "workspace:copy-path" => self.copy_current_path(false, cx),
             "workspace:copy-full-path" => self.copy_current_path(true, cx),
             "app:toggle-left-sidebar" => {
@@ -5925,6 +5965,30 @@ impl Workspace {
             current
         };
         cx.write_to_clipboard(ClipboardItem::new_string(text));
+    }
+
+    /// `silica:find-replace-vault`: the find-and-replace panel over every
+    /// note in the vault — a find, a replacement, a preview of each result
+    /// with a box beside it, and one button that rewrites the ticked files.
+    ///
+    /// Asked for with the panel already up it is a toggle, because a command
+    /// that opens with no way back is only half a command. The vault has to
+    /// be open: the panel searches the vault's own notes.
+    fn find_replace_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            self.report("No vault is open", cx);
+            return;
+        };
+        if self.modal == Modal::FindReplace {
+            self.close_modal(window, cx);
+            return;
+        }
+        self.find_replace
+            .update(cx, |pane, cx| pane.open(state, cx));
+        self.modal = Modal::FindReplace;
+        let handle = self.find_replace.read(cx).find_focus_handle(cx);
+        window.focus(&handle, cx);
+        cx.notify();
     }
 
     /// `silica:toggle-graph-pane`: the graph in the right dock, beside the
@@ -6628,7 +6692,11 @@ impl Workspace {
                     // * Cache the note's text so search, backlinks, and link
                     //   rewriting can find it even after a previous tab close
                     //   evicted it from the unbounded map.
-                    state.texts.write().unwrap_or_else(|e| e.into_inner()).insert(path.to_string(), Arc::new(text.clone()));
+                    state
+                        .texts
+                        .write()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .insert(path.to_string(), Arc::new(text.clone()));
                     self.words = text.split_whitespace().count();
                     self.chars = text.chars().count();
                     // * The reading view's model is built for the mode
@@ -8971,12 +9039,14 @@ impl Render for Workspace {
             | Modal::Palette
             | Modal::Prompt
             | Modal::Chooser
-            | Modal::CopyResults => {
+            | Modal::CopyResults
+            | Modal::FindReplace => {
                 let child: gpui::AnyElement = match self.modal {
                     Modal::Switcher => self.switcher.clone().into_any_element(),
                     Modal::Palette => self.palette.clone().into_any_element(),
                     Modal::Chooser => self.chooser.clone().into_any_element(),
                     Modal::CopyResults => self.copy_results.clone().into_any_element(),
+                    Modal::FindReplace => self.find_replace.clone().into_any_element(),
                     _ => self.prompt.clone().into_any_element(),
                 };
                 Some(
@@ -9141,6 +9211,781 @@ fn canvas_frame(
         .into_any_element()
 }
 
+// ---------------------------------------------------------------------------
+// Vault-wide find and replace
+// ---------------------------------------------------------------------------
+
+/// What the find-and-replace panel has to show under its fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplacePhase {
+    /// The find field holds nothing that can be searched for: an empty box,
+    /// a pattern that will not compile, or one that matches the empty string.
+    Idle,
+    /// A preview is up; nothing has been written.
+    Preview,
+    /// The rewrite has run: what it did is on screen.
+    Done,
+}
+
+/// One note in the preview: what was found in it, and whether it is one of
+/// the files to rewrite.
+#[derive(Debug, Clone)]
+struct ReplaceEntry {
+    path: String,
+    name: String,
+    /// Every line that holds a match, in note order.
+    lines: Vec<PreviewLine>,
+    selected: bool,
+}
+
+impl ReplaceEntry {
+    /// How many match lines this note contributes to the count.
+    fn matches(&self) -> usize {
+        self.lines.len()
+    }
+}
+
+/// What one rewrite did: the files it wrote, the selected ones it left alone
+/// and the ones it could not touch, in the order it went through them.
+#[derive(Debug, Clone, Default)]
+struct RewriteOutcome {
+    written: Vec<FileChange>,
+    unchanged: Vec<String>,
+    failed: Vec<String>,
+}
+
+impl RewriteOutcome {
+    fn files(&self) -> usize {
+        self.written.len()
+    }
+}
+
+/// What the panel tells the workspace.
+pub enum FindReplaceEvent {
+    /// The rewrite wrote these files: the index and every pane need them.
+    FilesChanged(Changes),
+    /// The rewrite finished with this many files written, for the notice.
+    Rewritten(usize),
+    /// Escape, or the close button: the panel goes away.
+    Close,
+}
+
+/// `silica:find-replace-vault`: find a string in every note in the vault,
+/// preview each result as the line it is on with the context around it, tick
+/// the ones to change, and replace all of them at once.
+///
+/// Nothing is written until the Replace button is pressed — the preview is a
+/// plan and that button is its confirmation. The rewrite re-finds the pattern
+/// in the text it reads from disk, so a range a preview was made with cannot
+/// reach a file that has changed since, and a file that no longer holds the
+/// pattern is not touched at all.
+struct FindReplaceVault {
+    focus_handle: FocusHandle,
+    find: Entity<TextInput>,
+    replace: Entity<TextInput>,
+    state: Option<Arc<VaultState>>,
+    entries: Vec<ReplaceEntry>,
+    /// The find is case sensitive.
+    match_case: bool,
+    /// The find field holds a regular expression rather than a literal.
+    regex: bool,
+    phase: ReplacePhase,
+    /// What the panel says under the fields: the summary, or the refusal.
+    message: Option<SharedString>,
+    /// Drops the results of a search the user has typed past.
+    generation: u64,
+    _subscriptions: Vec<Subscription>,
+}
+
+impl EventEmitter<FindReplaceEvent> for FindReplaceVault {}
+
+impl Focusable for FindReplaceVault {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl FindReplaceVault {
+    pub fn new(cx: &mut Context<Self>) -> FindReplaceVault {
+        let find = cx.new(|cx| {
+            let mut input = TextInput::new("Find in vault", cx);
+            input.set_pad_left(px(30.));
+            input
+        });
+        let replace = cx.new(|cx| {
+            let mut input = TextInput::new("Replace with", cx);
+            input.set_pad_left(px(30.));
+            input
+        });
+        let subscriptions = vec![
+            cx.subscribe(&find, |this, _, event: &InputEvent, cx| match event {
+                InputEvent::Changed => {
+                    // * A new find is a new plan: the summary under the
+                    //   fields describes what the last one wrote, not this.
+                    this.message = None;
+                    this.run(cx);
+                }
+                // * Enter in the find field has nothing left to confirm — the
+                //   search runs as it is typed.
+                InputEvent::Submit | InputEvent::Up | InputEvent::Down => {}
+                InputEvent::Cancel => cx.emit(FindReplaceEvent::Close),
+            }),
+            cx.subscribe(&replace, |this, _, event: &InputEvent, cx| match event {
+                // * Enter in the replacement field is the confirmation: the
+                //   preview is up and every ticked file is rewritten.
+                InputEvent::Submit => this.confirm(cx),
+                InputEvent::Cancel => cx.emit(FindReplaceEvent::Close),
+                InputEvent::Changed | InputEvent::Up | InputEvent::Down => {}
+            }),
+        ];
+        FindReplaceVault {
+            focus_handle: cx.focus_handle(),
+            find,
+            replace,
+            state: None,
+            entries: Vec::new(),
+            match_case: false,
+            regex: false,
+            phase: ReplacePhase::Idle,
+            message: None,
+            generation: 0,
+            _subscriptions: subscriptions,
+        }
+    }
+
+    /// The field the panel opens on.
+    pub(crate) fn find_focus_handle(&self, cx: &App) -> FocusHandle {
+        self.find.focus_handle(cx)
+    }
+
+    /// Points the panel at a vault without searching it: the vault opens
+    /// before anyone asks for the panel.
+    pub(crate) fn set_state(&mut self, state: Arc<VaultState>, _cx: &mut Context<Self>) {
+        self.state = Some(state);
+    }
+
+    /// Opens the panel over `state` and searches for what is already in the
+    /// find field, the way a reopened modal shows its own state.
+    pub(crate) fn open(&mut self, state: Arc<VaultState>, cx: &mut Context<Self>) {
+        self.state = Some(state);
+        self.message = None;
+        self.run(cx);
+    }
+
+    /// Searches every note in the vault for what the find field holds.
+    fn run(&mut self, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            self.entries.clear();
+            self.phase = ReplacePhase::Idle;
+            cx.notify();
+            return;
+        };
+        let find = self.find.read(cx).text().trim().to_string();
+        let with = self.replace.read(cx).text().to_string();
+        self.generation += 1;
+        let generation = self.generation;
+        self.phase = ReplacePhase::Preview;
+        self.message = None;
+        match FindReplace::new(&find, &with, self.match_case, self.regex) {
+            None => {
+                // * An empty find is an untouched panel rather than a
+                //   refusal; a find that cannot be searched for says why.
+                self.entries.clear();
+                self.phase = ReplacePhase::Idle;
+                self.message = (!find.is_empty()).then(|| {
+                    SharedString::from("The find field holds no pattern that can be searched for")
+                });
+                cx.notify();
+            }
+            Some(fr) => cx
+                .spawn(async move |this, cx| {
+                    let entries = cx
+                        .background_executor()
+                        .spawn(async move { search_vault(&state, &fr) })
+                        .await;
+                    this.update(cx, |pane, cx| {
+                        if pane.generation != generation {
+                            return;
+                        }
+                        pane.entries = entries;
+                        cx.notify();
+                    })
+                    .ok();
+                })
+                .detach(),
+        }
+    }
+
+    /// The Replace button, or Enter in the replacement field: rewrites every
+    /// ticked file in one go and reports how many it wrote.
+    fn confirm(&mut self, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let find = self.find.read(cx).text().trim().to_string();
+        let with = self.replace.read(cx).text().to_string();
+        let Some(fr) = FindReplace::new(&find, &with, self.match_case, self.regex) else {
+            return;
+        };
+        let paths: Vec<String> = self
+            .entries
+            .iter()
+            .filter(|e| e.selected)
+            .map(|e| e.path.clone())
+            .collect();
+        if paths.is_empty() {
+            self.phase = ReplacePhase::Done;
+            self.message = Some(SharedString::from("No result is ticked to replace"));
+            cx.notify();
+            return;
+        }
+        let (changes, outcome) = rewrite_entries(&state, &fr, &paths);
+        // * The preview is rebuilt from the text now on disk, and what the
+        //   rewrite did is reported over it.
+        self.entries.iter_mut().for_each(|e| e.selected = false);
+        self.run(cx);
+        self.phase = ReplacePhase::Done;
+        self.message = Some(SharedString::from(summary_line(&outcome)));
+        if !changes.files.is_empty() {
+            let files = changes.files.len();
+            cx.emit(FindReplaceEvent::FilesChanged(changes));
+            cx.emit(FindReplaceEvent::Rewritten(files));
+        } else {
+            cx.emit(FindReplaceEvent::Rewritten(0));
+        }
+        cx.notify();
+    }
+
+    /// Ticks or unticks every result at once.
+    fn select_all(&mut self, selected: bool, cx: &mut Context<Self>) {
+        self.entries.iter_mut().for_each(|e| e.selected = selected);
+        cx.notify();
+    }
+
+    fn dismiss(&mut self, _: &Dismiss, _: &mut Window, cx: &mut Context<Self>) {
+        cx.emit(FindReplaceEvent::Close);
+    }
+
+    /// The counts the summary line carries: results, files, ticked files.
+    fn counts(&self) -> (usize, usize, usize) {
+        let files = self.entries.len();
+        let results: usize = self.entries.iter().map(ReplaceEntry::matches).sum();
+        let selected = self.entries.iter().filter(|e| e.selected).count();
+        (results, files, selected)
+    }
+
+    /// What the panel is showing, for the control socket's state dump: the
+    /// two fields, the toggles, the counts, and one row per preview line.
+    pub(crate) fn describe(&self, cx: &App) -> Value {
+        let (results, files, selected) = self.counts();
+        let rows: Vec<Value> = self
+            .entries
+            .iter()
+            .flat_map(|entry| {
+                entry.lines.iter().map(|line| {
+                    json!({
+                        "path": entry.path,
+                        "line": line.line,
+                        "text": line.snippet(),
+                        "selected": entry.selected,
+                    })
+                })
+            })
+            .collect();
+        json!({
+            "find": self.find.read(cx).text(),
+            "replace": self.replace.read(cx).text(),
+            "match_case": self.match_case,
+            "regex": self.regex,
+            "results": results,
+            "files": files,
+            "selected_files": selected,
+            "rows": rows,
+        })
+    }
+}
+
+/// Every note in the vault that holds the pattern, with the lines it was
+/// found on, in the order the Search pane lists its results.
+fn search_vault(state: &VaultState, fr: &FindReplace) -> Vec<ReplaceEntry> {
+    let paths: Vec<String> = state
+        .vault()
+        .markdown_files()
+        .map(|f| f.path.clone())
+        .collect();
+    let texts = state.texts();
+    let mut entries: Vec<ReplaceEntry> = paths
+        .par_iter()
+        .filter_map(|path| {
+            let text: Arc<String> = match texts.get(path).cloned() {
+                Some(t) => t,
+                None => Arc::new(std::fs::read_to_string(state.root.join(path)).ok()?),
+            };
+            let lines = fr.preview(&text);
+            if lines.is_empty() {
+                return None;
+            }
+            let name = path
+                .rsplit('/')
+                .next()
+                .unwrap_or(path)
+                .trim_end_matches(".md");
+            Some(ReplaceEntry {
+                path: path.clone(),
+                name: name.to_string(),
+                lines,
+                // * Everything found is ticked: the panel replaces what is
+                //   shown unless a box is cleared.
+                selected: true,
+            })
+        })
+        .collect();
+    entries.sort_by(|a, b| natural_cmp(&a.name, &b.name).then_with(|| b.path.cmp(&a.path)));
+    entries
+}
+
+/// Rewrites every path in `paths` with `fr`, reading each file from disk and
+/// writing only the ones the pattern changes.
+///
+/// The pattern is re-found in the text read from disk — never replayed from
+/// the ranges a preview was made with — so a file that changed while the
+/// panel was open is rewritten from what it holds now, and one that no longer
+/// holds the pattern is left untouched.
+fn rewrite_entries(
+    state: &VaultState,
+    fr: &FindReplace,
+    paths: &[String],
+) -> (Changes, RewriteOutcome) {
+    let mut written: Vec<FileChange> = Vec::new();
+    let mut unchanged: Vec<String> = Vec::new();
+    let mut failed: Vec<String> = Vec::new();
+    for path in paths {
+        let Ok(text) = std::fs::read_to_string(state.vault().absolute(path)) else {
+            failed.push(format!("{path}: cannot read the file"));
+            continue;
+        };
+        let Some(new_text) = fr.rewrite(&text) else {
+            unchanged.push(path.clone());
+            continue;
+        };
+        if new_text == text {
+            unchanged.push(path.clone());
+            continue;
+        }
+        match state.vault().write_bytes(path, new_text.as_bytes()) {
+            Ok(()) => written.push(FileChange::Modified(path.clone())),
+            Err(err) => failed.push(format!("{path}: {err}")),
+        }
+    }
+    let outcome = RewriteOutcome {
+        written: written.clone(),
+        unchanged,
+        failed,
+    };
+    let changes = match written.is_empty() {
+        true => Changes::default(),
+        false => state.absorb(written),
+    };
+    (changes, outcome)
+}
+
+/// The line under the fields after a rewrite: how many files it wrote, and
+/// what it left alone or could not touch.
+fn summary_line(outcome: &RewriteOutcome) -> String {
+    let mut parts = vec![format!(
+        "Rewrote {} file{}",
+        outcome.files(),
+        plural(outcome.files())
+    )];
+    if !outcome.unchanged.is_empty() {
+        parts.push(format!("{} unchanged", outcome.unchanged.len()));
+    }
+    if !outcome.failed.is_empty() {
+        parts.push(format!(
+            "{} failed: {}",
+            outcome.failed.len(),
+            outcome.failed.join("; ")
+        ));
+    }
+    parts.join(", ")
+}
+
+/// The highlight ranges a preview line's matches draw with: the background
+/// Obsidian puts behind matched text, the text colour kept.
+fn replace_highlights(
+    ranges: &[Range<usize>],
+    theme: &Theme,
+) -> Vec<(Range<usize>, HighlightStyle)> {
+    ranges
+        .iter()
+        .map(|r| {
+            (
+                r.clone(),
+                HighlightStyle {
+                    background_color: Some(theme.highlight_bg),
+                    ..HighlightStyle::default()
+                },
+            )
+        })
+        .collect()
+}
+
+impl Render for FindReplaceVault {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.global::<Theme>().clone();
+        let find = self.find.clone();
+        let replace = self.replace.clone();
+        let (results, files, selected) = self.counts();
+        // * A message the panel has to say — what a rewrite did, or why a
+        //   find was refused — is the whole line; otherwise the counts are.
+        let summary: SharedString = match &self.message {
+            Some(message) => message.clone(),
+            None => match self.phase {
+                ReplacePhase::Preview => format!(
+                    "{results} result{} in {files} file{}, {selected} ticked",
+                    plural(results),
+                    plural(files)
+                )
+                .into(),
+                ReplacePhase::Idle | ReplacePhase::Done => {
+                    "Find a string in every note in the vault".into()
+                }
+            },
+        };
+        div()
+            .id("find-replace-vault")
+            .key_context("FindReplace")
+            .track_focus(&self.focus_handle)
+            .on_action(cx.listener(Self::dismiss))
+            .w(px(620.))
+            .max_h(px(600.))
+            .flex()
+            .flex_col()
+            .bg(theme.bg_secondary)
+            .border_1()
+            .border_color(theme.border)
+            .rounded_lg()
+            .shadow_lg()
+            .p_4()
+            .on_mouse_down_out(cx.listener(|_, _, _, cx| cx.emit(FindReplaceEvent::Close)))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .pb(px(12.))
+                    .child(
+                        div()
+                            .text_size(px(15.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme.text)
+                            .child("Find and replace in vault"),
+                    )
+                    .child(
+                        div()
+                            .id("find-replace-close")
+                            .size(px(24.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(4.))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme.bg_alt))
+                            .on_click(cx.listener(|_, _, _, cx| cx.emit(FindReplaceEvent::Close)))
+                            .child(icon("x", 16., theme.text_muted)),
+                    ),
+            )
+            .child(
+                // * The two fields, each with the glyph Obsidian puts at its
+                //   left: a magnifier for the find, arrows for the replace.
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.))
+                    .child(
+                        div().relative().h(px(30.)).child(find).child(
+                            div()
+                                .absolute()
+                                .left(px(8.))
+                                .top(px(0.))
+                                .h(px(30.))
+                                .flex()
+                                .items_center()
+                                .child(icon("search", ICON_SIZE, theme.text_muted)),
+                        ),
+                    )
+                    .child(
+                        div().relative().h(px(30.)).child(replace).child(
+                            div()
+                                .absolute()
+                                .left(px(8.))
+                                .top(px(0.))
+                                .h(px(30.))
+                                .flex()
+                                .items_center()
+                                .child(icon("arrow-left-right", ICON_SIZE, theme.text_muted)),
+                        ),
+                    ),
+            )
+            .child(self.render_options(&theme, cx))
+            .child(
+                div()
+                    .pt(px(8.))
+                    .pb(px(4.))
+                    .text_size(px(FONT_UI_SMALL))
+                    .text_color(theme.text_muted)
+                    .child(summary),
+            )
+            .child(
+                div()
+                    .id("find-replace-results")
+                    .flex_1()
+                    .min_h(px(0.))
+                    .overflow_y_scroll()
+                    .border_t_1()
+                    .border_color(theme.border)
+                    .children(
+                        self.entries
+                            .iter()
+                            .enumerate()
+                            .map(|(ix, entry)| self.render_entry(ix, entry, &theme, cx)),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .pt(px(12.))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .id("find-replace-select-all")
+                                    .h(px(26.))
+                                    .px(px(10.))
+                                    .flex()
+                                    .items_center()
+                                    .rounded(px(5.))
+                                    .cursor_pointer()
+                                    .text_size(px(FONT_UI_SMALL))
+                                    .bg(theme.bg_alt)
+                                    .text_color(theme.text)
+                                    .hover(|s| s.bg(theme.bg_active))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        let all = this.entries.iter().all(|e| e.selected);
+                                        this.select_all(!all, cx)
+                                    }))
+                                    .child("Select all"),
+                            )
+                            .child(
+                                div()
+                                    .id("find-replace-select-none")
+                                    .h(px(26.))
+                                    .px(px(10.))
+                                    .flex()
+                                    .items_center()
+                                    .rounded(px(5.))
+                                    .cursor_pointer()
+                                    .text_size(px(FONT_UI_SMALL))
+                                    .bg(theme.bg_alt)
+                                    .text_color(theme.text)
+                                    .hover(|s| s.bg(theme.bg_active))
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.select_all(false, cx)),
+                                    )
+                                    .child("Select none"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("find-replace-confirm")
+                            .h(px(30.))
+                            .px(px(14.))
+                            .flex()
+                            .items_center()
+                            .rounded(px(5.))
+                            .cursor_pointer()
+                            .text_size(px(FONT_UI_SMALL))
+                            .bg(theme.accent)
+                            .text_color(gpui::white())
+                            .when(selected == 0, |d| d.opacity(0.5))
+                            .on_click(cx.listener(|this, _, _, cx| this.confirm(cx)))
+                            .child(format!("Replace in {} file{}", selected, plural(selected))),
+                    ),
+            )
+    }
+}
+
+impl FindReplaceVault {
+    /// The two toggles under the fields: Match case and Regular expression.
+    fn render_options(&mut self, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
+        let option = |id: &'static str,
+                      label: &'static str,
+                      on: bool,
+                      theme: &Theme|
+         -> gpui::Stateful<gpui::Div> {
+            let mut wash = theme.accent;
+            wash.a = 0.1;
+            div()
+                .id(id)
+                .h(px(24.))
+                .px(px(8.))
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(6.))
+                .rounded(px(5.))
+                .cursor_pointer()
+                .text_size(px(FONT_UI_SMALL))
+                .when(on, |d| d.bg(wash).text_color(theme.accent))
+                .when(!on, |d| d.text_color(theme.text_muted))
+                .hover(|s| s.bg(theme.bg_alt))
+                .child(
+                    div()
+                        .size(px(14.))
+                        .rounded(px(3.))
+                        .border_1()
+                        .border_color(if on { theme.accent } else { theme.border })
+                        .bg(if on { theme.accent } else { theme.bg })
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .children(on.then(|| icon("check", 10., gpui::white()))),
+                )
+                .child(label)
+        };
+        let match_case = self.match_case;
+        let regex = self.regex;
+        div()
+            .flex()
+            .flex_row()
+            .gap(px(6.))
+            .pt(px(8.))
+            .child(
+                option("find-replace-match-case", "Match case", match_case, theme).on_click(
+                    cx.listener(move |this, _, _, cx| {
+                        this.match_case = !match_case;
+                        this.run(cx);
+                    }),
+                ),
+            )
+            .child(
+                option("find-replace-regex", "Regular expression", regex, theme).on_click(
+                    cx.listener(move |this, _, _, cx| {
+                        this.regex = !regex;
+                        this.run(cx);
+                    }),
+                ),
+            )
+    }
+
+    /// One note in the preview: its tick box and name, then every line the
+    /// find matched with the matched text highlighted.
+    fn render_entry(
+        &self,
+        ix: usize,
+        entry: &ReplaceEntry,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let mut wash = theme.accent;
+        wash.a = 0.1;
+        let count: SharedString = entry.matches().to_string().into();
+        let path = entry.path.clone();
+        div()
+            .id(("find-replace-entry", ix))
+            .w_full()
+            .flex()
+            .flex_col()
+            .py(px(6.))
+            .border_b_1()
+            .border_color(theme.border)
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .id(("find-replace-tick", ix))
+                            .size(px(16.))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(3.))
+                            .cursor_pointer()
+                            .border_1()
+                            .border_color(if entry.selected {
+                                theme.accent
+                            } else {
+                                theme.border
+                            })
+                            .bg(if entry.selected { wash } else { theme.bg })
+                            .children(entry.selected.then(|| icon("check", 11., gpui::white())))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if let Some(entry) =
+                                    this.entries.iter_mut().find(|e| e.path == path)
+                                {
+                                    entry.selected = !entry.selected;
+                                }
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_size(px(FONT_UI_SMALL))
+                            .text_color(theme.text)
+                            .child(entry.name.clone()),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(FONT_UI_SMALLER))
+                            .text_color(theme.text_faint)
+                            .child(count),
+                    ),
+            )
+            .children(entry.lines.iter().map(|line| {
+                let number: SharedString = line.line.to_string().into();
+                let text = StyledText::new(SharedString::from(line.snippet().to_string()))
+                    .with_highlights(replace_highlights(line.ranges(), theme));
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap(px(8.))
+                    .pl(px(24.))
+                    .py(px(2.))
+                    .child(
+                        div()
+                            .w(px(24.))
+                            .flex_shrink_0()
+                            .text_size(px(FONT_UI_SMALLER))
+                            .text_color(theme.text_faint)
+                            .child(number),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_size(px(FONT_UI_SMALLER))
+                            .line_height(relative(1.3))
+                            .text_color(theme.text_muted)
+                            .child(text),
+                    )
+            }))
+            .into_any_element()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -9156,6 +10001,79 @@ mod tests {
         assert!(tab_in_strip(1, 1, true));
         assert!(!tab_in_strip(0, 1, true));
         assert!(!tab_in_strip(2, 1, true));
+    }
+
+    /// Vault-wide replace, end to end: three notes, two of them holding the
+    /// string, the third without it. The two are rewritten and the third is
+    /// left exactly as it was — not rewritten, not even touched.
+    ///
+    /// This is the promise the panel's button makes: the preview is made
+    /// from the indexed text, and the rewrite re-finds the pattern in what
+    /// each file holds on disk, so a note without the pattern is never a
+    /// candidate for a write at all.
+    #[test]
+    fn a_vault_replace_rewrites_the_matching_notes_and_leaves_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = dir.path();
+        fs::create_dir_all(r.join(".obsidian")).unwrap();
+        fs::write(r.join(".obsidian/app.json"), "{}").unwrap();
+        let untouched = "nothing here at all\n";
+        fs::write(r.join("One.md"), "alpha mango beta\nsecond mango line\n").unwrap();
+        fs::write(r.join("Two.md"), "one mango\n").unwrap();
+        fs::write(r.join("Three.md"), untouched).unwrap();
+        let state = VaultState::load(&r.to_path_buf()).unwrap();
+
+        let fr = FindReplace::new("mango", "papaya", false, false).expect("compiles");
+        // * The preview: the two notes that hold the string, with the line
+        //   number of every match — the third is not a result at all.
+        let entries = search_vault(&state, &fr);
+        let paths: Vec<&str> = entries.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(paths, vec!["One.md", "Two.md"]);
+        assert_eq!(entries[0].lines.len(), 2, "both of the first note's lines");
+        assert_eq!(entries[0].lines[0].line, 1);
+        assert_eq!(entries[0].lines[1].line, 2);
+        assert_eq!(entries[1].lines.len(), 1);
+
+        // * The ticked files — which is everything found — are rewritten.
+        let ticked: Vec<String> = entries
+            .iter()
+            .filter(|e| e.selected)
+            .map(|e| e.path.clone())
+            .collect();
+        let (changes, outcome) = rewrite_entries(&state, &fr, &ticked);
+        assert_eq!(outcome.files(), 2);
+        assert!(outcome.failed.is_empty());
+        assert_eq!(changes.files.len(), 2, "the index hears about both writes");
+        assert_eq!(
+            fs::read_to_string(r.join("One.md")).unwrap(),
+            "alpha papaya beta\nsecond papaya line\n"
+        );
+        assert_eq!(
+            fs::read_to_string(r.join("Two.md")).unwrap(),
+            "one papaya\n"
+        );
+        assert_eq!(
+            fs::read_to_string(r.join("Three.md")).unwrap(),
+            untouched,
+            "a note without the string is left exactly as it was"
+        );
+
+        // * A file ticked that no longer holds the pattern — this one never
+        //   did — is reported as unchanged rather than written.
+        let (changes, outcome) = rewrite_entries(&state, &fr, &["Three.md".to_string()]);
+        assert_eq!(outcome.files(), 0);
+        assert_eq!(outcome.unchanged, vec!["Three.md".to_string()]);
+        assert!(changes.files.is_empty());
+        assert_eq!(fs::read_to_string(r.join("Three.md")).unwrap(), untouched);
+
+        // * The rewrite found the pattern afresh: running it again over the
+        //   rewritten text finds nothing left to change.
+        let (_, outcome) = rewrite_entries(&state, &fr, &ticked);
+        assert_eq!(outcome.files(), 0, "nothing left to replace");
+        assert_eq!(
+            outcome.unchanged,
+            vec!["One.md".to_string(), "Two.md".to_string()]
+        );
     }
 
     /// A symlink to a folder or a file on either platform. Windows refuses

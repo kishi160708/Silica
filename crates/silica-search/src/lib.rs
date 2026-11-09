@@ -9,16 +9,21 @@
 //! `prepareFuzzySearch` and `prepareSimpleSearch` counterparts used by the
 //! quick switcher and pickers. [`match_lines`] windows a note's hits into
 //! the context lines a result row shows. [`natural_cmp`] orders names the
-//! way Obsidian's numeric, locale-aware collation does.
+//! way Obsidian's numeric, locale-aware collation does, and
+//! [`FindReplace`] is the vault-wide find and replace: a query compiled
+//! once, previewed per line, and replayed over the text it is written
+//! back to.
 
 pub mod collate;
 pub mod fuzzy;
 pub mod matcher;
 pub mod query;
+pub mod replace;
 pub mod snippet;
 
 pub use collate::natural_cmp;
 pub use fuzzy::{fuzzy_match, simple_search, FuzzyMatch};
 pub use matcher::{MatchSet, Search, SearchError, SearchFile, TaskLine};
-pub use query::{parse, Compare, Field, Query, index_terms};
+pub use query::{index_terms, parse, Compare, Field, Query};
+pub use replace::{FindReplace, PreviewLine};
 pub use snippet::{context_window, match_lines, MatchLine};
