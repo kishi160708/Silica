@@ -10,7 +10,7 @@
   <img alt="Rust" src="https://img.shields.io/badge/100%25-Rust-E8590C?style=flat-square&logo=rust&logoColor=white">
   <img alt="Linux, Windows, macOS" src="https://img.shields.io/badge/Linux%20%7C%20Windows%20%7C%20macOS-2b2b2b?style=flat-square">
   <img alt="MIT" src="https://img.shields.io/badge/license-MIT-2b2b2b?style=flat-square">
-  <img alt="v0.7.0" src="https://img.shields.io/badge/status-early%20alpha%20v0.7.0-f2545b?style=flat-square">
+  <img alt="v0.7.1" src="https://img.shields.io/badge/status-early%20alpha%20v0.7.1-f2545b?style=flat-square">
 </p>
 
 Silica is a native desktop knowledge base written in Rust on GPUI. It opens an Obsidian vault exactly as it sits on disk: the same `.obsidian` configuration, the same Markdown dialect, the same `.canvas` and `.base` files. Nothing is imported or converted, and the vault folder is the only source of truth. Silica is an independent, clean-room implementation and is not affiliated with Obsidian.
@@ -114,10 +114,11 @@ Factual gaps versus Obsidian, tracked rather than hidden:
 - HTML is drawn where it can be drawn faithfully and left as source where it cannot. `<sup>` and `<sub>` are among the tags drawn without a baseline shift, because the text layer carries no vertical-offset attribute.
 - Local video plays without sound or seeking; remote media opens in the system player.
 - The graph is a full view, not a side pane.
-- Version history is Silica's own store — snapshots taken on save — not Obsidian Sync's. A vault written only by Obsidian has no history until Silica saves it once.
 - Two of 1,009 corpus notes do not match Obsidian's output (degenerate delimiter runs, a wikilink inside link text).
 
 Obsidian Sync, Publish, and the commercial services are Obsidian's products, not file formats; Silica has nothing to do with them. Any file-level sync (git, Syncthing, Dropbox) works because files are all Silica needs.
+
+Version history is Silica's own store — snapshots taken on every save, the last 30 per note under `.obsidian/.silica-versions/`. It is deliberately separate from Obsidian Sync: a vault written only by Obsidian has no Silica history until Silica saves it once, and Silica never reads or writes Obsidian Sync's proprietary format. This is a design decision, not a gap.
 
 ## Deliberately different
 
