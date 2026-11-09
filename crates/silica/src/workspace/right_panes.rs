@@ -1099,7 +1099,10 @@ impl Workspace {
     /// its own plugin in `core-plugins.json`, and a vault with no file has
     /// them all, so the default is what `CORE_PLUGINS` says.
     pub(crate) fn pane_enabled(&self, tab: RightTab) -> bool {
+        // * The Trash pane is Silica's own, not a core plugin's view: it is
+        //   there whenever a vault is, so no toggle takes it away.
         let id = match tab {
+            RightTab::Trash => return true,
             RightTab::Backlinks => "backlink",
             RightTab::Outgoing => "outgoing-link",
             RightTab::Tags => "tag-pane",
@@ -1130,6 +1133,7 @@ impl Workspace {
                 RightTab::Properties,
                 RightTab::Outline,
                 RightTab::Graph,
+                RightTab::Trash,
             ]
             .into_iter()
             .find(|t| self.pane_enabled(*t))
@@ -1144,6 +1148,7 @@ impl Workspace {
             RightTab::Outline => self.render_outline_pane(theme, cx),
             RightTab::Tags => self.render_tags_pane(theme, cx),
             RightTab::Properties => self.render_properties_pane(theme, cx),
+            RightTab::Trash => self.render_trash_pane(theme, cx),
             // * The graph side pane: the GraphView entity the ribbon opens
             //   full screen, kept in the dock. While a group's area already
             //   paints it, the dock says so rather than painting it twice.
@@ -1247,6 +1252,8 @@ impl Workspace {
                     ))
                     .children(tab_button(self, "Outline", "list", RightTab::Outline, cx))
                     .children(tab_button(self, "Graph", "git-fork", RightTab::Graph, cx))
+                    // * Silica's own pane, after Obsidian's six.
+                    .children(tab_button(self, "Trash", "trash-2", RightTab::Trash, cx))
                     .child(window_handle(
                         div().id("right-dock-space").flex_1().h_full(),
                         frameless,
@@ -1387,6 +1394,7 @@ impl Workspace {
             RightTab::Tags => self.tag_rows(cx).len(),
             RightTab::Properties => self.property_rows(cx).len(),
             RightTab::Outline => self.outline_rows(cx).len(),
+            RightTab::Trash => self.trash_state.entries.len(),
             // * Backlinks and Outgoing are card lists without a row model
             //   the arrows could walk; their rows stay click-only.
             _ => 0,
@@ -1404,6 +1412,7 @@ impl Workspace {
             RightTab::Tags => &mut self.tag_state.selected,
             RightTab::Properties => &mut self.property_state.selected,
             RightTab::Outline => &mut self.outline_state.selected,
+            RightTab::Trash => &mut self.trash_state.selected,
             _ => return,
         };
         let next = match selected {
@@ -1422,12 +1431,13 @@ impl Workspace {
 
     /// Enter on the selected row: the same thing a click on it does — a tag
     /// or property row searches for it, an outline row reveals its heading
-    /// in the note.
+    /// in the note, a trash row is restored.
     pub(crate) fn pane_activate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let ix = match self.right_tab {
             RightTab::Tags => self.tag_state.selected,
             RightTab::Properties => self.property_state.selected,
             RightTab::Outline => self.outline_state.selected,
+            RightTab::Trash => self.trash_state.selected,
             _ => None,
         };
         let Some(ix) = ix else {
@@ -1454,6 +1464,15 @@ impl Workspace {
                     self.reveal_heading(row.offset, cx);
                 }
             }
+            // * The one-way delete is left to its button, where a pointer
+            //   has to be aimed at it; Enter restores, which the note can
+            //   be trashed out of again if it was a mistake.
+            RightTab::Trash => {
+                if let Some(name) = self.trash_state.entries.get(ix) {
+                    let name = name.clone();
+                    self.restore_trash_entry(name, cx);
+                }
+            }
             _ => {}
         }
     }
@@ -1464,6 +1483,7 @@ impl Workspace {
             RightTab::Tags => self.tag_state.selected = None,
             RightTab::Properties => self.property_state.selected = None,
             RightTab::Outline => self.outline_state.selected = None,
+            RightTab::Trash => self.trash_state.selected = None,
             _ => {}
         }
         self.focus_main(window, cx);

@@ -105,6 +105,7 @@ mod render;
 mod right_panes;
 mod socket;
 mod tabs;
+mod trash_panel;
 
 actions!(
     workspace,
@@ -492,6 +493,7 @@ pub const RUNNABLE: &[&str] = &[
     "app:decrease-font-size",
     "silica:vault-backup",
     "silica:toggle-graph-pane",
+    "silica:workspace-show-trash",
     "workspace:copy-path",
     "workspace:copy-full-path",
     "app:open-settings",
@@ -1336,6 +1338,74 @@ impl VaultState {
         Ok(changes)
     }
 
+    /// The vault's own `.trash/` as the Trash pane lists it: every
+    /// trashed entry's name, sorted. The vault's own records (the
+    /// `.origin` sidecars) are not among them -- `Vault::list_trash`
+    /// skips them.
+    pub fn list_trash(&self) -> Result<Vec<String>, String> {
+        self.vault().list_trash().map_err(|e| e.to_string())
+    }
+
+    /// Restores a trashed entry to the folder it came from and re-indexes
+    /// it: a note on disk that the index does not know is invisible to
+    /// search, links and every list in the app, which would look exactly
+    /// like a lost note.
+    pub fn restore_from_trash(&self, name: &str) -> Result<Changes, String> {
+        // * Where it goes is read before the move, because the move
+        //   removes the record that says so.
+        let restored = {
+            let vault = self.vault();
+            let origin = vault.write_path(".trash").ok().and_then(|trash| {
+                std::fs::read_to_string(trash.join(format!(".{name}.origin")))
+                    .ok()
+                    .filter(|folder| !folder.is_empty())
+            });
+            match origin {
+                Some(folder) => format!("{folder}/{name}"),
+                None => name.to_string(),
+            }
+        };
+        {
+            let mut vault = self.vault.write().unwrap_or_else(|e| e.into_inner());
+            vault.restore_from_trash(name).map_err(|e| e.to_string())?;
+        }
+        Ok(self.absorb(vec![FileChange::Added(restored)]))
+    }
+
+    /// Deletes a trashed entry for good: it leaves `.trash/`, and nothing
+    /// in the vault says it was ever there afterwards. There is no undo
+    /// and no restore after this, which is what the panel's row says it
+    /// is doing.
+    pub fn delete_from_trash(&self, name: &str) -> Result<(), String> {
+        let vault = self.vault();
+        let trash = vault.write_path(".trash").map_err(|e| e.to_string())?;
+        let abs = vault
+            .entry_path(&format!(".trash/{name}"))
+            .map_err(|e| e.to_string())?;
+        // * The name comes from the panel's own list, but a command may
+        //   arrive over the socket saying anything: only what is one
+        //   entry inside the trash folder goes, and `entry_path` has
+        //   already refused anything that would climb out of the vault.
+        let inside = abs
+            .strip_prefix(&trash)
+            .is_ok_and(|rest| rest.components().count() == 1);
+        if !inside {
+            return Err(format!("{name} is not in the vault's trash"));
+        }
+        if !abs.exists() {
+            return Err(format!("{name} is not in the trash"));
+        }
+        let gone = if abs.is_dir() {
+            std::fs::remove_dir_all(&abs)
+        } else {
+            std::fs::remove_file(&abs)
+        };
+        gone.map_err(|e| format!("could not delete {name}: {e}"))?;
+        // * The record of where it came from has nothing left to record.
+        let _ = std::fs::remove_file(trash.join(format!(".{name}.origin")));
+        Ok(())
+    }
+
     /// Note names and aliases, for unlinked mentions.
     fn names(&self) -> Vec<(String, String)> {
         let cache = self.cache();
@@ -1496,6 +1566,11 @@ pub(crate) enum RightTab {
     /// All properties: every key in the vault with its type and count.
     Properties,
     Outline,
+    /// The vault's own `.trash/`: Silica's own pane, not an Obsidian
+    /// view -- the vault keeps its trashed notes and Obsidian leaves them
+    /// to the file manager, so there is nothing there to copy and this
+    /// is where they are listed, restored or dropped for good.
+    Trash,
 }
 
 /// The Outline pane's headings for one note's metadata, whether that
@@ -1510,6 +1585,22 @@ fn outline_headings(meta: &CachedMetadata) -> Vec<panes::Heading> {
             offset: h.position.start.offset,
         })
         .collect()
+}
+
+/// The Trash leaf's state: the entries as last read from `.trash/`, the
+/// row the arrow keys are on, and why a read failed when one did. It is
+/// Silica's own pane, so `workspace.json` keeps nothing for it: the vault
+/// folder is the state.
+#[derive(Debug, Clone, Default)]
+struct TrashPaneState {
+    /// Entry names as `Vault::list_trash` returns them, sorted: flat,
+    /// because `.trash/` is flat.
+    entries: Vec<String>,
+    /// The row the arrow keys are on, when the pane has the keyboard.
+    selected: Option<usize>,
+    /// A read of `.trash/` that did not work, so the pane says so rather
+    /// than showing a folder that is not empty as if it were.
+    error: Option<String>,
 }
 
 /// What a tree row's fold triangle does when clicked.
@@ -3036,6 +3127,9 @@ pub struct Workspace {
     /// `editor:open-link-in-new-leaf`. Taken by [`Workspace::follow_link`].
     link_in_new_tab: bool,
     right_tab: RightTab,
+    /// The Trash pane's rows: the entries in `.trash/` as last read, and
+    /// the row the arrow keys are on.
+    trash_state: TrashPaneState,
     /// The open note's headings, which the Outline pane draws as a tree.
     outline: Vec<panes::Heading>,
     outline_state: OutlinePaneState,
@@ -3646,6 +3740,7 @@ impl Workspace {
             window_title: SharedString::default(),
             link_in_new_tab: false,
             right_tab: RightTab::Backlinks,
+            trash_state: TrashPaneState::default(),
             outline: Vec::new(),
             outline_state: OutlinePaneState::default(),
             outline_filter,
@@ -4752,6 +4847,7 @@ impl Workspace {
             "outline" => RightTab::Outline,
             "tags" => RightTab::Tags,
             "properties" => RightTab::Properties,
+            "trash" => RightTab::Trash,
             _ => RightTab::Backlinks,
         };
         self.select_right_tab(which, cx);
@@ -5242,6 +5338,11 @@ impl Workspace {
             "global-search:open" => self.open_search_action(&OpenSearch, window, cx),
             "graph:open" => self.open_graph_action(&OpenGraph, window, cx),
             "silica:export-site" => self.start_export_site(window, cx),
+            // * `silica:workspace-show-trash`: the Trash pane, beside the
+            //   note in the right dock. Silica's own view -- the vault's
+            //   own `.trash` is where its trashed notes wait, and
+            //   Obsidian has no view over it.
+            "silica:workspace-show-trash" => self.show_trash_panel(window, cx),
             // * Asked for by id with no file open -- the palette does not offer
             //   it, and `can_run` says so -- this opens nothing, which is what
             //   Obsidian's `checkCallback` does rather than falling back to the
@@ -9221,6 +9322,64 @@ mod tests {
         // * The defaults stand in: the unreadable setting does not take
         // * effect, so nothing silently runs on half a config.
         assert_eq!(state.trash_option(), TrashOption::System);
+    }
+
+    /// The Trash pane's three moves over the vault's own trash. A note
+    /// trashed locally is listed without the vault's own sidecar, and
+    /// restored to the folder it came from even when that folder is gone
+    /// with it; a trashed entry can then be deleted for good, and a name
+    /// that is not in the trash is refused rather than unlinked from
+    /// wherever it points.
+    #[test]
+    fn trash_lists_restores_back_to_its_folder_and_deletes_for_good() {
+        let (dir, state) = vault();
+        let r = dir.path();
+        state.trash("Sub/S.md").unwrap();
+        assert_eq!(state.list_trash().unwrap(), vec!["S.md".to_string()]);
+        // * The sidecar naming where it came from is the vault's own
+        //   record, not a trashed note, so it is not listed.
+        assert!(r.join(".trash/.S.md.origin").is_file());
+        assert!(!r.join("Sub/S.md").exists());
+
+        // * The folder went with the note: a restore brings it back rather
+        //   than refusing, and the note is in the index again.
+        fs::remove_dir_all(r.join("Sub")).unwrap();
+        let changes = state.restore_from_trash("S.md").unwrap();
+        assert_eq!(changes.files, vec![FileChange::Added("Sub/S.md".into())]);
+        assert_eq!(
+            fs::read_to_string(r.join("Sub/S.md")).unwrap(),
+            "[A](../A.md) [[B]]\n"
+        );
+        assert!(state.cache().file("Sub/S.md").is_some());
+        assert!(state.vault().folders().contains(&"Sub".to_string()));
+        assert!(!r.join(".trash/S.md").exists());
+        assert!(!r.join(".trash/.S.md.origin").exists());
+        assert!(state.list_trash().unwrap().is_empty());
+    }
+
+    /// A trashed entry deleted for good leaves the vault entirely: nothing
+    /// is left in `.trash/` for it, and nothing outside it is touched.
+    #[test]
+    fn a_trashed_entry_deleted_for_good_leaves_nothing_behind() {
+        let (dir, state) = vault();
+        let r = dir.path();
+        state.trash("A.md").unwrap();
+        state.trash("B.md").unwrap();
+        assert_eq!(state.list_trash().unwrap(), vec!["A.md", "B.md"]);
+        // * A name that is not in the trash, and a name that would climb
+        //   out of it, are both refused.
+        assert!(state.delete_from_trash("Sub/S.md").is_err());
+        assert!(state.delete_from_trash("../A.md").is_err());
+        state.delete_from_trash("A.md").unwrap();
+        assert_eq!(state.list_trash().unwrap(), vec!["B.md".to_string()]);
+        assert!(!r.join(".trash/A.md").exists());
+        // * The note itself is still gone from the vault: what was deleted
+        //   was the copy waiting in the trash, not the vault's place.
+        assert!(!r.join("A.md").exists());
+        assert!(state.vault().files().iter().all(|f| f.path != "A.md"));
+        state.delete_from_trash("B.md").unwrap();
+        assert!(state.list_trash().unwrap().is_empty());
+        assert!(state.vault().files().iter().all(|f| f.path != "B.md"));
     }
 
     /// A link written in a property is an outgoing link like any other,

@@ -146,6 +146,7 @@ impl Workspace {
             Some("graph") => self.right_tab = RightTab::Graph,
             Some("tag") => self.right_tab = RightTab::Tags,
             Some("all-properties") => self.right_tab = RightTab::Properties,
+            Some("trash") => self.right_tab = RightTab::Trash,
             _ => {}
         }
         self.layout = Some(layout);
