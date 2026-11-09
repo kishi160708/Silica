@@ -1086,7 +1086,17 @@ impl Plugin for TagPane {
     }
 }
 
-/// Workspaces: save/load window layouts.
+/// Workspaces: named window layouts saved in the vault, one file each
+/// under `.silica/workspaces/<name>.json`. A layout holds the open tab
+/// groups and the side-dock tabs of one session; the shell puts it back
+/// on screen when it is loaded.
+///
+/// The plugin keeps the file format: `workspaces:save` writes a layout
+/// document under a name, and `workspaces:load` reads one back and opens
+/// the note it was left on. The shell's `silica:workspaces-*` commands in
+/// `crates/silica/src/workspace.rs` capture the live layout, apply a
+/// loaded layout to the workspace shell, and list the saved names in a
+/// modal for switching.
 pub struct Workspaces;
 
 impl Plugin for Workspaces {
@@ -1119,44 +1129,73 @@ impl Plugin for Workspaces {
     ) -> Result<(), String> {
         match id {
             "workspaces:save" => {
-                let name = value.and_then(|v| v.as_str()).unwrap_or("default");
-                let current = (ctx.current_note)().unwrap_or_default();
+                // * The value carries `name` and `layout`: the shell
+                //   captures its current layout and hands it over whole.
+                let layout = value
+                    .and_then(|v| v.get("layout").and_then(Value::as_object))
+                    .ok_or_else(|| "the workspace layout is not an object".to_string())?;
+                let name = value
+                    .and_then(|v| v.get("name").and_then(Value::as_str))
+                    .unwrap_or("default");
+                let name = normalized_name(name)
+                    .ok_or_else(|| format!("'{name}' is not a valid workspace name"))?;
                 let workspace_path = format!(".silica/workspaces/{name}.json");
-                let workspace = serde_json::json!({
+                let document = serde_json::json!({
                     "name": name,
-                    "current_note": current,
+                    "layout": layout,
                     "created": SystemTime::now()
                         .duration_since(SystemTime::UNIX_EPOCH)
                         .map(|d| d.as_secs())
                         .unwrap_or(0)
                 });
-                (ctx.create_file)(
+                (ctx.write_file)(
                     &workspace_path,
-                    &serde_json::to_string_pretty(&workspace).map_err(|e| e.to_string())?,
+                    &serde_json::to_string_pretty(&document).map_err(|e| e.to_string())?,
                 )?;
+                (ctx.notify)(&format!("Workspace '{name}' saved."));
                 Ok(())
             }
             "workspaces:load" => {
-                let name = value.and_then(|v| v.as_str()).unwrap_or("default");
+                let name = value
+                    .and_then(|v| v.get("name").and_then(Value::as_str))
+                    .unwrap_or("default");
                 let workspace_path = format!(".silica/workspaces/{name}.json");
                 if !(ctx.file_exists)(&workspace_path)? {
                     return Err(format!("no workspace named {name}"));
                 }
                 let content = (ctx.read_file)(&workspace_path)?;
-                let workspace: Value = serde_json::from_str(&content)
+                let document: Value = serde_json::from_str(&content)
                     .map_err(|e| format!("workspace {name} is not valid JSON: {e}"))?;
-                let note = workspace
+                let note = document
                     .get("current_note")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
                 if !note.is_empty() {
                     (ctx.open_note)(note)?;
                 }
+                (ctx.notify)(&format!("Workspace '{name}' loaded."));
                 Ok(())
             }
             _ => Err(format!("'{id}' is not a command this plugin registered")),
         }
     }
+}
+
+/// The name a workspace is saved under: trimmed, and refused when empty
+/// or when it carries a path separator or a control character, so a name
+/// can never address a file outside `.silica/workspaces/`.
+fn normalized_name(name: &str) -> Option<String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return None;
+    }
+    if name
+        .chars()
+        .any(|c| c.is_control() || c == '/' || c == '\\')
+    {
+        return None;
+    }
+    Some(name.to_string())
 }
 
 /// Slash commands: trigger commands via slash syntax.
@@ -1435,5 +1474,224 @@ mod report_tests {
         assert_eq!(shown.len(), 1);
         assert!(shown[0].contains("2 tags"), "{}", shown[0]);
         assert!(shown[0].contains("alpha") && shown[0].contains("beta"));
+    }
+}
+
+/// Workspaces: the file format the plugin keeps under
+/// `.silica/workspaces/<name>.json`, exercised through a plugin context
+/// whose closures write to a real temp directory.
+#[cfg(test)]
+mod workspaces_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::path::{Path, PathBuf};
+    use std::rc::Rc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// A plugin context backed by a temp directory: writes, reads and
+    /// existence checks go to disk, opened notes are recorded, and every
+    /// notice is kept.
+    struct Harness {
+        root: PathBuf,
+        opens: Rc<RefCell<Vec<String>>>,
+        notices: Rc<RefCell<Vec<String>>>,
+    }
+
+    impl Harness {
+        fn new() -> (Self, PluginContext<'static>) {
+            static NEXT: AtomicUsize = AtomicUsize::new(0);
+            let ix = NEXT.fetch_add(1, Ordering::Relaxed);
+            let root = std::env::temp_dir().join(format!("silica-workspaces-test-{ix}",));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).expect("the temp vault");
+            let opens = Rc::new(RefCell::new(Vec::new()));
+            let notices = Rc::new(RefCell::new(Vec::new()));
+            let shown = Rc::clone(&notices);
+            let recorded = Rc::clone(&opens);
+            let root_read = root.clone();
+            let root_write = root.clone();
+            let root_exists = root.clone();
+            let ctx = PluginContext {
+                vault_root: Path::new(""),
+                read_file: Box::new(move |p| {
+                    std::fs::read_to_string(root_read.join(p)).map_err(|e| e.to_string())
+                }),
+                write_file: Box::new(move |p, text| {
+                    let full = root_write.join(p);
+                    if let Some(parent) = full.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    std::fs::write(full, text).map_err(|e| e.to_string())
+                }),
+                append_file: Box::new(|_, _| Err("not used".to_string())),
+                create_file: Box::new(|_, _| Err("not used".to_string())),
+                create_folder: Box::new(|_| Err("not used".to_string())),
+                delete_file: Box::new(|_| Err("not used".to_string())),
+                rename_file: Box::new(|_, _| Err("not used".to_string())),
+                list_dir: Box::new(|_| Ok(Vec::new())),
+                file_exists: Box::new(move |p| Ok(root_exists.join(p).exists())),
+                metadata_cache: Box::new(|_| Err("not used".to_string())),
+                open_note: Box::new(move |p| {
+                    recorded.borrow_mut().push(p.to_string());
+                    Ok(())
+                }),
+                current_note: Box::new(|| None),
+                notify: Box::new(move |line: &str| shown.borrow_mut().push(line.to_string())),
+            };
+            (
+                Self {
+                    root,
+                    opens,
+                    notices,
+                },
+                ctx,
+            )
+        }
+    }
+
+    #[test]
+    fn save_writes_the_layout_document_under_a_name() {
+        let (harness, ctx) = Harness::new();
+        let layout = serde_json::json!({ "tabs": [] });
+        let value = serde_json::json!({ "name": "notes", "layout": layout });
+        assert!(Workspaces
+            .run_command("workspaces:save", Some(&value), &ctx)
+            .is_ok());
+
+        let text = std::fs::read_to_string(harness.root.join(".silica/workspaces/notes.json"))
+            .expect("the workspace file is written");
+        let document: Value = serde_json::from_str(&text).expect("the document is valid JSON");
+        assert_eq!(document.get("name").and_then(Value::as_str), Some("notes"));
+        assert_eq!(document.get("layout"), Some(&layout));
+        assert!(document.get("created").and_then(Value::as_u64).is_some());
+        assert_eq!(
+            harness.notices.borrow().as_slice(),
+            ["Workspace 'notes' saved."]
+        );
+    }
+
+    #[test]
+    fn save_uses_default_when_no_name_is_given() {
+        let (harness, ctx) = Harness::new();
+        let value = serde_json::json!({ "layout": {} });
+        assert!(Workspaces
+            .run_command("workspaces:save", Some(&value), &ctx)
+            .is_ok());
+        assert!(harness
+            .root
+            .join(".silica/workspaces/default.json")
+            .is_file());
+    }
+
+    #[test]
+    fn save_overwrites_an_existing_workspace() {
+        let (harness, ctx) = Harness::new();
+        let first = serde_json::json!({ "name": "notes", "layout": { "one": 1 } });
+        Workspaces
+            .run_command("workspaces:save", Some(&first), &ctx)
+            .unwrap();
+        let second = serde_json::json!({ "name": "notes", "layout": { "two": 2 } });
+        Workspaces
+            .run_command("workspaces:save", Some(&second), &ctx)
+            .unwrap();
+
+        let text = std::fs::read_to_string(harness.root.join(".silica/workspaces/notes.json"))
+            .expect("the workspace file is written");
+        let document: Value = serde_json::from_str(&text).expect("the document is valid JSON");
+        assert_eq!(
+            document.get("layout").and_then(|v| v.get("two")),
+            Some(&serde_json::json!(2))
+        );
+    }
+
+    #[test]
+    fn save_rejects_an_invalid_name() {
+        let (harness, ctx) = Harness::new();
+        for bad in ["", "   ", "../notes", "a/b", "a\\b", "a\u{7f}b"] {
+            let value = serde_json::json!({ "name": bad, "layout": {} });
+            assert!(
+                Workspaces
+                    .run_command("workspaces:save", Some(&value), &ctx)
+                    .is_err(),
+                "{bad} must be refused"
+            );
+        }
+        let dir = harness.root.join(".silica/workspaces");
+        assert!(
+            std::fs::read_dir(&dir).is_err(),
+            "no workspace folder is created"
+        );
+    }
+
+    #[test]
+    fn load_reads_the_document_and_opens_its_note() {
+        let (harness, ctx) = Harness::new();
+        std::fs::create_dir_all(harness.root.join(".silica/workspaces")).unwrap();
+        std::fs::write(
+            harness.root.join(".silica/workspaces/notes.json"),
+            r#"{"name":"notes","layout":{},"current_note":"Journal.md"}"#,
+        )
+        .unwrap();
+
+        let value = serde_json::json!({ "name": "notes" });
+        assert!(Workspaces
+            .run_command("workspaces:load", Some(&value), &ctx)
+            .is_ok());
+        assert_eq!(harness.opens.borrow().as_slice(), ["Journal.md"]);
+        assert!(harness
+            .notices
+            .borrow()
+            .iter()
+            .any(|n| n.contains("notes") && n.contains("loaded")));
+    }
+
+    #[test]
+    fn load_without_a_note_still_reports_loaded() {
+        let (harness, ctx) = Harness::new();
+        std::fs::create_dir_all(harness.root.join(".silica/workspaces")).unwrap();
+        std::fs::write(
+            harness.root.join(".silica/workspaces/empty.json"),
+            r#"{"name":"empty","layout":{}}"#,
+        )
+        .unwrap();
+
+        let value = serde_json::json!({ "name": "empty" });
+        assert!(Workspaces
+            .run_command("workspaces:load", Some(&value), &ctx)
+            .is_ok());
+        assert!(harness.opens.borrow().is_empty());
+    }
+
+    #[test]
+    fn load_refuses_a_missing_workspace() {
+        let (_harness, ctx) = Harness::new();
+        let err = Workspaces
+            .run_command(
+                "workspaces:load",
+                Some(&serde_json::json!({ "name": "gone" })),
+                &ctx,
+            )
+            .unwrap_err();
+        assert_eq!(err, "no workspace named gone");
+    }
+
+    #[test]
+    fn load_refuses_invalid_json() {
+        let (harness, ctx) = Harness::new();
+        std::fs::create_dir_all(harness.root.join(".silica/workspaces")).unwrap();
+        std::fs::write(
+            harness.root.join(".silica/workspaces/broken.json"),
+            "{ not json",
+        )
+        .unwrap();
+
+        let err = Workspaces
+            .run_command(
+                "workspaces:load",
+                Some(&serde_json::json!({ "name": "broken" })),
+                &ctx,
+            )
+            .unwrap_err();
+        assert!(err.contains("not valid JSON"));
     }
 }

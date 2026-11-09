@@ -315,6 +315,7 @@ impl Workspace {
                 Modal::Prompt => "prompt",
                 Modal::CopyResults => "copy-results",
                 Modal::Chooser => "chooser",
+                Modal::Workspaces => "workspaces",
             }),
         );
         // * The four list modals fill these in; with no modal up they stay
@@ -330,6 +331,7 @@ impl Workspace {
             Modal::CopyResults => Some(self.copy_results.read(cx).describe()),
             Modal::Chooser => Some(self.chooser.read(cx).describe(rows, cx)),
             Modal::Settings => Some(self.settings.read(cx).describe(rows, cx)),
+            Modal::Workspaces => None,
             Modal::None => None,
         };
         if let Some(Value::Object(view)) = view {

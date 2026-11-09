@@ -74,8 +74,8 @@ use gpui::{
 use rayon::prelude::*;
 use serde_json::{json, Map, Value};
 use silica_cache::{
-    basename, frontmatter_aliases, index_markdown, CachedMetadata, LinkFormat, MetadataCache,
-    PropertyEntry, index::TermIndex,
+    basename, frontmatter_aliases, index::TermIndex, index_markdown, CachedMetadata, LinkFormat,
+    MetadataCache, PropertyEntry,
 };
 use silica_commands::{hotkey_label, keystroke, CommandRegistry};
 use silica_formats::bookmarks::{Bookmark, Bookmarks};
@@ -105,6 +105,7 @@ mod render;
 mod right_panes;
 mod socket;
 mod tabs;
+mod workspaces;
 
 actions!(
     workspace,
@@ -445,6 +446,9 @@ pub const RUNNABLE: &[&str] = &[
     // * Silica's own extension, not an Obsidian id: the `silica:` prefix is
     //   what the repo marks its native additions with.
     "silica:export-site",
+    "silica:workspaces-save",
+    "silica:workspaces-load",
+    "silica:workspaces-open-modal",
     "canvas:new-file",
     "canvas:export-as-image",
     "canvas:jump-to-group",
@@ -958,9 +962,16 @@ impl VaultState {
     /// still searchable and link-rewritable because their text is read
     /// back from the vault rather than skipped.
     pub fn text_for(&self, path: &str) -> Option<Arc<String>> {
-        self.texts.read().unwrap_or_else(|e| e.into_inner()).get(path).cloned().or_else(|| {
-            std::fs::read_to_string(self.root.join(path)).ok().map(Arc::new)
-        })
+        self.texts
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(path)
+            .cloned()
+            .or_else(|| {
+                std::fs::read_to_string(self.root.join(path))
+                    .ok()
+                    .map(Arc::new)
+            })
     }
 
     pub fn build_options(&self) -> reading::BuildOptions {
@@ -1715,6 +1726,8 @@ enum Modal {
     Chooser,
     /// The Search pane's "Copy search results".
     CopyResults,
+    /// The saved-workspace list the user switches a layout from.
+    Workspaces,
 }
 
 /// The file operation the open prompt will finish.
@@ -5813,6 +5826,39 @@ impl Workspace {
                     self.start_merge_current(window, cx);
                 }
             }
+            // * Named window layouts: the layout lives in
+            //   `.silica/workspaces/<name>.json` in the vault. Saving
+            //   records the open tab groups and side-dock tabs under a
+            //   name, loading puts one back on screen, and the modal
+            //   lists the saved names for switching.
+            "silica:workspaces-save" => {
+                if self.state.is_none() {
+                    self.report("no vault is open", cx);
+                    return;
+                };
+                let layout = self.capture_layout("default");
+                let value = serde_json::json!({ "name": "default", "layout": layout });
+                match silica_plugins::live::run("workspaces:save", Some(&value), &ctx) {
+                    Some((Ok(()), _)) => self.report("Workspace 'default' saved.", cx),
+                    Some((Err(reason), _)) => self.report(reason, cx),
+                    None => self.report("the workspaces plugin is not registered", cx),
+                }
+            }
+            "silica:workspaces-load" => match self.load_workspace("default", window, cx) {
+                Ok(()) => self.report("Workspace 'default' loaded.", cx),
+                Err(reason) => self.report(reason, cx),
+            },
+            "silica:workspaces-open-modal" => {
+                if self.state.is_none() {
+                    self.report("no vault is open", cx);
+                    return;
+                };
+                match workspaces::list_workspaces(self.state.as_ref().expect("a vault is open")) {
+                    Ok(names) if names.is_empty() => self.report("no saved workspaces", cx),
+                    Ok(_) => self.modal = Modal::Workspaces,
+                    Err(reason) => self.report(reason, cx),
+                }
+            }
             _ => {
                 let name = self.command_name(id, cx);
                 self.report(format!("{name}: not available in Silica yet"), cx);
@@ -6628,7 +6674,11 @@ impl Workspace {
                     // * Cache the note's text so search, backlinks, and link
                     //   rewriting can find it even after a previous tab close
                     //   evicted it from the unbounded map.
-                    state.texts.write().unwrap_or_else(|e| e.into_inner()).insert(path.to_string(), Arc::new(text.clone()));
+                    state
+                        .texts
+                        .write()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .insert(path.to_string(), Arc::new(text.clone()));
                     self.words = text.split_whitespace().count();
                     self.chars = text.chars().count();
                     // * The reading view's model is built for the mode
@@ -8971,12 +9021,14 @@ impl Render for Workspace {
             | Modal::Palette
             | Modal::Prompt
             | Modal::Chooser
-            | Modal::CopyResults => {
+            | Modal::CopyResults
+            | Modal::Workspaces => {
                 let child: gpui::AnyElement = match self.modal {
                     Modal::Switcher => self.switcher.clone().into_any_element(),
                     Modal::Palette => self.palette.clone().into_any_element(),
                     Modal::Chooser => self.chooser.clone().into_any_element(),
                     Modal::CopyResults => self.copy_results.clone().into_any_element(),
+                    Modal::Workspaces => self.render_workspaces_modal(&theme, cx),
                     _ => self.prompt.clone().into_any_element(),
                 };
                 Some(

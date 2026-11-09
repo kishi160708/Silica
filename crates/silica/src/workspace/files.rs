@@ -1191,10 +1191,7 @@ link to it is rewritten. The current note is deleted."
                 }
             }
             if let Err(e) = silica_vault::write_no_follow(&absolute, rw.text.as_bytes()) {
-                merge_write_errors.push(format!(
-                    "Could not update links in {}: {e}",
-                    rw.new_path
-                ));
+                merge_write_errors.push(format!("Could not update links in {}: {e}", rw.new_path));
             }
         }
         drop(index_texts);

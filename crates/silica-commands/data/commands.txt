@@ -253,3 +253,6 @@ silica:toggle-graph-pane
 silica:vault-backup
 quick-capture:open
 task-dashboard:open
+silica:workspaces-save
+silica:workspaces-load
+silica:workspaces-open-modal
