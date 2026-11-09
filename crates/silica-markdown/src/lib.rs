@@ -15,6 +15,7 @@
 
 pub mod ast;
 mod block;
+pub mod block_ref;
 mod entities;
 pub mod frontmatter;
 pub mod highlight;

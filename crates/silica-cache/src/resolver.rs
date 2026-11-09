@@ -151,6 +151,29 @@ impl LinkResolver {
             .unwrap_or(&[])
     }
 
+    /// Resolves a wikilink body that names a block — `[[#^id]]` or
+    /// `[[path#^id]]` — to the vault path of the note holding it and the
+    /// block id. A bare `[[#^id]]` (empty path) names the current note.
+    /// Returns `None` when the subpath is not a block reference or the note
+    /// path does not resolve in this vault.
+    pub fn resolve_block_link<'a>(
+        &self,
+        linktext: &'a str,
+        source_path: &str,
+    ) -> Option<(String, &'a str)> {
+        let parsed = silica_markdown::parse_linktext(linktext);
+        let block_id = match parsed.subpath {
+            Some(silica_markdown::linktext::Subpath::Block(id)) => id,
+            _ => return None,
+        };
+        let path = if parsed.path.is_empty() {
+            normalize(source_path).to_string()
+        } else {
+            self.resolve(linktext, source_path)?.to_string()
+        };
+        Some((path, block_id))
+    }
+
     fn with_extensions(&self, stem: &str) -> Option<&str> {
         if FileKind::from_path(stem) != FileKind::Other {
             if let Some(p) = self.exact(stem) {
@@ -392,5 +415,22 @@ mod tests {
         r.remove("a.md");
         assert!(r.all_exact("a.md").is_empty());
         assert_eq!(r.resolve("a", "Note.md"), None);
+    }
+
+    #[test]
+    fn block_links_resolve_to_note_and_block_id() {
+        let r = resolver();
+        assert_eq!(
+            r.resolve_block_link("#^x1", "Note.md"),
+            Some(("Note.md".to_string(), "x1"))
+        );
+        assert_eq!(
+            r.resolve_block_link("Note#^x1", "Projects/Plan.md"),
+            Some(("Note.md".to_string(), "x1"))
+        );
+        // A heading subpath is not a block reference.
+        assert_eq!(r.resolve_block_link("Note#Heading", "Note.md"), None);
+        // An unknown note resolves to nothing.
+        assert_eq!(r.resolve_block_link("Missing#^x1", "Note.md"), None);
     }
 }
