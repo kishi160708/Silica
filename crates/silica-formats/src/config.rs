@@ -144,6 +144,14 @@ pub struct AppConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub trash_option: Option<String>,
+    /// `always` | `ask` | `never`: what happens to a deleted note's
+    /// attachments that no other note refers to. Absent means ask.
+    #[serde(
+        default,
+        rename = "attachmentDelete",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub attachment_delete: Option<String>,
     #[serde(
         default,
         rename = "alwaysUpdateLinks",

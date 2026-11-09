@@ -378,6 +378,9 @@ impl Workspace {
                     json!({"op": "rename-tag", "from": from})
                 }
                 Some(PendingOp::ExportSite) => json!({"op": "export-site"}),
+                Some(PendingOp::DeleteAttachments { path }) => {
+                    json!({"op": "delete-attachments", "path": path})
+                }
             },
         );
         Value::Object(modal)

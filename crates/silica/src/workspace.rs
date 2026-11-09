@@ -1060,6 +1060,17 @@ impl VaultState {
         TrashOption::from_config(self.app().trash_option.as_deref())
     }
 
+    /// `attachmentDelete`: `always`/`ask`/`never` — what happens to a
+    /// deleted note's attachments that no other note refers to. Absent
+    /// means ask.
+    pub fn attachment_delete(&self) -> AttachmentDelete {
+        match self.app().attachment_delete.as_deref() {
+            Some("always") => AttachmentDelete::Always,
+            Some("never") => AttachmentDelete::Never,
+            _ => AttachmentDelete::Ask,
+        }
+    }
+
     /// `alwaysUpdateLinks`: on by default; off means ask before rewriting.
     pub fn update_links_automatically(&self) -> bool {
         self.app().always_update_links.unwrap_or(true)
@@ -1328,6 +1339,30 @@ impl VaultState {
             .write()
             .unwrap_or_else(|e| e.into_inner())
             .trash(path, self.trash_option())
+            .map_err(|e| e.to_string())?;
+        let mut changes = Changes::default();
+        let mut cache = self.cache.write().unwrap_or_else(|e| e.into_inner());
+        let mut texts = self.texts.write().unwrap_or_else(|e| e.into_inner());
+        for p in removed {
+            if texts.remove(&p).is_some() {
+                changes.removed_notes.push(p.clone());
+            }
+            cache.forget_path(&p);
+            changes.files.push(FileChange::Removed(p));
+        }
+        cache.reresolve();
+        Ok(changes)
+    }
+
+    /// Like `trash`, but always moves the file into the vault's own
+    /// `.trash` folder, no matter what `trashOption` says, and drops it
+    /// from the index.
+    pub(crate) fn trash_local(&self, path: &str) -> Result<Changes, String> {
+        let removed = self
+            .vault
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .trash(path, TrashOption::Local)
             .map_err(|e| e.to_string())?;
         let mut changes = Changes::default();
         let mut cache = self.cache.write().unwrap_or_else(|e| e.into_inner());
@@ -1665,9 +1700,17 @@ impl Default for OutgoingState {
     }
 }
 
-/// How long a transient message stays on screen. Obsidian reports what a
-/// command did with a Notice that fades on its own after a few seconds;
-/// the exact duration there has not been probed.
+/// What to do with a deleted note's attachments that no other note refers
+/// to: move them to the vault's `.trash` folder, ask every time, or leave
+/// them alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AttachmentDelete {
+    Always,
+    Ask,
+    Never,
+}
+
+/// How long a transient message stays on screen.
 const NOTICE_LIFETIME: Duration = Duration::from_secs(5);
 
 /// A message on screen, with the id its expiry timer names it by.
@@ -1738,6 +1781,12 @@ pub(crate) enum PendingOp {
     Rename(String),
     Move(String),
     Delete(String),
+    /// The delete confirmation was accepted; the attachment-cleanup
+    /// prompt (`ask`) named the note whose unreferenced attachments may
+    /// go to `.trash`.
+    DeleteAttachments {
+        path: String,
+    },
     NewFolder {
         parent: String,
     },
