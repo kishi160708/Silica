@@ -719,6 +719,42 @@ impl Workspace {
         );
     }
 
+    /// `silica:vault-export-bundle`: asks where in the vault the bundle
+    /// goes, with the vault's own root as the pre-filled answer.
+    ///
+    /// The bundle is one Markdown file holding every note, for handing the
+    /// vault to a model; where it lands is the only question worth asking,
+    /// because the vault it comes from is the one this window has open.
+    pub(crate) fn start_export_vault_bundle(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(state) = self.state.clone() else {
+            self.report("No vault is open", cx);
+            return;
+        };
+        // * The root is the answer most of the time, so the box starts
+        //   empty and an empty box means "the root" -- the prompt's
+        //   suggestions carry the folders that are already there.
+        let mut suggestions = vec![String::new()];
+        suggestions.extend(state.vault().folders().iter().cloned());
+        self.open_prompt(
+            PendingOp::ExportBundle,
+            PromptSpec {
+                title: "Export vault bundle".into(),
+                detail: Some("Every note in one Markdown file, with a table of contents.".into()),
+                input: Some(String::new()),
+                placeholder: "Folder (empty for the vault root)".into(),
+                suggestions,
+                confirm: "Export".into(),
+                ..PromptSpec::default()
+            },
+            window,
+            cx,
+        );
+    }
+
     pub(crate) fn start_move(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Some(state) = self.state.clone() else {
             return;
@@ -1338,6 +1374,35 @@ link to it is rewritten. The current note is deleted."
                         cx,
                     ),
                     Err(err) => self.report(err, cx),
+                }
+            }
+            PendingOp::ExportBundle => {
+                self.pending = None;
+                self.close_modal(window, cx);
+                // * The vault the bundle comes from is the one this window
+                //   has open, and the op reads it through its own borrow, so
+                //   the root is cloned out before the report takes `self`
+                //   back.
+                let Some(state) = self.state.clone() else {
+                    self.report("No vault is open", cx);
+                    return;
+                };
+                let root = state.vault().root().to_path_buf();
+                // * An empty box is the vault's root, which is where the
+                //   bundle is easiest to find again.
+                let folder = value.trim_matches('/').to_string();
+                match silica_vault::ops::export_vault_bundle(&root, &folder) {
+                    Ok(report) => self.report(
+                        format!(
+                            "Exported {} note{}, {} byte(s), to {}",
+                            report.notes,
+                            plural(report.notes),
+                            report.bytes,
+                            report.file.display()
+                        ),
+                        cx,
+                    ),
+                    Err(err) => self.report(format!("Bundle export failed: {err}"), cx),
                 }
             }
             PendingOp::NewFolder { parent } => {

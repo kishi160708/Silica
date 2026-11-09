@@ -491,6 +491,7 @@ pub const RUNNABLE: &[&str] = &[
     "app:increase-font-size",
     "app:decrease-font-size",
     "silica:vault-backup",
+    "silica:vault-export-bundle",
     "silica:toggle-graph-pane",
     "workspace:copy-path",
     "workspace:copy-full-path",
@@ -1739,6 +1740,9 @@ pub(crate) enum PendingOp {
     /// `silica:export-site`: the folder the site is written to. An empty
     /// box takes the vault's sibling default.
     ExportSite,
+    /// `silica:vault-export-bundle`: the folder in the vault the bundle is
+    /// written to. An empty box takes the vault's root.
+    ExportBundle,
     /// "Merge entire file with...": the open note takes `other` in.
     Merge {
         file: String,
@@ -5557,6 +5561,7 @@ impl Workspace {
                 self.step_font_size(up, window, cx);
             }
             "silica:vault-backup" => self.backup_vault(window, cx),
+            "silica:vault-export-bundle" => self.start_export_vault_bundle(window, cx),
             "silica:toggle-graph-pane" => self.toggle_graph_pane(cx),
             "workspace:copy-path" => self.copy_current_path(false, cx),
             "workspace:copy-full-path" => self.copy_current_path(true, cx),

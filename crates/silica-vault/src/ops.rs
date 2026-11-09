@@ -18,8 +18,9 @@
 //! and `/` and `""` both mean the root ([`attachment_path`], observed on
 //! 1.14.5).
 
-use crate::{create_dir_all_at, FileChange, Vault};
+use crate::{create_dir_all_at, read_verified, FileChange, Vault};
 use silica_formats::validate_file_name;
+use silica_templates::{moment, Stamp};
 use std::path::{Path, PathBuf};
 
 /// `trashOption` in `app.json`.
@@ -833,6 +834,167 @@ fn utc_timestamp() -> String {
         (rem % 3600) / 60,
         rem % 60
     )
+}
+
+/// What one bundle run produced.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct BundleReport {
+    /// Notes written into the bundle.
+    pub notes: usize,
+    /// Bytes the bundle holds.
+    pub bytes: u64,
+    /// The bundle file that was written.
+    pub file: PathBuf,
+}
+
+/// The folders a bundle never includes, at any depth: Silica's own scratch
+/// space, the repository the vault is versioned in, and the trash. The
+/// first two are copies of something, and the third is where the user
+/// already said goodbye.
+const BUNDLE_SKIP: [&str; 3] = [".silica", ".git", ".trash"];
+
+/// The most a single note may hold and still be read into a bundle. The
+/// bound the site export uses: no real note has reached it, and a file
+/// that has is data wearing a `.md` name, which a bundle handed to a model
+/// should refuse rather than swallow.
+const BUNDLE_MAX_BYTES: u64 = 10 << 20;
+
+/// Writes one Markdown file holding every note in the vault at `root` into
+/// `folder` (vault-relative, empty for the root), and says where it went.
+///
+/// The bundle exists for a machine: the whole vault in one read for a model
+/// that is being asked about it. So every note arrives verbatim under a
+/// heading that names its vault path, the table of contents is the first
+/// thing in the file, and the order is the sorted path order a folder
+/// listing shows -- stable, and the same for every run over the same
+/// vault. Obsidian's core has no bundle of its own (its export is note by
+/// note), so this is one of Silica's `silica:` commands, and the
+/// third-party plugins that do offer one are what the shape follows.
+///
+/// A bundle never includes itself, nor one an earlier run left behind: a
+/// note named `vault-bundle-*.md` is Silica's file, not one of yours.
+pub fn export_vault_bundle(root: &Path, folder: &str) -> Result<BundleReport, OpError> {
+    let folder = folder.trim_matches('/');
+    if !folder.is_empty() {
+        validate_path(folder)?;
+        create_dir_all_at(root, Path::new(folder))
+            .map_err(io("create folder", &root.join(folder)))?;
+    }
+    let notes = bundle_notes(root)?;
+    let (name, stamp) = bundle_file_name();
+    let mut text = bundle_header(root, &stamp, &notes);
+    for (path, body) in &notes {
+        text.push_str(&format!("\n---\n\n## {path}\n\n{body}"));
+        if !body.ends_with('\n') {
+            text.push('\n');
+        }
+    }
+    let file = if folder.is_empty() {
+        root.join(&name)
+    } else {
+        root.join(folder).join(&name)
+    };
+    std::fs::write(&file, text.as_bytes()).map_err(io("write bundle", &file))?;
+    Ok(BundleReport {
+        notes: notes.len(),
+        bytes: text.len() as u64,
+        file,
+    })
+}
+
+/// The title, the date, and the table of contents every section sits under.
+fn bundle_header(root: &Path, stamp: &str, notes: &[(String, String)]) -> String {
+    let name = root
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "vault".into());
+    let mut out = format!(
+        "# Vault bundle: {name}\n\n\
+         Written {stamp} from {} note{}, in vault path order, each in full \
+         below a heading that names its path.\n\n\
+         ## Table of contents\n\n",
+        notes.len(),
+        if notes.len() == 1 { "" } else { "s" }
+    );
+    for (path, _) in notes {
+        out.push_str(&format!("- {path}\n"));
+    }
+    out
+}
+
+/// Every note in the vault as `(vault path, text)`, in path order. The walk
+/// is the backup's, minus what a bundle refuses to carry, and each note is
+/// read through [`read_verified`] so a link planted where a note sits
+/// cannot redirect what goes into the file.
+fn bundle_notes(root: &Path) -> Result<Vec<(String, String)>, OpError> {
+    let walker = walkdir::WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| {
+            entry.depth() != 1 || !BUNDLE_SKIP.contains(&entry.file_name().to_str().unwrap_or(""))
+        });
+    let mut notes: Vec<(String, String)> = Vec::new();
+    for entry in walker {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                let path = err
+                    .path()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| root.to_path_buf());
+                // ! A folder that vanished mid-walk is not a failed bundle:
+                //   the rest of the vault is still worth having.
+                if err
+                    .io_error()
+                    .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+                {
+                    continue;
+                }
+                let source = match err.io_error() {
+                    Some(e) => std::io::Error::new(e.kind(), e.to_string()),
+                    None => std::io::Error::other(err.to_string()),
+                };
+                return Err(OpError::Io {
+                    action: "read folder",
+                    path,
+                    source,
+                });
+            }
+        };
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let rel = match entry.path().strip_prefix(root) {
+            Ok(rel) => rel.to_string_lossy().replace('\\', "/"),
+            Err(_) => continue,
+        };
+        if !rel.to_ascii_lowercase().ends_with(".md") {
+            continue;
+        }
+        let base = rel.rsplit('/').next().unwrap_or(&rel);
+        if base.starts_with("vault-bundle-") {
+            continue;
+        }
+        let text = read_verified(root, Path::new(&rel), BUNDLE_MAX_BYTES)
+            .map_err(io("read note", Path::new(&rel)))?;
+        notes.push((rel, text));
+    }
+    notes.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(notes)
+}
+
+/// `vault-bundle-<date>.md` and the date written inside it, in UTC: a
+/// reader wants the day, and a machine reading the file wants the same date
+/// the name carries. Two runs on one day overwrite, by design -- the newest
+/// bundle is the vault as it stands, which is the only one worth having.
+fn bundle_file_name() -> (String, String) {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+        .unwrap_or(0);
+    let at = Stamp::from_unix(secs, 0);
+    let date = moment::format("YYYY-MM-DD", &at);
+    (format!("vault-bundle-{date}.md"), date)
 }
 
 #[cfg(test)]
@@ -1849,6 +2011,141 @@ mod tests {
         assert!(!torn.exists(), "torn backup should be deleted");
         assert!(!old_complete.exists(), "oldest complete should be pruned");
         assert!(new_complete.exists(), "newest complete should survive");
+    }
+
+    // * A bundle is one file, and what is in it is notes: the whole vault
+    //   as Markdown for a model to read. It works on a plain folder, so
+    //   these need no `Vault` either.
+    fn bundle_vault() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fs::create_dir_all(root.join("Sub")).unwrap();
+        fs::write(root.join("A.md"), "# Alpha\n\nfirst body\n").unwrap();
+        fs::write(root.join("Zed.md"), "last body").unwrap();
+        fs::write(root.join("Sub/B.md"), "sub body\n").unwrap();
+        fs::write(root.join("Sub/pic.png"), "png").unwrap();
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::write(root.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        fs::create_dir_all(root.join(".silica")).unwrap();
+        fs::write(root.join(".silica/app.json"), "{}").unwrap();
+        fs::create_dir_all(root.join(".trash")).unwrap();
+        fs::write(root.join(".trash/Gone.md"), "gone\n").unwrap();
+        // * Last run's bundle: Silica's own file, never a note.
+        fs::write(root.join("vault-bundle-2020-01-01.md"), "old bundle\n").unwrap();
+        (dir, root)
+    }
+
+    #[test]
+    fn a_bundle_holds_every_note_whole_over_a_table_of_contents() {
+        let (_dir, root) = bundle_vault();
+        let report = super::export_vault_bundle(&root, "").unwrap();
+
+        assert_eq!(report.notes, 3);
+        let name = report.file.file_name().unwrap().to_string_lossy();
+        assert!(name.starts_with("vault-bundle-"), "named {name}");
+        assert!(name.ends_with(".md"), "named {name}");
+        let text = fs::read_to_string(&report.file).unwrap();
+        // * The contents come first, in the order the notes arrive in.
+        let contents = &text[..text.find("\n## A.md").unwrap()];
+        assert!(contents.contains("## Table of contents"), "{contents}");
+        let mut at = 0;
+        for line in ["- A.md", "- Sub/B.md", "- Zed.md"] {
+            let found = contents[at..]
+                .find(line)
+                .unwrap_or_else(|| panic!("{line}"));
+            at += found + line.len();
+        }
+        assert!(
+            !contents.contains("vault-bundle-"),
+            "Silica's own file: {contents}"
+        );
+        assert!(!contents.contains("pic.png"), "an attachment is not a note");
+        // * And every note is in full, verbatim, under a heading of its own.
+        assert!(
+            text.contains("## A.md\n\n# Alpha\n\nfirst body\n"),
+            "{text}"
+        );
+        assert!(text.contains("## Sub/B.md\n\nsub body\n"), "{text}");
+        // * A note with no trailing newline still ends its section on one.
+        assert!(text.contains("## Zed.md\n\nlast body\n"), "{text}");
+        // * The vault is the vault it was.
+        assert_eq!(
+            fs::read_to_string(root.join("A.md")).unwrap(),
+            "# Alpha\n\nfirst body\n"
+        );
+        assert!(root.join(".git").is_dir());
+        assert_eq!(report.bytes, text.len() as u64);
+    }
+
+    #[test]
+    fn a_bundle_lands_in_the_folder_it_was_asked_for() {
+        let (_dir, root) = bundle_vault();
+        let report = super::export_vault_bundle(&root, "Out").unwrap();
+
+        assert_eq!(report.notes, 3);
+        assert_eq!(report.file.parent(), Some(root.join("Out").as_path()));
+        assert!(
+            root.join("Out").is_dir(),
+            "a folder that is not there is made"
+        );
+        assert!(fs::read_to_string(&report.file)
+            .unwrap()
+            .contains("## Zed.md"));
+    }
+
+    #[test]
+    fn a_second_bundle_replaces_the_first_and_never_includes_it() {
+        let (_dir, root) = bundle_vault();
+        let first = super::export_vault_bundle(&root, "").unwrap();
+        fs::write(root.join("New.md"), "one more\n").unwrap();
+        let second = super::export_vault_bundle(&root, "").unwrap();
+
+        assert_eq!(second.file, first.file, "same day, same name");
+        assert_eq!(second.notes, 4, "the new note, and not the old bundle");
+        let text = fs::read_to_string(&second.file).unwrap();
+        assert!(text.contains("- New.md"), "{text}");
+        assert!(!text.contains("vault-bundle-"), "{text}");
+    }
+
+    #[test]
+    fn a_note_that_cannot_be_read_fails_the_bundle_rather_than_dropping_it() {
+        let (_dir, root) = bundle_vault();
+        fs::write(root.join("binary.md"), [0xff, 0xfe, 0x00]).unwrap();
+
+        assert!(super::export_vault_bundle(&root, "").is_err());
+        // * Nothing was written: a bundle that quietly lost a note is worse
+        //   than no bundle at all.
+        let bundles: Vec<String> = fs::read_dir(&root)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with("vault-bundle-"))
+            .collect();
+        assert_eq!(bundles, vec!["vault-bundle-2020-01-01.md".to_string()]);
+    }
+
+    #[test]
+    fn a_folder_outside_or_inside_the_vaults_own_space_is_refused() {
+        let (_dir, root) = bundle_vault();
+
+        assert!(super::export_vault_bundle(&root, "../escape").is_err());
+        assert!(super::export_vault_bundle(&root, ".git").is_err());
+        assert!(super::export_vault_bundle(&root, ":").is_err());
+        assert!(
+            !root.parent().unwrap().join("escape").exists(),
+            "nothing was written outside the vault"
+        );
+    }
+
+    #[test]
+    fn an_empty_vault_still_gets_a_bundle_that_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let report = super::export_vault_bundle(dir.path(), "").unwrap();
+
+        assert_eq!(report.notes, 0);
+        let text = fs::read_to_string(&report.file).unwrap();
+        assert!(text.contains("0 notes"), "{text}");
+        assert!(text.contains("## Table of contents"), "{text}");
     }
 }
 
