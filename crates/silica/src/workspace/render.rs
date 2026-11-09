@@ -6,7 +6,6 @@
 use super::*;
 
 impl Workspace {
-
     /// A sidebar's tab: Obsidian shows the view's icon alone, 16 px in a
     /// 28 by 25 button with a 4 px radius, the active one on a wash.
     pub(crate) fn dock_tab(
@@ -75,7 +74,11 @@ impl Workspace {
     /// The Backlinks pane: Obsidian's four header actions (collapse,
     /// more context, sort, filter), the filter field when it is shown,
     /// then the two sections.
-    pub(crate) fn render_backlinks_pane(&mut self, theme: &Theme, cx: &mut Context<Self>) -> gpui::AnyElement {
+    pub(crate) fn render_backlinks_pane(
+        &mut self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         let (collapse_all, extra, show_search) = (
             self.backlink_state.collapse_all,
             self.backlink_state.extra_context,
@@ -168,7 +171,11 @@ impl Workspace {
 
     /// The Outgoing links pane has no header of its own: Links, then
     /// Unlinked mentions.
-    pub(crate) fn render_outgoing_pane(&mut self, theme: &Theme, cx: &mut Context<Self>) -> gpui::AnyElement {
+    pub(crate) fn render_outgoing_pane(
+        &mut self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         self.render_sections(RightTab::Outgoing, "", theme, cx)
     }
 

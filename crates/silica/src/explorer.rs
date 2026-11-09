@@ -710,7 +710,12 @@ fn menu_items(target: &Target) -> Vec<MenuItem> {
                 S::System,
                 E::ShowInSystemExplorer(path.clone()),
             ),
-            item(t("Rename..."), "pen-line", S::Danger, E::Rename(path.clone())),
+            item(
+                t("Rename..."),
+                "pen-line",
+                S::Danger,
+                E::Rename(path.clone()),
+            ),
             item(t("Delete"), "trash-2", S::Danger, E::Delete(path.clone())),
         ],
         Target::Folder(folder) => vec![
@@ -1464,8 +1469,14 @@ impl FileExplorer {
             .justify_center()
             .gap(px(2.))
             .child(
-                Self::header_button("explorer-new-note", "square-pen", t("New note"), false, &theme)
-                    .on_click(cx.listener(|_, _, _, cx| cx.emit(ExplorerEvent::NewNoteFromHeader))),
+                Self::header_button(
+                    "explorer-new-note",
+                    "square-pen",
+                    t("New note"),
+                    false,
+                    &theme,
+                )
+                .on_click(cx.listener(|_, _, _, cx| cx.emit(ExplorerEvent::NewNoteFromHeader))),
             )
             .child(
                 Self::header_button(
@@ -2457,7 +2468,12 @@ mod menu_tests {
     fn the_empty_space_offers_the_four_creation_items_at_the_root() {
         assert_eq!(
             drawn(&Target::Blank),
-            [t("New note"), t("New folder"), t("New canvas"), t("New base")]
+            [
+                t("New note"),
+                t("New folder"),
+                t("New canvas"),
+                t("New base")
+            ]
         );
         for item in menu_items(&Target::Blank) {
             assert_eq!(

@@ -14,12 +14,11 @@ use crate::properties::{Field, Part, Target};
 use crate::workspace::VaultState;
 
 use super::{
-    Editor, EditorEvent, Backspace, Copy, Cut, Delete, DeleteWordLeft, DeleteWordRight, Newline,
+    Backspace, Copy, Cut, Delete, DeleteWordLeft, DeleteWordRight, Editor, EditorEvent, Newline,
     NewlinePlain, Outdent, Paste, Redo, Tab, Undo,
 };
 
 impl Editor {
-
     pub(crate) fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
         // * A properties field has the pill gesture behind it, so it takes the
         //   press through its own path.
@@ -112,7 +111,12 @@ impl Editor {
     }
 
     /// Shift+Enter: a plain newline.
-    pub(crate) fn newline_plain(&mut self, _: &NewlinePlain, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn newline_plain(
+        &mut self,
+        _: &NewlinePlain,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.accept_suggestion(Accept::Typed, window, cx) {
             return;
         }

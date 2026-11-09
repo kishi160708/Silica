@@ -2177,7 +2177,6 @@ fn finish(
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::render::arrowhead;

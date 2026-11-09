@@ -128,7 +128,12 @@ pub fn file_data(state: &VaultState, path: &str) -> Option<Arc<FileData>> {
     let cache = state.cache();
     let types = state.property_types();
     // * O(1) via the path index instead of a linear scan over every file.
-    let file = state.file_index.read().expect("index lock").get(path)?.clone();
+    let file = state
+        .file_index
+        .read()
+        .expect("index lock")
+        .get(path)?
+        .clone();
     let data = build(&file, &cache, &types);
     let arc = Arc::new(data);
     // * Store so the next call for this path is a hash lookup.

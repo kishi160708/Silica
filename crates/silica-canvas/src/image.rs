@@ -26,13 +26,7 @@ pub struct Placed {
 }
 
 /// Draw the canvas as an SVG document — `width` by `height` units.
-pub fn svg(
-    width: u32,
-    height: u32,
-    nodes: &[Placed],
-    edges: &[Edge],
-    palette: &Palette,
-) -> String {
+pub fn svg(width: u32, height: u32, nodes: &[Placed], edges: &[Edge], palette: &Palette) -> String {
     let mut out = String::with_capacity(4096);
     out.push_str(&format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{height}\" viewBox=\"0 0 {width} {height}\">"
@@ -52,7 +46,11 @@ pub fn svg(
     out.push_str(&format!(
         "<g stroke=\"{}\" stroke-width=\"2\" fill=\"none\"{}>",
         palette.edge,
-        if has_arrow { " marker-end=\"url(#a)\"" } else { "" }
+        if has_arrow {
+            " marker-end=\"url(#a)\""
+        } else {
+            ""
+        }
     ));
     for edge in edges {
         let a = nodes.iter().find(|n| n.node_id == edge.from_node);
@@ -117,8 +115,7 @@ pub fn png(svg: &str, width: u32, height: u32) -> Result<Vec<u8>, String> {
         (width as f32 * scale).ceil().max(1.0) as u32,
         (height as f32 * scale).ceil().max(1.0) as u32,
     );
-    let mut pixmap = resvg::tiny_skia::Pixmap::new(w, h)
-        .ok_or_else(|| "no pixmap".to_string())?;
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(w, h).ok_or_else(|| "no pixmap".to_string())?;
     resvg::render(
         &tree,
         resvg::tiny_skia::Transform::from_scale(scale, scale),

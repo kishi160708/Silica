@@ -7,7 +7,6 @@
 use super::*;
 
 impl BasesView {
-
     /// The open panel, anchored where its control was clicked.
     pub(crate) fn render_panel(
         &mut self,
@@ -344,7 +343,12 @@ impl BasesView {
         )
     }
 
-    pub(crate) fn image_fit_row(&self, fit: ImageFit, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn image_fit_row(
+        &self,
+        fit: ImageFit,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let labels = [SharedString::from("Cover"), SharedString::from("Contain")];
         let now = match fit {
             ImageFit::Cover => 0,

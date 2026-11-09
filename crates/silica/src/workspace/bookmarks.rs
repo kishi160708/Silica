@@ -6,7 +6,6 @@
 use super::*;
 
 impl Workspace {
-
     /// Opens "Add bookmark" for a draft: the Title field, empty, with the
     /// name the bookmark gets without one as its placeholder.
     pub(crate) fn start_bookmark(
@@ -52,7 +51,11 @@ impl Workspace {
     /// `bookmarks:bookmark-current-view` and the pane's first button: the
     /// open note, or the graph while it is up. A note already bookmarked
     /// opens "Edit bookmark", where Remove is the only change offered.
-    pub(crate) fn start_bookmark_current_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn start_bookmark_current_view(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.mode == ViewMode::Graph {
             self.start_bookmark(BookmarkDraft::Graph, window, cx);
             return;
@@ -66,7 +69,12 @@ impl Workspace {
 
     /// "Bookmark..." for a file or folder, from the explorer's menu or the
     /// open note.
-    pub(crate) fn start_bookmark_path(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn start_bookmark_path(
+        &mut self,
+        path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(state) = self.state.clone() else {
             return;
         };
@@ -109,7 +117,12 @@ impl Workspace {
 
     /// The prompt answered: the item for the draft, with the typed title if
     /// any, appended and written.
-    pub(crate) fn finish_bookmark(&mut self, draft: BookmarkDraft, title: &str, cx: &mut Context<Self>) {
+    pub(crate) fn finish_bookmark(
+        &mut self,
+        draft: BookmarkDraft,
+        title: &str,
+        cx: &mut Context<Self>,
+    ) {
         let Some(state) = self.state.clone() else {
             return;
         };
@@ -145,7 +158,11 @@ impl Workspace {
 
     /// Applies a change to the bookmarks, writes the file and redraws the
     /// pane; a write that fails leaves both as they were and says so.
-    pub(crate) fn change_bookmarks(&mut self, cx: &mut Context<Self>, change: impl FnOnce(&mut Bookmarks)) {
+    pub(crate) fn change_bookmarks(
+        &mut self,
+        cx: &mut Context<Self>,
+        change: impl FnOnce(&mut Bookmarks),
+    ) {
         let Some(state) = self.state.clone() else {
             return;
         };
@@ -568,7 +585,12 @@ impl Workspace {
     /// One group: its tab strip, view header and the view itself. A mouse
     /// down anywhere in a group that is not the active one makes it so
     /// before the view underneath handles the click.
-    pub(crate) fn render_group(&self, ix: usize, theme: &Theme, cx: &mut Context<Self>) -> gpui::AnyElement {
+    pub(crate) fn render_group(
+        &self,
+        ix: usize,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         let view = self.group_view(ix);
         let id = view.id;
         let mut order = Vec::new();
@@ -658,7 +680,12 @@ impl Workspace {
     /// The view header: back and forward, the note's folder and name, the
     /// graph toggle and the mode toggle. The buttons act on their own
     /// group, which they make active first.
-    pub(crate) fn render_header(&self, view: &GroupView, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
+    pub(crate) fn render_header(
+        &self,
+        view: &GroupView,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
         let id = view.id;
         // * The leaf's name, the same string its tab carries: "New tab" with
         //   nothing open, not "No file is open".
@@ -1070,7 +1097,11 @@ impl Workspace {
     }
 
     /// Applies an editing key to the open title field.
-    pub(crate) fn with_title_field(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut TitleField)) {
+    pub(crate) fn with_title_field(
+        &mut self,
+        cx: &mut Context<Self>,
+        f: impl FnOnce(&mut TitleField),
+    ) {
         if let Some(edit) = self.title_edit.as_mut() {
             f(&mut edit.field);
             edit.marked = None;
@@ -1283,7 +1314,11 @@ impl Workspace {
     /// blank canvas the window has, so it is where the mark goes. The body
     /// is the same however the tab came to be empty, a fresh vault and the
     /// last tab closing alike, because both leave a tab with no file.
-    pub(crate) fn render_empty_tab(&self, theme: &Theme, cx: &mut Context<Self>) -> gpui::AnyElement {
+    pub(crate) fn render_empty_tab(
+        &self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         let registry = cx.global::<Commands>().0.clone();
         let pills: Vec<_> =
             empty_tab_actions(&registry)

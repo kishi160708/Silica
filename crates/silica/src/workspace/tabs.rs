@@ -7,7 +7,6 @@
 use super::*;
 
 impl Workspace {
-
     /// Copies the active tab's live fields into its slot.
     pub(crate) fn stash_active_tab(&mut self) {
         let slot = self.tabs.get(self.active_tab);
@@ -327,7 +326,12 @@ impl Workspace {
 
     /// A group of its own, with an editor and a reading view set up like the
     /// others', not yet in the layout.
-    pub(crate) fn new_group(&mut self, mode: ViewMode, window: &mut Window, cx: &mut Context<Self>) -> u64 {
+    pub(crate) fn new_group(
+        &mut self,
+        mode: ViewMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> u64 {
         let editor = cx.new(|cx| Editor::new(window, cx));
         let reading = cx.new(ReadingView::new);
         let canvas = cx.new(CanvasView::new);
@@ -355,7 +359,12 @@ impl Workspace {
     /// note in the same mode, and it takes the focus. A `dimension` the group
     /// had is halved between the two, or moves to the split that now wraps
     /// them (see [[Specification#Observed tab group behavior]]).
-    pub(crate) fn split(&mut self, direction: SplitDirection, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn split(
+        &mut self,
+        direction: SplitDirection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.split_beside(None, direction, window, cx);
     }
 
@@ -363,7 +372,12 @@ impl Workspace {
     /// one showing `path`, which is [`Workspace::split`] with a file of its
     /// own. The group it leaves behind keeps whatever it was showing, which is
     /// the difference from a split.
-    pub(crate) fn open_to_right(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_to_right(
+        &mut self,
+        path: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.split_beside(Some(path), SplitDirection::Vertical, window, cx);
     }
 
@@ -438,7 +452,13 @@ impl Workspace {
     /// before it along `direction`, and settles the `dimension`: halved
     /// between the two when they became siblings, moved onto the split that
     /// now wraps them when they did not.
-    pub(crate) fn place_beside(&mut self, from: u64, new: u64, direction: SplitDirection, after: bool) {
+    pub(crate) fn place_beside(
+        &mut self,
+        from: u64,
+        new: u64,
+        direction: SplitDirection,
+        after: bool,
+    ) {
         let Some(from_ix) = self.group_ix(from) else {
             return;
         };
@@ -630,7 +650,12 @@ impl Workspace {
     /// group whose active tab left shows the one that takes its place,
     /// which means making it live for a moment: its views only ever load
     /// through the live fields. Says whether the group has nothing left.
-    pub(crate) fn take_tab(&mut self, from_ix: usize, ix: usize, cx: &mut Context<Self>) -> Option<Tab> {
+    pub(crate) fn take_tab(
+        &mut self,
+        from_ix: usize,
+        ix: usize,
+        cx: &mut Context<Self>,
+    ) -> Option<Tab> {
         let group = &mut self.groups[from_ix];
         if ix >= group.tabs.len() {
             return None;
@@ -654,7 +679,13 @@ impl Workspace {
     /// end, and makes it the active tab of the active group. In its own
     /// group that is a reorder. A group left with nothing closes, as one
     /// whose last tab closed does.
-    pub(crate) fn move_tab(&mut self, drag: &TabDrag, to: u64, at: Option<usize>, cx: &mut Context<Self>) {
+    pub(crate) fn move_tab(
+        &mut self,
+        drag: &TabDrag,
+        to: u64,
+        at: Option<usize>,
+        cx: &mut Context<Self>,
+    ) {
         self.flush_save(cx);
         self.stash_active_group();
         let (Some(from_ix), Some(to_ix)) = (self.group_ix(drag.group), self.group_ix(to)) else {
@@ -925,7 +956,12 @@ impl Workspace {
     /// `editor:focus-left` and its three siblings: the keyboard moves to the
     /// group on that side — of the groups there, the one used most recently,
     /// which is where Obsidian's went.
-    pub(crate) fn focus_neighbor(&mut self, direction: SplitDirection, forward: bool, cx: &mut Context<Self>) {
+    pub(crate) fn focus_neighbor(
+        &mut self,
+        direction: SplitDirection,
+        forward: bool,
+        cx: &mut Context<Self>,
+    ) {
         let candidates = self
             .layout_tree
             .neighbors(self.active_group_id(), direction, forward);

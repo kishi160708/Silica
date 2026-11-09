@@ -6,8 +6,11 @@
 use super::*;
 
 impl SettingsView {
-
-    pub(crate) fn render_nav(&self, theme: &Theme, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
+    pub(crate) fn render_nav(
+        &self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
         let group_title = |label: &'static str, theme: &Theme| {
             div()
                 .px_3()
@@ -458,9 +461,12 @@ impl SettingsView {
                     .text_color(theme.text_muted)
                     .child(label.clone())
                     .cursor_pointer()
-                    .on_mouse_down(MouseButton::Left, cx.listener(move |_this, _, _, cx| {
-                        cx.emit(SettingsEvent::ButtonClicked(label.clone()));
-                    }))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |_this, _, _, cx| {
+                            cx.emit(SettingsEvent::ButtonClicked(label.clone()));
+                        }),
+                    )
                     .into_any_element()
             }
         }
@@ -475,7 +481,12 @@ impl SettingsView {
 
     /// Writes a slider's value, which the control also reads through.
     /// Opens a text field for typing, with what the vault holds in it.
-    pub(crate) fn edit_field(&mut self, field: TextField, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn edit_field(
+        &mut self,
+        field: TextField,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         // * One input serves every row, so opening the next one is the last
         //   moment the one before it can be written.
         self.commit_field(cx);
@@ -510,7 +521,13 @@ impl SettingsView {
         cx.notify();
     }
 
-    pub(crate) fn set_number(&mut self, number: Number, value: i64, window: &Window, cx: &mut Context<Self>) {
+    pub(crate) fn set_number(
+        &mut self,
+        number: Number,
+        value: i64,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
         self.after_open_field(window, cx, move |this, cx| {
             let Some(state) = this.state.clone() else {
                 return;
@@ -527,7 +544,13 @@ impl SettingsView {
 
     /// Writes the option a dropdown's row names. The value comes from the
     /// same table the control reads through, so the two cannot drift.
-    pub(crate) fn pick(&mut self, typed: Typed, option: usize, window: &Window, cx: &mut Context<Self>) {
+    pub(crate) fn pick(
+        &mut self,
+        typed: Typed,
+        option: usize,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
         self.menu = None;
         self.after_open_field(window, cx, move |this, cx| {
             let Some(state) = this.state.clone() else {
@@ -545,7 +568,12 @@ impl SettingsView {
         });
     }
 
-    pub(crate) fn render_item(&self, item: &Item, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
+    pub(crate) fn render_item(
+        &self,
+        item: &Item,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
         if item.heading {
             return div()
                 .pt_5()

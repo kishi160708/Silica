@@ -534,8 +534,14 @@ mod tests {
                 .map(|(k, d)| (k.clone(), d.clone()))
                 .collect();
             let start_line = text[..window.start].matches('\n').count();
-            let partial =
-                parse_range(&text, window.clone(), start_line, &opts, &outside, &full.footnote_labels);
+            let partial = parse_range(
+                &text,
+                window.clone(),
+                start_line,
+                &opts,
+                &outside,
+                &full.footnote_labels,
+            );
             // * The same region of the full parse, structurally compared.
             let wanted: Vec<Block<'_>> = full
                 .blocks

@@ -1687,7 +1687,6 @@ impl ReadingView {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::{line_distance, page_distance, same_note, LINE_HEIGHT};
