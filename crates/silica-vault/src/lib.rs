@@ -420,6 +420,7 @@ pub fn write_at(root: &Path, relative: &Path, bytes: &[u8]) -> std::io::Result<(
     use std::io::Write as _;
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
     use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::PermissionsExt;
 
     const DIR_FLAGS: libc::c_int = libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
     const FILE_FLAGS: libc::c_int =
@@ -485,9 +486,17 @@ pub fn write_at(root: &Path, relative: &Path, bytes: &[u8]) -> std::io::Result<(
         std::process::id()
     );
     let temp_c = name(std::ffi::OsStr::new(&temp_name))?;
+    // * Preserve the existing file's permission bits so a 0600 note is not
+    //   widened to 0644 by the rename. A brand-new file keeps 0644.
+    let existing_mode = std::fs::metadata(root.join(relative))
+        .ok()
+        .map(|m| m.permissions().mode() & 0o7777);
     let tmp_fd = unsafe { libc::openat(dir.as_raw_fd(), temp_c.as_ptr(), FILE_FLAGS, 0o644) };
     if tmp_fd < 0 {
         return Err(std::io::Error::last_os_error());
+    }
+    if let Some(mode) = existing_mode {
+        let _ = unsafe { libc::fchmod(tmp_fd, mode) };
     }
     let mut tmp = unsafe { std::fs::File::from_raw_fd(tmp_fd) };
     tmp.write_all(bytes)?;
@@ -2378,5 +2387,29 @@ mod tests {
             "outside",
             "the file behind the junction was changed"
         );
+    }
+
+    /// * Writing over an existing note keeps its permission bits: a 0600 note
+    ///   is not widened to 0644 by the temp-file-plus-rename write.
+    #[cfg(unix)]
+    #[test]
+    fn write_at_keeps_existing_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = sample_vault();
+        let path = dir.path().join("Note.md");
+        fs::set_permissions(&path, PermissionsExt::from_mode(0o600)).unwrap();
+
+        write_at(dir.path(), Path::new("Note.md"), b"updated
+").unwrap();
+
+        let meta = fs::metadata(&path).unwrap();
+        assert_eq!(
+            PermissionsExt::mode(&meta.permissions()) & 0o7777,
+            0o600,
+            "write widened the file's permission bits",
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), "updated
+");
     }
 }
