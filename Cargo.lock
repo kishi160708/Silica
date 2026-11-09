@@ -6131,7 +6131,7 @@ dependencies = [
 
 [[package]]
 name = "silica"
-version = "0.7.5"
+version = "0.7.7"
 dependencies = [
  "anyhow",
  "async-channel 2.5.0",
@@ -6176,7 +6176,7 @@ dependencies = [
 
 [[package]]
 name = "silica-bases"
-version = "0.7.5"
+version = "0.7.7"
 dependencies = [
  "chrono",
  "indexmap",
@@ -6187,7 +6187,7 @@ dependencies = [
 
 [[package]]
 name = "silica-bench"
-version = "0.7.5"
+version = "0.7.7"
 dependencies = [
  "rayon",
  "silica-cache",
@@ -6200,7 +6200,7 @@ dependencies = [
 
 [[package]]
 name = "silica-cache"
-version = "0.7.5"
+version = "0.7.7"
 dependencies = [
  "serde",
  "serde_yaml",
@@ -6210,7 +6210,7 @@ dependencies = [
 
 [[package]]
 name = "silica-canvas"
-version = "0.7.5"
+version = "0.7.7"
 dependencies = [
  "image",
  "resvg",
@@ -6222,7 +6222,7 @@ dependencies = [
 
 [[package]]
 name = "silica-commands"
-version = "0.7.5"
+version = "0.7.7"
 dependencies = [
  "serde_json",
  "silica-formats",
@@ -6230,7 +6230,7 @@ dependencies = [
 
 [[package]]
 name = "silica-control"
-version = "0.7.5"
+version = "0.7.7"
 dependencies = [
  "serde",
  "serde_json",
@@ -6239,7 +6239,7 @@ dependencies = [
 
 [[package]]
 name = "silica-formats"
-version = "0.7.5"
+version = "0.7.7"
 dependencies = [
  "indexmap",
  "serde",
@@ -6249,7 +6249,7 @@ dependencies = [
 
 [[package]]
 name = "silica-highlight"
-version = "0.7.5"
+version = "0.7.7"
 dependencies = [
  "fancy-regex 0.16.2",
  "serde",
@@ -6258,7 +6258,7 @@ dependencies = [
 
 [[package]]
 name = "silica-llm-mcp"
-version = "0.7.5"
+version = "0.7.7"
 dependencies = [
  "libc",
  "native-tls",
@@ -6268,11 +6268,11 @@ dependencies = [
 
 [[package]]
 name = "silica-markdown"
-version = "0.7.5"
+version = "0.7.7"
 
 [[package]]
 name = "silica-math"
-version = "0.7.5"
+version = "0.7.7"
 dependencies = [
  "ab_glyph",
  "ratex-font",
@@ -6284,7 +6284,7 @@ dependencies = [
 
 [[package]]
 name = "silica-mcp"
-version = "0.7.5"
+version = "0.7.7"
 dependencies = [
  "serde",
  "serde_json",
@@ -6293,21 +6293,21 @@ dependencies = [
 
 [[package]]
 name = "silica-net"
-version = "0.7.5"
+version = "0.7.7"
 dependencies = [
  "url",
 ]
 
 [[package]]
 name = "silica-pdf"
-version = "0.7.5"
+version = "0.7.7"
 dependencies = [
  "hayro",
 ]
 
 [[package]]
 name = "silica-plugins"
-version = "0.7.5"
+version = "0.7.7"
 dependencies = [
  "chrono",
  "cpal 0.16.0",
@@ -6326,7 +6326,7 @@ dependencies = [
 
 [[package]]
 name = "silica-search"
-version = "0.7.5"
+version = "0.7.7"
 dependencies = [
  "regex",
  "serde_yaml",
@@ -6334,7 +6334,7 @@ dependencies = [
 
 [[package]]
 name = "silica-suggest"
-version = "0.7.5"
+version = "0.7.7"
 dependencies = [
  "silica-cache",
  "silica-formats",
@@ -6345,11 +6345,11 @@ dependencies = [
 
 [[package]]
 name = "silica-templates"
-version = "0.7.5"
+version = "0.7.7"
 
 [[package]]
 name = "silica-text"
-version = "0.7.5"
+version = "0.7.7"
 dependencies = [
  "regex",
  "serde",
@@ -6365,7 +6365,7 @@ dependencies = [
 
 [[package]]
 name = "silica-vault"
-version = "0.7.5"
+version = "0.7.7"
 dependencies = [
  "indexmap",
  "libc",

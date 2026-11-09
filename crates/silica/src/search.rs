@@ -159,6 +159,10 @@ pub struct SearchPane {
     /// A non-empty query has run this session: an emptied one then reads
     /// "0 results" rather than nothing, as Obsidian's count does.
     has_run: bool,
+    /// Search result cache: keyed by (query, match_case) -> results.
+    /// Repeated searches with the same query return instantly without
+    /// re-reading files from disk.
+    search_cache: HashMap<(String, bool), Vec<FileResult>>,
     /// Files whose fold differs from `collapse_all`. Keyed by path so a
     /// re-run over a changed vault leaves the user's folds alone.
     toggled: HashSet<String>,
@@ -302,6 +306,7 @@ impl SearchPane {
             settings_open: false,
             has_run: false,
             toggled: HashSet::new(),
+            search_cache: HashMap::new(),
             expanded: HashMap::new(),
             rows: Vec::new(),
             focused: None,
@@ -589,6 +594,15 @@ impl SearchPane {
         }
         self.error = None;
         let order = self.sort;
+        // * Check cache first: repeated queries return instantly without
+        //   re-reading files from disk.
+        let cache_key = (query.to_string(), self.matching_case);
+        if let Some(cached) = self.search_cache.get(&cache_key) {
+            self.results = cached.clone();
+            self.replace_rows();
+            cx.notify();
+            return;
+        }
         cx.spawn(async move |this, cx| {
             let results = cx
                 .background_executor()
@@ -602,7 +616,9 @@ impl SearchPane {
                 if pane.generation != generation {
                     return;
                 }
-                pane.results = results;
+                pane.results = results.clone();
+                // * Cache the results for future identical queries.
+                pane.search_cache.insert(cache_key, results);
                 pane.replace_rows();
                 cx.notify();
             })
@@ -1972,7 +1988,7 @@ pub fn run_search(search: &Search, state: &VaultState) -> Vec<FileResult> {
 /// full matcher still runs on every candidate, so false positives are
 /// harmless; false negatives are the only risk, avoided by refusing
 /// complex queries.
-fn index_terms(query: &Query) -> Option<Vec<String>> {
+pub fn index_terms(query: &Query) -> Option<Vec<String>> {
     match query {
         Query::Text(s) | Query::Exact(s) => Some(vec![s.clone()]),
         Query::All(children) => {

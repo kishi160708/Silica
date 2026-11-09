@@ -16,8 +16,7 @@
 use rayon::prelude::*;
 use silica_cache::{index_markdown, CachedMetadata, LinkResolver};
 use silica_markdown::{parse, render_html};
-use silica_plugins::{Registry, Tier};
-use silica_search::{Search, SearchFile};
+use silica_search::{index_terms, Search, SearchFile};
 use silica_vault::Vault;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -26,8 +25,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::{Duration, Instant};
 
-const USAGE: &str = "\
-silica-bench: spike benchmarks for the metadata index
+const USAGE: &str = r#"silica-bench: spike benchmarks for the metadata index
 
   silica-bench generate <dir> [--notes N] [--seed S] [--jobs J]
       Write a synthetic vault into <dir> (created if missing, must be empty).
@@ -58,19 +56,39 @@ Run 1 is only cold if the OS page cache was evicted first, for example with
       Render every markdown note to HTML (the export-site pipeline).
       Reports total export time and notes per second.
 
-"";
+  silica-bench all <vault> [--runs R]
+      Run all benchmarks sequentially.
+"#;
 
 const GATE: Duration = Duration::from_secs(2);
+
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
+        None => return,
         Some("generate") => Opts::parse(&args[1..]).and_then(|o| cmd_generate(&o)),
         Some("index") => Opts::parse(&args[1..]).and_then(|o| cmd_index(&o)),
         Some("search") => Opts::parse(&args[1..]).and_then(|o| cmd_search(&o)),
         Some("parse") => Opts::parse(&args[1..]).and_then(|o| cmd_parse(&o)),
         Some("plugin") => Opts::parse(&args[1..]).and_then(|o| cmd_plugin(&o)),
         Some("export") => Opts::parse(&args[1..]).and_then(|o| cmd_export(&o)),
+        Some("all") => {
+            match Opts::parse(&args[1..]) {
+                Ok(opts) => {
+                    let vault = opts.positional.get(0).cloned().unwrap_or_default();
+                    if let Err(msg) = cmd_all(&opts, &vault) {
+                        eprintln!("error: {msg}");
+                        std::process::exit(1);
+                    }
+                }
+                Err(msg) => {
+                    eprintln!("error: {msg}");
+                    std::process::exit(1);
+                }
+            }
+            return;
+        }
         Some(s) => {
             Err(format!("unknown subcommand {}:{}\n\n{}", s, USAGE, USAGE))
         }
@@ -420,7 +438,7 @@ fn note_body(rng: &mut Rng, plans: &[Plan], me: usize, attachments: usize) -> St
     if rng.chance(30) {
         let _ = writeln!(
             s,
-            "related: \"[[{}]]\"",
+            "related: [[{}]]",
             stem(&plans[rng.below(plans.len())].path)
         );
     }
@@ -767,6 +785,8 @@ fn cmd_index(opts: &Opts) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 
 /// Time search query parsing and matching across all notes.
+/// Uses the term index for candidate pre-filtering and parallel matching,
+/// mirroring the production `run_search` path.
 fn cmd_search(opts: &Opts) -> Result<(), String> {
     let root = opts.path("vault")?;
     let query = opts
@@ -778,10 +798,10 @@ fn cmd_search(opts: &Opts) -> Result<(), String> {
     opts.configure_jobs()?;
     let runs = runs.max(1);
 
-    let vault = Vault::open(root).map_err(|e| e.to_string())?;
+    let vault = Vault::open(&root).map_err(|e| e.to_string())?;
     let notes: Vec<&str> = vault.markdown_files().map(|f| f.path.as_str()).collect();
 
-    // Read all notes once
+    // Read all notes once and compute metadata (mirrors cache.files()).
     let sources: Vec<(String, String)> = notes
         .iter()
         .filter_map(|p| {
@@ -789,6 +809,18 @@ fn cmd_search(opts: &Opts) -> Result<(), String> {
             Some((p.to_string(), text))
         })
         .collect();
+
+    // Pre-compute metadata for all notes (avoids re-parsing on each run).
+    let metas: Vec<CachedMetadata> = sources
+        .par_iter()
+        .map(|(_, text)| index_markdown(text))
+        .collect();
+
+    // Build a term index from all notes for candidate pre-filtering.
+    let mut term_index = silica_cache::index::TermIndex::new();
+    for (path, text) in &sources {
+        term_index.insert(path, text);
+    }
 
     println!("vault {} — {} notes, query: {:?}", root.display(), notes.len(), query);
     println!();
@@ -799,25 +831,43 @@ fn cmd_search(opts: &Opts) -> Result<(), String> {
         let (search, parse_time) = time(|| Search::new(query));
         let search = search.map_err(|e| format!("query parse error: {e}"))?;
 
-        // Run the match
+        // Get candidate paths from term index (AND semantics over terms).
+        let candidate_paths: Option<std::collections::HashSet<String>> =
+            index_terms(search.query()).map(|terms| {
+                let term_refs: Vec<&str> = terms.iter().map(String::as_str).collect();
+                term_index
+                    .candidates(&term_refs)
+                    .into_iter()
+                    .collect()
+            });
+
+        // Run the match in parallel over candidates (or all if no index filter).
         let (match_count, match_time) = time(|| {
-            let mut count = 0usize;
-            for (path, text) in &sources {
-                let meta = index_markdown(text);
-                let file = SearchFile {
-                    path: path.as_str(),
-                    content: text.as_str(),
-                    tags: &[],
-                    frontmatter: meta.frontmatter.as_ref(),
-                    blocks: &[],
-                    sections: &[],
-                    tasks: &[],
-                };
-                if search.matches(&file).is_some() {
-                    count += 1;
-                }
-            }
-            count
+            sources
+                .par_iter()
+                .zip(metas.par_iter())
+                .filter(|((path, _), _)| {
+                    candidate_paths
+                        .as_ref()
+                        .map_or(true, |cp| cp.contains(path.as_str()))
+                })
+                .filter_map(|((path, text), meta)| {
+                    let file = SearchFile {
+                        path: path.as_str(),
+                        content: text.as_str(),
+                        tags: &[],
+                        frontmatter: meta.frontmatter.as_ref(),
+                        blocks: &[],
+                        sections: &[],
+                        tasks: &[],
+                    };
+                    if search.matches(&file).is_some() {
+                        Some(1)
+                    } else {
+                        None
+                    }
+                })
+                .count()
         });
 
         println!(
@@ -854,7 +904,7 @@ fn cmd_parse(opts: &Opts) -> Result<(), String> {
     opts.configure_jobs()?;
     let runs = runs.max(1);
 
-    let vault = Vault::open(root).map_err(|e| e.to_string())?;
+    let vault = Vault::open(&root).map_err(|e| e.to_string())?;
     let notes: Vec<&str> = vault.markdown_files().map(|f| f.path.as_str()).collect();
 
     println!("vault {} — {} notes", root.display(), notes.len());
@@ -891,14 +941,13 @@ fn cmd_plugin(opts: &Opts) -> Result<(), String> {
     opts.configure_jobs()?;
     let runs = runs.max(1);
 
-    let vault = Vault::open(root).map_err(|e| e.to_string())?;
+    let vault = Vault::open(&root).map_err(|e| e.to_string())?;
 
     println!("vault {} — plugin discovery", root.display());
     println!();
 
     for i in 0..runs {
         let (plugins, scan_time) = time(|| silica_plugins::Registry::scan(&vault));
-        let plugins = plugins.map_err(|e| format!("plugin scan error: {e}"))?;
         let records = plugins.records();
         let native_count = records.iter().filter(|r| r.tier == silica_plugins::Tier::Native).count();
         let community_count = records.iter().filter(|r| r.enabled).count();
@@ -922,7 +971,7 @@ fn cmd_export(opts: &Opts) -> Result<(), String> {
         .map(String::as_str)
         .ok_or("missing <out-dir> argument\n\n{USAGE}")?;
 
-    let vault = Vault::open(root).map_err(|e| e.to_string())?;
+    let vault = Vault::open(&root).map_err(|e| e.to_string())?;
     let notes: Vec<&str> = vault.markdown_files().map(|f| f.path.as_str()).collect();
 
     fs::create_dir_all(out_dir).map_err(|e| format!("{out_dir}: {e}"))?;
@@ -943,6 +992,51 @@ fn cmd_export(opts: &Opts) -> Result<(), String> {
 
     println!("vault {} — {} notes exported to {}", root.display(), exported, out_dir);
     println!("total: {:>9}  notes/sec: {:.0}", human_duration(elapsed), notes_per_sec);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// * All benchmarks
+// ---------------------------------------------------------------------------
+
+/// Run every benchmark sequentially.
+fn cmd_all(opts: &Opts, vault: &str) -> Result<(), String> {
+    let vault_path = if vault.is_empty() {
+        return Err("missing <vault> argument\n\n{USAGE}".to_string());
+    } else {
+        vault.to_string()
+    };
+
+    println!("=== INDEX ===");
+    cmd_index(&Opts {
+        positional: vec![vault_path.clone()],
+        flags: opts.flags.clone(),
+    })?;
+    println!();
+    println!("=== SEARCH ===");
+    cmd_search(&Opts {
+        positional: vec![vault_path.clone(), "note".to_string()],
+        flags: opts.flags.clone(),
+    })?;
+    println!();
+    println!("=== PARSE ===");
+    cmd_parse(&Opts {
+        positional: vec![vault_path.clone()],
+        flags: opts.flags.clone(),
+    })?;
+    println!();
+    println!("=== PLUGIN ===");
+    cmd_plugin(&Opts {
+        positional: vec![vault_path.clone()],
+        flags: opts.flags.clone(),
+    })?;
+    println!();
+    let out_dir = std::path::Path::new("/tmp/silica-export-bench");
+    let _ = fs::remove_dir_all(out_dir);
+    cmd_export(&Opts {
+        positional: vec![vault_path, out_dir.to_string_lossy().to_string()],
+        flags: opts.flags.clone(),
+    })?;
     Ok(())
 }
 
