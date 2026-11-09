@@ -1105,6 +1105,7 @@ impl Workspace {
             RightTab::Tags => "tag-pane",
             RightTab::Properties => "properties",
             RightTab::Outline => "outline",
+            RightTab::Footnotes => "footnotes",
             // * The graph's own plugin id, so a vault with the graph core
             //   plugin off takes the tab away with it.
             RightTab::Graph => "graph",
@@ -1129,6 +1130,7 @@ impl Workspace {
                 RightTab::Tags,
                 RightTab::Properties,
                 RightTab::Outline,
+                RightTab::Footnotes,
                 RightTab::Graph,
             ]
             .into_iter()
@@ -1144,6 +1146,7 @@ impl Workspace {
             RightTab::Outline => self.render_outline_pane(theme, cx),
             RightTab::Tags => self.render_tags_pane(theme, cx),
             RightTab::Properties => self.render_properties_pane(theme, cx),
+            RightTab::Footnotes => self.render_footnotes_pane(theme, cx),
             // * The graph side pane: the GraphView entity the ribbon opens
             //   full screen, kept in the dock. While a group's area already
             //   paints it, the dock says so rather than painting it twice.
@@ -1246,6 +1249,13 @@ impl Workspace {
                         cx,
                     ))
                     .children(tab_button(self, "Outline", "list", RightTab::Outline, cx))
+                    .children(tab_button(
+                        self,
+                        "Footnotes",
+                        "list",
+                        RightTab::Footnotes,
+                        cx,
+                    ))
                     .children(tab_button(self, "Graph", "git-fork", RightTab::Graph, cx))
                     .child(window_handle(
                         div().id("right-dock-space").flex_1().h_full(),
@@ -1467,6 +1477,71 @@ impl Workspace {
             _ => {}
         }
         self.focus_main(window, cx);
+    }
+
+    /// The Footnotes pane: one row per footnote in the active note, numbered
+    /// in section order; clicking a row reveals its definition's line with
+    /// the same `reveal_offset` a footnote reference click uses.
+    fn render_footnotes_pane(&mut self, theme: &Theme, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let model = self.reading.read(cx).model();
+        let rows = footnote_rows(model);
+        let empty = rows.is_empty();
+        let header = Self::pane_header();
+        let mut list = div()
+            .id("footnotes")
+            .flex()
+            .flex_col()
+            .flex_1()
+            .overflow_y_scroll()
+            .px(px(12.))
+            .pt(px(4.))
+            .pb(px(32.));
+        for row in rows {
+            let offset = row.offset;
+            list = list.child(
+                Self::tree_row(
+                    ("footnote-row", row.n),
+                    0,
+                    None,
+                    None,
+                    Self::tree_label(format!("[{}]", row.n)),
+                    None,
+                    false,
+                    theme,
+                    cx,
+                    None,
+                )
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.reveal_offset(offset, cx);
+                    this.focus_panes(window, cx);
+                })),
+            );
+        }
+        let body: gpui::AnyElement = if empty {
+            div()
+                .flex_1()
+                .px(px(12.))
+                .child(
+                    div()
+                        .my(px(8.))
+                        .px(px(16.))
+                        .py(px(24.))
+                        .text_size(px(FONT_UI_SMALL))
+                        .text_color(theme.text_faint)
+                        .text_center()
+                        .child("No footnotes."),
+                )
+                .into_any_element()
+        } else {
+            list.into_any_element()
+        };
+        div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .child(header)
+            .child(body)
+            .into_any_element()
     }
 }
 
