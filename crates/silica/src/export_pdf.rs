@@ -293,7 +293,7 @@ impl Layout {
                 }
                 self.gap(BLOCK_GAP);
             }
-            BlockKind::HtmlBlock { content } => {
+            BlockKind::HtmlBlock { content, .. } => {
                 // Raw HTML is not what a PDF shows, but it is not this
                 // export's business to decide what the note meant by it:
                 // the lines are printed as the note holds them.

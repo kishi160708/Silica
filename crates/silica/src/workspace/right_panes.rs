@@ -1528,6 +1528,8 @@ impl Workspace {
                         "Kalender",
                         "calendar",
                         RightTab::Calendar,
+                        cx,
+                    ))
                     .children(tab_button(
                         self,
                         "Tasks",
@@ -1716,6 +1718,9 @@ impl Workspace {
             RightTab::Tags => self.tag_state.selected,
             RightTab::Properties => self.property_state.selected,
             RightTab::Outline => self.outline_state.selected,
+            RightTab::Tasks => self.task_state.selected,
+            _ => None,
+        };
         let count = self.pane_row_count(cx);
         if count == 0 {
             return;
@@ -1853,6 +1858,7 @@ impl Workspace {
             Some(PaneRowAction::Search(query)) => self.show_search(&query, Some(window), cx),
             Some(PaneRowAction::Reveal(offset)) => self.reveal_heading(offset, cx),
             None => {}
+        }
         let ix = match self.right_tab {
             RightTab::Tags => self.tag_state.selected,
             RightTab::Properties => self.property_state.selected,

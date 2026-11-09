@@ -6558,6 +6558,8 @@ impl Workspace {
             ),
             cx,
         );
+    }
+
     /// `silica:reminder-add`: the reminder for the task at the cursor.
     /// A task line carries its date — `📅 2026-11-10` or
     /// `[due:: 2026-11-10]` — and the command fires the reminder for
