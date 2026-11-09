@@ -5932,12 +5932,13 @@ impl Workspace {
     /// showing it, the command is a toggle, because a command that opens
     /// without a way back is only half a command.
     fn toggle_graph_pane(&mut self, cx: &mut Context<Self>) {
-        if self.right_tab == RightTab::Graph && self.right_visible {
-            self.right_visible = false;
-            cx.notify();
-        } else {
-            self.right_visible = true;
+        let (visible, tab) = graph_pane_toggle(self.right_visible, self.right_tab);
+        self.right_visible = visible;
+        self.right_tab = tab;
+        if visible {
             self.select_right_tab(RightTab::Graph, cx);
+        } else {
+            cx.notify();
         }
     }
 
@@ -9117,6 +9118,17 @@ fn tab_in_strip(ix: usize, active: usize, stacked: bool) -> bool {
     !stacked || ix == active
 }
 
+/// `silica:toggle-graph-pane`'s toggle: the dock opens on the Graph tab,
+/// and asked for while the Graph tab is showing it closes the dock instead.
+/// Pure so the on/off behaviour can be tested without building a workspace.
+fn graph_pane_toggle(right_visible: bool, right_tab: RightTab) -> (bool, RightTab) {
+    if right_visible && right_tab == RightTab::Graph {
+        (false, RightTab::Graph)
+    } else {
+        (true, RightTab::Graph)
+    }
+}
+
 /// An embedded canvas is bounded by the note, not by the window: it gets a
 /// fixed box with its own pan and zoom inside it.
 fn canvas_frame(
@@ -11319,5 +11331,50 @@ mod tests {
         n.clear();
         assert!(n.latest().is_none());
         assert_eq!(n.push("three".into()), 3, "ids keep counting up");
+    }
+
+    /// `silica:toggle-graph-pane`: a closed dock opens it on the Graph tab;
+    /// the Graph tab showing closes the dock instead; any other tab switches
+    /// the dock to Graph.
+    #[test]
+    fn toggle_graph_pane_switches_on_and_off() {
+        assert_eq!(
+            graph_pane_toggle(false, RightTab::Backlinks),
+            (true, RightTab::Graph),
+            "closed dock opens the graph pane"
+        );
+        assert_eq!(
+            graph_pane_toggle(true, RightTab::Graph),
+            (false, RightTab::Graph),
+            "the graph pane showing closes the dock"
+        );
+        assert_eq!(
+            graph_pane_toggle(true, RightTab::Tags),
+            (true, RightTab::Graph),
+            "another tab switches to the graph pane"
+        );
+        assert_eq!(
+            graph_pane_toggle(false, RightTab::Graph),
+            (true, RightTab::Graph),
+            "a hidden dock still opens the graph pane"
+        );
+    }
+
+    /// The panel reads the cache, read-only: one node per note in the index
+    /// and one edge per resolved link between two indexed notes.
+    #[test]
+    fn graph_panel_counts_nodes_and_edges_from_cache() {
+        let (_dir, state) = vault();
+        let cache = state.cache();
+        let nodes = cache.files().count();
+        let edges: usize = cache
+            .files()
+            .map(|(path, _)| cache.resolved_links(path).map(|t| t.len()).unwrap_or(0))
+            .sum();
+        assert_eq!(nodes, 3, "A.md, B.md and Sub/S.md are the nodes");
+        assert_eq!(
+            edges, 5,
+            "A.md -> B.md and Sub/S.md, B.md -> A.md, Sub/S.md -> A.md twice"
+        );
     }
 }
