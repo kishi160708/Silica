@@ -476,7 +476,7 @@ pub fn build_widgets(
             // * Only the raw HTML the renderer can actually draw earns a
             //   widget. Anything else -- a comment, a script, a bare `<div>` --
             //   would fold its source lines away to show the same muted text.
-            BlockKind::HtmlBlock { content } => html_images(content).is_some(),
+            BlockKind::HtmlBlock { content, .. } => html_images(content).is_some(),
             BlockKind::Paragraph { content } => match content.as_slice() {
                 [one] => matches!(
                     &one.kind,
@@ -665,7 +665,7 @@ impl<'v> Builder<'v> {
                     copy: body.strip_suffix('\n').unwrap_or(&body).to_string(),
                 }
             }
-            BlockKind::HtmlBlock { content } => match html_images(content) {
+            BlockKind::HtmlBlock { content, .. } => match html_images(content) {
                 // * Obsidian resolves a raw `<img src>` like a wikilink target
                 //   and renders the run of them as one block, so they go
                 //   through the same embeds a markdown image does.
