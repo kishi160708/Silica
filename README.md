@@ -37,13 +37,13 @@ Reading view took the same pass: the properties block is editable there, text se
 
 Measured on a Lenovo Legion 5 (CachyOS, AMD Ryzen 5 4600H, 12 threads) with `crates/silica-bench` on a synthetic vault of 20,000 notes, 2,000 attachments, and 35.3 MB of Markdown.
 
-| run | Scan | Read | Index | Resolve | Total |
+|| run | Scan | Read | Index | Resolve | Total |
 | --- | --- | --- | --- | --- | --- |
-| 1 (cold) | 45 ms | 16 ms | 81 ms | 47 ms | 190 ms |
-| 2 | 44 ms | 12 ms | 80 ms | 40 ms | 175 ms |
-| 3 | 44 ms | 11 ms | 71 ms | 39 ms | 166 ms |
+| 1 (cold) | 46 ms | 18 ms | 78 ms | 49 ms | 192 ms |
+| 2 | 45 ms | 11 ms | 73 ms | 45 ms | 174 ms |
+| 3 | 45 ms | 11 ms | 71 ms | 42 ms | 169 ms |
 
-Gate: 190 ms cold against a 2.00 s budget. PASS.
+Gate: 192 ms in run 1 against a 2.00 s budget -> PASS (best run 169 ms)
 
 ## Crates
 
