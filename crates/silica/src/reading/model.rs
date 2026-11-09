@@ -70,6 +70,18 @@ pub trait EmbedSource {
     fn read(&self, path: &str) -> Option<String>;
     /// Absolute path of a vault file, for images.
     fn absolute(&self, path: &str) -> PathBuf;
+    /// Whether the vault holds a file at this path.
+    ///
+    /// A link can resolve to a path whose file is gone — deleted after the
+    /// index was built, or never written — and an image the vault cannot
+    /// serve is a missing attachment rather than a silent blank: the
+    /// placeholder the reading view draws then names the path, which is
+    /// Obsidian's own behaviour for a missing file. The default answers
+    /// yes, which is what a source with no vault behind it (a test's stub)
+    /// has to answer.
+    fn exists(&self, _path: &str) -> bool {
+        true
+    }
     /// An embedded `![[x.base]]`, resolved on its first view.
     ///
     /// A base is a view over the whole vault rather than over one file, so
@@ -1240,6 +1252,10 @@ impl<'v> Builder<'v> {
         let kind = match resolved {
             None => EmbedKind::Missing,
             Some(path) => match FileKind::from_path(&path) {
+                // * An image the vault holds no file for is a missing
+                //   attachment: the embed names its path in the placeholder
+                //   instead of painting a blank the reader cannot explain.
+                FileKind::Image if !self.vault.exists(&path) => EmbedKind::Missing,
                 FileKind::Image => EmbedKind::Image(self.vault.absolute(&path)),
                 FileKind::Markdown => {
                     if self.depth + 1 >= MAX_EMBED_DEPTH {
@@ -1945,6 +1961,260 @@ mod tests {
         let mut seen = Vec::new();
         each_embed(&m.blocks, &mut |embed| seen.push(embed.link.clone()));
         assert_eq!(seen, vec!["Nester", "Main.base", "Field.pdf"]);
+    }
+
+    /// A vault whose resolution is the real one, so a nested image is
+    /// resolved exactly the way the workspace resolves it: against the
+    /// file it is written in.
+    struct NestingStub {
+        files: HashMap<String, String>,
+        absent: Vec<String>,
+        resolver: silica_cache::LinkResolver,
+    }
+
+    impl EmbedSource for NestingStub {
+        fn resolve(&self, linktext: &str, source_path: &str) -> Option<String> {
+            self.resolver
+                .resolve(linktext, source_path)
+                .map(str::to_string)
+        }
+        fn read(&self, path: &str) -> Option<String> {
+            self.files.get(path).cloned()
+        }
+        fn absolute(&self, path: &str) -> PathBuf {
+            PathBuf::from("/vault").join(path)
+        }
+        fn exists(&self, path: &str) -> bool {
+            !self.absent.iter().any(|p| p.eq_ignore_ascii_case(path))
+        }
+    }
+
+    fn nesting_stub(files: &[(&str, &str)]) -> NestingStub {
+        nesting_stub_with_absent(files, &[])
+    }
+
+    fn nesting_stub_with_absent(files: &[(&str, &str)], absent: &[&str]) -> NestingStub {
+        NestingStub {
+            files: files
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            absent: absent.iter().map(|p| p.to_string()).collect(),
+            resolver: silica_cache::LinkResolver::new(
+                files.iter().map(|(k, _)| *k).chain(["/etc/passwd"]),
+            ),
+        }
+    }
+
+    /// Every embed of `model`'s blocks, including the ones inside embedded
+    /// notes, in document order.
+    fn every_embed(model: &Model) -> Vec<Embed> {
+        let mut out = Vec::new();
+        each_embed(&model.blocks, &mut |e| out.push(e.clone()));
+        out
+    }
+
+    #[test]
+    fn an_image_written_inside_an_embedded_note_still_renders() {
+        let m = build(
+            "Self.md",
+            "![[Holder]]",
+            &nesting_stub(&[
+                ("Self.md", ""),
+                ("Holder.md", "![[pic.png]]"),
+                ("pic.png", ""),
+            ]),
+        );
+        let embeds = every_embed(&m);
+        assert_eq!(
+            embeds.len(),
+            2,
+            "holder then the image inside it: {embeds:?}"
+        );
+        assert!(matches!(&embeds[0].kind, EmbedKind::Note { .. }));
+        match &embeds[1].kind {
+            EmbedKind::Image(p) => assert_eq!(p, &PathBuf::from("/vault/pic.png")),
+            other => panic!("the nested image was dropped: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_nested_image_resolves_against_the_file_it_is_written_in() {
+        // * `Holder.md` sits in `Media/`, and so does its image: resolution
+        //   has to run against the embedded note, not against the note that
+        //   embedded it, or the image silently goes missing.
+        let m = build(
+            "Self.md",
+            "![[Holder]]",
+            &nesting_stub(&[
+                ("Self.md", ""),
+                ("Media/Holder.md", "![[pic.png]]"),
+                ("Media/pic.png", ""),
+                ("other.png", ""),
+            ]),
+        );
+        let embeds = every_embed(&m);
+        match &embeds[1].kind {
+            EmbedKind::Image(p) => assert_eq!(p, &PathBuf::from("/vault/Media/pic.png")),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_nested_image_at_every_depth_of_an_embed_chain() {
+        let m = build(
+            "Self.md",
+            "![[One]]",
+            &nesting_stub(&[
+                ("Self.md", ""),
+                ("One.md", "![[pic.png]]\n\n![[Two]]"),
+                ("Two.md", "![[pic.png]]\n\n![[Three]]"),
+                ("Three.md", "![[pic.png]]"),
+                ("pic.png", ""),
+            ]),
+        );
+        let images = every_embed(&m)
+            .into_iter()
+            .filter(|e| matches!(e.kind, EmbedKind::Image(_)))
+            .count();
+        assert_eq!(images, 3, "one image per level of the chain");
+    }
+
+    #[test]
+    fn a_nested_image_path_the_vault_cannot_hold_is_missing_not_a_panic() {
+        // * A linkpath that escapes the vault, or names it absolutely, has
+        //   nowhere to resolve to: the embed goes Missing, and nothing here
+        //   walks off the end of a byte slice looking for it.
+        for body in [
+            "![[/etc/passwd]]",
+            "![[../outside.png]]",
+            "![[../../pic.png]]",
+            "![alt](../../pic.png)",
+        ] {
+            let m = build(
+                "Self.md",
+                "![[Holder]]",
+                &nesting_stub(&[
+                    ("Self.md", ""),
+                    ("Media/Holder.md", body),
+                    ("Media/pic.png", ""),
+                ]),
+            );
+            let embeds = every_embed(&m);
+            assert!(
+                matches!(embeds[1].kind, EmbedKind::Missing),
+                "{body} resolved instead of going missing: {:?}",
+                embeds[1].kind
+            );
+        }
+    }
+
+    #[test]
+    fn a_missing_nested_image_keeps_the_path_it_named() {
+        let m = build(
+            "Self.md",
+            "![[Holder]]",
+            &nesting_stub(&[
+                ("Self.md", ""),
+                ("Media/Holder.md", "![[gone.png]]"),
+                ("Media/pic.png", ""),
+            ]),
+        );
+        let embeds = every_embed(&m);
+        assert_eq!(embeds[1].link, "gone.png", "the placeholder names the path");
+        assert!(matches!(embeds[1].kind, EmbedKind::Missing));
+    }
+
+    #[test]
+    fn a_nested_image_survives_multibyte_text_before_it() {
+        // * A paragraph that starts with multibyte characters: every span
+        //   the builder takes out of it has to land on a char boundary, or
+        //   the slice panics before the image is ever built.
+        let body = "α ⚠ 日本語 — ![[pic.png]]";
+        let m = build(
+            "Self.md",
+            "![[Holder]]",
+            &nesting_stub(&[
+                ("Self.md", ""),
+                ("Holder.md", body),
+                ("Holder2.md", body),
+                ("pic.png", ""),
+            ]),
+        );
+        let embeds = every_embed(&m);
+        assert!(
+            matches!(embeds[1].kind, EmbedKind::Image(_)),
+            "{:?}",
+            embeds[1].kind
+        );
+    }
+
+    #[test]
+    fn an_html_image_block_with_multibyte_text_keeps_its_spans_on_char_boundaries() {
+        // * A paragraph of multibyte text, then a raw `<img>` whose alt is
+        //   multibyte too: every span the builder takes out of the block has
+        //   to land on a char boundary or the slice panics first.
+        let m = build(
+            "Self.md",
+            "![[Holder]]",
+            &nesting_stub(&[
+                ("Self.md", ""),
+                (
+                    "Holder.md",
+                    "日本語\n\n<img src=\"pic.png\" alt=\"日本語 — OK\">\n",
+                ),
+                ("pic.png", ""),
+            ]),
+        );
+        let embeds = every_embed(&m);
+        match &embeds[1].kind {
+            EmbedKind::Image(p) => assert_eq!(p, &PathBuf::from("/vault/pic.png")),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(embeds[1].alt, "日本語 — OK");
+    }
+
+    #[test]
+    fn a_nested_image_in_a_list_or_quote_still_renders() {
+        let m = build(
+            "Self.md",
+            "![[Holder]]",
+            &nesting_stub(&[
+                ("Self.md", ""),
+                ("Holder.md", "- ![[pic.png]]\n\n> ![[pic.png]]"),
+                ("pic.png", ""),
+            ]),
+        );
+        let images = every_embed(&m)
+            .into_iter()
+            .filter(|e| matches!(e.kind, EmbedKind::Image(_)))
+            .count();
+        assert_eq!(images, 2, "a list item and a quote both keep the image");
+    }
+
+    #[test]
+    fn an_image_the_vault_has_no_file_for_is_missing_not_blank() {
+        // * A link that resolves but whose file is gone: the placeholder
+        //   names the path instead of the view painting nothing.
+        let m = build(
+            "Self.md",
+            "![[Holder]]",
+            &nesting_stub_with_absent(
+                &[
+                    ("Self.md", ""),
+                    ("Media/Holder.md", "![[pic.png]]"),
+                    ("Media/pic.png", ""),
+                ],
+                &["Media/pic.png"],
+            ),
+        );
+        let embeds = every_embed(&m);
+        assert_eq!(embeds[1].link, "pic.png");
+        assert!(
+            matches!(embeds[1].kind, EmbedKind::Missing),
+            "{:?}",
+            embeds[1].kind
+        );
     }
 
     #[test]

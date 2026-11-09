@@ -1006,9 +1006,15 @@ impl<'a> Renderer<'a> {
         let t = self.theme;
         let base = t.base_font_size;
         let image = match &embed.kind {
-            EmbedKind::Image(path) => img(path.clone())
-                .max_w_full()
-                .object_fit(ObjectFit::Contain),
+            EmbedKind::Image(path) => {
+                let lost = path.clone();
+                img(path.clone())
+                    .max_w_full()
+                    .object_fit(ObjectFit::Contain)
+                    // * A file the vault holds no image for paints nothing at
+                    //   all: the fallback names it instead.
+                    .with_fallback(move || missing_image(&lost))
+            }
             EmbedKind::RemoteImage(url) => {
                 let err_url = url.clone();
                 let bg_sec = t.bg_secondary;
@@ -1045,9 +1051,14 @@ impl<'a> Renderer<'a> {
         let base = t.base_font_size;
         match &embed.kind {
             EmbedKind::Image(path) => {
+                let lost = path.clone();
                 let mut image = img(path.clone())
                     .max_w_full()
-                    .object_fit(ObjectFit::Contain);
+                    .object_fit(ObjectFit::Contain)
+                    // * The same fallback the inline image carries: a file the
+                    //   vault holds no image for names itself instead of
+                    //   painting nothing.
+                    .with_fallback(move || missing_image(&lost));
                 if let Some(w) = embed.width {
                     image = image.w(px(w));
                 }
