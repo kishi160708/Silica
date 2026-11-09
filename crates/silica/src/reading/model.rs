@@ -99,6 +99,10 @@ pub struct InlineStyle {
     pub math: bool,
     pub footnote: bool,
     pub html: bool,
+    /// Superscript text: raised above the baseline with reduced size.
+    pub sup: bool,
+    /// Subscript text: lowered below the baseline with reduced size.
+    pub sub: bool,
 }
 
 impl InlineStyle {

@@ -22,6 +22,10 @@ enum Effect {
     Strike,
     Code,
     Mark,
+    /// Superscript: raised above the baseline with reduced size.
+    Sup,
+    /// Subscript: lowered below the baseline with reduced size.
+    Sub,
     /// A heading, which the reading view can only show as bold: one run of
     /// text carries one size, and a heading inside raw HTML is inline here.
     Heading,
@@ -44,6 +48,8 @@ fn effect(name: &str) -> Option<Effect> {
         "s" | "del" | "strike" => Effect::Strike,
         "code" | "tt" | "kbd" | "samp" | "pre" => Effect::Code,
         "mark" => Effect::Mark,
+        "sup" => Effect::Sup,
+        "sub" => Effect::Sub,
         "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => Effect::Heading,
         _ => return None,
     })
@@ -57,8 +63,6 @@ fn inert(name: &str) -> bool {
             | "font"
             | "small"
             | "big"
-            | "sup"
-            | "sub"
             | "abbr"
             | "q"
             | "time"
@@ -203,6 +207,8 @@ impl RichBuilder {
                 Some(Effect::Strike) => style.strike = true,
                 Some(Effect::Code) => style.code = true,
                 Some(Effect::Mark) => style.highlight = true,
+                Some(Effect::Sup) => style.sup = true,
+                Some(Effect::Sub) => style.sub = true,
                 None => {}
             }
         }

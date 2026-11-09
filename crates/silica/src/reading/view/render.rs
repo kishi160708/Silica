@@ -1883,9 +1883,44 @@ impl<'a> Renderer<'a> {
         self.rich_at(text, self.theme.base_font_size)
     }
 
-    /// Inline content set at `size` pixels: one `InteractiveText`, with
-    /// inline formulas typeset over placeholders when the text has any.
-    pub(crate) fn rich_at(&self, text: &RichText, size: f32) -> AnyElement {
+    /// Filter `InlineStyle` runs to those falling within `[start, end)`.
+fn filter_runs(
+    runs: &[(Range<usize>, InlineStyle)],
+    start: usize,
+    end: usize,
+) -> Vec<(Range<usize>, InlineStyle)> {
+    runs.iter()
+        .filter_map(|(r, s)| {
+            if r.end <= start || r.start >= end {
+                None
+            } else {
+                Some((r.start.max(start).min(end)..r.end.min(end), *s))
+            }
+        })
+        .collect()
+}
+
+/// Filter `LinkTarget` ranges to those falling within `[start, end)`.
+fn filter_links(
+    links: &[(Range<usize>, LinkTarget)],
+    start: usize,
+    end: usize,
+) -> Vec<(Range<usize>, LinkTarget)> {
+    links
+        .iter()
+        .filter_map(|(r, l)| {
+            if r.end <= start || r.start >= end {
+                None
+            } else {
+                Some((r.start.max(start).min(end)..r.end.min(end), l.clone()))
+            }
+        })
+        .collect()
+}
+
+/// Inline content set at `size` pixels: one `InteractiveText`, with
+/// inline formulas typeset over placeholders when the text has any.
+pub(crate) fn rich_at(&self, text: &RichText, size: f32) -> AnyElement {
         // * Each `$x$` run, typeset in text style. A formula that does not
         //   parse stays as its source, in the error red (`highlight`).
         let formulas: Vec<(Range<usize>, Arc<silica_math::Formula>)> = text
@@ -1897,11 +1932,82 @@ impl<'a> Renderer<'a> {
                 math::typeset(tex, false).ok().map(|f| (r.clone(), f))
             })
             .collect();
-        if formulas.is_empty() {
+        // * `<sup>` and `<sub>` runs: raised/lowered above or below the
+        //   baseline with reduced size. GPUI's `HighlightStyle` has no
+        //   vertical-offset attribute, so these are rendered as separate
+        //   positioned elements interleaved with the surrounding text.
+        let vertical: Vec<(Range<usize>, bool)> = text
+            .runs
+            .iter()
+            .filter_map(|(r, s)| {
+                if s.sup {
+                    Some((r.clone(), true))
+                } else if s.sub {
+                    Some((r.clone(), false))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if formulas.is_empty() && vertical.is_empty() {
             return self
                 .interactive(text, &text.text, &text.runs, &text.links)
                 .into_any_element();
         }
+        // * Build a list of segments alternating between regular text and
+        //   sup/sub text. Each regular segment is an `InteractiveText`;
+        //   each sup/sub segment is a positioned `Div` with reduced size
+        //   and vertical offset.
+        let mut segments: Vec<AnyElement> = Vec::new();
+        let mut at = 0;
+        let mut all_special: Vec<(Range<usize>, bool, f32)> = Vec::new();
+        for (range, _formula) in &formulas {
+            all_special.push((range.clone(), false, 0.0));
+        }
+        for (range, is_sup) in &vertical {
+            all_special.push((range.clone(), *is_sup, if *is_sup { -4.0 } else { 2.0 }));
+        }
+        all_special.sort_by_key(|(r, _, _)| r.start.clone());
+        for (range, _is_sup, offset) in &all_special {
+            if at < range.start {
+                segments.push(self.interactive(
+                    text,
+                    &text.text[at..range.start],
+                    &Self::filter_runs(&text.runs, at, range.start),
+                    &Self::filter_links(&text.links, at, range.start),
+                ).into_any_element());
+            }
+            let segment_text = &text.text[range.clone()];
+            let sup_sub_size = px(size * 0.6);
+            segments.push(
+                div()
+                    .text_size(sup_sub_size)
+                    .mt(px(*offset))
+                    .child(SharedString::from(segment_text))
+                    .into_any_element(),
+            );
+            at = range.end;
+        }
+        if at < text.text.len() {
+            segments.push(self.interactive(
+                text,
+                &text.text[at..],
+                &Self::filter_runs(&text.runs, at, text.text.len()),
+                &Self::filter_links(&text.links, at, text.text.len()),
+            ).into_any_element());
+        }
+        let result = div()
+            .flex()
+            .flex_row()
+            .items_start()
+            .gap_0()
+            .children(segments)
+            .into_any_element();
+        if formulas.is_empty() {
+            return result;
+        }
+        // * Formulas still need the Overlay treatment on top of the
+        //   segmented text.
         let t = self.theme;
         let em = px(size);
         let font = Font {
@@ -1912,8 +2018,6 @@ impl<'a> Renderer<'a> {
             style: FontStyle::Normal,
         };
         let spaces = SpaceWidths::measure(&self.text_system, &font, em);
-        // * Rebuild the string with a placeholder where each formula was,
-        //   and carry the other runs and the links across the edits.
         let mut edits: Vec<(Range<usize>, usize)> = Vec::new();
         let mut shaped = String::with_capacity(text.text.len());
         let mut inlines = Vec::new();
@@ -1939,7 +2043,6 @@ impl<'a> Renderer<'a> {
                     break;
                 }
                 if offset < range.end {
-                    // * Inside a formula: its start.
                     return (range.start as isize + shift) as usize;
                 }
                 shift += *len as isize - range.len() as isize;
@@ -1957,7 +2060,8 @@ impl<'a> Renderer<'a> {
             .iter()
             .map(|(r, l)| (remap(r.start)..remap(r.end), l.clone()))
             .collect();
-        let (interactive, layout) = self.interactive_with_layout(text, &shaped, &runs, &links);
+        let (interactive, layout) =
+            self.interactive_with_layout(text, &shaped, &runs, &links);
         Overlay::new(interactive.into_any_element(), layout, inlines, em, t.text).into_any_element()
     }
 

@@ -79,7 +79,11 @@ impl TermIndex {
             });
         }
         result
-            .map(|s| s.into_iter().map(String::from).collect())
+            .map(|s| {
+                let mut v: Vec<String> = s.into_iter().map(String::from).collect();
+                v.sort();
+                v
+            })
             .unwrap_or_default()
     }
 
