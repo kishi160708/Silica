@@ -7,7 +7,6 @@
 use super::*;
 
 impl Workspace {
-
     pub(crate) fn open_prompt(
         &mut self,
         op: PendingOp,
@@ -96,7 +95,12 @@ impl Workspace {
     /// keeps `Notes/` from also matching `Notes archive/`. What Obsidian puts
     /// in its own box here was not captured, so the query is marked OBSERVE in
     /// [[Specification#The file explorer's context menus]].
-    pub(crate) fn search_in_folder(&mut self, folder: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn search_in_folder(
+        &mut self,
+        folder: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let query = match folder.is_empty() {
             true => String::new(),
             false => format!("path:\"{folder}/\""),
@@ -615,7 +619,12 @@ impl Workspace {
     }
 
     /// Creates the note a link or the switcher names and opens it.
-    pub(crate) fn create_note_for(&mut self, name: &str, window: Option<&mut Window>, cx: &mut Context<Self>) {
+    pub(crate) fn create_note_for(
+        &mut self,
+        name: &str,
+        window: Option<&mut Window>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(state) = self.state.clone() else {
             return;
         };
@@ -634,7 +643,12 @@ impl Workspace {
         }
     }
 
-    pub(crate) fn create_from_link(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn create_from_link(
+        &mut self,
+        name: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.create_note_for(name, Some(window), cx);
     }
 
@@ -744,7 +758,12 @@ impl Workspace {
         );
     }
 
-    pub(crate) fn start_new_folder(&mut self, parent: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn start_new_folder(
+        &mut self,
+        parent: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let initial = self
             .state
             .as_ref()
@@ -905,7 +924,12 @@ impl Workspace {
     /// was saved through, newest first. Picking one loads those bytes into
     /// the buffer, unsaved, so the restore is reviewed before it lands --
     /// the same rule the merge follows.
-    pub(crate) fn start_version_history(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn start_version_history(
+        &mut self,
+        path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(state) = self.state.clone() else {
             return;
         };
@@ -1142,14 +1166,38 @@ link to it is rewritten. The current note is deleted."
             .plan_merge_rewrites(source, &target, state.link_format(), &|p| {
                 state.texts().get(p).map(|t| t.to_string())
             });
+        // * A write error on one note must not abort the rest: continue with
+        //   every remaining rewrite and report failures once the merge is
+        //   done, so the merge itself always completes and the vault stays
+        //   consistent instead of half-rewritten.
+        let mut merge_write_errors: Vec<String> = Vec::new();
+        let index_texts = state.texts();
         for rw in &plan {
             let absolute = state
                 .vault()
                 .write_path(&rw.new_path)
                 .map_err(|e| e.to_string())?;
-            silica_vault::write_no_follow(&absolute, rw.text.as_bytes())
-                .map_err(|e| format!("Could not update links in {}: {e}", rw.new_path))?;
+            // Stale check: the rewrite was planned from the index text of
+            // this file; if disk differs, another app edited it since and we
+            // must not clobber it.
+            let on_disk = match std::fs::read_to_string(&absolute) {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            let planned_from = index_texts.get(&rw.new_path).map(|t| t.as_str());
+            if let Some(was) = planned_from {
+                if on_disk != was {
+                    continue;
+                }
+            }
+            if let Err(e) = silica_vault::write_no_follow(&absolute, rw.text.as_bytes()) {
+                merge_write_errors.push(format!(
+                    "Could not update links in {}: {e}",
+                    rw.new_path
+                ));
+            }
         }
+        drop(index_texts);
 
         // * The target may not exist yet (`create_note` refuses an existing
         //   path), so an existing one is written through the vault's save
@@ -1188,6 +1236,10 @@ link to it is rewritten. The current note is deleted."
         self.after_changes(changes, cx);
         self.open_file(target, None, cx);
 
+        if let Some(first_err) = merge_write_errors.into_iter().next() {
+            return Err(first_err);
+        }
+
         let links: usize = plan.iter().map(|r| r.links).sum();
         Ok((links > 0).then(|| {
             format!(
@@ -1201,7 +1253,12 @@ link to it is rewritten. The current note is deleted."
     }
 
     /// Enter in the prompt: finish the pending operation with `value`.
-    pub(crate) fn prompt_submitted(&mut self, value: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn prompt_submitted(
+        &mut self,
+        value: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(op) = self.pending.clone() else {
             self.close_modal(window, cx);
             return;
@@ -1349,7 +1406,10 @@ link to it is rewritten. The current note is deleted."
                     self.report("Tag name cannot be empty", cx);
                     return;
                 }
-                if !new_tag.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '/') {
+                if !new_tag
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '/')
+                {
                     self.report("Tag name contains invalid characters", cx);
                     return;
                 }
@@ -1368,6 +1428,7 @@ link to it is rewritten. The current note is deleted."
                     .unwrap_or_default();
                 let vault_root = state.vault().root().to_path_buf();
                 let mut changed = Vec::new();
+                let mut tag_write_errors: Vec<String> = Vec::new();
                 for path in &files {
                     let absolute = vault_root.join(path);
                     let Ok(content) = std::fs::read_to_string(&absolute) else {
@@ -1375,23 +1436,20 @@ link to it is rewritten. The current note is deleted."
                     };
                     let next = rename_tag_in_content(&content, &from, new_tag);
                     if next != content {
-                        if let Err(err) =
-                            silica_vault::write_no_follow(&absolute, next.as_bytes())
+                        if let Err(err) = silica_vault::write_no_follow(&absolute, next.as_bytes())
                         {
-                            self.report(format!("Could not write {path}: {err}"), cx);
-                            return;
+                            tag_write_errors.push(format!("Could not write {path}: {err}"));
+                            continue;
                         }
                         changed.push(path.clone());
                     }
                 }
+                let changed_was_empty = changed.is_empty();
                 if !changed.is_empty() {
                     let count = changed.len();
                     self.after_changes(
                         Changes {
-                            files: changed
-                                .into_iter()
-                                .map(FileChange::Modified)
-                                .collect(),
+                            files: changed.into_iter().map(FileChange::Modified).collect(),
                             notes: Vec::new(),
                             removed_notes: Vec::new(),
                         },
@@ -1405,7 +1463,12 @@ link to it is rewritten. The current note is deleted."
                         ),
                         cx,
                     );
-                } else {
+                }
+                let had_errors = !tag_write_errors.is_empty();
+                if let Some(first_err) = tag_write_errors.into_iter().next() {
+                    self.report(first_err, cx);
+                }
+                if changed_was_empty && !had_errors {
                     self.report("No files to rename", cx);
                 }
             }
