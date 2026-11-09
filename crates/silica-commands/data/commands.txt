@@ -253,3 +253,4 @@ silica:toggle-graph-pane
 silica:vault-backup
 quick-capture:open
 task-dashboard:open
+silica:spaced-repetition

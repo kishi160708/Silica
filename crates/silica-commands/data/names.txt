@@ -234,3 +234,4 @@ silica:vault-backup	Back up the vault to a local folder
 silica:export-site	Export vault as site
 quick-capture:open	Quick Capture: New note
 task-dashboard:open	Task Dashboard: Open
+silica:spaced-repetition	Spaced repetition: review due flashcards

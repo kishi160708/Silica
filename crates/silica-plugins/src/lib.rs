@@ -20,6 +20,7 @@ pub mod live;
 pub mod native;
 pub mod native_plugins;
 pub mod registry;
+pub mod spaced_repetition;
 pub mod tier;
 pub mod vault_doctor;
 
