@@ -515,6 +515,7 @@ pub const RUNNABLE: &[&str] = &[
     "random-note",
     "file-explorer:move-file",
     "file-explorer:duplicate-file",
+    "file-explorer:rename-file",
     "workspace:edit-file-title",
     "workspace:new-tab",
     "workspace:close",
@@ -5610,6 +5611,11 @@ impl Workspace {
             "file-explorer:duplicate-file" => {
                 if let Some(current) = self.current.clone() {
                     self.duplicate(&current, cx);
+                }
+            }
+            "file-explorer:rename-file" => {
+                if let Some(current) = self.current.clone() {
+                    self.start_rename(&current, window, cx);
                 }
             }
             "workspace:edit-file-title" => {

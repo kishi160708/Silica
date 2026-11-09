@@ -60,9 +60,9 @@ pub fn render_html_with(doc: &Document<'_>, opts: &HtmlOptions) -> String {
     r.footnote_section();
     // * Degenerate `====`/`===` delimiter runs can produce an empty
     //   `<mark></mark>` element. Strip those so they never reach the user.
-    let out = std::mem::take(&mut r.out);
-    let out = out.replace("<mark data-main=\"\"></mark>", "");
-    let out = out.replace("<mark data-highlight=\"\"></mark>", "");
+    let mut out = std::mem::take(&mut r.out);
+    out = out.replace("<mark data-main=\"\"></mark>", "");
+    out = out.replace("<mark data-highlight=\"\"></mark>", "");
     out
 }
 

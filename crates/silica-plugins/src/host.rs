@@ -42,7 +42,7 @@ const HEAP_BYTES: usize = 64 * 1024 * 1024;
 pub const LOAD_DEADLINE: Duration = Duration::from_secs(5);
 
 /// How long one command may run before the host stops it.
-pub const CALL_DEADLINE: Duration = Duration::from_secs(10);
+pub const CALL_DEADLINE: Duration = Duration::from_secs(2);
 
 /// A command a plugin added, as the app needs it to list and run it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

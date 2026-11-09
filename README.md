@@ -17,7 +17,7 @@ Silica is a native desktop knowledge base written in Rust on GPUI. It opens an O
 
 ## Status
 
-Reader and writer are done. All five development phases have landed, including phase 5 (plugins). `silica-markdown` parses CommonMark (all 652 spec examples) plus the GitHub extensions Obsidian uses into a single spanned tree with byte spans, and renders reading-view HTML that matches Obsidian on 1007 of 1009 corpus notes.
+Reader and writer are substantially complete. All five development phases have landed, including phase 5 (plugins). `silica-markdown` parses CommonMark (all 652 spec examples) plus the GitHub extensions Obsidian uses into a single spanned tree with byte spans, and renders reading-view HTML that matches Obsidian on 1008 of 1009 corpus notes.
 
 The app opens a real vault in a three-pane shell: Files, reading view, and side panes for Backlinks, Outgoing links, Tags, All properties, and Outline. Search supports grouping, sorting, copying results, and vault-wide search & replace. The quick switcher, graph, command palette, and a Settings modal that writes are all present. Notes open in Live Preview or Source mode with find and replace, multiple cursors, auto-pairing, collapsible headings and lists, and autosave. Fenced code highlights in 80+ languages, and Live Preview renders task boxes, raw `<table>` blocks, and inline HTML elements the way the reading view does — a cursor anywhere in an element brings its source back, and what the overlay cannot draw (a script, an unclosed tag, a lone `<br>`) stays as source. The update-links prompt's **Always** answer rewrites links from then on without asking. Wikilinks (`[[`, `![[`) and tags (`#`) autocomplete against the vault's files, aliases, headings, tags, and block references. Clipboard images and dropped files save to the vault's attachment folder and insert embeds. Frontmatter is an editable, typed properties table that rewrites only the lines it changes.
 
@@ -74,7 +74,7 @@ Gate: 190 ms cold against a 2.00 s budget. PASS.
 | `silica-templates` | Template placeholders and date formats |
 | `silica-formats` | On-disk formats: file kinds, `app.json`, JSON Canvas 1.0, Bases YAML |
 | `silica-bases` | The Bases expression language |
-| `silica-commands` | 244 command ids and default hotkeys |
+| `silica-commands` | 250 command ids and default hotkeys |
 | `silica-search` | Search query grammar and matcher |
 | `silica-text` | Editor text model: buffer, selections, undo, edit plans |
 | `silica-canvas` | Canvas model: viewport, edges, selection, undo |

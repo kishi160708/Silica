@@ -778,7 +778,7 @@ fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
             // copy_tree destination is an internal copy target; create parents
             // securely so no symlink component can redirect the copy.
             std::fs::create_dir_all(parent).map_err(|e| {
-                std::io::Error::new(std::io::ErrorKind::Other, format!("create folder {}: {e}", parent.display()))
+                std::io::Error::other(format!("create folder {}: {e}", parent.display()))
             })?;
         }
         for entry in std::fs::read_dir(from)? {

@@ -80,47 +80,19 @@ move it, click a node to open it, Ctrl+0 refits the view.
 
 ## Releases
 
-`.github/workflows/release.yml` and `.forgejo/workflows/release.yml` both fire on a `v*` tag. Cut a
-release by bumping `version` under `[workspace.package]` in the root `Cargo.toml`, committing that,
-then tagging and pushing to both remotes:
+There is no automated release workflow. To cut a release, bump `version` under `[workspace.package]` in the root `Cargo.toml`, commit it, tag and push:
 
-```
+\`\`\`
 git tag -a v0.1.0 -m "Silica 0.1.0"
-git push origin v0.1.0 && git push forgejo v0.1.0
-```
+git push origin v0.1.0
+\`\`\`
 
-Either workflow refuses to build when the tag and the workspace version disagree, since the archive
-is named from the tag and the binary reports the manifest version. GitHub builds
-`x86_64-unknown-linux-gnu`, `x86_64-pc-windows-msvc` and `aarch64-apple-darwin`, one archive per target,
-plus `SHA256SUMS` over all of them, and publishes with `gh release create`. The homelab
-Forgejo runner has only the Linux container (see [[#Environment]] and `ci.yml`), so it
-builds the x86_64 Linux archive and creates the release through the instance API with the token
-Forgejo Actions injects for the run. Release notes on both are the commit subjects since the
-previous tag. A tag with a hyphen in it, `v0.2.0-rc1`, is published as a prerelease.
+CI (\`ci.yml\`) runs on \`v*\` tags and executes the test, GUI, and audit jobs.
+Release artifacts are not built automatically by CI; build them manually with
+\`cargo build --release --locked -p silica\` and \`cargo build --release --locked -p silica-mcp\`.
 
-Both builds pass `--locked`, so the pinned `gpui` revision and `libc` come from `Cargo.lock`.
+Nothing is code-signed or notarized, so macOS Gatekeeper and Windows SmartScreen will both object to unsigned binaries.
 
-Both workflows sign `SHA256SUMS` with GPG when the repository holds the maintainer's key as the
-secrets `GPG_SIGNING_KEY` and `GPG_PASSPHRASE`; without them the release is published unsigned and
-its notes say so. The key is `69BF AA44 7DAC E6C3 EF02  6CBA 4EA6 7A61 88DA 92BD`, `
-<@outlook.com>`, the same ed25519 key that signs the commits here, published on
-keys.openpgp.org and named in the README.
-
-What the forges hold is **only its signing subkey**, exported with
-`gpg --armor --export-secret-subkeys <fpr>` rather than `--export-secret-keys`: the certify key
-stays on the development machine, so a stolen CI secret can sign a release but cannot make new
-subkeys, certify another identity, or revoke anything. The primary key is certify-only to begin
-with, so the workflow's `--local-user <primary fpr>` resolves to the signing subkey on its own and
-needs no change. Set the pair on GitHub with
-`gpg --armor --export-secret-subkeys <fpr> | gh secret set GPG_SIGNING_KEY` and
-`gh secret set GPG_PASSPHRASE`, and on Forgejo by `PUT`ting `{"data": "<value>"}` to
-`/api/v1/repos/lw-xiong/Silica/actions/secrets/<name>` with the token in
-`~/.config/forgejo/token`. Rotating the subkey is the whole recovery procedure if a forge is ever
-compromised, and it invalidates nothing already signed. The GitHub workflow also attaches
-[build provenance attestations](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations)
-to every archive, which need no secret: `gh attestation verify <archive> --repo lw-xiong/Silica`
-confirms the archive came out of this workflow at that commit. Private vulnerability reporting is
-enabled on the GitHub repository, and `SECURITY.md` at the root is the policy.
 
 > [!warning] The macOS binary is untested, and Windows is only smoke-tested
 > CI runs `cargo check -p silica` on both and the release job is the first thing that links them.
