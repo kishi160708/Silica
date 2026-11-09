@@ -528,6 +528,27 @@ pub fn write_at(root: &Path, relative: &Path, bytes: &[u8]) -> std::io::Result<(
     Ok(())
 }
 
+/// Recursively deletes orphaned `.name.pid.silica-tmp` scratch files left
+/// beside notes by a previous crash. A temp file in use is held open by a
+/// live write, so deletion never collides with it.
+fn cleanup_temp_files(root: &Path) -> std::io::Result<()> {
+    if !root.is_dir() {
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(root)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            cleanup_temp_files(&path)?;
+        } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+            if name.ends_with(".silica-tmp") && name.starts_with('.') {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Creates every directory under `root` named by `relative`, one `openat` at a
 /// time, so no component can be swapped for a link mid-walk.
 #[cfg(unix)]
@@ -731,8 +752,9 @@ impl Vault {
     ) -> Result<Vault, VaultError> {
         let root = root.as_ref().to_path_buf();
         if !root.is_dir() {
-            return Err(VaultError::NotADirectory(root));
+            return Err(VaultError::NotADirectory(root.clone()));
         }
+        let root_for_cleanup = root.clone();
         let mut vault = Vault {
             root,
             config_dir: config_dir.to_string(),
@@ -740,6 +762,14 @@ impl Vault {
             folders: Vec::new(),
         };
         vault.rescan()?;
+        // * Drop orphaned scratch files from a previous crash: any
+        //   `.name.pid.silica-tmp` left beside a note is stale and safe to
+        //   delete (a write in progress holds the file open, so an unlinked
+        //   temp never collides with a live write).
+        cleanup_temp_files(&root_for_cleanup).map_err(|e| VaultError::Io {
+            path: root_for_cleanup.clone(),
+            source: e,
+        })?;
         Ok(vault)
     }
 
