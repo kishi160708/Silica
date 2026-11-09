@@ -56,12 +56,15 @@ Run 1 is only cold if the OS page cache was evicted first, for example with
       Render every markdown note to HTML (the export-site pipeline).
       Reports total export time and notes per second.
 
+  silica-bench slice <vault> [--slices N] [--runs R]
+      Split the vault into N contiguous note slices and index each slice.
+      Reports per-slice index time and aggregate notes per second.
+
   silica-bench all <vault> [--runs R]
       Run all benchmarks sequentially.
 "#;
 
 const GATE: Duration = Duration::from_secs(2);
-
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -73,10 +76,11 @@ fn main() {
         Some("parse") => Opts::parse(&args[1..]).and_then(|o| cmd_parse(&o)),
         Some("plugin") => Opts::parse(&args[1..]).and_then(|o| cmd_plugin(&o)),
         Some("export") => Opts::parse(&args[1..]).and_then(|o| cmd_export(&o)),
+        Some("slice") => Opts::parse(&args[1..]).and_then(|o| cmd_slice(&o)),
         Some("all") => {
             match Opts::parse(&args[1..]) {
                 Ok(opts) => {
-                    let vault = opts.positional.get(0).cloned().unwrap_or_default();
+                    let vault = opts.positional.first().cloned().unwrap_or_default();
                     if let Err(msg) = cmd_all(&opts, &vault) {
                         eprintln!("error: {msg}");
                         std::process::exit(1);
@@ -89,9 +93,7 @@ fn main() {
             }
             return;
         }
-        Some(s) => {
-            Err(format!("unknown subcommand {}:{}\n\n{}", s, USAGE, USAGE))
-        }
+        Some(s) => Err(format!("unknown subcommand {}:{}\n\n{}", s, USAGE, USAGE)),
     };
     if let Err(msg) = result {
         eprintln!("error: {msg}");
@@ -822,7 +824,12 @@ fn cmd_search(opts: &Opts) -> Result<(), String> {
         term_index.insert(path, text);
     }
 
-    println!("vault {} — {} notes, query: {:?}", root.display(), notes.len(), query);
+    println!(
+        "vault {} — {} notes, query: {:?}",
+        root.display(),
+        notes.len(),
+        query
+    );
     println!();
 
     let mut results = Vec::with_capacity(runs);
@@ -835,10 +842,7 @@ fn cmd_search(opts: &Opts) -> Result<(), String> {
         let candidate_paths: Option<std::collections::HashSet<String>> =
             index_terms(search.query()).map(|terms| {
                 let term_refs: Vec<&str> = terms.iter().map(String::as_str).collect();
-                term_index
-                    .candidates(&term_refs)
-                    .into_iter()
-                    .collect()
+                term_index.candidates(&term_refs).into_iter().collect()
             });
 
         // Run the match in parallel over candidates (or all if no index filter).
@@ -849,7 +853,7 @@ fn cmd_search(opts: &Opts) -> Result<(), String> {
                 .filter(|((path, _), _)| {
                     candidate_paths
                         .as_ref()
-                        .map_or(true, |cp| cp.contains(path.as_str()))
+                        .is_none_or(|cp| cp.contains(path.as_str()))
                 })
                 .filter_map(|((path, text), meta)| {
                     let file = SearchFile {
@@ -921,12 +925,25 @@ fn cmd_parse(opts: &Opts) -> Result<(), String> {
                 })
                 .collect::<Vec<CachedMetadata>>()
         });
-        println!("  {:<4} total={:>9} per_note={:>9}", i + 1, human_duration(parse_time), human_duration(Duration::from_nanos(parse_time.as_nanos() as u64 / notes.len() as u64)));
+        println!(
+            "  {:<4} total={:>9} per_note={:>9}",
+            i + 1,
+            human_duration(parse_time),
+            human_duration(Duration::from_nanos(
+                parse_time.as_nanos() as u64 / notes.len() as u64
+            ))
+        );
         total_times.push(parse_time);
     }
     let avg = total_times.iter().sum::<Duration>() / total_times.len() as u32;
     println!();
-    println!("avg: total={:>9} per_note={:>9}", human_duration(avg), human_duration(Duration::from_nanos(avg.as_nanos() as u64 / notes.len() as u64)));
+    println!(
+        "avg: total={:>9} per_note={:>9}",
+        human_duration(avg),
+        human_duration(Duration::from_nanos(
+            avg.as_nanos() as u64 / notes.len() as u64
+        ))
+    );
     Ok(())
 }
 
@@ -949,10 +966,19 @@ fn cmd_plugin(opts: &Opts) -> Result<(), String> {
     for i in 0..runs {
         let (plugins, scan_time) = time(|| silica_plugins::Registry::scan(&vault));
         let records = plugins.records();
-        let native_count = records.iter().filter(|r| r.tier == silica_plugins::Tier::Native).count();
+        let native_count = records
+            .iter()
+            .filter(|r| r.tier == silica_plugins::Tier::Native)
+            .count();
         let community_count = records.iter().filter(|r| r.enabled).count();
 
-        println!("  {:<4} scan={:>9} native={:<8} community={:<8}", i + 1, human_duration(scan_time), native_count, community_count);
+        println!(
+            "  {:<4} scan={:>9} native={:<8} community={:<8}",
+            i + 1,
+            human_duration(scan_time),
+            native_count,
+            community_count
+        );
     }
 
     Ok(())
@@ -980,9 +1006,9 @@ fn cmd_export(opts: &Opts) -> Result<(), String> {
     let mut exported = 0usize;
     for path in &notes {
         let text = std::fs::read_to_string(vault.absolute(path)).unwrap_or_default();
-        let doc = silica_markdown::parse(&text);
-        let html = silica_markdown::render_html(&doc);
-        let out_name = path.replace('/', "_").replace('\\', "_");
+        let doc = parse(&text);
+        let html = render_html(&doc);
+        let out_name = path.replace(['/', '\\'], "_");
         let out_path = std::path::Path::new(out_dir).join(format!("{out_name}.html"));
         fs::write(&out_path, html).map_err(|e| format!("{}: {e}", out_path.display()))?;
         exported += 1;
@@ -990,8 +1016,138 @@ fn cmd_export(opts: &Opts) -> Result<(), String> {
     let elapsed = started.elapsed();
     let notes_per_sec = exported as f64 / elapsed.as_secs_f64();
 
-    println!("vault {} — {} notes exported to {}", root.display(), exported, out_dir);
-    println!("total: {:>9}  notes/sec: {:.0}", human_duration(elapsed), notes_per_sec);
+    println!(
+        "vault {} — {} notes exported to {}",
+        root.display(),
+        exported,
+        out_dir
+    );
+    println!(
+        "total: {:>9}  notes/sec: {:.0}",
+        human_duration(elapsed),
+        notes_per_sec
+    );
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// * Slice benchmark
+// ---------------------------------------------------------------------------
+
+/// Totals for one slice of notes, mirroring the `IndexRun` counters.
+#[derive(Default)]
+struct SliceTotals {
+    notes: usize,
+    links: usize,
+    tags: usize,
+    headings: usize,
+    blocks: usize,
+}
+
+/// Splits `[0, total)` into `slices` contiguous, non-overlapping slices that
+/// cover every note index exactly once; the last slice takes the remainder.
+fn slice_bounds(total: usize, slices: usize) -> Vec<(usize, usize)> {
+    let slices = slices.clamp(1, total.max(1));
+    let mut bounds = Vec::with_capacity(slices);
+    let mut start = 0usize;
+    for i in 0..slices {
+        let end = if i + 1 == slices {
+            total
+        } else {
+            total * (i + 1) / slices
+        };
+        bounds.push((start, end));
+        start = end;
+    }
+    bounds
+}
+
+/// Reads and indexes one contiguous slice of notes, returning elapsed time and
+/// metadata totals for that slice.
+fn index_slice(vault: &Vault, notes: &[&str], range: (usize, usize)) -> (Duration, SliceTotals) {
+    let (start, end) = range;
+    let (sources, read) = time(|| {
+        notes[start..end]
+            .iter()
+            .map(|p| fs::read_to_string(vault.absolute(p)).unwrap_or_default())
+            .collect::<Vec<String>>()
+    });
+    let mut totals = SliceTotals {
+        notes: end - start,
+        ..Default::default()
+    };
+    let (metas, index) = time(|| {
+        sources
+            .par_iter()
+            .map(|s| index_markdown(s))
+            .collect::<Vec<CachedMetadata>>()
+    });
+    for m in &metas {
+        totals.links += m.links.len();
+        totals.tags += m.tags.len();
+        totals.headings += m.headings.len();
+        totals.blocks += m.blocks.len();
+    }
+    (read + index, totals)
+}
+
+/// Indexes every note slice of a vault and reports per-slice timings.
+fn cmd_slice(opts: &Opts) -> Result<(), String> {
+    let root = opts.path("vault")?;
+    let slices: usize = opts.flag("slices", 4)?;
+    let runs: usize = opts.flag("runs", 3)?;
+    opts.configure_jobs()?;
+    let slices = slices.max(1);
+    let runs = runs.max(1);
+
+    let vault = Vault::open(&root).map_err(|e| e.to_string())?;
+    let notes: Vec<&str> = vault.markdown_files().map(|f| f.path.as_str()).collect();
+    let bounds = slice_bounds(notes.len(), slices);
+
+    println!(
+        "vault {} — {} notes, {} slices, {} threads",
+        root.display(),
+        notes.len(),
+        slices,
+        rayon::current_num_threads()
+    );
+    println!();
+    println!("  run  slice  notes     time      notes/sec");
+
+    let mut best_total = Duration::MAX;
+    for i in 0..runs {
+        let mut run_total = Duration::ZERO;
+        let mut run_notes = 0usize;
+        for (si, range) in bounds.iter().enumerate() {
+            let (elapsed, totals) = index_slice(&vault, &notes, *range);
+            run_total += elapsed;
+            run_notes += totals.notes;
+            let notes_per_sec = totals.notes as f64 / elapsed.as_secs_f64().max(1e-9);
+            println!(
+                "  {:<3} {:<5} {:<7} {:>9} {:>9.0}",
+                i + 1,
+                si + 1,
+                totals.notes,
+                human_duration(elapsed),
+                notes_per_sec
+            );
+        }
+        best_total = best_total.min(run_total);
+        println!(
+            "  {:<3} {:<5} {:<7} {:>9}",
+            i + 1,
+            "-",
+            run_notes,
+            human_duration(run_total)
+        );
+    }
+    let notes_per_sec = notes.len() as f64 / best_total.as_secs_f64().max(1e-9);
+    println!();
+    println!(
+        "best run total: {:>9}  aggregate notes/sec: {:.0}",
+        human_duration(best_total),
+        notes_per_sec
+    );
     Ok(())
 }
 
@@ -1027,6 +1183,15 @@ fn cmd_all(opts: &Opts, vault: &str) -> Result<(), String> {
     println!();
     println!("=== PLUGIN ===");
     cmd_plugin(&Opts {
+        positional: vec![vault_path.clone()],
+        flags: opts.flags.clone(),
+    })?;
+    println!();
+    let out_dir = std::path::Path::new("/tmp/silica-export-bench");
+    let _ = fs::remove_dir_all(out_dir);
+    println!();
+    println!("=== SLICE ===");
+    cmd_slice(&Opts {
         positional: vec![vault_path.clone()],
         flags: opts.flags.clone(),
     })?;
@@ -1141,5 +1306,64 @@ mod tests {
         assert_eq!(o.flag("notes", 0usize).unwrap(), 10);
         assert_eq!(o.flag("seed", 0u64).unwrap(), 4);
         assert_eq!(o.flag("runs", 3usize).unwrap(), 3);
+    }
+
+    #[test]
+    fn slice_bounds_partition_covers_every_note_exactly_once() {
+        for total in [0usize, 1, 2, 3, 7, 100] {
+            for slices in [1usize, 2, 3, 5, 16] {
+                let bounds = slice_bounds(total, slices);
+                assert_eq!(bounds.first().map(|(s, _)| *s), Some(0));
+                assert_eq!(bounds.last().map(|(_, e)| *e), Some(total));
+                let mut seen = vec![false; total];
+                let mut prev_end = 0usize;
+                for &(start, end) in &bounds {
+                    assert_eq!(
+                        start, prev_end,
+                        "slice gap or overlap: total={total} slices={slices}"
+                    );
+                    prev_end = end;
+                    for (i, seen_slot) in seen[start..end].iter_mut().enumerate() {
+                        let idx = start + i;
+                        assert!(!*seen_slot, "note {idx} in multiple slices");
+                        *seen_slot = true;
+                    }
+                }
+                assert_eq!(prev_end, total);
+                assert!(
+                    seen.iter().all(|&x| x),
+                    "not all notes covered: total={total} slices={slices}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn slice_index_totals_match_full_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let stats = generate_vault(dir.path(), 200, 11).unwrap();
+        assert_eq!(stats.notes, 200);
+
+        let vault = Vault::open(dir.path()).unwrap();
+        let notes: Vec<&str> = vault.markdown_files().map(|f| f.path.as_str()).collect();
+        assert_eq!(notes.len(), 200);
+
+        let (_, full) = index_slice(&vault, &notes, (0, notes.len()));
+
+        let bounds = slice_bounds(notes.len(), 4);
+        let mut sum = SliceTotals::default();
+        for range in bounds {
+            let (_, totals) = index_slice(&vault, &notes, range);
+            sum.notes += totals.notes;
+            sum.links += totals.links;
+            sum.tags += totals.tags;
+            sum.headings += totals.headings;
+            sum.blocks += totals.blocks;
+        }
+        assert_eq!(sum.notes, full.notes);
+        assert_eq!(sum.links, full.links);
+        assert_eq!(sum.tags, full.tags);
+        assert_eq!(sum.headings, full.headings);
+        assert_eq!(sum.blocks, full.blocks);
     }
 }
