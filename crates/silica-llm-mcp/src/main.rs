@@ -71,6 +71,9 @@ fn main() {
     let backend = model::Backend::new(config);
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
+    // * Cap line size so a hostile or broken client cannot exhaust memory
+    //   with a single unterminated line.
+    const MAX_LINE_BYTES: usize = 1 << 20; // 1 MiB
     for line in stdin.lock().lines() {
         let line = match line {
             Ok(line) => line,
@@ -79,6 +82,10 @@ fn main() {
                 break;
             }
         };
+        if line.len() > MAX_LINE_BYTES {
+            eprintln!("silica-llm-mcp: line over {MAX_LINE_BYTES} bytes, dropped");
+            continue;
+        }
         if line.trim().is_empty() {
             continue;
         }

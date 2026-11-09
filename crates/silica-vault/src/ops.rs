@@ -609,15 +609,13 @@ impl Vault {
         };
         let target = self.numbered_path(".trash", stem, ext, 2);
         let target_abs = self.entry_path(&target)?;
-        std::fs::rename(&abs, &target_abs).map_err(io("move to .trash", &abs))?;
-        // * The flat `.trash` throws away which folder the entry came from,
-        // * so say it beside it: a restore would otherwise put a note from
-        // * Sub/ at the vault root and every relative link in it would
-        // * point somewhere else. Best effort — a record that fails to write
-        // * costs the note its old folder, not its bytes.
+        // * Write the origin sidecar before the move: a crash between the
+        //   two leaves at most an orphan sidecar (harmless), never a
+        //   trashed note with no record of where it came from.
         if let Some((folder, _)) = path.rsplit_once('/') {
             let _ = std::fs::write(trash.join(format!(".{name}.origin")), folder);
         }
+        std::fs::rename(&abs, &target_abs).map_err(io("move to .trash", &abs))?;
         Ok(())
     }
 
