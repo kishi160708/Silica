@@ -454,6 +454,7 @@ pub const RUNNABLE: &[&str] = &[
     "editor:toggle-highlight-blue",
     "editor:toggle-highlight-purple",
     "editor:clear-formatting",
+    "editor:toggle-spellcheck",
     "editor:insert-callout",
     "editor:insert-codeblock",
     "editor:insert-mathblock",
@@ -5738,6 +5739,11 @@ impl Workspace {
                 if self.editing_or_report(id, window, cx) {
                     self.editor
                         .update(cx, |e, cx| e.clear_formatting(window, cx));
+                }
+            }
+            "editor:toggle-spellcheck" => {
+                if self.editing_or_report(id, window, cx) {
+                    self.editor.update(cx, |e, _cx| e.toggle_spellcheck());
                 }
             }
             "editor:insert-callout"
