@@ -160,6 +160,7 @@ impl Workspace {
                 RightTab::Outgoing => "outgoing",
                 RightTab::Outline => "outline",
                 RightTab::Graph => "graph",
+                RightTab::LocalGraph => "local-graph",
                 RightTab::Tags => "tags",
                 RightTab::Properties => "properties",
             }),

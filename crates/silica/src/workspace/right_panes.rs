@@ -1108,6 +1108,10 @@ impl Workspace {
             // * The graph's own plugin id, so a vault with the graph core
             //   plugin off takes the tab away with it.
             RightTab::Graph => "graph",
+            // * The local graph rides on the graph's own plugin id: it is
+            //   the same core plugin's second pane, so a vault with the
+            //   graph off loses this tab with the other one.
+            RightTab::LocalGraph => "graph",
         };
         self.state
             .as_ref()
@@ -1130,6 +1134,7 @@ impl Workspace {
                 RightTab::Properties,
                 RightTab::Outline,
                 RightTab::Graph,
+                RightTab::LocalGraph,
             ]
             .into_iter()
             .find(|t| self.pane_enabled(*t))
@@ -1163,6 +1168,14 @@ impl Workspace {
                 .size_full()
                 .min_h_0()
                 .child(self.graph.clone())
+                .into_any_element(),
+            // * The local graph side pane: the open note at the centre with
+            //   the notes one hop out. It has no pan or zoom of its own, so
+            //   nothing but the pane itself is offered.
+            RightTab::LocalGraph => div()
+                .size_full()
+                .min_h_0()
+                .child(self.local_graph.clone())
                 .into_any_element(),
         };
         // * A pane whose core plugin is off is not offered: Obsidian takes
@@ -1247,6 +1260,13 @@ impl Workspace {
                     ))
                     .children(tab_button(self, "Outline", "list", RightTab::Outline, cx))
                     .children(tab_button(self, "Graph", "git-fork", RightTab::Graph, cx))
+                    .children(tab_button(
+                        self,
+                        crate::i18n::t("Local graph"),
+                        "binary",
+                        RightTab::LocalGraph,
+                        cx,
+                    ))
                     .child(window_handle(
                         div().id("right-dock-space").flex_1().h_full(),
                         frameless,
