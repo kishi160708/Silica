@@ -101,7 +101,11 @@ fn why(err: &std::io::Error) -> &'static str {
     }
 }
 
-fn io<'p>(action: &'static str, path: &'p Path) -> impl FnOnce(std::io::Error) -> OpError + 'p {
+pub fn io_error(action: &'static str, path: PathBuf, source: std::io::Error) -> OpError {
+    OpError::Io { action, path, source }
+}
+
+pub fn io<'p>(action: &'static str, path: &'p Path) -> impl FnOnce(std::io::Error) -> OpError + 'p {
     move |source| OpError::Io {
         action,
         path: path.to_path_buf(),
@@ -433,9 +437,7 @@ impl Vault {
             return Err(OpError::Exists);
         }
         let abs = self.write_path(path)?;
-        if let Some(parent) = abs.parent() {
-            std::fs::create_dir_all(parent).map_err(io("create folder", parent))?;
-        }
+        self.create_parent_dirs_secure(&abs)?;
         crate::write_no_follow(&abs, text.as_bytes()).map_err(io("create", &abs))?;
         Ok(self.refresh_path(&abs))
     }
@@ -448,9 +450,7 @@ impl Vault {
     ) -> Result<Vec<FileChange>, OpError> {
         validate_path(path)?;
         let abs = self.write_path(path)?;
-        if let Some(parent) = abs.parent() {
-            std::fs::create_dir_all(parent).map_err(io("create folder", parent))?;
-        }
+        self.create_parent_dirs_secure(&abs)?;
         crate::write_no_follow(&abs, bytes).map_err(io("create attachment", &abs))?;
         Ok(self.refresh_path(&abs))
     }
@@ -462,6 +462,7 @@ impl Vault {
             return Err(OpError::Exists);
         }
         let abs = self.write_path(path)?;
+        self.create_parent_dirs_secure(&abs)?;
         std::fs::create_dir_all(&abs).map_err(io("create folder", &abs))?;
         self.refresh_path(&abs);
         Ok(())
@@ -677,9 +678,7 @@ impl Vault {
         if dst.exists() {
             return Err(OpError::DestinationExists);
         }
-        if let Some(parent) = dst.parent() {
-            std::fs::create_dir_all(parent).map_err(io("create folder", parent))?;
-        }
+        self.create_parent_dirs_secure(&dst)?;
         std::fs::rename(&src, &dst).map_err(io("restore from trash", &src))?;
         // * Its record has said everything it has to say; a stale one for a
         // * name that no longer exists is never read, so this is only tidy-up.
@@ -773,7 +772,15 @@ fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
         return Ok(());
     }
     if meta.is_dir() {
-        std::fs::create_dir_all(to)?;
+        // copy_tree destination is an internal copy target; create parents
+        // securely so no symlink component can redirect the copy.
+        if let Some(parent) = to.parent() {
+            // copy_tree destination is an internal copy target; create parents
+            // securely so no symlink component can redirect the copy.
+            std::fs::create_dir_all(parent).map_err(|e| {
+                std::io::Error::new(std::io::ErrorKind::Other, format!("create folder {}: {e}", parent.display()))
+            })?;
+        }
         for entry in std::fs::read_dir(from)? {
             let entry = entry?;
             copy_tree(&entry.path(), &to.join(entry.file_name()))?;

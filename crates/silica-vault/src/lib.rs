@@ -6,7 +6,7 @@ pub mod registry;
 #[cfg(windows)]
 pub mod win_fs;
 
-pub use ops::{OpError, TrashOption};
+pub use ops::{io_error, OpError, TrashOption};
 pub use registry::{VaultEntry, VaultRegistry};
 use serde::de::DeserializeOwned;
 use silica_cache::LinkResolver;
@@ -895,6 +895,27 @@ impl Vault {
             }
         }
         Ok(absolute)
+    }
+
+    /// Creates every parent directory of `absolute` under the vault, one
+    /// `openat` component at a time so no component can be swapped for a link
+    /// mid-walk. Falls back to `std::fs::create_dir_all` on platforms without
+    /// handle-verified directory creation.
+    pub fn create_parent_dirs_secure(&self, absolute: &Path) -> Result<(), OpError> {
+        if let Some(parent) = absolute.parent() {
+            let relative = parent
+                .strip_prefix(&self.root)
+                .map_err(|_| io_error("create folder", parent.to_path_buf(), std::io::Error::new(std::io::ErrorKind::NotFound, "path not under root")))?;
+            #[cfg(any(unix, windows))]
+            {
+                create_dir_all_at(&self.root, relative).map_err(|e| io_error("create folder", parent.to_path_buf(), e))?;
+            }
+            #[cfg(not(any(unix, windows)))]
+            {
+                std::fs::create_dir_all(parent).map_err(|e| io_error("create folder", parent.to_path_buf(), e))?;
+            }
+        }
+        Ok(())
     }
 
     /// A trailing dot or space is silently dropped by Win32 path parsing,
