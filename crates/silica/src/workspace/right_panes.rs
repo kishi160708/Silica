@@ -1522,7 +1522,13 @@ impl Workspace {
                         cx,
                     ))
                     .children(tab_button(self, "Outline", "list", RightTab::Outline, cx))
-                    .children(tab_button(self, "Footnotes", "list", RightTab::Footnotes, cx))
+                    .children(tab_button(
+                        self,
+                        "Footnotes",
+                        "list",
+                        RightTab::Footnotes,
+                        cx,
+                    ))
                     .children(tab_button(
                         self,
                         "Kalender",
@@ -1725,13 +1731,6 @@ impl Workspace {
         if count == 0 {
             return;
         }
-        let selected = match self.right_tab {
-            RightTab::Tags => &mut self.tag_state.selected,
-            RightTab::Properties => &mut self.property_state.selected,
-            RightTab::Outline => &mut self.outline_state.selected,
-            RightTab::Tasks => &mut self.task_state.selected,
-            _ => return,
-        };
         let Some(next) = next_row_selection(current, self.pane_row_count(cx), delta) else {
             return;
         };

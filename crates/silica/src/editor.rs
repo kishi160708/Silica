@@ -62,8 +62,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
-pub(crate) mod attach;
 mod actions;
+pub(crate) mod attach;
 mod folding;
 mod mouse;
 mod movement;

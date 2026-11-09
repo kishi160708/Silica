@@ -930,16 +930,22 @@ impl Vault {
     /// handle-verified directory creation.
     pub fn create_parent_dirs_secure(&self, absolute: &Path) -> Result<(), OpError> {
         if let Some(parent) = absolute.parent() {
-            let relative = parent
-                .strip_prefix(&self.root)
-                .map_err(|_| io_error("create folder", parent.to_path_buf(), std::io::Error::new(std::io::ErrorKind::NotFound, "path not under root")))?;
+            let relative = parent.strip_prefix(&self.root).map_err(|_| {
+                io_error(
+                    "create folder",
+                    parent.to_path_buf(),
+                    std::io::Error::new(std::io::ErrorKind::NotFound, "path not under root"),
+                )
+            })?;
             #[cfg(any(unix, windows))]
             {
-                create_dir_all_at(&self.root, relative).map_err(|e| io_error("create folder", parent.to_path_buf(), e))?;
+                create_dir_all_at(&self.root, relative)
+                    .map_err(|e| io_error("create folder", parent.to_path_buf(), e))?;
             }
             #[cfg(not(any(unix, windows)))]
             {
-                std::fs::create_dir_all(parent).map_err(|e| io_error("create folder", parent.to_path_buf(), e))?;
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| io_error("create folder", parent.to_path_buf(), e))?;
             }
         }
         Ok(())
@@ -2547,8 +2553,13 @@ mod tests {
         let path = dir.path().join("Note.md");
         fs::set_permissions(&path, PermissionsExt::from_mode(0o600)).unwrap();
 
-        write_at(dir.path(), Path::new("Note.md"), b"updated
-").unwrap();
+        write_at(
+            dir.path(),
+            Path::new("Note.md"),
+            b"updated
+",
+        )
+        .unwrap();
 
         let meta = fs::metadata(&path).unwrap();
         assert_eq!(
@@ -2556,8 +2567,11 @@ mod tests {
             0o600,
             "write widened the file's permission bits",
         );
-        assert_eq!(fs::read_to_string(&path).unwrap(), "updated
-");
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "updated
+"
+        );
     }
 
     /// * Concurrent saves of the same note cannot collide: the temp-file name
@@ -2566,12 +2580,15 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn write_at_concurrent_saves_do_not_collide() {
-
         let dir = sample_vault();
         let vault_path = dir.path().to_path_buf();
         let note_path = vault_path.join("Note.md");
-        fs::write(&note_path, "original
-").unwrap();
+        fs::write(
+            &note_path,
+            "original
+",
+        )
+        .unwrap();
 
         let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
         let mut handles = Vec::new();
@@ -2580,8 +2597,15 @@ mod tests {
             let barrier = std::sync::Arc::clone(&barrier);
             handles.push(std::thread::spawn(move || {
                 barrier.wait();
-                write_at(&vault_path, Path::new("Note.md"), format!("write {i}
-").as_bytes())
+                write_at(
+                    &vault_path,
+                    Path::new("Note.md"),
+                    format!(
+                        "write {i}
+"
+                    )
+                    .as_bytes(),
+                )
             }));
         }
         for h in handles {
@@ -2592,8 +2616,11 @@ mod tests {
         // * Every write completed and the file holds one of the written values.
         let final_text = fs::read_to_string(&note_path).unwrap();
         assert!(
-            (0..8u64).any(|i| final_text == format!("write {i}
-")),
+            (0..8u64).any(|i| final_text
+                == format!(
+                    "write {i}
+"
+                )),
             "unexpected final content: {final_text:?}",
         );
     }

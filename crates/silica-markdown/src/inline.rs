@@ -536,7 +536,15 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
         (left, right, before_punct, after_punct)
     }
 
-    fn push_delim(&mut self, ch: u8, start: usize, end: usize, orig_run: usize, can_open: bool, can_close: bool) {
+    fn push_delim(
+        &mut self,
+        ch: u8,
+        start: usize,
+        end: usize,
+        orig_run: usize,
+        can_open: bool,
+        can_close: bool,
+    ) {
         self.push_text(start, end);
         let node = self.nodes.len() - 1;
         let idx = self.delims.len();

@@ -84,8 +84,8 @@ use gpui::{
 use rayon::prelude::*;
 use serde_json::{json, Map, Value};
 use silica_cache::{
-    basename, frontmatter_aliases, index_markdown, CachedMetadata, LinkFormat, MetadataCache,
-    PropertyEntry, index::TermIndex,
+    basename, frontmatter_aliases, index::TermIndex, index_markdown, CachedMetadata, LinkFormat,
+    MetadataCache, PropertyEntry,
 };
 use silica_commands::{hotkey_label, keystroke, CommandRegistry};
 use silica_formats::bookmarks::{Bookmark, Bookmarks};
@@ -1190,9 +1190,16 @@ impl VaultState {
     /// still searchable and link-rewritable because their text is read
     /// back from the vault rather than skipped.
     pub fn text_for(&self, path: &str) -> Option<Arc<String>> {
-        self.texts.read().unwrap_or_else(|e| e.into_inner()).get(path).cloned().or_else(|| {
-            std::fs::read_to_string(self.root.join(path)).ok().map(Arc::new)
-        })
+        self.texts
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(path)
+            .cloned()
+            .or_else(|| {
+                std::fs::read_to_string(self.root.join(path))
+                    .ok()
+                    .map(Arc::new)
+            })
     }
 
     pub fn build_options(&self) -> reading::BuildOptions {
@@ -7407,7 +7414,11 @@ impl Workspace {
                     // * Cache the note's text so search, backlinks, and link
                     //   rewriting can find it even after a previous tab close
                     //   evicted it from the unbounded map.
-                    state.texts.write().unwrap_or_else(|e| e.into_inner()).insert(path.to_string(), Arc::new(text.clone()));
+                    state
+                        .texts
+                        .write()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .insert(path.to_string(), Arc::new(text.clone()));
                     self.words = text.split_whitespace().count();
                     self.chars = text.chars().count();
                     // * The reading view's model is built for the mode

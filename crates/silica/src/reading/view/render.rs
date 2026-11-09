@@ -1903,43 +1903,43 @@ impl<'a> Renderer<'a> {
     }
 
     /// Filter `InlineStyle` runs to those falling within `[start, end)`.
-fn filter_runs(
-    runs: &[(Range<usize>, InlineStyle)],
-    start: usize,
-    end: usize,
-) -> Vec<(Range<usize>, InlineStyle)> {
-    runs.iter()
-        .filter_map(|(r, s)| {
-            if r.end <= start || r.start >= end {
-                None
-            } else {
-                Some((r.start.max(start).min(end)..r.end.min(end), *s))
-            }
-        })
-        .collect()
-}
+    fn filter_runs(
+        runs: &[(Range<usize>, InlineStyle)],
+        start: usize,
+        end: usize,
+    ) -> Vec<(Range<usize>, InlineStyle)> {
+        runs.iter()
+            .filter_map(|(r, s)| {
+                if r.end <= start || r.start >= end {
+                    None
+                } else {
+                    Some((r.start.max(start).min(end)..r.end.min(end), *s))
+                }
+            })
+            .collect()
+    }
 
-/// Filter `LinkTarget` ranges to those falling within `[start, end)`.
-fn filter_links(
-    links: &[(Range<usize>, LinkTarget)],
-    start: usize,
-    end: usize,
-) -> Vec<(Range<usize>, LinkTarget)> {
-    links
-        .iter()
-        .filter_map(|(r, l)| {
-            if r.end <= start || r.start >= end {
-                None
-            } else {
-                Some((r.start.max(start).min(end)..r.end.min(end), l.clone()))
-            }
-        })
-        .collect()
-}
+    /// Filter `LinkTarget` ranges to those falling within `[start, end)`.
+    fn filter_links(
+        links: &[(Range<usize>, LinkTarget)],
+        start: usize,
+        end: usize,
+    ) -> Vec<(Range<usize>, LinkTarget)> {
+        links
+            .iter()
+            .filter_map(|(r, l)| {
+                if r.end <= start || r.start >= end {
+                    None
+                } else {
+                    Some((r.start.max(start).min(end)..r.end.min(end), l.clone()))
+                }
+            })
+            .collect()
+    }
 
-/// Inline content set at `size` pixels: one `InteractiveText`, with
-/// inline formulas typeset over placeholders when the text has any.
-pub(crate) fn rich_at(&self, text: &RichText, size: f32) -> AnyElement {
+    /// Inline content set at `size` pixels: one `InteractiveText`, with
+    /// inline formulas typeset over placeholders when the text has any.
+    pub(crate) fn rich_at(&self, text: &RichText, size: f32) -> AnyElement {
         // * Each `$x$` run, typeset in text style. A formula that does not
         //   parse stays as its source, in the error red (`highlight`).
         let formulas: Vec<(Range<usize>, Arc<silica_math::Formula>)> = text
@@ -1986,15 +1986,18 @@ pub(crate) fn rich_at(&self, text: &RichText, size: f32) -> AnyElement {
         for (range, is_sup) in &vertical {
             all_special.push((range.clone(), *is_sup, if *is_sup { -4.0 } else { 2.0 }));
         }
-        all_special.sort_by_key(|(r, _, _)| r.start.clone());
+        all_special.sort_by_key(|(r, _, _)| r.start);
         for (range, _is_sup, offset) in &all_special {
             if at < range.start {
-                segments.push(self.interactive(
-                    text,
-                    &text.text[at..range.start],
-                    &Self::filter_runs(&text.runs, at, range.start),
-                    &Self::filter_links(&text.links, at, range.start),
-                ).into_any_element());
+                segments.push(
+                    self.interactive(
+                        text,
+                        &text.text[at..range.start],
+                        &Self::filter_runs(&text.runs, at, range.start),
+                        &Self::filter_links(&text.links, at, range.start),
+                    )
+                    .into_any_element(),
+                );
             }
             let segment_text = &text.text[range.clone()];
             let sup_sub_size = px(size * 0.6);
@@ -2008,12 +2011,15 @@ pub(crate) fn rich_at(&self, text: &RichText, size: f32) -> AnyElement {
             at = range.end;
         }
         if at < text.text.len() {
-            segments.push(self.interactive(
-                text,
-                &text.text[at..],
-                &Self::filter_runs(&text.runs, at, text.text.len()),
-                &Self::filter_links(&text.links, at, text.text.len()),
-            ).into_any_element());
+            segments.push(
+                self.interactive(
+                    text,
+                    &text.text[at..],
+                    &Self::filter_runs(&text.runs, at, text.text.len()),
+                    &Self::filter_links(&text.links, at, text.text.len()),
+                )
+                .into_any_element(),
+            );
         }
         let result = div()
             .flex()
@@ -2079,8 +2085,7 @@ pub(crate) fn rich_at(&self, text: &RichText, size: f32) -> AnyElement {
             .iter()
             .map(|(r, l)| (remap(r.start)..remap(r.end), l.clone()))
             .collect();
-        let (interactive, layout) =
-            self.interactive_with_layout(text, &shaped, &runs, &links);
+        let (interactive, layout) = self.interactive_with_layout(text, &shaped, &runs, &links);
         Overlay::new(interactive.into_any_element(), layout, inlines, em, t.text).into_any_element()
     }
 
