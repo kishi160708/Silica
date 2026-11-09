@@ -1209,6 +1209,12 @@ impl VaultState {
         //   moved underneath keeps its own bytes and its links are left for
         //   the user, which loses nothing either way.
         let mut stale: Vec<String> = Vec::new();
+        // * A write error on one note must not abort the rest: the rename has
+        //   already happened on disk, so every remaining rewrite still runs
+        //   and the index is always brought up to date. Errors are collected
+        //   and reported once, rather than leaving the vault half-rewritten
+        //   and the index stale.
+        let mut write_errors: Vec<String> = Vec::new();
         let texts = self.texts();
         for rw in &plan {
             let absolute = self
@@ -1223,8 +1229,9 @@ impl VaultState {
                 }
                 _ => {}
             }
-            silica_vault::write_no_follow(&absolute, rw.text.as_bytes())
-                .map_err(|e| format!("Could not update links in {}: {e}", rw.new_path))?;
+            if let Err(e) = silica_vault::write_no_follow(&absolute, rw.text.as_bytes()) {
+                write_errors.push(format!("Could not update links in {}: {e}", rw.new_path));
+            }
         }
         drop(texts);
         let moved_from: HashMap<&str, &str> = moved
@@ -1271,6 +1278,9 @@ impl VaultState {
             changes.notes.push(rw.new_path.clone());
         }
         cache.reresolve();
+        if let Some(first_err) = write_errors.into_iter().next() {
+            return Err(first_err);
+        }
         Ok(RenameOutcome {
             changes,
             renamed: moved,
