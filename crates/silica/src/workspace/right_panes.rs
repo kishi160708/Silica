@@ -39,6 +39,7 @@ impl Workspace {
             RightTab::Tags => &self.tag_filter,
             RightTab::Properties => &self.property_filter,
             RightTab::Outline => &self.outline_filter,
+            RightTab::Tasks => &self.task_filter,
             _ => &self.backlink_filter,
         }
     }
@@ -48,6 +49,7 @@ impl Workspace {
             RightTab::Tags => &mut self.tag_state.show_search,
             RightTab::Properties => &mut self.property_state.show_search,
             RightTab::Outline => &mut self.outline_state.show_search,
+            RightTab::Tasks => &mut self.task_state.show_search,
             _ => &mut self.backlink_state.show_search,
         }
     }
@@ -1337,6 +1339,9 @@ impl Workspace {
             //   the same core plugin's second pane, so a vault with the
             //   graph off loses this tab with the other one.
             RightTab::LocalGraph => "graph",
+            // * The inbox is this app's own pane, not a core plugin's
+            //   leaf: an id no core plugin owns always answers enabled.
+            RightTab::Tasks => "tasks",
         };
         self.state
             .as_ref()
@@ -1362,6 +1367,7 @@ impl Workspace {
                 RightTab::Graph,
                 RightTab::Calendar,
                 RightTab::LocalGraph,
+                RightTab::Tasks,
             ]
             .into_iter()
             .find(|t| self.pane_enabled(*t))
@@ -1379,6 +1385,7 @@ impl Workspace {
             RightTab::Footnotes => self.render_footnotes_pane(theme, cx),
             // * Kalender: grid bulan di samping catatan harian.
             RightTab::Calendar => render_calendar_pane(self, theme, cx).into_any_element(),
+            RightTab::Tasks => self.render_tasks_pane(theme, cx),
             // * The graph side pane: the GraphView entity the ribbon opens
             //   full screen, kept in the dock. While a group's area already
             //   paints it, the dock says so rather than painting it twice.
@@ -1501,6 +1508,11 @@ impl Workspace {
                         "Kalender",
                         "calendar",
                         RightTab::Calendar,
+                    .children(tab_button(
+                        self,
+                        "Tasks",
+                        "square-check",
+                        RightTab::Tasks,
                         cx,
                     ))
                     .children(tab_button(self, "Graph", "git-fork", RightTab::Graph, cx))
@@ -1670,6 +1682,7 @@ impl Workspace {
             RightTab::Tags => self.tag_rows(cx).len(),
             RightTab::Properties => self.property_rows(cx).len(),
             RightTab::Outline => self.outline_rows(cx).len(),
+            RightTab::Tasks => self.visible_task_rows(cx).len(),
             // * Backlinks and Outgoing are card lists without a row model
             //   the arrows could walk; their rows stay click-only.
             _ => 0,
@@ -1683,6 +1696,15 @@ impl Workspace {
             RightTab::Tags => self.tag_state.selected,
             RightTab::Properties => self.property_state.selected,
             RightTab::Outline => self.outline_state.selected,
+        let count = self.pane_row_count(cx);
+        if count == 0 {
+            return;
+        }
+        let selected = match self.right_tab {
+            RightTab::Tags => &mut self.tag_state.selected,
+            RightTab::Properties => &mut self.property_state.selected,
+            RightTab::Outline => &mut self.outline_state.selected,
+            RightTab::Tasks => &mut self.task_state.selected,
             _ => return,
         };
         let Some(next) = next_row_selection(current, self.pane_row_count(cx), delta) else {
@@ -1790,7 +1812,7 @@ impl Workspace {
 
     /// Enter on the selected row: the same thing a click on it does — a tag
     /// or property row searches for it, an outline row reveals its heading
-    /// in the note.
+    /// in the note, an inbox row opens the note its task came from.
     pub(crate) fn pane_activate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let action = match self.right_tab {
             RightTab::Tags => self
@@ -1811,6 +1833,44 @@ impl Workspace {
             Some(PaneRowAction::Search(query)) => self.show_search(&query, Some(window), cx),
             Some(PaneRowAction::Reveal(offset)) => self.reveal_heading(offset, cx),
             None => {}
+        let ix = match self.right_tab {
+            RightTab::Tags => self.tag_state.selected,
+            RightTab::Properties => self.property_state.selected,
+            RightTab::Outline => self.outline_state.selected,
+            RightTab::Tasks => self.task_state.selected,
+            _ => None,
+        };
+        let Some(ix) = ix else {
+            return;
+        };
+        match self.right_tab {
+            RightTab::Tags => {
+                let rows = self.tag_rows(cx);
+                if let Some(row) = rows.get(ix) {
+                    let path = row.path.clone();
+                    self.show_search(&format!("tag:#{path}"), Some(window), cx);
+                }
+            }
+            RightTab::Properties => {
+                let rows = self.property_rows(cx);
+                if let Some(row) = rows.get(ix) {
+                    let name = row.name.clone();
+                    self.show_search(&format!("[\"{name}\"]"), Some(window), cx);
+                }
+            }
+            RightTab::Outline => {
+                let rows = self.outline_rows(cx);
+                if let Some(row) = rows.get(ix) {
+                    self.reveal_heading(row.offset, cx);
+                }
+            }
+            RightTab::Tasks => {
+                let rows = self.visible_task_rows(cx);
+                if let Some(row) = rows.get(ix) {
+                    self.open_task(row, cx);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1820,6 +1880,7 @@ impl Workspace {
             RightTab::Tags => self.tag_state.selected = None,
             RightTab::Properties => self.property_state.selected = None,
             RightTab::Outline => self.outline_state.selected = None,
+            RightTab::Tasks => self.task_state.selected = None,
             _ => {}
         }
         self.focus_main(window, cx);

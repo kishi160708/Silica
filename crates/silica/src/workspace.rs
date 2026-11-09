@@ -111,6 +111,7 @@ mod render;
 mod right_panes;
 mod socket;
 mod tabs;
+mod tasks;
 
 actions!(
     workspace,
@@ -1704,6 +1705,8 @@ pub(crate) enum RightTab {
     /// File recovery: every snapshot Silica has taken of every note, with a
     /// way to restore one. Silica's own pane, not an Obsidian core plugin.
     FileRecovery,
+    /// The Task inbox: every checkbox in the vault, in one pane.
+    Tasks,
 }
 
 /// The Outline pane's headings for one note's metadata, whether that
@@ -1791,6 +1794,20 @@ struct OutlinePaneState {
     /// when `follow_cursor` is on.
     scroll_pending: bool,
     scroll: ScrollHandle,
+}
+
+/// The Task inbox leaf's state: `showSearch` (the query itself lives in
+/// the filter field), whether the completed tasks are listed, and the row
+/// the arrow keys are on. None of it belongs in `workspace.json` — the
+/// pane reads the vault's own index every draw.
+#[derive(Default)]
+struct TaskPaneState {
+    show_search: bool,
+    /// Whether a completed task is listed too. A fresh pane shows only
+    /// what is still to do, the way Obsidian's task list opens.
+    show_done: bool,
+    /// The row the arrow keys are on, when the pane has the keyboard.
+    selected: Option<usize>,
 }
 
 /// Mentions computed off the UI thread for one open note.
@@ -3320,6 +3337,11 @@ pub struct Workspace {
     property_entries: Vec<PropertyEntry>,
     property_state: PropertyPaneState,
     property_filter: Entity<TextInput>,
+    /// The Task inbox: the filter field's text, the completed-tasks flag
+    /// and the row the arrow keys are on.
+    task_state: TaskPaneState,
+    /// The Task inbox's search filter.
+    task_filter: Entity<TextInput>,
     /// Matcher over every note name and alias, rebuilt when files change.
     name_finder: Option<Arc<Finder>>,
     mention_generation: u64,
@@ -3469,6 +3491,7 @@ impl Workspace {
         let tag_filter = cx.new(pane_filter_input);
         let property_filter = cx.new(pane_filter_input);
         let outline_filter = cx.new(pane_filter_input);
+        let task_filter = cx.new(pane_filter_input);
         let bookmarks = cx.new(BookmarksPane::new);
         let switcher = cx.new(QuickSwitcher::new);
         let chooser = cx.new(Chooser::new);
@@ -3518,6 +3541,15 @@ impl Workspace {
                 |this, _, event: &InputEvent, window, cx| match event {
                     InputEvent::Changed => cx.notify(),
                     InputEvent::Cancel => this.hide_pane_search(RightTab::Outline, window, cx),
+                    _ => {}
+                },
+            ),
+            cx.subscribe_in(
+                &task_filter,
+                window,
+                |this, _, event: &InputEvent, window, cx| match event {
+                    InputEvent::Changed => cx.notify(),
+                    InputEvent::Cancel => this.hide_pane_search(RightTab::Tasks, window, cx),
                     _ => {}
                 },
             ),
@@ -3927,6 +3959,8 @@ impl Workspace {
             property_entries: Vec::new(),
             property_state: PropertyPaneState::default(),
             property_filter,
+            task_state: TaskPaneState::default(),
+            task_filter,
             name_finder: None,
             mention_generation: 0,
             status: "Pass a vault folder as the first argument".into(),
@@ -5103,6 +5137,7 @@ impl Workspace {
             "outgoing" => RightTab::Outgoing,
             "outline" => RightTab::Outline,
             "tags" => RightTab::Tags,
+            "tasks" => RightTab::Tasks,
             "properties" => RightTab::Properties,
             "file-recovery" => RightTab::FileRecovery,
             "local-graph" | "localgraph" => RightTab::LocalGraph,

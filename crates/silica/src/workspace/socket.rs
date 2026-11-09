@@ -166,6 +166,7 @@ impl Workspace {
                 RightTab::Properties => "properties",
                 RightTab::Calendar => "calendar",
                 RightTab::FileRecovery => "file-recovery",
+                RightTab::Tasks => "tasks",
             }),
         );
         put_capped(
