@@ -251,5 +251,6 @@ random-note
 silica:export-site
 silica:toggle-graph-pane
 silica:vault-backup
+silica:templates-dynamic
 quick-capture:open
 task-dashboard:open

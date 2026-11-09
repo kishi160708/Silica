@@ -11,10 +11,12 @@
 //! The instant is passed in, never read, so every test is a fixed date and
 //! the crate needs no dependency for one.
 
+pub mod dynamic;
 pub mod expand;
 pub mod moment;
 pub mod stamp;
 
+pub use dynamic::{expand_dynamic, DynamicTemplates, ScriptContext};
 pub use expand::{expand, Context, DEFAULT_DATE_FORMAT, DEFAULT_TIME_FORMAT};
 pub use moment::{format, unsupported_tokens};
 pub use stamp::Stamp;
