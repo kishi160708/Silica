@@ -99,7 +99,10 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 use std::time::{Duration, Instant};
 
+use chrono::{Datelike, NaiveDate};
+
 mod bookmarks;
+mod calendar;
 mod files;
 mod record;
 mod render;
@@ -445,6 +448,7 @@ pub const RUNNABLE: &[&str] = &[
     "graph:open-local",
     // * Silica's own extension, not an Obsidian id: the `silica:` prefix is
     //   what the repo marks its native additions with.
+    "silica:calendar",
     "silica:export-site",
     "silica:footnotes",
     "canvas:new-file",
@@ -1465,6 +1469,8 @@ pub(crate) enum RightTab {
     /// The graph, in the dock: the same view the ribbon opens full screen,
     /// kept beside the note.
     Graph,
+    /// Kalender: grid bulan untuk membuka daily note tanggal yang diklik.
+    Calendar,
     /// All properties: every key in the vault with its type and count.
     Properties,
     Outline,
@@ -3011,6 +3017,13 @@ pub struct Workspace {
     /// `editor:open-link-in-new-leaf`. Taken by [`Workspace::follow_link`].
     link_in_new_tab: bool,
     right_tab: RightTab,
+    /// Kalender: bulan yang ditampilkan (pertama tanggalnya) dan tanggal
+    /// yang dipilih panah kalender; `None` berarti belum ada pilihan.
+    calendar_viewed: NaiveDate,
+    calendar_selected: Option<NaiveDate>,
+    /// Fokus grid kalender: saat tab kanan aktif kalender, panah gerak di
+    /// dalam grid ini bukan di antara baris pane sebelah kanan.
+    calendar_focus: FocusHandle,
     /// The open note's headings, which the Outline pane draws as a tree.
     outline: Vec<panes::Heading>,
     outline_state: OutlinePaneState,
@@ -3621,6 +3634,12 @@ impl Workspace {
             window_title: SharedString::default(),
             link_in_new_tab: false,
             right_tab: RightTab::Backlinks,
+            calendar_viewed: chrono::Local::now()
+                .date_naive()
+                .with_day(1)
+                .expect("first of month"),
+            calendar_selected: None,
+            calendar_focus: cx.focus_handle(),
             outline: Vec::new(),
             outline_state: OutlinePaneState::default(),
             outline_filter,
@@ -4032,7 +4051,7 @@ impl Workspace {
         let Some(state) = self.state.clone() else {
             return;
         };
-        let (format, folder, template) = {
+        let (format, folder, _template) = {
             let daily = state.daily_notes();
             (
                 non_empty(daily.format.as_deref())
@@ -4071,6 +4090,38 @@ impl Workspace {
             return;
         }
         let (path, exists) = match state.vault().daily_note(&format, &folder, &today) {
+            Ok(found) => found,
+            Err(err) => return self.report(err.to_string(), cx),
+        };
+        if exists {
+            // * An existing note is opened and not touched, bytes or times.
+            self.open_file(path, None, cx);
+            let mode = self.editing_mode();
+            self.set_mode(mode, window, cx);
+            return;
+        }
+        self.open_daily_at(today, window, cx);
+    }
+
+    /// Buka daily note untuk tanggal `at`, membuatnya jika belum ada, tanpa
+    /// tergantung pada note yang sedang dibuka atau tanggal hari ini. Dipakai
+    /// oleh `daily-notes` (hari ini) dan oleh pane Kalender (tanggal yang
+    /// diklik). Perintah `daily-notes` itu sendiri tidak diubah.
+    fn open_daily_at(&mut self, at: templates::Stamp, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let (format, folder, template) = {
+            let daily = state.daily_notes();
+            (
+                non_empty(daily.format.as_deref())
+                    .unwrap_or(config::DAILY_NOTE_DEFAULT_FORMAT)
+                    .to_string(),
+                daily.folder.clone().unwrap_or_default(),
+                daily.template.clone().unwrap_or_default(),
+            )
+        };
+        let (path, exists) = match state.vault().daily_note(&format, &folder, &at) {
             Ok(found) => found,
             Err(err) => return self.report(err.to_string(), cx),
         };
@@ -5460,6 +5511,7 @@ impl Workspace {
             "daily-notes" => self.open_daily(None, window, cx),
             "daily-notes:goto-prev" => self.open_daily(Some(false), window, cx),
             "daily-notes:goto-next" => self.open_daily(Some(true), window, cx),
+            "silica:calendar" => self.toggle_calendar_pane(cx),
             _ if TableCommand::from_id(id).is_some() => {
                 let cmd = TableCommand::from_id(id).expect("checked above");
                 if self.editing_or_report(id, window, cx) {
@@ -5909,6 +5961,18 @@ impl Workspace {
         } else {
             self.right_visible = true;
             self.select_right_tab(RightTab::Graph, cx);
+        }
+    }
+
+    /// `silica:calendar`: Kalender di dock kanan — grid bulan yang tanggal
+    /// tanggalnya membuka daily note. Toggle seperti pane graph.
+    fn toggle_calendar_pane(&mut self, cx: &mut Context<Self>) {
+        if self.right_tab == RightTab::Calendar && self.right_visible {
+            self.right_visible = false;
+            cx.notify();
+        } else {
+            self.right_visible = true;
+            self.select_right_tab(RightTab::Calendar, cx);
         }
     }
 

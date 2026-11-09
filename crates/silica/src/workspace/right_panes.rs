@@ -3,6 +3,7 @@
 //! split-out section, unchanged apart from living in their own module.
 //! Split from `workspace.rs` per the audit's module-size finding.
 
+use super::calendar::render_calendar_pane;
 use super::*;
 
 actions!(pane_keys, [PaneUp, PaneDown, PaneActivate, PaneLeaveFocus]);
@@ -1109,6 +1110,15 @@ impl Workspace {
             // * The graph's own plugin id, so a vault with the graph core
             //   plugin off takes the tab away with it.
             RightTab::Graph => "graph",
+            // * Kalender bukan core plugin dengan id di `core-plugins.json`;
+            //   ia dihidupkan oleh kunci `calendar` di `daily-notes.json`
+            //   (default on, berkas lama tetap).
+            RightTab::Calendar => {
+                return self
+                    .state
+                    .as_ref()
+                    .is_none_or(|state| state.daily_notes().calendar.unwrap_or(true));
+            }
         };
         self.state
             .as_ref()
@@ -1132,6 +1142,7 @@ impl Workspace {
                 RightTab::Outline,
                 RightTab::Footnotes,
                 RightTab::Graph,
+                RightTab::Calendar,
             ]
             .into_iter()
             .find(|t| self.pane_enabled(*t))
@@ -1147,6 +1158,8 @@ impl Workspace {
             RightTab::Tags => self.render_tags_pane(theme, cx),
             RightTab::Properties => self.render_properties_pane(theme, cx),
             RightTab::Footnotes => self.render_footnotes_pane(theme, cx),
+            // * Kalender: grid bulan di samping catatan harian.
+            RightTab::Calendar => render_calendar_pane(self, theme, cx).into_any_element(),
             // * The graph side pane: the GraphView entity the ribbon opens
             //   full screen, kept in the dock. While a group's area already
             //   paints it, the dock says so rather than painting it twice.
@@ -1183,9 +1196,12 @@ impl Workspace {
                     theme,
                     move |this, window, cx| {
                         this.select_right_tab(which, cx);
-                        // * The dock tab takes the keyboard, the way a row
-                        //   click does: the arrows then walk the pane.
-                        this.focus_panes(window, cx);
+                        match which {
+                            RightTab::Calendar => window.focus(&this.calendar_focus, cx),
+                            // * The dock tab takes the keyboard, the way a row
+                            //   click does: the arrows then walk the pane.
+                            _ => this.focus_panes(window, cx),
+                        }
                     },
                     cx,
                 )
@@ -1249,11 +1265,12 @@ impl Workspace {
                         cx,
                     ))
                     .children(tab_button(self, "Outline", "list", RightTab::Outline, cx))
+                    .children(tab_button(self, "Footnotes", "list", RightTab::Footnotes, cx))
                     .children(tab_button(
                         self,
-                        "Footnotes",
-                        "list",
-                        RightTab::Footnotes,
+                        "Kalender",
+                        "calendar",
+                        RightTab::Calendar,
                         cx,
                     ))
                     .children(tab_button(self, "Graph", "git-fork", RightTab::Graph, cx))

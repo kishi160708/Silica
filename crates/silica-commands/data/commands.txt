@@ -247,6 +247,7 @@ insert-unique-link
 random-note
 
 # Silica ids that are not Obsidian commands (marked by the `silica:` prefix).
+silica:calendar
 silica:export-site
 silica:footnotes
 silica:toggle-graph-pane
