@@ -233,10 +233,7 @@ silica:toggle-graph-pane	Toggle the graph side pane
 silica:vault-backup	Back up the vault to a local folder
 silica:calendar	Kalender
 silica:export-site	Export vault as site
-<<<<<<< HEAD
 silica:footnotes	Footnotes view: Show footnotes
-=======
 silica:file-recovery	File recovery: Recover a note from a snapshot
->>>>>>> burst/v6/file-recovery
 quick-capture:open	Quick Capture: New note
 task-dashboard:open	Task Dashboard: Open

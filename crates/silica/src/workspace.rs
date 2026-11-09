@@ -450,11 +450,8 @@ pub const RUNNABLE: &[&str] = &[
     //   what the repo marks its native additions with.
     "silica:calendar",
     "silica:export-site",
-<<<<<<< HEAD
     "silica:footnotes",
-=======
     "silica:file-recovery",
->>>>>>> burst/v6/file-recovery
     "canvas:new-file",
     "canvas:export-as-image",
     "canvas:jump-to-group",
@@ -1508,15 +1505,12 @@ pub(crate) enum RightTab {
     /// All properties: every key in the vault with its type and count.
     Properties,
     Outline,
-<<<<<<< HEAD
     /// Footnotes of the active note: one row per footnote, numbered in
     /// section order; a row reveals its definition's line.
     Footnotes,
-=======
     /// File recovery: every snapshot Silica has taken of every note, with a
     /// way to restore one. Silica's own pane, not an Obsidian core plugin.
     FileRecovery,
->>>>>>> burst/v6/file-recovery
 }
 
 /// The Outline pane's headings for one note's metadata, whether that
@@ -6011,7 +6005,6 @@ impl Workspace {
         }
     }
 
-<<<<<<< HEAD
     /// `silica:calendar`: Kalender di dock kanan — grid bulan yang tanggal
     /// tanggalnya membuka daily note. Toggle seperti pane graph.
     fn toggle_calendar_pane(&mut self, cx: &mut Context<Self>) {
@@ -6021,7 +6014,9 @@ impl Workspace {
         } else {
             self.right_visible = true;
             self.select_right_tab(RightTab::Calendar, cx);
-=======
+        }
+    }
+
     /// `silica:file-recovery`: opens the file-recovery pane in the right dock,
     /// listing every snapshot Silica has taken of every note so one can be
     /// reviewed and restored.
@@ -6042,7 +6037,6 @@ impl Workspace {
         match crate::file_recovery::restore(&vault, &root, path, at) {
             Ok(p) => self.report(format!("Restored {p}"), cx),
             Err(err) => self.report(format!("Restore failed: {err}"), cx),
->>>>>>> burst/v6/file-recovery
         }
     }
 

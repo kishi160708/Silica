@@ -1230,7 +1230,6 @@ impl Workspace {
             // * The graph's own plugin id, so a vault with the graph core
             //   plugin off takes the tab away with it.
             RightTab::Graph => "graph",
-<<<<<<< HEAD
             // * Kalender bukan core plugin dengan id di `core-plugins.json`;
             //   ia dihidupkan oleh kunci `calendar` di `daily-notes.json`
             //   (default on, berkas lama tetap).
@@ -1240,9 +1239,7 @@ impl Workspace {
                     .as_ref()
                     .is_none_or(|state| state.daily_notes().calendar.unwrap_or(true));
             }
-=======
             RightTab::FileRecovery => unreachable!("handled above"),
->>>>>>> burst/v6/file-recovery
         };
         self.state
             .as_ref()
