@@ -161,6 +161,7 @@ impl Workspace {
                 RightTab::Outline => "outline",
                 RightTab::Footnotes => "footnotes",
                 RightTab::Graph => "graph",
+                RightTab::LocalGraph => "local-graph",
                 RightTab::Tags => "tags",
                 RightTab::Properties => "properties",
                 RightTab::Calendar => "calendar",

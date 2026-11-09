@@ -144,6 +144,7 @@ impl Workspace {
             Some("outgoing-link") => self.right_tab = RightTab::Outgoing,
             Some("outline") => self.right_tab = RightTab::Outline,
             Some("graph") => self.right_tab = RightTab::Graph,
+            Some("local-graph") => self.right_tab = RightTab::LocalGraph,
             Some("tag") => self.right_tab = RightTab::Tags,
             Some("all-properties") => self.right_tab = RightTab::Properties,
             Some("calendar") => self.right_tab = RightTab::Calendar,

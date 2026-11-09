@@ -8,10 +8,6 @@
 
 use super::layout::{Forces, Layout};
 use crate::canvas::menu::tooltip;
-/// Shaped node label lines, keyed by (label, colour, font family). The
-/// graph paints at one fixed font size, so those three are the whole
-/// shaping input and a shaped line outlives any single paint.
-type LabelCache = Arc<Mutex<HashMap<(String, [u32; 4], SharedString), ShapedLine>>>;
 use crate::search::inputs;
 use crate::text_input::{InputEvent, TextInput};
 use crate::theme::Theme;
@@ -31,6 +27,23 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 mod render;
+
+/// The forces the config names, with `graph.json`'s defaults for the keys
+/// it leaves out.
+pub(super) fn forces(config: &GraphConfig) -> Forces {
+    let d = Forces::default();
+    Forces {
+        center: config.center_strength.unwrap_or(d.center),
+        repel: config.repel_strength.unwrap_or(d.repel),
+        link: config.link_strength.unwrap_or(d.link),
+        link_distance: config.link_distance.unwrap_or(d.link_distance),
+    }
+}
+
+/// Shaped node label lines, keyed by (label, colour, font family). The
+/// graph paints at one fixed font size, so those three are the whole
+/// shaping input and a shaped line outlives any single paint.
+pub(super) type LabelCache = Arc<Mutex<HashMap<(String, [u32; 4], SharedString), ShapedLine>>>;
 
 /// How long after the last change the panel waits before writing
 /// `graph.json`; Obsidian's writes landed about a third of a second after a
@@ -291,10 +304,31 @@ pub struct Node {
 }
 
 /// Nodes and edges ready for layout, built off the UI thread.
-struct Built {
-    nodes: Vec<Node>,
-    edges: Vec<(u32, u32)>,
-    neighbors: Vec<Vec<usize>>,
+pub(super) struct Built {
+    pub(super) nodes: Vec<Node>,
+    pub(super) edges: Vec<(u32, u32)>,
+    pub(super) neighbors: Vec<Vec<usize>>,
+}
+
+impl Built {
+    /// Attaches a finished layout, so what a pane holds is one value.
+    pub(super) fn into_layout(self, layout: Layout) -> Placed {
+        Placed {
+            nodes: self.nodes,
+            edges: self.edges,
+            neighbors: self.neighbors,
+            layout,
+        }
+    }
+}
+
+/// The node and edge lists with their layout, ready to be painted: what
+/// [`build`] returns plus a simulation run to settled.
+pub(super) struct Placed {
+    pub(super) nodes: Vec<Node>,
+    pub(super) edges: Vec<(u32, u32)>,
+    pub(super) neighbors: Vec<Vec<usize>>,
+    pub(super) layout: Layout,
 }
 
 pub enum GraphEvent {
@@ -559,13 +593,7 @@ impl GraphView {
     }
 
     fn forces(&self) -> Forces {
-        let d = Forces::default();
-        Forces {
-            center: self.config.center_strength.unwrap_or(d.center),
-            repel: self.config.repel_strength.unwrap_or(d.repel),
-            link: self.config.link_strength.unwrap_or(d.link),
-            link_distance: self.config.link_distance.unwrap_or(d.link_distance),
-        }
+        forces(&self.config)
     }
 
     /// Rebuilds nodes and edges from the cache on the background executor,
@@ -589,18 +617,7 @@ impl GraphView {
         // * Compile color groups only when config.color_groups changes —
         //   avoids recompiling 97+ regexes against every node on every rebuild.
         if self.cached_color_config != config.color_groups {
-            self.cached_color_groups = config
-                .color_groups
-                .iter()
-                .filter(|g| !g.query.trim().is_empty())
-                .filter_map(|g| {
-                    let search = Arc::new(Search::new(&g.query).ok()?);
-                    let rgb = g.color.rgb;
-                    let mut color: Hsla = gpui::rgb(rgb).into();
-                    color.a = g.color.a.clamp(0.0, 1.0);
-                    Some((search, color))
-                })
-                .collect();
+            self.cached_color_groups = color_groups(&config);
             self.cached_color_config = config.color_groups.clone();
         }
         let groups = self.cached_color_groups.clone();
@@ -1839,7 +1856,24 @@ fn frame(
     Some((scale, point(-cx * scale, -cy * scale)))
 }
 
-/// Builds the node and edge lists for the current filters.
+/// The color group queries of `config`, compiled once. First matching query
+/// wins, and a group with an empty query is dropped rather than kept as one
+/// that matches nothing.
+pub(super) fn color_groups(config: &GraphConfig) -> Vec<(Arc<Search>, Hsla)> {
+    config
+        .color_groups
+        .iter()
+        .filter(|g| !g.query.trim().is_empty())
+        .filter_map(|g| {
+            let search = Arc::new(Search::new(&g.query).ok()?);
+            let rgb = g.color.rgb;
+            let mut color: Hsla = gpui::rgb(rgb).into();
+            color.a = g.color.a.clamp(0.0, 1.0);
+            Some((search, color))
+        })
+        .collect()
+}
+
 /// A theme colour as `#rrggbb`, for the SVG the export writes.
 fn hex(color: gpui::Hsla) -> String {
     let rgba: gpui::Rgba = color.into();
@@ -1856,7 +1890,7 @@ fn hex(color: gpui::Hsla) -> String {
 // * every call. Bundling them into a struct would add a type whose only job
 // * is to be unpacked one line later.
 #[allow(clippy::too_many_arguments)]
-fn build(
+pub(super) fn build(
     state: &VaultState,
     config: &GraphConfig,
     local: Option<&str>,

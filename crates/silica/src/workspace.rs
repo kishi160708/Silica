@@ -21,7 +21,7 @@ use crate::explorer::{display_name, kind_name, ExplorerEvent, FileExplorer, File
 use crate::export_pdf;
 use crate::fold;
 use crate::footnotes::footnote_rows;
-use crate::graph::{GraphEvent, GraphView};
+use crate::graph::{GraphEvent, GraphView, LocalGraph};
 use crate::help::HelpWindow;
 use crate::mentions::{Finder, Name};
 use crate::palette::{CommandPalette, PaletteCommand, PaletteEvent};
@@ -1565,6 +1565,9 @@ pub(crate) enum RightTab {
     Graph,
     /// Kalender: grid bulan untuk membuka daily note tanggal yang diklik.
     Calendar,
+    /// The local graph: the open note at the centre with the notes one hop
+    /// out, the pane Obsidian keeps beside the graph view in the dock.
+    LocalGraph,
     /// All properties: every key in the vault with its type and count.
     Properties,
     Outline,
@@ -3058,6 +3061,9 @@ pub struct Workspace {
     /// when that is a `.pdf`.
     pdf: Entity<PdfView>,
     graph: Entity<GraphView>,
+    /// The local graph pane in the right dock: the open note and its
+    /// immediate neighbours, with no controls and no pan or zoom.
+    local_graph: Entity<LocalGraph>,
     /// `![[Board.canvas]]` embeds, made once per path and reused: a canvas
     /// view holds a parsed scene, a viewport and a card cache, so making a
     /// new one on every paint would drop all three.
@@ -3331,6 +3337,7 @@ impl Workspace {
         let bases = cx.new(BasesView::new);
         let pdf = cx.new(PdfView::new);
         let graph = cx.new(GraphView::new);
+        let local_graph = cx.new(LocalGraph::new);
         let subscriptions = vec![
             // * The filter is applied as the pane is drawn; a keystroke only
             //   has to ask for a draw.
@@ -3717,6 +3724,7 @@ impl Workspace {
             bases,
             pdf,
             graph,
+            local_graph,
             embedded_canvases: std::rc::Rc::new(std::cell::RefCell::new(
                 std::collections::HashMap::new(),
             )),
@@ -4715,6 +4723,8 @@ impl Workspace {
             .update(cx, |s, cx| s.set_state(state.clone(), cx));
         self.graph
             .update(cx, |g, cx| g.set_state(state.clone(), cx));
+        self.local_graph
+            .update(cx, |g, cx| g.set_state(state.clone(), cx));
         self.settings
             .update(cx, |s, cx| s.set_state(state.clone(), cx));
         self.name_finder = None;
@@ -4948,6 +4958,7 @@ impl Workspace {
             "tags" => RightTab::Tags,
             "properties" => RightTab::Properties,
             "file-recovery" => RightTab::FileRecovery,
+            "local-graph" | "localgraph" => RightTab::LocalGraph,
             _ => RightTab::Backlinks,
         };
         self.select_right_tab(which, cx);
@@ -6783,6 +6794,8 @@ impl Workspace {
         self.explorer.update(cx, |e, cx| e.follow(path, cx));
         self.graph
             .update(cx, |g, cx| g.set_current(Some(path.to_string()), cx));
+        self.local_graph
+            .update(cx, |g, cx| g.set_current(Some(path.to_string()), cx));
         let kind = FileKind::from_path(path);
         if kind != FileKind::Canvas {
             self.release_canvas(cx);
@@ -7066,7 +7079,10 @@ impl Workspace {
         match self.current.clone() {
             Some(back) => {
                 self.explorer.update(cx, |e, cx| e.follow(&back, cx));
-                self.graph.update(cx, |g, cx| g.set_current(Some(back), cx));
+                self.graph
+                    .update(cx, |g, cx| g.set_current(Some(back.clone()), cx));
+                self.local_graph
+                    .update(cx, |g, cx| g.set_current(Some(back), cx));
             }
             None => self.detach_current(true, state, cx),
         }
@@ -7174,6 +7190,7 @@ impl Workspace {
         //   keep painting a path the vault no longer has.
         self.explorer.update(cx, |e, cx| e.clear_active(cx));
         self.graph.update(cx, |g, cx| g.set_current(None, cx));
+        self.local_graph.update(cx, |g, cx| g.set_current(None, cx));
         self.clear_panes(cx);
     }
 

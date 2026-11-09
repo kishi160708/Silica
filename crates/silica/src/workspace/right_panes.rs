@@ -1251,6 +1251,10 @@ impl Workspace {
                     .is_none_or(|state| state.daily_notes().calendar.unwrap_or(true));
             }
             RightTab::FileRecovery => unreachable!("handled above"),
+            // * The local graph rides on the graph's own plugin id: it is
+            //   the same core plugin's second pane, so a vault with the
+            //   graph off loses this tab with the other one.
+            RightTab::LocalGraph => "graph",
         };
         self.state
             .as_ref()
@@ -1275,6 +1279,7 @@ impl Workspace {
                 RightTab::Footnotes,
                 RightTab::Graph,
                 RightTab::Calendar,
+                RightTab::LocalGraph,
             ]
             .into_iter()
             .find(|t| self.pane_enabled(*t))
@@ -1313,6 +1318,15 @@ impl Workspace {
                 .child(self.graph.clone())
                 .into_any_element(),
             RightTab::FileRecovery => self.render_file_recovery_pane(theme, cx),
+            // * The local graph side pane: the open note at the centre with
+            //   the notes one hop out. It has no pan or zoom of its own, so
+            //   nothing but the pane itself is offered.
+            RightTab::LocalGraph => div()
+                .size_full()
+                .min_h_0()
+                .child(self.local_graph.clone())
+                .into_any_element(),
+>>>>>>> origin/burst/v6/graph-local
         };
         // * A pane whose core plugin is off is not offered: Obsidian takes
         //   the view away with the plugin.
@@ -1411,9 +1425,15 @@ impl Workspace {
                     .children(tab_button(self, "Graph", "git-fork", RightTab::Graph, cx))
                     .children(tab_button(
                         self,
+<<<<<<< HEAD
                         "File recovery",
                         "clock",
                         RightTab::FileRecovery,
+=======
+                        crate::i18n::t("Local graph"),
+                        "binary",
+                        RightTab::LocalGraph,
+>>>>>>> origin/burst/v6/graph-local
                         cx,
                     ))
                     .child(window_handle(
