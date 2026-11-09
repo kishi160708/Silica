@@ -20,6 +20,7 @@ mod copy_results;
 mod css_watcher;
 mod editor;
 mod explorer;
+mod export_pdf;
 mod fold;
 mod graph;
 mod help;

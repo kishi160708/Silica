@@ -18,6 +18,7 @@ use crate::chooser::{Chooser, ChooserEvent, Row as ChooserRow};
 use crate::copy_results::{CopyResults, CopyResultsEvent};
 use crate::editor::{Editor, EditorEvent};
 use crate::explorer::{display_name, kind_name, ExplorerEvent, FileExplorer, FileTree, SortOrder};
+use crate::export_pdf;
 use crate::fold;
 use crate::graph::{GraphEvent, GraphView};
 use crate::help::HelpWindow;
@@ -445,6 +446,7 @@ pub const RUNNABLE: &[&str] = &[
     // * Silica's own extension, not an Obsidian id: the `silica:` prefix is
     //   what the repo marks its native additions with.
     "silica:export-site",
+    "silica:export-pdf",
     "canvas:new-file",
     "canvas:export-as-image",
     "canvas:jump-to-group",
@@ -4380,6 +4382,59 @@ impl Workspace {
         }
     }
 
+    /// `silica:export-pdf`: write the open note to a PDF beside it, and name
+    /// the file it landed in.
+    ///
+    /// What is exported is the note as it stands on screen -- the buffer when
+    /// it holds the note, because a note with unsaved edits is the note the
+    /// user is looking at, and the file otherwise. Asked with no note open,
+    /// or with something that is not a note, it says so rather than writing
+    /// a file nobody asked for.
+    fn export_active_pdf(&mut self, cx: &mut Context<Self>) {
+        let Some(current) = self.current.clone() else {
+            self.report("Export PDF: no note is open", cx);
+            return;
+        };
+        let source = match self.vault_path(&current) {
+            Ok(path) => path,
+            Err(err) => return self.report(format!("Export PDF: {err}"), cx),
+        };
+        if source.extension().and_then(|ext| ext.to_str()) != Some("md") {
+            self.report("Export PDF: the open file is not a note", cx);
+            return;
+        }
+        let text = {
+            let editor = self.editor.read(cx);
+            if editor.name.as_ref() == current.as_str() {
+                editor.text().to_string()
+            } else {
+                match std::fs::read_to_string(&source) {
+                    Ok(text) => text,
+                    Err(err) => {
+                        return self
+                            .report(format!("Export PDF: cannot read {current}: {err}"), cx);
+                    }
+                }
+            }
+        };
+        let title = source
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().to_string())
+            .unwrap_or_else(|| current.clone());
+        let target = export_pdf::pdf_target(&current);
+        let absolute = match self.vault_path(&target) {
+            Ok(path) => path,
+            Err(err) => return self.report(format!("Export PDF: {err}"), cx),
+        };
+        let bytes = export_pdf::note_to_pdf(&title, &text);
+        match std::fs::write(&absolute, &bytes) {
+            Ok(()) => self.report(format!("Export PDF: wrote {target}"), cx),
+            Err(err) => {
+                self.report(format!("Export PDF: cannot write {target}: {err}"), cx);
+            }
+        }
+    }
+
     /// Opens the chooser and picks `query` out of it, for `--template`.
     pub fn pick_template(&mut self, query: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.open_template_chooser(window, cx);
@@ -5212,6 +5267,7 @@ impl Workspace {
             "global-search:open" => self.open_search_action(&OpenSearch, window, cx),
             "graph:open" => self.open_graph_action(&OpenGraph, window, cx),
             "silica:export-site" => self.start_export_site(window, cx),
+            "silica:export-pdf" => self.export_active_pdf(cx),
             // * Asked for by id with no file open -- the palette does not offer
             //   it, and `can_run` says so -- this opens nothing, which is what
             //   Obsidian's `checkCallback` does rather than falling back to the
@@ -6058,6 +6114,12 @@ impl Workspace {
         //   local` is not offered with no file open]]). Only the no-file case
         //   was observed, so that is all this refuses.
         if id == "graph:open-local" {
+            return self.current.is_some();
+        }
+        // * Exporting has nothing to work on with no note open, so the
+        //   palette does not offer it there rather than offering a command
+        //   that would only refuse.
+        if id == "silica:export-pdf" {
             return self.current.is_some();
         }
         if EDITOR_ONLY.contains(&id) {
