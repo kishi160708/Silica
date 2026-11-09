@@ -1326,7 +1326,6 @@ impl Workspace {
                 .min_h_0()
                 .child(self.local_graph.clone())
                 .into_any_element(),
->>>>>>> origin/burst/v6/graph-local
         };
         // * A pane whose core plugin is off is not offered: Obsidian takes
         //   the view away with the plugin.
@@ -1425,15 +1424,16 @@ impl Workspace {
                     .children(tab_button(self, "Graph", "git-fork", RightTab::Graph, cx))
                     .children(tab_button(
                         self,
-<<<<<<< HEAD
                         "File recovery",
                         "clock",
                         RightTab::FileRecovery,
-=======
+                        cx,
+                    ))
+                    .children(tab_button(
+                        self,
                         crate::i18n::t("Local graph"),
                         "binary",
                         RightTab::LocalGraph,
->>>>>>> origin/burst/v6/graph-local
                         cx,
                     ))
                     .child(window_handle(

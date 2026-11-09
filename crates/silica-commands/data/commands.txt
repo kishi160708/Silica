@@ -254,6 +254,7 @@ silica:footnotes
 silica:file-recovery
 silica:export-pdf
 silica:toggle-graph-pane
+silica:pin-tab
 silica:vault-backup
 quick-capture:open
 task-dashboard:open
