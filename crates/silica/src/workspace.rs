@@ -179,6 +179,56 @@ struct SidePaneMenuItem {
     action: SidePaneAction,
 }
 
+fn side_menu_item(
+    label: &'static str,
+    icon: &'static str,
+    action: SidePaneAction,
+) -> SidePaneMenuItem {
+    SidePaneMenuItem {
+        label,
+        icon,
+        action,
+    }
+}
+
+/// The file menu's items on a right-dock row, in the order the capture
+/// draws them: Rename..., Move file to..., Bookmark... and Delete.
+///
+/// Every one of them opens a prompt or a confirm, which needs the window a
+/// row's own mouse-down closure does not carry — which is why they are
+/// emitted as actions and answered by `handle_side_menu_action`, where the
+/// workspace already has one. A row standing for a note that does not exist
+/// (an unresolved link) gets none of them: there is nothing to rename, move,
+/// bookmark or delete yet.
+fn right_dock_file_items(path: &str) -> Vec<SidePaneMenuItem> {
+    use SidePaneAction as A;
+    if path.is_empty() {
+        return Vec::new();
+    }
+    vec![
+        side_menu_item(
+            crate::i18n::t("Rename..."),
+            "pen-line",
+            A::RenameFile(path.to_string()),
+        ),
+        side_menu_item(
+            crate::i18n::t("Move file to..."),
+            "folder-tree",
+            A::MoveFile(path.to_string()),
+        ),
+        side_menu_item(
+            crate::i18n::t("Bookmark..."),
+            "bookmark",
+            A::BookmarkFile(path.to_string()),
+        ),
+        side_menu_item(
+            crate::i18n::t("Delete"),
+            "trash-2",
+            A::DeleteFile(path.to_string()),
+        ),
+    ]
+}
+
 /// A context menu over a side-pane row.
 struct SidePaneMenu {
     position: gpui::Point<Pixels>,
@@ -188,11 +238,7 @@ struct SidePaneMenu {
 /// The menu for a side-pane target, in Obsidian's order.
 fn side_menu_items(target: &SidePaneTarget) -> Vec<SidePaneMenuItem> {
     use SidePaneAction as A;
-    let item = |label, icon, action| SidePaneMenuItem {
-        label,
-        icon,
-        action,
-    };
+    let item = side_menu_item;
     match target {
         SidePaneTarget::Tag(tag) => vec![
             item("Search for \"#tag\"", "search", A::SearchTag(tag.clone())),
@@ -262,7 +308,7 @@ fn side_menu_items(target: &SidePaneTarget) -> Vec<SidePaneMenuItem> {
             } else {
                 path.clone()
             };
-            vec![
+            let mut items = vec![
                 item(
                     crate::i18n::t("Open note"),
                     "file-text",
@@ -287,7 +333,13 @@ fn side_menu_items(target: &SidePaneTarget) -> Vec<SidePaneMenuItem> {
                         path.clone()
                     }),
                 ),
-            ]
+            ];
+            // * The row stands for a note, so the file menu's own items
+            //   come after the open trio, in the order the capture draws
+            //   them. A row for a note that does not exist gets none of
+            //   them — the helper holds that rule.
+            items.extend(right_dock_file_items(path));
+            items
         }
     }
 }
@@ -317,6 +369,18 @@ pub enum SidePaneAction {
     OpenLinkToRight(String),
     /// Copy the row's vault-relative path.
     CopyLinkPath(String),
+    /// The row's note file menu: Rename... asks the new name over the
+    /// vault's own rename, which rewrites the links that pointed at the
+    /// old one across the vault.
+    RenameFile(String),
+    /// Move file to... asks the folder over the vault's own move.
+    MoveFile(String),
+    /// Bookmark... asks the bookmark's title, the way the pane's first
+    /// button and `bookmarks:bookmark-current-view` do.
+    BookmarkFile(String),
+    /// Delete moves the file to the trash the settings name — or past
+    /// the confirm, straight there when confirmations are off.
+    DeleteFile(String),
 }
 
 /// The command registry with the vault's `hotkeys.json` applied.
@@ -9917,6 +9981,70 @@ mod tests {
         assert!(tab_in_strip(1, 1, true));
         assert!(!tab_in_strip(0, 1, true));
         assert!(!tab_in_strip(2, 1, true));
+    }
+
+    /// A Backlinks row that stands for a note gets the open trio and then
+    /// the file menu's own four, in the capture's order; a row for a
+    /// note that does not exist yet gets the trio and no file items.
+    #[test]
+    fn a_link_row_of_an_existing_note_carries_the_file_menu_items() {
+        let items = side_menu_items(&SidePaneTarget::Link {
+            path: "Notes/Bills.md".to_string(),
+            link: Some("Bills".to_string()),
+        });
+        let labels: Vec<&str> = items.iter().map(|i| i.label).collect();
+        assert_eq!(
+            labels,
+            [
+                "Open note",
+                "Open note in new tab",
+                "Open note to the right",
+                "Copy path",
+                "Rename...",
+                "Move file to...",
+                "Bookmark...",
+                "Delete",
+            ]
+        );
+        let file = |label: &str| {
+            items
+                .iter()
+                .find(|i| i.label == label)
+                .map(|i| i.action.clone())
+                .unwrap_or_else(|| panic!("{label} is on the menu"))
+        };
+        assert_eq!(
+            file("Rename..."),
+            SidePaneAction::RenameFile("Notes/Bills.md".to_string())
+        );
+        assert_eq!(
+            file("Move file to..."),
+            SidePaneAction::MoveFile("Notes/Bills.md".to_string())
+        );
+        assert_eq!(
+            file("Bookmark..."),
+            SidePaneAction::BookmarkFile("Notes/Bills.md".to_string())
+        );
+        assert_eq!(
+            file("Delete"),
+            SidePaneAction::DeleteFile("Notes/Bills.md".to_string())
+        );
+
+        let unresolved = side_menu_items(&SidePaneTarget::Link {
+            path: String::new(),
+            link: Some("Gone".to_string()),
+        });
+        let labels: Vec<&str> = unresolved.iter().map(|i| i.label).collect();
+        assert_eq!(
+            labels,
+            [
+                "Open note",
+                "Open note in new tab",
+                "Open note to the right",
+                "Copy path"
+            ],
+            "an unresolved link has no note to rename, move, bookmark or delete"
+        );
     }
 
     /// A symlink to a folder or a file on either platform. Windows refuses
