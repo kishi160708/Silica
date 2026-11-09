@@ -20,7 +20,9 @@
 
 use crate::{create_dir_all_at, FileChange, Vault};
 use silica_formats::validate_file_name;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use walkdir::WalkDir;
 
 /// `trashOption` in `app.json`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1852,6 +1854,201 @@ mod tests {
     }
 }
 
+/// `vault-export-<tanggal>.zip`: every file in the vault, except `.git`,
+/// `.silica` and `.trash` wherever they appear, stored under their
+/// vault-relative paths. Bytes are stored uncompressed, so what goes in
+/// comes out byte for byte.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ZipExportReport {
+    /// Files written into the zip.
+    pub files: usize,
+    /// Bytes those files hold, uncompressed.
+    pub bytes: u64,
+    /// The zip file that was written.
+    pub path: PathBuf,
+}
+
+/// `YYYY-MM-DD` for now, in UTC: the date part of the export file name.
+pub fn export_stamp() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let days = (secs / 86_400) as i64;
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// MS-DOS date and time for now, as a zip entry stamps them.
+fn dos_date_time() -> (u32, u32) {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let days = (secs / 86_400) as i64;
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    let date = ((y - 1980) as u32) << 9 | (m as u32) << 5 | d as u32;
+    let rem = secs % 86_400;
+    let h = rem / 3600;
+    let mi = (rem % 3600) / 60;
+    let s = rem % 60;
+    let time = h << 11 | mi << 5 | (s / 2);
+    (date, time as u32)
+}
+
+/// CRC-32 (IEEE) of `data`, the same polynomial every zip reader expects.
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for &byte in data {
+        crc ^= byte as u32;
+        for _ in 0..8 {
+            crc = if crc & 1 == 1 {
+                0xEDB8_8320 ^ (crc >> 1)
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    !crc
+}
+
+/// True when any path component is a folder the export must not open.
+fn is_export_skip(rel: &Path) -> bool {
+    rel.components().any(|c| {
+        matches!(
+            c.as_os_str().to_str(),
+            Some(".git") | Some(".silica") | Some(".trash")
+        )
+    })
+}
+
+/// Zips every file under `root` into `name` beside it — conventionally
+/// `vault-export-<tanggal>.zip` at the vault root. `.git`, `.silica` and
+/// `.trash` are skipped, entry names are vault-relative paths with `/`
+/// separators, and entry contents are the on-disk bytes unchanged.
+pub fn export_vault_zip(root: &Path, name: &str) -> Result<ZipExportReport, OpError> {
+    let out = root.join(name);
+    // * Collect first, write last: the zip lives next to the notes it
+    //   packs, so the walk must finish before anything is created.
+    let mut entries: Vec<(PathBuf, Vec<u8>)> = Vec::new();
+    let mut bytes: u64 = 0;
+    for entry in WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
+        let path = entry.path();
+        let file_type = entry.file_type();
+        if !file_type.is_file() {
+            continue;
+        }
+        let rel = match path.strip_prefix(root) {
+            Ok(rel) => rel.to_path_buf(),
+            Err(_) => continue,
+        };
+        if is_export_skip(&rel) {
+            continue;
+        }
+        let content = std::fs::read(path).map_err(io("read file", path))?;
+        bytes += content.len() as u64;
+        entries.push((rel, content));
+    }
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut out_file = std::fs::File::create(&out).map_err(io("create", &out))?;
+    let (date, time) = dos_date_time();
+    let mut offset: u64 = 0;
+    let mut central: Vec<u8> = Vec::new();
+
+    for (rel, content) in &entries {
+        let entry_name = rel.to_string_lossy().replace('\\', "/").to_owned();
+        let entry_bytes = entry_name.as_bytes();
+        let crc = crc32(content);
+        let size = content.len() as u32;
+
+        let mut header = [0u8; 30];
+        header[0..4].copy_from_slice(&0x0403_4B50u32.to_le_bytes());
+        header[4..6].copy_from_slice(&20u16.to_le_bytes());
+        header[6..8].copy_from_slice(&0x0800u16.to_le_bytes());
+        header[8..10].copy_from_slice(&0u16.to_le_bytes());
+        header[10..12].copy_from_slice(&time.to_le_bytes()[..2]);
+        header[12..14].copy_from_slice(&date.to_le_bytes()[..2]);
+        header[14..18].copy_from_slice(&crc.to_le_bytes());
+        header[18..22].copy_from_slice(&size.to_le_bytes());
+        header[22..26].copy_from_slice(&size.to_le_bytes());
+        header[26..28].copy_from_slice(&(entry_bytes.len() as u16).to_le_bytes());
+        header[28..30].copy_from_slice(&0u16.to_le_bytes());
+        out_file
+            .write_all(&header)
+            .map_err(io("write zip header", &out))?;
+        out_file
+            .write_all(entry_bytes)
+            .map_err(io("write zip header", &out))?;
+        out_file
+            .write_all(content)
+            .map_err(io("write zip data", &out))?;
+
+        let mut central_entry = [0u8; 46];
+        central_entry[0..4].copy_from_slice(&0x0201_4B50u32.to_le_bytes());
+        central_entry[4..6].copy_from_slice(&20u16.to_le_bytes());
+        central_entry[6..8].copy_from_slice(&20u16.to_le_bytes());
+        central_entry[8..10].copy_from_slice(&0x0800u16.to_le_bytes());
+        central_entry[10..12].copy_from_slice(&0u16.to_le_bytes());
+        central_entry[12..14].copy_from_slice(&time.to_le_bytes()[..2]);
+        central_entry[14..16].copy_from_slice(&date.to_le_bytes()[..2]);
+        central_entry[16..20].copy_from_slice(&crc.to_le_bytes());
+        central_entry[20..24].copy_from_slice(&size.to_le_bytes());
+        central_entry[24..28].copy_from_slice(&size.to_le_bytes());
+        central_entry[28..30].copy_from_slice(&(entry_bytes.len() as u16).to_le_bytes());
+        central_entry[30..32].copy_from_slice(&0u16.to_le_bytes());
+        central_entry[32..34].copy_from_slice(&0u16.to_le_bytes());
+        central_entry[34..36].copy_from_slice(&0u16.to_le_bytes());
+        central_entry[36..38].copy_from_slice(&0u16.to_le_bytes());
+        central_entry[38..42].copy_from_slice(&0u32.to_le_bytes());
+        central_entry[42..46].copy_from_slice(&(offset as u32).to_le_bytes());
+        central.extend_from_slice(&central_entry);
+        central.extend_from_slice(entry_bytes);
+
+        offset += 30 + entry_bytes.len() as u64 + size as u64;
+    }
+
+    let central_count = entries.len() as u16;
+    out_file
+        .write_all(&central)
+        .map_err(io("write zip central directory", &out))?;
+
+    let mut end = [0u8; 22];
+    end[0..4].copy_from_slice(&0x0605_4B50u32.to_le_bytes());
+    end[8..10].copy_from_slice(&central_count.to_le_bytes());
+    end[10..12].copy_from_slice(&central_count.to_le_bytes());
+    end[12..16].copy_from_slice(&(central.len() as u32).to_le_bytes());
+    end[16..20].copy_from_slice(&(offset as u32).to_le_bytes());
+    out_file
+        .write_all(&end)
+        .map_err(io("write zip end of central directory", &out))?;
+    out_file.sync_all().map_err(io("sync zip", &out))?;
+
+    Ok(ZipExportReport {
+        files: entries.len(),
+        bytes,
+        path: out,
+    })
+}
+
 /// Where a daily note goes, and which one is next to it.
 ///
 /// The format is a moment format and the folder is a setting; both were
@@ -2237,5 +2434,138 @@ mod daily_tests {
 
         let link = dst.path().join("loop.md");
         assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+    }
+}
+
+#[cfg(test)]
+mod zip_export_tests {
+    use super::*;
+    use std::fs;
+
+    fn read_u16(bytes: &[u8], at: usize) -> u16 {
+        u16::from_le_bytes(bytes[at..at + 2].try_into().unwrap())
+    }
+    fn read_u32(bytes: &[u8], at: usize) -> u32 {
+        u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
+    }
+
+    /// One local file header and its data, parsed out of the zip bytes.
+    struct ZipEntry {
+        name: String,
+        crc: u32,
+        data: Vec<u8>,
+    }
+
+    /// Parses the zip the export wrote: end-of-central-directory record at
+    /// the end, central directory it points at, then each local header and
+    /// its data. Stored entries only, no comment.
+    fn parse_zip(zip: &[u8]) -> Vec<ZipEntry> {
+        let eocd = &zip[zip.len() - 22..];
+        assert_eq!(
+            read_u32(eocd, 0),
+            0x0605_4B50,
+            "the export is not a zip file"
+        );
+        let count = read_u16(eocd, 10) as usize;
+        let cd_size = read_u32(eocd, 12) as usize;
+        let cd_off = read_u32(eocd, 16) as usize;
+        let cd = &zip[cd_off..cd_off + cd_size];
+        let mut out = Vec::new();
+        let mut at = 0;
+        for _ in 0..count {
+            assert_eq!(read_u32(cd, at), 0x0201_4B50, "bad central header");
+            let name_len = read_u16(cd, at + 28) as usize;
+            let local_off = read_u32(cd, at + 42) as usize;
+            let name = String::from_utf8(cd[at + 46..at + 46 + name_len].to_vec()).unwrap();
+            at += 46 + name_len;
+
+            let local = &zip[local_off..];
+            assert_eq!(read_u32(local, 0), 0x0403_4B50, "bad local header");
+            assert_eq!(
+                read_u16(local, 8),
+                0,
+                "{name} is compressed, the export stores only"
+            );
+            let l_name_len = read_u16(local, 26) as usize;
+            assert_eq!(
+                String::from_utf8(local[30..30 + l_name_len].to_vec()).unwrap(),
+                name,
+                "central and local names disagree for {name}"
+            );
+            let crc = read_u32(local, 14);
+            let data_start = (local_off as u64 + 30 + l_name_len as u64) as usize;
+            let data = zip[data_start..data_start + read_u32(local, 22) as usize].to_vec();
+            out.push(ZipEntry { name, crc, data });
+        }
+        out
+    }
+
+    #[test]
+    fn zip_export_holds_every_note_and_skips_the_forbidden_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("Sub/Deep")).unwrap();
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::create_dir_all(root.join(".silica")).unwrap();
+        fs::create_dir_all(root.join(".trash")).unwrap();
+        fs::create_dir_all(root.join("Sub/.git")).unwrap();
+        fs::write(root.join("A.md"), "note a\n").unwrap();
+        fs::write(root.join("Sub/B.md"), "note b\n").unwrap();
+        fs::write(root.join("Sub/Deep/C.md"), "note c\n").unwrap();
+        fs::write(root.join(".git/HEAD.md"), "ref\n").unwrap();
+        fs::write(root.join(".silica/index.md"), "x\n").unwrap();
+        fs::write(root.join(".trash/D.md"), "gone\n").unwrap();
+        fs::write(root.join("Sub/.git/E.md"), "nested\n").unwrap();
+
+        let report = super::export_vault_zip(root, "vault-export-2026-11-10.zip").unwrap();
+        assert_eq!(report.files, 3, "every file outside the skipped folders");
+        assert_eq!(report.bytes, 21, "byte count of the three notes");
+        assert!(report.path.exists());
+        assert_eq!(
+            report.path.file_name().and_then(|n| n.to_str()),
+            Some("vault-export-2026-11-10.zip"),
+            "the export file keeps its tanggal name"
+        );
+
+        let zip = fs::read(&report.path).unwrap();
+        let entries = parse_zip(&zip);
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["A.md", "Sub/B.md", "Sub/Deep/C.md"],
+            "entry names are vault-relative paths"
+        );
+        for entry in &entries {
+            let on_disk = fs::read(root.join(&entry.name)).unwrap();
+            assert_eq!(
+                entry.data, on_disk,
+                "{} must come out byte for byte",
+                entry.name
+            );
+            assert_eq!(
+                crc32(&entry.data),
+                entry.crc,
+                "{} crc must match its local header",
+                entry.name
+            );
+        }
+        // * Nothing from .git, .silica or .trash made it in, nested or not.
+        assert!(
+            entries.iter().all(|e| !is_export_skip(Path::new(&e.name))),
+            "a skipped folder leaked into the zip"
+        );
+    }
+
+    #[test]
+    fn zip_export_uses_vault_path_separators_in_entry_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("a b.md"), "x\n").unwrap();
+        let report = super::export_vault_zip(root, "vault-export-2026-11-10.zip").unwrap();
+        let zip = fs::read(&report.path).unwrap();
+        let entries = parse_zip(&zip);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "a b.md");
+        assert_eq!(entries[0].data, b"x\n");
     }
 }

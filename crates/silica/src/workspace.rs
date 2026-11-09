@@ -491,6 +491,7 @@ pub const RUNNABLE: &[&str] = &[
     "app:increase-font-size",
     "app:decrease-font-size",
     "silica:vault-backup",
+    "silica:zip-export-vault",
     "silica:toggle-graph-pane",
     "workspace:copy-path",
     "workspace:copy-full-path",
@@ -5557,6 +5558,7 @@ impl Workspace {
                 self.step_font_size(up, window, cx);
             }
             "silica:vault-backup" => self.backup_vault(window, cx),
+            "silica:zip-export-vault" => self.zip_export_vault(window, cx),
             "silica:toggle-graph-pane" => self.toggle_graph_pane(cx),
             "workspace:copy-path" => self.copy_current_path(false, cx),
             "workspace:copy-full-path" => self.copy_current_path(true, cx),
@@ -5903,6 +5905,33 @@ impl Workspace {
                 cx,
             ),
             Err(err) => self.report(format!("Backup failed: {err}"), cx),
+        }
+    }
+
+    /// `silica:zip-export-vault`: every file of the vault, `.git`,
+    /// `.silica` and `.trash` left out, into one `vault-export-<tanggal>.zip`
+    /// at the vault root. The zip holds the on-disk bytes unchanged, so
+    /// extracting it is the vault again.
+    fn zip_export_vault(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            self.report("No vault is open", cx);
+            return;
+        };
+        let root = state.root.clone();
+        let stamp = silica_vault::ops::export_stamp();
+        let name = {
+            let vault = state.vault();
+            vault.available_path("", &format!("vault-export-{stamp}"), "zip")
+        };
+        match silica_vault::ops::export_vault_zip(&root, &name) {
+            Ok(report) => self.report(
+                format!(
+                    "Exported {} file(s), {} byte(s) into {}",
+                    report.files, report.bytes, name
+                ),
+                cx,
+            ),
+            Err(err) => self.report(format!("Zip export failed: {err}"), cx),
         }
     }
 
