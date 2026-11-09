@@ -49,6 +49,9 @@ pub struct SearchFile<'a> {
     /// Ranges between headings (the preamble included), for `section:`.
     pub sections: &'a [Range<usize>],
     pub tasks: &'a [TaskLine],
+    /// Page ranges into `content`, zero-based pages in order, for a PDF's
+    /// page text; empty for a note, whose content has no pages.
+    pub pages: &'a [Range<usize>],
 }
 
 impl SearchFile<'_> {
@@ -60,11 +63,16 @@ impl SearchFile<'_> {
 /// What a query matched in one file. Content ranges are byte ranges into
 /// `SearchFile::content`; name ranges are byte ranges into its base name,
 /// which Obsidian highlights in the result's title rather than in a match
-/// line, so the two kinds never mix.
+/// line, so the two kinds never mix. `pages` parallels `content`: the
+/// zero-based page each content hit sits on, for a PDF's page text, empty
+/// for a note.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MatchSet {
     pub content: Vec<Range<usize>>,
     pub name: Vec<Range<usize>>,
+    /// The page of each content hit, in the same order; empty unless the
+    /// file's content is a PDF's page text.
+    pub pages: Vec<usize>,
 }
 
 impl MatchSet {
@@ -72,6 +80,29 @@ impl MatchSet {
         self.content.extend(other.content);
         self.name.extend(other.name);
     }
+}
+
+/// The zero-based page an offset into a joined page text belongs to: the
+/// page whose range holds it, or the page that begins at it when the offset
+/// is a separator between pages, or the last page past all of them. `None`
+/// only when `pages` is empty, when the content holds no pages at all.
+///
+/// A page whose range is empty (one the interpreter gave up on) holds no
+/// bytes, so a hit at that offset belongs to the page whose text follows.
+pub fn page_for(pages: &[Range<usize>], offset: usize) -> Option<usize> {
+    // * The page whose own text holds the byte: the one it is read on.
+    if let Some(index) = pages.iter().position(|page| page.contains(&offset)) {
+        return Some(index);
+    }
+    // * Otherwise the offset is a separator between two pages, or past the
+    // * last page's end. A separator belongs to the page that begins after
+    // * it, which also skips a page the interpreter gave up on: an empty
+    // * range holds no byte, so the offset sitting at it is the next
+    // * page's. Past every start it stays on the last page.
+    pages
+        .iter()
+        .position(|page| page.start > offset)
+        .or_else(|| pages.len().checked_sub(1))
 }
 
 /// A query compiled for matching.
@@ -121,7 +152,8 @@ impl Search {
     }
 
     /// Whether `file` matches; on success the ranges to highlight, sorted and
-    /// merged (both empty when only the path, tags or properties matched).
+    /// merged (both empty when only the path, tags or properties matched),
+    /// and the page each content hit sits on for a PDF's page text.
     pub fn matches(&self, file: &SearchFile<'_>) -> Option<MatchSet> {
         // * Konten dan nama difolding sekali per file: akcent dihilangkan di
         // * keduanya, sehingga `cafe` temukan `café` dan `strasse` temukan
@@ -146,9 +178,21 @@ impl Search {
                 .map(|r| norm.origin_range(r.start, r.end))
                 .collect()
         };
+        let content = merge(remap(&content, hits.content));
+        let name = merge(remap(&name, hits.name));
+        let pages = if file.pages.is_empty() {
+            // * A note has no pages, so no hit names one.
+            Vec::new()
+        } else {
+            content
+                .iter()
+                .filter_map(|r| page_for(file.pages, r.start))
+                .collect()
+        };
         Some(MatchSet {
-            content: merge(remap(&content, hits.content)),
-            name: merge(remap(&name, hits.name)),
+            content,
+            name,
+            pages,
         })
     }
 }
@@ -693,6 +737,7 @@ mod tests {
             blocks,
             sections,
             tasks,
+            pages: &[],
         }
     }
 
@@ -788,6 +833,7 @@ mod tests {
             blocks: &[],
             sections: &[],
             tasks: &[],
+            pages: &[],
         };
         let hits = Search::new("tag:#work").unwrap().matches(&file).unwrap();
         let shown: Vec<&str> = hits.content.iter().map(|r| &text[r.clone()]).collect();
@@ -995,6 +1041,7 @@ mod tests {
             blocks: &[],
             sections: &[],
             tasks: &[],
+            pages: &[],
         };
         Search::new(q).unwrap().matches(&file).map(|m| {
             m.content
@@ -1043,6 +1090,7 @@ mod tests {
             blocks: &[],
             sections: &[],
             tasks: &[],
+            pages: &[],
         };
         let m = Search::new("cafe").unwrap().matches(&file).unwrap();
         assert!(m.content.is_empty());
@@ -1069,9 +1117,122 @@ mod tests {
             blocks: &[],
             sections: &[],
             tasks: &[],
+            pages: &[],
         };
         assert!(Search::new("tag:cafe").unwrap().matches(&file).is_some());
         assert!(Search::new("tag:café").unwrap().matches(&file).is_some());
         assert!(Search::new("tag:coffee").unwrap().matches(&file).is_none());
+    }
+
+    /// A PDF's page text searched as one document: the matcher takes the
+    /// joined text with the range of each page, and answers a hit with the
+    /// page it sits on, which is the locator the result row opens with.
+    const PDF: &str = "alpha on one\nbeta on two\ngamma on three\n";
+
+    /// The page ranges of `PDF` as an index joins them: a newline between
+    /// pages, so a page's range stops before it.
+    fn pdf_pages() -> Vec<Range<usize>> {
+        let lines: Vec<&str> = PDF.split_inclusive('\n').collect();
+        let mut ranges = Vec::new();
+        let mut at = 0;
+        for (page, line) in lines.iter().enumerate() {
+            // * The separator newline belongs to neither page, so a page's
+            // * range stops one byte short of it; the last page has none.
+            let own = if page + 1 < lines.len() {
+                line.len() - 1
+            } else {
+                line.len()
+            };
+            ranges.push(at..at + own);
+            at += line.len();
+        }
+        ranges
+    }
+
+    fn pdf_file<'a>(pages: &'a [Range<usize>]) -> SearchFile<'a> {
+        SearchFile {
+            path: "Attachments/Pages.pdf",
+            content: PDF,
+            tags: &[],
+            frontmatter: None,
+            blocks: &[],
+            sections: &[],
+            tasks: &[],
+            pages,
+        }
+    }
+
+    /// The matched text and the zero-based page each hit sits on.
+    fn pdf_hits(q: &str) -> Option<Vec<(&str, usize)>> {
+        let ranges = pdf_pages();
+        let file = pdf_file(&ranges);
+        let hits = Search::new(q).unwrap().matches(&file)?;
+        Some(
+            hits.content
+                .iter()
+                .zip(hits.pages.iter())
+                .map(|(range, &page)| (&PDF[range.clone()], page))
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn a_hit_names_the_page_it_sits_on() {
+        assert_eq!(pdf_hits("beta"), Some(vec![("beta", 1)]));
+        assert_eq!(pdf_hits("alpha"), Some(vec![("alpha", 0)]));
+        assert_eq!(pdf_hits("gamma"), Some(vec![("gamma", 2)]));
+        // * A term on every page is a hit on every page, in order.
+        assert_eq!(
+            pdf_hits("/one|two|three/"),
+            Some(vec![("one", 0), ("two", 1), ("three", 2)])
+        );
+        // * The whole phrase on one page is one hit, on that page.
+        assert_eq!(pdf_hits("\"beta on two\""), Some(vec![("beta on two", 1)]));
+        // * A term in no page's text matches nothing.
+        assert_eq!(pdf_hits("delta"), None);
+    }
+
+    /// A query that matches only the name, the path or a property reports no
+    /// page, and a note — content with no page ranges — never reports one.
+    #[test]
+    fn a_name_hit_names_no_page_and_a_note_names_none() {
+        let ranges = pdf_pages();
+        let hits = Search::new("file:pages")
+            .unwrap()
+            .matches(&pdf_file(&ranges));
+        let hits = hits.expect("the name holds Pages");
+        assert!(hits.content.is_empty());
+        assert!(hits.pages.is_empty());
+        assert_eq!(hits.name.len(), 1, "{:?}", hits.name);
+        assert!(Search::new("beta")
+            .unwrap()
+            .matches(&SearchFile {
+                path: "A.md",
+                content: "beta in a note\n",
+                ..Default::default()
+            })
+            .expect("beta matches the note")
+            .pages
+            .is_empty());
+    }
+
+    /// The page a byte offset falls on, over the range shapes an index
+    /// produces: a plain hit inside a page, a separator between pages, a
+    /// page the interpreter gave up on (an empty range), and a hit on the
+    /// last page.
+    #[test]
+    fn page_for_looks_the_offset_up_in_the_ranges() {
+        let ranges = vec![0..6, 7..7, 8..14];
+        assert_eq!(page_for(&ranges, 0), Some(0));
+        assert_eq!(page_for(&ranges, 5), Some(0));
+        // * The newline between page one and page two belongs to page two.
+        assert_eq!(page_for(&ranges, 6), Some(1));
+        // * Page two is empty, so a byte at its offset is page three's.
+        assert_eq!(page_for(&ranges, 7), Some(2));
+        assert_eq!(page_for(&ranges, 10), Some(2));
+        // * Past the last page's start stays on the last page.
+        assert_eq!(page_for(&ranges, 14), Some(2));
+        // * No page ranges at all: content with no pages in it.
+        assert_eq!(page_for(&[], 3), None);
     }
 }

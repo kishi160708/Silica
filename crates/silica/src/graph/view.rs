@@ -1927,6 +1927,7 @@ fn build(
                 blocks: &blocks,
                 sections: &sections,
                 tasks: &tasks,
+                pages: &[],
             })
             .is_some()
     };
@@ -2059,6 +2060,7 @@ fn build(
                 blocks: &blocks,
                 sections: &sections,
                 tasks: &tasks,
+                pages: &[],
             };
             node.color = color_groups
                 .iter()
@@ -2176,7 +2178,6 @@ fn finish(
         neighbors,
     }
 }
-
 
 #[cfg(test)]
 mod tests {

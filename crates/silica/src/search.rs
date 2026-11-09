@@ -1919,6 +1919,7 @@ pub fn run_search(search: &Search, state: &VaultState) -> Vec<FileResult> {
                 blocks: &blocks,
                 sections: &sections,
                 tasks: &tasks,
+                pages: &[],
             };
             let hits = search.matches(&file)?;
             let name = path
