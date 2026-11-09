@@ -1966,7 +1966,7 @@ impl<'a> Renderer<'a> {
         }
         let mono: Vec<_> = runs
             .iter()
-            .filter(|(_, s)| s.code || s.html)
+            .filter(|(_, s)| s.code || s.html || s.kbd)
             .map(|(range, _)| (range.clone(), t.mono_font.clone()))
             .collect();
         let mut styled =
@@ -2032,6 +2032,12 @@ impl<'a> Renderer<'a> {
         if s.code {
             h.background_color = Some(t.code_bg);
         }
+        if s.kbd {
+            // * `<kbd>` paints as a key box: monospace over a filled wash.
+            //   gpui pins no per-run border, so the box has no outline — a
+            //   gpui limit reported with the feature.
+            h.background_color = Some(t.code_bg);
+        }
         if s.math {
             // * Only a formula that failed to typeset is still text here.
             h.color = Some(math::error_color());
@@ -2039,6 +2045,11 @@ impl<'a> Renderer<'a> {
         if s.html {
             h.color = Some(t.text_muted);
         }
+        // * `<sup>` / `<sub>`: raised or lowered text. This gpui's
+        //   `HighlightStyle` carries no per-run font size or vertical
+        //   offset, so they paint at base size until gpui can; the offset is
+        //   a reported gpui limit, and `InlineStyle::sup`/`::sub` keep the
+        //   intent on each run.
         if s.tag {
             h.color = Some(t.tag);
         }

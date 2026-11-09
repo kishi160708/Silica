@@ -1004,11 +1004,35 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
         }
         if let Some(len) = scan::scan_inline_html(rest) {
             let html = self.slice(start, start + len);
-            self.push_node(InlineKind::Html(html), start, start + len);
+            let node = match Self::inline_html_element(&html) {
+                Some(tag) => InlineKind::HtmlInline {
+                    tag: Cow::Owned(tag),
+                    html,
+                },
+                None => InlineKind::Html(html),
+            };
+            self.push_node(node, start, start + len);
             self.pos = start + len;
             return true;
         }
         false
+    }
+
+    /// The element name of a scanned inline HTML token, lower-cased: `b` from
+    /// `<b>`, `br` from `<br />`, `div` from `</div >`. A comment, a
+    /// declaration, a processing instruction or CDATA has no element name
+    /// and yields `None`, so that token stays `InlineKind::Html`.
+    fn inline_html_element(html: &str) -> Option<String> {
+        let after = html.strip_prefix('<')?;
+        let (start, name) = match after.strip_prefix('/') {
+            Some(rest) => (2usize, rest),
+            None => (1usize, after),
+        };
+        let len = name
+            .bytes()
+            .take_while(|&b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b':' | b'_'))
+            .count();
+        (len > 0).then(|| html[start..start + len].to_ascii_lowercase())
     }
 
     fn entity(&mut self) -> bool {
