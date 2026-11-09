@@ -9,7 +9,14 @@
 //! The layer stores annotations only: it never touches the PDF bytes, never
 //! renders, and never validates that `page` is inside the document — the
 //! caller supplies page indices from [`Document::page_count`].
+//!
+//! Keeping annotations across sessions is [`crate::store`]'s job: one
+//! sidecar JSON file per PDF, which rebuilds a layer through
+//! [`AnnotationLayer::restored`]. Painting them again after a repaint is
+//! [`Overlay`]: it maps every rectangle onto the pixel space of the rendered
+//! page bitmap, so the view draws ink without asking the PDF for anything.
 
+use crate::PageSize;
 use std::fmt;
 
 /// A point in PDF user space (points), origin bottom-left, y up.
@@ -85,6 +92,12 @@ impl AnnotationId {
     pub fn as_u64(self) -> u64 {
         self.0
     }
+
+    /// An id read back from a sidecar file. The store is the only caller;
+    /// hand it a whole number the file actually carried.
+    pub(crate) fn from_raw(value: u64) -> Self {
+        Self(value)
+    }
 }
 
 impl fmt::Display for AnnotationId {
@@ -111,6 +124,15 @@ impl AnnotationLayer {
             next_id: 1,
             items: Vec::new(),
         }
+    }
+
+    /// A layer rebuilt from data that was saved earlier — the sidecar file's
+    /// annotations, in the order they were stored. Ids keep the values they
+    /// were saved with, and the mint continues above the highest one seen,
+    /// so a reload never hands out an id that is still on the page.
+    pub fn restored(items: Vec<Annotation>) -> Self {
+        let next_id = items.iter().map(|item| item.id.as_u64()).max().unwrap_or(0) + 1;
+        Self { next_id, items }
     }
 
     /// Insert `kind` on `page` inside `rect`, with optional `author`, and
@@ -195,6 +217,115 @@ impl<'a> Iterator for Iter<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         self.inner.next()
+    }
+}
+
+/// A rectangle in a rendered page bitmap's pixel space: origin top-left,
+/// y down — the space a bitmap is drawn in.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PixelRect {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+impl PixelRect {
+    /// True when `(x, y)` lies inside or on the edge of the rectangle.
+    pub fn contains(&self, x: f32, y: f32) -> bool {
+        x >= self.x && x <= self.x + self.width && y >= self.y && y <= self.y + self.height
+    }
+
+    /// True when the rectangle covers no pixel at all.
+    pub fn is_degenerate(&self) -> bool {
+        self.width <= 0.0 || self.height <= 0.0
+    }
+}
+
+/// One annotation placed on a rendered page, ready to paint.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Overlay {
+    pub id: AnnotationId,
+    pub page: usize,
+    pub kind: Kind,
+    pub area: PixelRect,
+}
+
+/// Map a user-space rectangle onto a page of `size` points drawn at
+/// `width` x `height` pixels. `None` when the mapping has no usable frame —
+/// a page with no positive finite size, a zero-sized bitmap, or coordinates
+/// that are not finite — so a bad page size never paints NaN.
+fn pixel_area(rect: Rect, size: PageSize, width: u32, height: u32) -> Option<PixelRect> {
+    let finite = rect.x0.is_finite()
+        && rect.y0.is_finite()
+        && rect.x1.is_finite()
+        && rect.y1.is_finite()
+        && size.width.is_finite()
+        && size.height.is_finite();
+    if !finite || size.width <= 0.0 || size.height <= 0.0 || width == 0 || height == 0 {
+        return None;
+    }
+    let (pixels_x, pixels_y) = (f64::from(width), f64::from(height));
+    let scale_x = pixels_x / f64::from(size.width);
+    let scale_y = pixels_y / f64::from(size.height);
+    let left = (f64::from(rect.x0) * scale_x).clamp(0.0, pixels_x);
+    let right = (f64::from(rect.x1) * scale_x).clamp(0.0, pixels_x);
+    // User space has y up; a bitmap has y down, so the top edge is the
+    // larger user-space coordinate.
+    let top = (pixels_y - f64::from(rect.y1) * scale_y).clamp(0.0, pixels_y);
+    let bottom = (pixels_y - f64::from(rect.y0) * scale_y).clamp(0.0, pixels_y);
+    let area = PixelRect {
+        x: left as f32,
+        y: top as f32,
+        width: (right - left) as f32,
+        height: (bottom - top) as f32,
+    };
+    (!area.is_degenerate()).then_some(area)
+}
+
+impl Annotation {
+    /// The annotation mapped onto a page of `size` points drawn at
+    /// `width` x `height` pixels, or `None` when the mapping covers no
+    /// pixel. Rectangles reaching past the page are clipped to the bitmap.
+    pub fn pixel_area(&self, size: PageSize, width: u32, height: u32) -> Option<PixelRect> {
+        pixel_area(self.rect, size, width, height)
+    }
+}
+
+impl AnnotationLayer {
+    /// Every annotation of `page` mapped onto the rendered bitmap, in
+    /// insertion order — the list a repaint draws.
+    pub fn overlay(&self, page: usize, size: PageSize, width: u32, height: u32) -> Vec<Overlay> {
+        self.items
+            .iter()
+            .filter(|item| item.page == page)
+            .filter_map(|item| {
+                item.pixel_area(size, width, height).map(|area| Overlay {
+                    id: item.id,
+                    page: item.page,
+                    kind: item.kind.clone(),
+                    area,
+                })
+            })
+            .collect()
+    }
+
+    /// The annotations of `page` whose mapped area contains `(x, y)`,
+    /// topmost (last inserted) first — pixel-space hit testing over a
+    /// rendered page.
+    pub fn overlay_at(
+        &self,
+        page: usize,
+        size: PageSize,
+        width: u32,
+        height: u32,
+        x: f32,
+        y: f32,
+    ) -> Vec<Overlay> {
+        let mut found = self.overlay(page, size, width, height);
+        found.retain(|item| item.area.contains(x, y));
+        found.reverse();
+        found
     }
 }
 
@@ -310,5 +441,197 @@ mod tests {
             assert_eq!(layer.page(index).len(), 1);
         }
         assert_eq!(layer.page(doc.page_count()).len(), 0);
+    }
+
+    #[test]
+    fn restored_keeps_saved_ids_and_mints_above_them() {
+        let mut first = AnnotationLayer::new();
+        let one = first.add(0, Kind::Highlight, rect(0.0, 0.0, 1.0, 1.0), None);
+        let two = first.add(1, Kind::Highlight, rect(0.0, 0.0, 1.0, 1.0), None);
+        let saved: Vec<Annotation> = first.iter().cloned().collect();
+
+        let mut second = AnnotationLayer::restored(saved);
+        assert_eq!(second.annotation(one).map(|item| item.id), Some(one));
+        assert!(second.remove(two));
+        let three = second.add(2, Kind::Highlight, rect(0.0, 0.0, 1.0, 1.0), None);
+        assert_eq!(three.as_u64(), two.as_u64() + 1);
+        assert_eq!(second.len(), 2);
+        assert_eq!(second.annotation(three).unwrap().page, 2);
+    }
+
+    #[test]
+    fn restored_of_nothing_mints_from_one() {
+        let mut layer = AnnotationLayer::restored(Vec::new());
+        let id = layer.add(0, Kind::Highlight, rect(0.0, 0.0, 1.0, 1.0), None);
+        assert_eq!(id.as_u64(), 1);
+    }
+
+    #[test]
+    fn pixel_area_flips_y_and_fills_the_bitmap() {
+        let size = PageSize {
+            width: 100.0,
+            height: 200.0,
+        };
+        let mut layer = AnnotationLayer::new();
+        let full = layer.add(0, Kind::Highlight, rect(0.0, 0.0, 100.0, 200.0), None);
+        assert_eq!(
+            layer.annotation(full).unwrap().pixel_area(size, 50, 100),
+            Some(PixelRect {
+                x: 0.0,
+                y: 0.0,
+                width: 50.0,
+                height: 100.0
+            })
+        );
+
+        // The top half in user space is the top half of the bitmap.
+        let top = layer.add(0, Kind::Highlight, rect(0.0, 100.0, 100.0, 200.0), None);
+        assert_eq!(
+            layer.annotation(top).unwrap().pixel_area(size, 50, 100),
+            Some(PixelRect {
+                x: 0.0,
+                y: 0.0,
+                width: 50.0,
+                height: 50.0
+            })
+        );
+
+        // The bottom half in user space sits at the bottom of the bitmap.
+        let bottom = layer.add(1, Kind::Highlight, rect(0.0, 0.0, 100.0, 100.0), None);
+        assert_eq!(
+            layer.annotation(bottom).unwrap().pixel_area(size, 50, 100),
+            Some(PixelRect {
+                x: 0.0,
+                y: 50.0,
+                width: 50.0,
+                height: 50.0
+            })
+        );
+    }
+
+    #[test]
+    fn pixel_area_clips_and_refuses_unusable_frames() {
+        let size = PageSize {
+            width: 100.0,
+            height: 100.0,
+        };
+        let mut layer = AnnotationLayer::new();
+
+        // Reaching past the right edge is clipped to the bitmap, not dropped.
+        let wide = layer.add(0, Kind::Highlight, rect(80.0, 0.0, 400.0, 100.0), None);
+        assert_eq!(
+            layer.annotation(wide).unwrap().pixel_area(size, 50, 25),
+            Some(PixelRect {
+                x: 40.0,
+                y: 0.0,
+                width: 10.0,
+                height: 25.0
+            })
+        );
+
+        // A rectangle with no area on the page paints nothing.
+        let sliver = layer.add(0, Kind::Highlight, rect(10.0, 10.0, 10.0, 90.0), None);
+        assert_eq!(
+            layer.annotation(sliver).unwrap().pixel_area(size, 50, 25),
+            None
+        );
+
+        let page = PageSize {
+            width: 100.0,
+            height: 100.0,
+        };
+        let id = layer.add(0, Kind::Highlight, rect(0.0, 0.0, 100.0, 100.0), None);
+        let annotation = layer.annotation(id).unwrap();
+        assert_eq!(
+            annotation.pixel_area(
+                PageSize {
+                    width: 0.0,
+                    height: 100.0
+                },
+                50,
+                25
+            ),
+            None
+        );
+        assert_eq!(
+            annotation.pixel_area(
+                PageSize {
+                    width: f32::NAN,
+                    height: 100.0
+                },
+                50,
+                25
+            ),
+            None
+        );
+        assert_eq!(annotation.pixel_area(page, 0, 25), None);
+
+        let nan = layer.add(0, Kind::Highlight, rect(f32::NAN, 0.0, 10.0, 10.0), None);
+        assert_eq!(
+            layer.annotation(nan).unwrap().pixel_area(page, 50, 25),
+            None
+        );
+    }
+
+    #[test]
+    fn overlay_and_pixel_hit_test_follow_the_bitmap() {
+        let doc = crate::Document::open(
+            std::fs::read(format!(
+                "{}/tests/fixtures/pages.pdf",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        let size = doc.page_size(0).unwrap();
+        let mut layer = AnnotationLayer::new();
+        let back = layer.add(
+            0,
+            Kind::Highlight,
+            rect(0.0, 0.0, size.width, size.height),
+            None,
+        );
+        let front = layer.add(
+            0,
+            Kind::Text {
+                contents: "note".into(),
+            },
+            rect(
+                size.width / 2.0 - 5.0,
+                size.height / 2.0 - 5.0,
+                size.width / 2.0 + 5.0,
+                size.height / 2.0 + 5.0,
+            ),
+            None,
+        );
+        layer.add(
+            1,
+            Kind::Highlight,
+            rect(0.0, 0.0, size.width, size.height),
+            None,
+        );
+
+        let (width, height) = (200u32, 400u32);
+        let overlay = layer.overlay(0, size, width, height);
+        assert_eq!(overlay.len(), 2, "insertion order, page 1 excluded");
+        assert_eq!(overlay[0].id, back);
+        assert_eq!(overlay[1].id, front);
+
+        // Middle of the bitmap hits the front annotation first.
+        let center = (width as f32 / 2.0, height as f32 / 2.0);
+        let hit = layer.overlay_at(0, size, width, height, center.0, center.1);
+        let hit_ids: Vec<AnnotationId> = hit.iter().map(|item| item.id).collect();
+        assert_eq!(hit_ids, vec![front, back]);
+
+        // The top-left corner of the bitmap only holds the page-wide one.
+        let corner = layer.overlay_at(0, size, width, height, 1.0, 1.0);
+        let corner_ids: Vec<AnnotationId> = corner.iter().map(|item| item.id).collect();
+        assert_eq!(corner_ids, vec![back]);
+
+        // A page the document does not have: nothing, at any pixel.
+        let missing = doc.page_count() + 5;
+        assert!(layer
+            .overlay_at(missing, size, width, height, center.0, center.1)
+            .is_empty());
     }
 }

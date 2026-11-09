@@ -5,16 +5,28 @@
 //! so the view can render pages on a background thread while the UI thread reads
 //! sizes. Every entry point guards against a panic inside the renderer: malformed
 //! input gives an `Err` or a `None`, never a crash.
+//!
+//! Reading a PDF can also carry the reader's own marks: [`AnnotationLayer`] holds
+//! them in memory, [`AnnotationStore`] keeps them in a sidecar JSON file per PDF
+//! under `.silica/annotations/`, and [`Overlay`] lays them back over a rendered
+//! page for the next repaint.
 
 #![forbid(unsafe_code)]
 
 mod annotate;
+mod command;
+mod json;
 mod outline;
+mod store;
 mod subpath;
 mod text;
 mod textstring;
 
-pub use annotate::{Annotation, AnnotationId, AnnotationLayer, Kind, Point, Rect};
+pub use annotate::{
+    Annotation, AnnotationId, AnnotationLayer, Kind, Overlay, PixelRect, Point, Rect,
+};
+pub use command::{AddRequest, PDF_ANNOTATE_ADD};
+pub use store::{sidecar_path, AnnotationStore, StoreError};
 pub use subpath::{parse_subpath, Subpath};
 pub use text::PdfGlyph;
 
