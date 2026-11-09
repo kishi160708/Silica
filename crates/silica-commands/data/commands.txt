@@ -256,6 +256,7 @@ silica:export-pdf
 silica:toggle-graph-pane
 silica:pin-tab
 silica:vault-backup
+silica:palette-verify
 quick-capture:open
 task-dashboard:open
 silica:insert-image

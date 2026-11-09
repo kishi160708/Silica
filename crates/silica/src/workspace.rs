@@ -528,6 +528,7 @@ pub const RUNNABLE: &[&str] = &[
     "silica:vault-backup",
     "silica:toggle-graph-pane",
     "silica:pin-tab",
+    "silica:palette-verify",
     "workspace:copy-path",
     "workspace:copy-full-path",
     "app:open-settings",
@@ -5796,6 +5797,7 @@ impl Workspace {
             "silica:vault-backup" => self.backup_vault(window, cx),
             "silica:file-recovery" => self.open_file_recovery(window, cx),
             "silica:toggle-graph-pane" => self.toggle_graph_pane(cx),
+            "silica:palette-verify" => self.verify_palette(window, cx),
             "workspace:copy-path" => self.copy_current_path(false, cx),
             "workspace:copy-full-path" => self.copy_current_path(true, cx),
             "silica:pin-tab" => self.pin_tab(cx),
@@ -6143,6 +6145,53 @@ impl Workspace {
             ),
             Err(err) => self.report(format!("Backup failed: {err}"), cx),
         }
+    }
+
+    /// `silica:palette-verify`: an audit of the three lists behind the
+    /// palette — the ids the registry knows, the names it shows and the
+    /// ids a `run_command` arm answers for — written to
+    /// [`silica_commands::verify::REPORT_PATH`] at the vault's root. Any
+    /// of the three drifting shows up in the app as a palette row with no
+    /// name, an id offered that does nothing when chosen, or one
+    /// registration silently replacing another, and none of those tell
+    /// the user which list is wrong. This names them, in the file the
+    /// vault already keeps its own notes in.
+    fn verify_palette(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            self.report("No vault is open", cx);
+            return;
+        };
+        // * The ids `can_run` answers for: `RUNNABLE` is what the palette
+        //   offers, and `EDITOR_ONLY` is the same question asked the
+        //   other way round in the gate test below.
+        let runnable: Vec<&str> = RUNNABLE.iter().chain(EDITOR_ONLY).copied().collect();
+        let audit = silica_commands::verify::audit(
+            &silica_commands::known_ids(),
+            &silica_commands::known_names(),
+            &runnable,
+        );
+        let path = match state
+            .vault()
+            .write_path(silica_commands::verify::REPORT_PATH)
+        {
+            Ok(path) => path,
+            Err(err) => {
+                self.report(format!("Palette check not written: {err}"), cx);
+                return;
+            }
+        };
+        if let Err(err) = std::fs::write(&path, audit.text()) {
+            self.report(format!("Palette check not written: {err}"), cx);
+            return;
+        }
+        self.report(
+            format!(
+                "Palette check written: {} finding(s) over {} registered id(s)",
+                audit.issues.len(),
+                audit.registered
+            ),
+            cx,
+        );
     }
 
     /// Obsidian's `workspace:copy-path` and `workspace:copy-full-path`:
