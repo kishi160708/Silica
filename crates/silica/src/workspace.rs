@@ -205,9 +205,24 @@ fn side_menu_items(target: &SidePaneTarget) -> Vec<SidePaneMenuItem> {
                 A::SearchProperty(key.clone()),
             ),
             item(
+                crate::i18n::t("Rename property"),
+                "pen-line",
+                A::RenameProperty(key.clone()),
+            ),
+            item(
+                crate::i18n::t("Property type"),
+                "type",
+                A::SetPropertyType(key.clone()),
+            ),
+            item(
                 crate::i18n::t("Copy property"),
                 "clipboard",
                 A::CopyProperty(key.clone()),
+            ),
+            item(
+                crate::i18n::t("Delete property"),
+                "trash-2",
+                A::DeleteProperty(key.clone()),
             ),
         ],
         SidePaneTarget::Heading { path, offset } => vec![
@@ -277,6 +292,12 @@ pub enum SidePaneAction {
     CopyTag(String),
     SearchProperty(String),
     CopyProperty(String),
+    /// Rename a property key across every note that carries it.
+    RenameProperty(String),
+    /// Assign a type to a property key: recorded in `types.json`.
+    SetPropertyType(String),
+    /// Delete a property key from every note that carries it.
+    DeleteProperty(String),
     OpenHeading(String, usize),
     OpenHeadingInNewTab(String),
     OpenHeadingToRight(String),
@@ -976,6 +997,97 @@ impl VaultState {
             .write_config("types.json", &*types)
             .map_err(|e| e.to_string())?;
         Ok(types.clone())
+    }
+
+    /// Applies one frontmatter edit to the property key in every note that
+    /// carries it, writing each changed note atomically (`write_no_follow`).
+    /// Notes the vault can no longer read are skipped. Returns the
+    /// vault-relative paths of the notes rewritten. The cache and `texts`
+    /// go stale for rewritten notes: the caller must run `after_changes`
+    /// so the watcher re-indexes them. A write that fails ends the run
+    /// with an error and leaves the notes already rewritten in place: the
+    /// run is not rolled back.
+    fn rewrite_property_frontmatter(
+        &self,
+        key: &str,
+        change: Change,
+    ) -> Result<Vec<String>, String> {
+        let vault_root = self.vault().root().to_path_buf();
+        let mut changed = Vec::new();
+        for (path, meta) in self.cache().files() {
+            let has_key = meta
+                .frontmatter
+                .as_ref()
+                .is_some_and(|v| v.as_mapping().is_some_and(|m| m.contains_key(key)));
+            if !has_key {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(vault_root.join(path)) else {
+                continue;
+            };
+            let Some(props) = silica_cache::note_properties(&text) else {
+                continue;
+            };
+            // * A note that already carries the target key is left alone:
+            //   merging values is not defined here, and writing a duplicate
+            //   key would corrupt the block.
+            if matches!(&change, Change::Rename { to, .. } if props.get(to).is_some()) {
+                continue;
+            }
+            let Some(edits) =
+                silica_formats::properties::plan(&text, &props, std::slice::from_ref(&change))
+            else {
+                continue;
+            };
+            let next = silica_formats::properties::apply(&text, &edits);
+            silica_vault::write_no_follow(&vault_root.join(path), next.as_bytes())
+                .map_err(|e| e.to_string())?;
+            changed.push(path.to_string());
+        }
+        Ok(changed)
+    }
+
+    /// Renames property key `from` to `to` in every note's frontmatter that
+    /// has it, and moves the key's entry in `types.json` when one exists.
+    /// See [`VaultState::rewrite_property_frontmatter`] for the staleness
+    /// caveat.
+    pub fn rename_property(&self, from: &str, to: &str) -> Result<Vec<String>, String> {
+        if from == to {
+            return Ok(Vec::new());
+        }
+        let changed = self.rewrite_property_frontmatter(
+            from,
+            Change::Rename {
+                from: from.to_string(),
+                to: to.to_string(),
+            },
+        )?;
+        let mut types = self.property_types.write().expect("property types lock");
+        if let Some(ty) = types.types.shift_remove(from) {
+            types.types.insert(to.to_string(), ty);
+            self.vault()
+                .replace_config("types.json", &*types)
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(changed)
+    }
+
+    /// Removes property `key` from every note's frontmatter that has it,
+    /// and drops the key from `types.json` when it has an entry.
+    pub fn remove_property(&self, key: &str) -> Result<Vec<String>, String> {
+        let changed = self.rewrite_property_frontmatter(
+            key,
+            Change::Remove {
+                key: key.to_string(),
+            },
+        )?;
+        let mut types = self.property_types.write().expect("property types lock");
+        if types.types.shift_remove(key).is_some() {
+            self.vault()
+                .replace_config("types.json", &*types)
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(changed)
     }
 
     pub fn vault(&self) -> RwLockReadGuard<'_, Vault> {
@@ -1864,6 +1976,18 @@ pub(crate) enum PendingOp {
     /// "Rename tag...": the value names the tag the old one becomes.
     RenameTag {
         from: String,
+    },
+    /// "Rename property...": the value names the key the old one becomes.
+    RenameProperty {
+        from: String,
+    },
+    /// "Set property type": the value names the type the key becomes.
+    SetPropertyType {
+        key: String,
+    },
+    /// "Delete property": the key is removed from every note that carries it.
+    DeleteProperty {
+        key: String,
     },
 }
 
@@ -11753,5 +11877,145 @@ mod tests {
             target: None,
         };
         assert!(expand_match(text, &m).is_none());
+    }
+}
+
+#[cfg(test)]
+mod property_menu_tests {
+    use super::*;
+    use std::fs;
+
+    fn write_note(root: &std::path::Path, name: &str, block: &str, body: &str) {
+        fs::write(root.join(name), format!("{block}{body}")).expect("write note");
+    }
+
+    #[test]
+    fn rename_property_rewrites_every_note_that_carries_the_key() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        fs::create_dir_all(dir.path().join(".obsidian")).expect("config folder");
+        // * `types.json` as the vault layer reads it back: the map sits
+        //   under `types`, the shape `assign_property_type` writes.
+        fs::write(
+            dir.path().join(".obsidian/types.json"),
+            r#"{"types":{"tags":"aliases","other":"number"}}"#,
+        )
+        .expect("types.json");
+        write_note(
+            dir.path(),
+            "A.md",
+            r#"---
+tags:
+  - a
+  - b
+---
+"#,
+            r#"body A
+"#,
+        );
+        write_note(
+            dir.path(),
+            "B.md",
+            r#"---
+tags: x
+other: 1
+---
+"#,
+            r#"body B
+"#,
+        );
+        // This note already carries the target key: left as it is (values
+        // are not merged here).
+        write_note(
+            dir.path(),
+            "D.md",
+            r#"---
+tags: z
+labels: y
+---
+"#,
+            r#"body D
+"#,
+        );
+        // This note never had `tags`.
+        write_note(
+            dir.path(),
+            "C.md",
+            r#"---
+other: 2
+---
+"#,
+            r#"body C
+"#,
+        );
+
+        let state = VaultState::load(&dir.path().to_path_buf()).expect("load vault");
+        let changed = state.rename_property("tags", "labels").expect("rename");
+        assert_eq!(changed, vec!["A.md".to_string(), "B.md".to_string()]);
+
+        let read = |name: &str| fs::read_to_string(dir.path().join(name)).expect("read note");
+        assert_eq!(
+            read("A.md"),
+            r#"---
+labels:
+  - a
+  - b
+---
+body A
+"#
+        );
+        assert_eq!(
+            read("B.md"),
+            r#"---
+labels: x
+other: 1
+---
+body B
+"#
+        );
+        assert_eq!(
+            read("D.md"),
+            r#"---
+tags: z
+labels: y
+---
+body D
+"#
+        );
+        assert_eq!(
+            read("C.md"),
+            r#"---
+other: 2
+---
+body C
+"#
+        );
+
+        let types =
+            fs::read_to_string(dir.path().join(".obsidian/types.json")).expect("read types");
+        assert!(types.contains(r#""labels""#), "{types}");
+        assert!(!types.contains(r#""tags""#), "{types}");
+
+        drop(state);
+        let state = VaultState::load(&dir.path().to_path_buf()).expect("reload vault");
+        let changed = state.remove_property("other").expect("remove");
+        assert_eq!(changed, vec!["B.md".to_string(), "C.md".to_string()]);
+        assert_eq!(
+            read("B.md"),
+            r#"---
+labels: x
+---
+body B
+"#
+        );
+        // Removing the last property also drops the frontmatter fence.
+        assert_eq!(
+            read("C.md"),
+            r#"body C
+"#
+        );
+
+        let types =
+            fs::read_to_string(dir.path().join(".obsidian/types.json")).expect("read types");
+        assert!(!types.contains(r#""other""#), "{types}");
     }
 }

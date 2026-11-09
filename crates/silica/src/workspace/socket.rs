@@ -378,6 +378,15 @@ impl Workspace {
                 Some(PendingOp::RenameTag { from }) => {
                     json!({"op": "rename-tag", "from": from})
                 }
+                Some(PendingOp::RenameProperty { from }) => {
+                    json!({"op": "rename-property", "from": from})
+                }
+                Some(PendingOp::SetPropertyType { key }) => {
+                    json!({"op": "set-property-type", "key": key})
+                }
+                Some(PendingOp::DeleteProperty { key }) => {
+                    json!({"op": "delete-property", "key": key})
+                }
                 Some(PendingOp::ExportSite) => json!({"op": "export-site"}),
                 Some(PendingOp::DeleteAttachments { path }) => {
                     json!({"op": "delete-attachments", "path": path})

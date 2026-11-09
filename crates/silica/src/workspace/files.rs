@@ -1649,6 +1649,85 @@ link to it is rewritten. The current note is deleted."
                     self.report("No files to rename", cx);
                 }
             }
+            PendingOp::RenameProperty { from } => {
+                self.pending = None;
+                self.close_modal(window, cx);
+                let Some(state) = self.state.clone() else {
+                    return;
+                };
+                let new = value.trim();
+                if new.is_empty() {
+                    self.report("Property name cannot be empty", cx);
+                    return;
+                }
+                if new == from {
+                    return;
+                }
+                match state.rename_property(&from, new) {
+                    Ok(changed) => {
+                        let n = changed.len();
+                        self.after_changes(
+                            Changes {
+                                files: changed.into_iter().map(FileChange::Modified).collect(),
+                                notes: Vec::new(),
+                                removed_notes: Vec::new(),
+                            },
+                            cx,
+                        );
+                        let s = if n == 1 { "" } else { "s" };
+                        self.report(
+                            format!(
+                                "Renamed property \"{from}\" to \"{new}\" in {n} note{s}",
+                                s = s
+                            ),
+                            cx,
+                        );
+                    }
+                    Err(err) => self.report(format!("Could not rename property: {err}"), cx),
+                }
+            }
+            PendingOp::SetPropertyType { key } => {
+                let ty = match silica_formats::properties::PropertyType::parse(value.trim()) {
+                    Some(ty) => ty,
+                    None => {
+                        self.report(crate::i18n::t("Invalid property type"), cx);
+                        return;
+                    }
+                };
+                self.pending = None;
+                self.close_modal(window, cx);
+                let Some(state) = self.state.clone() else {
+                    return;
+                };
+                match state.assign_property_type(&key, ty) {
+                    Ok(_) => {
+                        self.refresh_property_rows(&state);
+                        self.report(format!("Set \"{key}\" to {}", ty.as_str()), cx);
+                    }
+                    Err(err) => self.report(format!("Could not write types.json: {err}"), cx),
+                }
+            }
+            PendingOp::DeleteProperty { key } => {
+                self.pending = None;
+                self.close_modal(window, cx);
+                let Some(state) = self.state.clone() else {
+                    return;
+                };
+                match state.remove_property(&key) {
+                    Ok(changed) => {
+                        self.after_changes(
+                            Changes {
+                                files: changed.into_iter().map(FileChange::Modified).collect(),
+                                notes: Vec::new(),
+                                removed_notes: Vec::new(),
+                            },
+                            cx,
+                        );
+                        self.report(format!("Deleted property \"{key}\""), cx);
+                    }
+                    Err(err) => self.report(format!("Could not delete property: {err}"), cx),
+                }
+            }
         }
     }
 
