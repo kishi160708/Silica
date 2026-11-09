@@ -62,6 +62,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
+pub(crate) mod attach;
 mod actions;
 mod folding;
 mod mouse;
@@ -2170,7 +2171,7 @@ impl Render for Editor {
                 "Editor"
             })
             .track_focus(&self.focus_handle)
-            .size_full()
+            .flex_1()
             .font_family(theme.text_font.clone())
             .text_size(px(base))
             .line_height(px(base * 1.5))
@@ -2223,10 +2224,16 @@ impl Render for Editor {
             .hover_preview
             .as_ref()
             .map(|(pos, data)| crate::page_preview::render_floating(data, *pos, &theme));
+        // * The attachment toolbar rides above the text, and only with a
+        //   note open: there is nothing to attach to an empty pane.
+        let toolbar = (!self.name.is_empty()).then(|| self.render_attach_toolbar(&theme, cx));
         div()
             .relative()
             .size_full()
+            .flex()
+            .flex_col()
             .on_drop(cx.listener(Self::handle_drop))
+            .children(toolbar)
             .child(editor)
             .children(panel)
             .children(popup.flatten())

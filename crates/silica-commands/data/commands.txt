@@ -256,3 +256,6 @@ silica:toggle-graph-pane
 silica:vault-backup
 quick-capture:open
 task-dashboard:open
+silica:insert-image
+silica:attach-file
+silica:remove-attachment

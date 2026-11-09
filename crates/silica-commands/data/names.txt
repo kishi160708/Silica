@@ -237,3 +237,6 @@ silica:footnotes	Footnotes view: Show footnotes
 silica:file-recovery	File recovery: Recover a note from a snapshot
 quick-capture:open	Quick Capture: New note
 task-dashboard:open	Task Dashboard: Open
+silica:insert-image	Insert image
+silica:attach-file	Attach file
+silica:remove-attachment	Remove attachment

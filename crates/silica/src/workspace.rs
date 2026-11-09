@@ -330,6 +330,9 @@ pub const EDITOR_ONLY: &[&str] = &[
     "editor:insert-wikilink",
     "editor:open-link-in-new-leaf",
     "editor:open-link-in-new-split",
+    "silica:insert-image",
+    "silica:attach-file",
+    "silica:remove-attachment",
     "editor:set-heading",
     "editor:set-heading-0",
     "editor:set-heading-1",
@@ -435,6 +438,9 @@ pub const RUNNABLE: &[&str] = &[
     "editor:insert-link",
     "editor:insert-wikilink",
     "editor:insert-embed",
+    "silica:insert-image",
+    "silica:attach-file",
+    "silica:remove-attachment",
     "editor:follow-link",
     "editor:open-link-in-new-leaf",
     "editor:copy",
@@ -5565,6 +5571,17 @@ impl Workspace {
                     };
                     self.editor
                         .update(cx, |e, cx| e.insert_link(kind, window, cx));
+                }
+            }
+            // * The attachment toolbar's rows, reachable from the palette and
+            //   the control socket as well as from the toolbar itself.
+            "silica:insert-image" | "silica:attach-file" | "silica:remove-attachment" => {
+                if self.editing_or_report(id, window, cx) {
+                    self.editor.update(cx, |e, cx| match id {
+                        "silica:insert-image" => e.attach_image(window, cx),
+                        "silica:attach-file" => e.attach_file(window, cx),
+                        _ => e.remove_attachment(window, cx),
+                    });
                 }
             }
             "editor:follow-link" => {
