@@ -8,7 +8,7 @@ use crate::native::{NativeCommand, Plugin, PluginContext};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use serde_json::Value;
 use std::io::BufWriter;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
@@ -253,6 +253,128 @@ impl Plugin for Templates {
             }
             _ => Err(format!("'{id}' is not a command this plugin registered")),
         }
+    }
+}
+
+/// Templates, dynamic: insert a template the way Templater does — the
+/// date, the time, the title of the note being written into, and a
+/// question to the user — rather than a copy of the bytes as they are.
+///
+/// `{{input:<prompt>}}` needs someone to ask, and [`PluginContext`] has no
+/// way to ask: the app owns the only modal in the process, and a command
+/// the palette ran arrives with no value to carry an answer in. So the
+/// answers come in the command `value` — a prompt-keyed object, or the
+/// answers in the order the template asks them — and a prompt nothing
+/// answered is left in the note exactly as it was written, with a notice
+/// saying so. The engine and its tests are `silica_templates::dynamic`;
+/// this is only the wiring.
+pub struct TemplatesDynamic;
+
+impl Plugin for TemplatesDynamic {
+    fn id(&self) -> &'static str {
+        "silica:templates-dynamic"
+    }
+
+    fn name(&self) -> &'static str {
+        "Templates (dynamic)"
+    }
+
+    fn commands(&self) -> Vec<NativeCommand> {
+        vec![NativeCommand {
+            id: "silica:template-insert-dynamic".into(),
+            name: "Insert template (dynamic)".into(),
+        }]
+    }
+
+    fn run_command(
+        &self,
+        id: &str,
+        value: Option<&Value>,
+        ctx: &PluginContext<'_>,
+    ) -> Result<(), String> {
+        match id {
+            "silica:template-insert-dynamic" => {
+                let template_name = value
+                    .and_then(|v| match v {
+                        Value::String(name) => Some(name.as_str()),
+                        Value::Object(map) => map.get("template").and_then(|name| name.as_str()),
+                        _ => None,
+                    })
+                    .unwrap_or("default");
+                let path = format!("templates/{template_name}.md");
+                if !(ctx.file_exists)(&path)? {
+                    return Err(format!("Template '{template_name}' not found"));
+                }
+                let content = (ctx.read_file)(&path)?;
+                let current = (ctx.current_note)().ok_or_else(|| "No note is open".to_string())?;
+                // * What `{{title}}` reads: the basename of the note being
+                //   written into, as the app's own insert does.
+                let title = Path::new(&current)
+                    .file_stem()
+                    .map(|stem| stem.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let (keyed, ordered) = answers(value);
+                let taken = std::cell::Cell::new(0usize);
+                let cx = silica_templates::Dynamic::new(now_stamp(), &title).with_ask(Box::new(
+                    move |prompt| {
+                        if let Some((_, answer)) = keyed.iter().find(|(p, _)| p == prompt) {
+                            return Some(answer.clone());
+                        }
+                        // * The next answer for a prompt the list covers by
+                        //   position, which is the whole list's point.
+                        let ix = taken.get();
+                        taken.set(ix + 1);
+                        ordered.get(ix).cloned()
+                    },
+                ));
+                let text = silica_templates::expand_dynamic(&content, &cx);
+                (ctx.append_file)(&current, &text)?;
+                if text.contains("{{input:") {
+                    (ctx.notify)("Template inserted; a prompt had no answer and stays as written");
+                }
+                Ok(())
+            }
+            _ => Err(format!("'{id}' is not a command this plugin registered")),
+        }
+    }
+}
+
+/// The answers a command `value` carries for a template's prompts: a
+/// prompt-keyed object, or the lines in the order the template asks them.
+/// Neither is required — a prompt with no answer stays as it was written.
+fn answers(value: Option<&Value>) -> (Vec<(String, String)>, Vec<String>) {
+    let Some(Value::Object(map)) = value else {
+        return (Vec::new(), Vec::new());
+    };
+    match map.get("input") {
+        Some(Value::Object(entries)) => (
+            entries
+                .iter()
+                .filter_map(|(prompt, answer)| Some((prompt.clone(), answer.as_str()?.to_string())))
+                .collect(),
+            Vec::new(),
+        ),
+        Some(Value::Array(lines)) => (
+            Vec::new(),
+            lines
+                .iter()
+                .filter_map(|line| line.as_str().map(str::to_string))
+                .collect(),
+        ),
+        _ => (Vec::new(), Vec::new()),
+    }
+}
+
+/// The local civil time, which is what the dates a template writes are in.
+fn now_stamp() -> silica_templates::Stamp {
+    let naive = chrono::Local::now().naive_local();
+    silica_templates::Stamp {
+        year: chrono::Datelike::year(&naive) as i64,
+        month: chrono::Datelike::month(&naive),
+        day: chrono::Datelike::day(&naive),
+        hour: chrono::Timelike::hour(&naive),
+        minute: chrono::Timelike::minute(&naive),
+        second: chrono::Timelike::second(&naive),
     }
 }
 
@@ -1219,6 +1341,7 @@ pub fn register_all() {
     register_native(Box::new(Backlink));
     register_native(Box::new(OutgoingLink));
     register_native(Box::new(Templates));
+    register_native(Box::new(TemplatesDynamic));
     register_native(Box::new(RandomNote));
     register_native(Box::new(WordCount));
     register_native(Box::new(NoteComposer));

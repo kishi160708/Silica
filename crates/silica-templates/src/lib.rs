@@ -16,7 +16,7 @@ pub mod expand;
 pub mod moment;
 pub mod stamp;
 
-pub use dynamic::{expand_dynamic, DynamicTemplates, ScriptContext};
+pub use dynamic::{expand_dynamic, Ask, Dynamic};
 pub use expand::{expand, Context, DEFAULT_DATE_FORMAT, DEFAULT_TIME_FORMAT};
 pub use moment::{format, unsupported_tokens};
 pub use stamp::Stamp;
