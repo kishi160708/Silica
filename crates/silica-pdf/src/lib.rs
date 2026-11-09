@@ -8,10 +8,15 @@
 
 #![forbid(unsafe_code)]
 
+mod annotate;
 mod outline;
 mod subpath;
 mod text;
 mod textstring;
+
+pub use annotate::{Annotation, AnnotationId, AnnotationLayer, Kind, Point, Rect};
+pub use subpath::{parse_subpath, Subpath};
+pub use text::PdfGlyph;
 
 use std::fmt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -23,9 +28,6 @@ use hayro::kurbo::Affine;
 use hayro::vello_cpu::color::palette::css::WHITE;
 use hayro::vello_cpu::{Pixmap, RasterizerSettings, RenderContext, Resources, TargetInit};
 use hayro::{render_into, RenderCache, RenderSettings};
-
-pub use subpath::{parse_subpath, Subpath};
-pub use text::PdfGlyph;
 
 /// The longest side a rendered page may have, in pixels. A larger request is
 /// scaled down to fit; the bitmap then reports the size it was actually drawn at.
