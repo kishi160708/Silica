@@ -122,12 +122,8 @@ impl Layout {
                 me: i,
                 strength: f.repel * 1500.0,
             };
-            self.tree.apply(
-                &query,
-                &mut self.stack,
-                &mut self.fx[i],
-                &mut self.fy[i],
-            );
+            self.tree
+                .apply(&query, &mut self.stack, &mut self.fx[i], &mut self.fy[i]);
         }
         // * Attraction along edges.
         for &(a, b) in &self.edges {
@@ -347,13 +343,7 @@ impl QuadTree {
     /// Barnes-Hut repulsion of the node pool onto one body. `stack` is the
     /// caller's traversal scratch, cleared and reused across bodies so a
     /// step over a large graph allocates nothing.
-    fn apply(
-        &self,
-        query: &RepelQuery,
-        stack: &mut Vec<usize>,
-        fx: &mut f32,
-        fy: &mut f32,
-    ) {
+    fn apply(&self, query: &RepelQuery, stack: &mut Vec<usize>, fx: &mut f32, fy: &mut f32) {
         let (px, py, me, strength) = (query.px, query.py, query.me, query.strength);
         stack.clear();
         stack.push(0usize);

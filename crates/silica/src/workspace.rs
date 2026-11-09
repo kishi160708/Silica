@@ -76,7 +76,7 @@ use rayon::prelude::*;
 use serde_json::{json, Map, Value};
 use silica_cache::{
     basename, frontmatter_aliases, index_markdown, CachedMetadata, LinkFormat, MetadataCache,
-    PropertyEntry,
+    PropertyEntry, index::TermIndex,
 };
 use silica_commands::{hotkey_label, keystroke, CommandRegistry};
 use silica_formats::bookmarks::{Bookmark, Bookmarks};
@@ -525,6 +525,7 @@ pub const RUNNABLE: &[&str] = &[
     "random-note",
     "file-explorer:move-file",
     "file-explorer:duplicate-file",
+    "file-explorer:rename-file",
     "workspace:edit-file-title",
     "workspace:new-tab",
     "workspace:close",
@@ -597,6 +598,9 @@ pub struct VaultState {
     cache: RwLock<MetadataCache>,
     /// Note text as indexed, for search and mentions.
     texts: RwLock<HashMap<String, Arc<String>>>,
+    /// Inverted term index: term → set of paths containing it. Used by
+    /// `run_search` to avoid scanning the whole vault on every query.
+    pub(crate) index: RwLock<TermIndex>,
     /// Vault-relative path → the scan row. Built once at load and kept in
     /// step with changes, so `file_data` is O(1) instead of a linear scan
     /// over every file in the vault.
@@ -747,11 +751,18 @@ impl VaultState {
             .iter()
             .map(|f| (f.path.clone(), Arc::new(f.clone())))
             .collect();
+        // * Term index: every indexed note's terms, so search narrows to
+        //   candidate files instead of scanning the whole vault.
+        let mut index = TermIndex::new();
+        for (path, text) in &texts {
+            index.insert(path, text);
+        }
         Ok(VaultState {
             root: vault.root().to_path_buf(),
             vault: RwLock::new(vault),
             cache: RwLock::new(cache),
             texts: RwLock::new(texts),
+            index: RwLock::new(index),
             file_index: RwLock::new(file_index),
             file_data_cache: RwLock::new(HashMap::new()),
             app: RwLock::new(app),
@@ -952,6 +963,16 @@ impl VaultState {
         self.texts.read().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Note text for `path`, from the in-memory cache when present and
+    /// from disk otherwise. Evicted notes (tabs closed this session) are
+    /// still searchable and link-rewritable because their text is read
+    /// back from the vault rather than skipped.
+    pub fn text_for(&self, path: &str) -> Option<Arc<String>> {
+        self.texts.read().unwrap_or_else(|e| e.into_inner()).get(path).cloned().or_else(|| {
+            std::fs::read_to_string(self.root.join(path)).ok().map(Arc::new)
+        })
+    }
+
     pub fn build_options(&self) -> reading::BuildOptions {
         reading::BuildOptions {
             strict_line_breaks: self.app().strict_line_breaks.unwrap_or(false),
@@ -1001,16 +1022,19 @@ impl VaultState {
         {
             let mut cache = self.cache.write().unwrap_or_else(|e| e.into_inner());
             let mut texts = self.texts.write().unwrap_or_else(|e| e.into_inner());
+            let mut index = self.index.write().unwrap_or_else(|e| e.into_inner());
             for (c, (path, indexed)) in files.iter().zip(reread) {
                 match (c, indexed) {
                     (FileChange::Removed(_), _) => {
                         if texts.remove(&path).is_some() {
                             changes.removed_notes.push(path.clone());
                         }
+                        index.remove(&path);
                         cache.forget_path(&path);
                     }
                     (_, Some((meta, text))) => {
                         cache.insert_file(path.clone(), meta);
+                        index.insert(path.as_str(), text.as_str());
                         texts.insert(path.clone(), text);
                         changes.notes.push(path.clone());
                     }
@@ -1153,11 +1177,10 @@ impl VaultState {
     /// `(files, links)`.
     pub fn rename_preview(&self, from: &str, to: &str) -> (usize, usize) {
         let plan = self.vault().rename_plan(from, to);
-        let texts = self.texts();
         let rewrites = self
             .cache()
             .plan_rename_rewrites(&plan, self.link_format(), &|p| {
-                texts.get(p).map(|t| t.to_string())
+                self.text_for(p).map(|t| t.to_string())
             });
         (
             rewrites.len(),
@@ -1205,10 +1228,9 @@ impl VaultState {
             //   get the sentence rather than the path and the errno.
             .map_err(|e| e.user_message())?;
         let plan = if update_links {
-            let texts = self.texts();
             self.cache()
                 .plan_rename_rewrites(&moved, self.link_format(), &|p| {
-                    texts.get(p).map(|t| t.to_string())
+                    self.text_for(p).map(|t| t.to_string())
                 })
         } else {
             Vec::new()
@@ -1219,13 +1241,18 @@ impl VaultState {
         //   moved underneath keeps its own bytes and its links are left for
         //   the user, which loses nothing either way.
         let mut stale: Vec<String> = Vec::new();
-        let texts = self.texts();
+        // * A write error on one note must not abort the rest: the rename has
+        //   already happened on disk, so every remaining rewrite still runs
+        //   and the index is always brought up to date. Errors are collected
+        //   and reported once, rather than leaving the vault half-rewritten
+        //   and the index stale.
+        let mut write_errors: Vec<String> = Vec::new();
         for rw in &plan {
             let absolute = self
                 .vault()
                 .write_path(&rw.new_path)
                 .map_err(|e| e.to_string())?;
-            let planned_from = texts.get(&rw.old_path).map(|t| t.to_string());
+            let planned_from = self.text_for(&rw.old_path).map(|t| t.to_string());
             match (std::fs::read_to_string(&absolute), planned_from) {
                 (Ok(on_disk), Some(was)) if on_disk != was => {
                     stale.push(rw.new_path.clone());
@@ -1233,10 +1260,10 @@ impl VaultState {
                 }
                 _ => {}
             }
-            silica_vault::write_no_follow(&absolute, rw.text.as_bytes())
-                .map_err(|e| format!("Could not update links in {}: {e}", rw.new_path))?;
+            if let Err(e) = silica_vault::write_no_follow(&absolute, rw.text.as_bytes()) {
+                write_errors.push(format!("Could not update links in {}: {e}", rw.new_path));
+            }
         }
-        drop(texts);
         let moved_from: HashMap<&str, &str> = moved
             .iter()
             .map(|(a, b)| (a.as_str(), b.as_str()))
@@ -1281,6 +1308,9 @@ impl VaultState {
             changes.notes.push(rw.new_path.clone());
         }
         cache.reresolve();
+        if let Some(first_err) = write_errors.into_iter().next() {
+            return Err(first_err);
+        }
         Ok(RenameOutcome {
             changes,
             renamed: moved,
@@ -5672,6 +5702,11 @@ impl Workspace {
                     self.duplicate(&current, cx);
                 }
             }
+            "file-explorer:rename-file" => {
+                if let Some(current) = self.current.clone() {
+                    self.start_rename(&current, window, cx);
+                }
+            }
             "workspace:edit-file-title" => {
                 if let Some(current) = self.current.clone() {
                     self.start_rename(&current, window, cx);
@@ -6695,6 +6730,10 @@ impl Workspace {
             },
             FileKind::Markdown => match std::fs::read_to_string(state.vault().absolute(path)) {
                 Ok(text) => {
+                    // * Cache the note's text so search, backlinks, and link
+                    //   rewriting can find it even after a previous tab close
+                    //   evicted it from the unbounded map.
+                    state.texts.write().unwrap_or_else(|e| e.into_inner()).insert(path.to_string(), Arc::new(text.clone()));
                     self.words = text.split_whitespace().count();
                     self.chars = text.chars().count();
                     // * The reading view's model is built for the mode
@@ -7175,7 +7214,7 @@ impl Workspace {
         let Some(state) = self.state.clone() else {
             return;
         };
-        let Some(text) = state.texts().get(&source).cloned() else {
+        let Some(text) = state.text_for(&source) else {
             return;
         };
         let Some(mentioned) = text.get(mention.clone()) else {
@@ -7808,8 +7847,8 @@ fn mention_sections(
     let own_refs: Vec<Name<'_>> = own.iter().map(|t| Name { text: t, path }).collect();
     let own_finder = Finder::new(&own_refs);
     let incoming = backlinks::unlinked_incoming(&texts, path, own_finder.as_ref(), extra);
-    let outgoing = match texts.get(path) {
-        Some(text) => backlinks::unlinked_outgoing(text, path, finder, extra),
+    let outgoing = match state.text_for(path) {
+        Some(text) => backlinks::unlinked_outgoing(&text, path, finder, extra),
         None => Section::empty(backlinks::UNLINKED),
     };
     MentionSections {

@@ -5,18 +5,17 @@
 
 use std::ops::Range;
 
-use gpui::{px, Context, Modifiers, Point, Pixels, Window};
+use gpui::{px, Context, Modifiers, Pixels, Point, Window};
 use silica_text::Sel;
 
 use crate::fold::{self, Foldable};
+use crate::preview;
 use crate::reading::model::{RBlock, Widget};
 use silica_formats::properties::PropertiesInDocument;
-use crate::preview;
 
-use super::{Editor, Shaped, shape_display};
+use super::{shape_display, Editor, Shaped};
 
 impl Editor {
-
     /// `foldHeading` and `foldIndent`, read from the vault's `app.json`
     /// as each parse starts; both default to on.
     pub(crate) fn fold_options(&self) -> fold::FoldOptions {

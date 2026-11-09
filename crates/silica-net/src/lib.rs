@@ -7,6 +7,10 @@
 /// The largest response either caller will keep.
 pub const MAX_BYTES: u64 = 32 * 1024 * 1024;
 
+/// The largest response header block either caller will keep. A malicious
+/// server can send arbitrarily large headers; cap them before they fill disk.
+pub const MAX_HEADERS_BYTES: u64 = 64 * 1024;
+
 /// How many redirects a fetch may follow. Each hop is revalidated against
 /// the private-network rules before the connection is made, so a hostile
 /// redirect chain cannot reach an address the original URL was refused.
@@ -15,16 +19,25 @@ pub const MAX_REDIRECTS: u32 = 5;
 /// The seconds a single attempt may take.
 pub const TIMEOUT_SECS: &str = "30";
 
-/// Whether `url` may be fetched at all.
-///
-/// A note can name any image it likes, so the request goes where the note
-/// says. That makes the note able to probe whatever the app can reach, which
-/// on a laptop includes the router's admin page and anything on `localhost`.
-/// A literal private or loopback host is refused here, before any request.
-///
-/// A hostname that resolves to a private address is refused here, before any
-/// request: the name is resolved and every candidate address is checked, so
-/// DNS rebinding cannot reach the local network through a look-alike name.
+/// Strip `user:pass@` from a URL's authority so credentials embedded in a
+/// URL are never sent to the remote host.
+fn strip_userinfo(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = authority.rsplit('@').next().unwrap_or(authority);
+    let rest_after_authority = &rest[authority.len()..];
+    format!("{}://{}{}", scheme, host, rest_after_authority)
+}
+
+/// Ports a fetch may use. Well-known ports below 1024 (except HTTP/HTTPS)
+/// are refused: they are typically router admin pages, mail servers, and
+/// other local services a note should not be able to probe.
+fn allowed_port(port: u16) -> bool {
+    matches!(port, 80 | 443) || port >= 1024
+}
+
 pub fn allows_destination(url: &str) -> bool {
     let Some((scheme, rest)) = url.split_once("://") else {
         return false;
@@ -34,15 +47,21 @@ pub fn allows_destination(url: &str) -> bool {
     }
     let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
     // * Drop any userinfo, then any port.
-    let host = authority.rsplit('@').next().unwrap_or(authority);
-    let host = if host.starts_with('[') {
+    let host_port = authority.rsplit('@').next().unwrap_or(authority);
+    let port = host_port.rsplit_once(':').and_then(|(_, p)| p.parse::<u16>().ok());
+    if let Some(p) = port {
+        if !allowed_port(p) {
+            return false;
+        }
+    }
+    let host = if host_port.starts_with('[') {
         // * A bracketed IPv6 literal.
-        host.split(']')
+        host_port.split(']')
             .next()
-            .unwrap_or(host)
+            .unwrap_or(host_port)
             .trim_start_matches('[')
     } else {
-        host.split(':').next().unwrap_or(host)
+        host_port.split(':').next().unwrap_or(host_port)
     };
     let host = host.trim_end_matches('.').to_ascii_lowercase();
     if host.is_empty() || host == "localhost" || host.ends_with(".localhost") {
@@ -216,7 +235,7 @@ pub fn fetch(request: &Request<'_>) -> Result<Response, String> {
         let mut current = request.url.to_string();
         let mut resolve = resolve_target(&current)
             .ok_or_else(|| format!("the destination resolves to no public address: {current}"))?;
-        for _hop in 0..=MAX_REDIRECTS {
+        for _hop in 0..MAX_REDIRECTS {
             match attempt(request, &current, &resolve, &body_path, &headers_path)? {
                 // * Each hop is revalidated against the destination and DNS
                 //   rules before its connection is made, so a chain cannot
@@ -281,7 +300,7 @@ fn attempt(
         .arg(body_path)
         .arg("-X")
         .arg(request.method)
-        .arg(url);
+        .arg(strip_userinfo(url));
     for header in request.headers {
         command.arg("-H").arg(header);
     }
@@ -307,6 +326,9 @@ fn attempt(
     }
 
     let headers = std::fs::read_to_string(headers_path).unwrap_or_default();
+    if headers.len() as u64 > MAX_HEADERS_BYTES {
+        return Err("response headers exceed the size limit".to_string());
+    }
     let body = std::fs::read(body_path).unwrap_or_default();
     let code = status_code(&headers);
     if let Some(location) = code

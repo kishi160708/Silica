@@ -1918,8 +1918,6 @@ impl SettingsView {
             }
         }
     }
-
-
 }
 
 impl Render for SettingsView {

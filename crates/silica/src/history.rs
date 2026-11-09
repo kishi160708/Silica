@@ -118,8 +118,7 @@ impl History {
             return Vec::new();
         };
         // Group counter-suffixed files by nanosecond stamp.
-        let mut by_stamp: std::collections::BTreeMap<u64, u64> =
-            std::collections::BTreeMap::new();
+        let mut by_stamp: std::collections::BTreeMap<u64, u64> = std::collections::BTreeMap::new();
         for e in entries.filter_map(|e| e.ok()) {
             let name = e.file_name().to_string_lossy().into_owned();
             let Some(stamp) = name

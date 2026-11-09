@@ -6,7 +6,7 @@ pub mod registry;
 #[cfg(windows)]
 pub mod win_fs;
 
-pub use ops::{OpError, TrashOption};
+pub use ops::{io_error, OpError, TrashOption};
 pub use registry::{VaultEntry, VaultRegistry};
 use serde::de::DeserializeOwned;
 use silica_cache::LinkResolver;
@@ -420,6 +420,7 @@ pub fn write_at(root: &Path, relative: &Path, bytes: &[u8]) -> std::io::Result<(
     use std::io::Write as _;
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
     use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::PermissionsExt;
 
     const DIR_FLAGS: libc::c_int = libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
     const FILE_FLAGS: libc::c_int =
@@ -478,16 +479,28 @@ pub fn write_at(root: &Path, relative: &Path, bytes: &[u8]) -> std::io::Result<(
         )));
     }
     // Temporary file beside the target, unique per write so concurrent saves
-    // of one note cannot share a scratch file.
+    // of one note cannot share a scratch file. The pid alone is not enough:
+    // two saves of the same note in the same process would collide.
+    static TMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let counter = TMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let temp_name = format!(
-        ".{}.{}.silica-tmp",
+        ".{}.{}.{}.silica-tmp",
         file_name.to_string_lossy(),
-        std::process::id()
+        std::process::id(),
+        counter
     );
     let temp_c = name(std::ffi::OsStr::new(&temp_name))?;
+    // * Preserve the existing file's permission bits so a 0600 note is not
+    //   widened to 0644 by the rename. A brand-new file keeps 0644.
+    let existing_mode = std::fs::metadata(root.join(relative))
+        .ok()
+        .map(|m| m.permissions().mode() & 0o7777);
     let tmp_fd = unsafe { libc::openat(dir.as_raw_fd(), temp_c.as_ptr(), FILE_FLAGS, 0o644) };
     if tmp_fd < 0 {
         return Err(std::io::Error::last_os_error());
+    }
+    if let Some(mode) = existing_mode {
+        let _ = unsafe { libc::fchmod(tmp_fd, mode) };
     }
     let mut tmp = unsafe { std::fs::File::from_raw_fd(tmp_fd) };
     tmp.write_all(bytes)?;
@@ -511,6 +524,27 @@ pub fn write_at(root: &Path, relative: &Path, bytes: &[u8]) -> std::io::Result<(
     // * The directory entry itself is what a crash could lose.
     if let Ok(dir_file) = std::fs::File::open(root) {
         let _ = dir_file.sync_all();
+    }
+    Ok(())
+}
+
+/// Recursively deletes orphaned `.name.pid.silica-tmp` scratch files left
+/// beside notes by a previous crash. A temp file in use is held open by a
+/// live write, so deletion never collides with it.
+fn cleanup_temp_files(root: &Path) -> std::io::Result<()> {
+    if !root.is_dir() {
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(root)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            cleanup_temp_files(&path)?;
+        } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+            if name.ends_with(".silica-tmp") && name.starts_with('.') {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
     }
     Ok(())
 }
@@ -718,8 +752,9 @@ impl Vault {
     ) -> Result<Vault, VaultError> {
         let root = root.as_ref().to_path_buf();
         if !root.is_dir() {
-            return Err(VaultError::NotADirectory(root));
+            return Err(VaultError::NotADirectory(root.clone()));
         }
+        let root_for_cleanup = root.clone();
         let mut vault = Vault {
             root,
             config_dir: config_dir.to_string(),
@@ -727,6 +762,14 @@ impl Vault {
             folders: Vec::new(),
         };
         vault.rescan()?;
+        // * Drop orphaned scratch files from a previous crash: any
+        //   `.name.pid.silica-tmp` left beside a note is stale and safe to
+        //   delete (a write in progress holds the file open, so an unlinked
+        //   temp never collides with a live write).
+        cleanup_temp_files(&root_for_cleanup).map_err(|e| VaultError::Io {
+            path: root_for_cleanup.clone(),
+            source: e,
+        })?;
         Ok(vault)
     }
 
@@ -852,6 +895,27 @@ impl Vault {
             }
         }
         Ok(absolute)
+    }
+
+    /// Creates every parent directory of `absolute` under the vault, one
+    /// `openat` component at a time so no component can be swapped for a link
+    /// mid-walk. Falls back to `std::fs::create_dir_all` on platforms without
+    /// handle-verified directory creation.
+    pub fn create_parent_dirs_secure(&self, absolute: &Path) -> Result<(), OpError> {
+        if let Some(parent) = absolute.parent() {
+            let relative = parent
+                .strip_prefix(&self.root)
+                .map_err(|_| io_error("create folder", parent.to_path_buf(), std::io::Error::new(std::io::ErrorKind::NotFound, "path not under root")))?;
+            #[cfg(any(unix, windows))]
+            {
+                create_dir_all_at(&self.root, relative).map_err(|e| io_error("create folder", parent.to_path_buf(), e))?;
+            }
+            #[cfg(not(any(unix, windows)))]
+            {
+                std::fs::create_dir_all(parent).map_err(|e| io_error("create folder", parent.to_path_buf(), e))?;
+            }
+        }
+        Ok(())
     }
 
     /// A trailing dot or space is silently dropped by Win32 path parsing,
@@ -1335,7 +1399,6 @@ fn same_config_value(old: &serde_json::Value, new: &serde_json::Value) -> bool {
 mod tests {
     use super::*;
     use std::fs;
-
     /// A configuration that cannot be read must not be replaced.
     ///
     /// The bytes are made unreadable — not deleted — so the read fails with
@@ -2377,6 +2440,68 @@ mod tests {
             std::fs::read_to_string(outside.path().join("real.md")).unwrap(),
             "outside",
             "the file behind the junction was changed"
+        );
+    }
+
+    /// * Writing over an existing note keeps its permission bits: a 0600 note
+    ///   is not widened to 0644 by the temp-file-plus-rename write.
+    #[cfg(unix)]
+    #[test]
+    fn write_at_keeps_existing_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = sample_vault();
+        let path = dir.path().join("Note.md");
+        fs::set_permissions(&path, PermissionsExt::from_mode(0o600)).unwrap();
+
+        write_at(dir.path(), Path::new("Note.md"), b"updated
+").unwrap();
+
+        let meta = fs::metadata(&path).unwrap();
+        assert_eq!(
+            PermissionsExt::mode(&meta.permissions()) & 0o7777,
+            0o600,
+            "write widened the file's permission bits",
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), "updated
+");
+    }
+
+    /// * Concurrent saves of the same note cannot collide: the temp-file name
+    ///   includes a per-process counter, so two saves of one note in the same
+    ///   process never share a scratch file and neither fails with EEXIST.
+    #[cfg(unix)]
+    #[test]
+    fn write_at_concurrent_saves_do_not_collide() {
+
+        let dir = sample_vault();
+        let vault_path = dir.path().to_path_buf();
+        let note_path = vault_path.join("Note.md");
+        fs::write(&note_path, "original
+").unwrap();
+
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let mut handles = Vec::new();
+        for i in 0..8u64 {
+            let vault_path = vault_path.clone();
+            let barrier = std::sync::Arc::clone(&barrier);
+            handles.push(std::thread::spawn(move || {
+                barrier.wait();
+                write_at(&vault_path, Path::new("Note.md"), format!("write {i}
+").as_bytes())
+            }));
+        }
+        for h in handles {
+            let result = h.join().unwrap();
+            assert!(result.is_ok(), "concurrent write failed: {result:?}");
+        }
+
+        // * Every write completed and the file holds one of the written values.
+        let final_text = fs::read_to_string(&note_path).unwrap();
+        assert!(
+            (0..8u64).any(|i| final_text == format!("write {i}
+")),
+            "unexpected final content: {final_text:?}",
         );
     }
 }

@@ -13,8 +13,8 @@
 //! dispatcher. A menu can therefore never offer something the palette does
 //! not.
 
-use crate::workspace::{RunCommand, VaultState};
 use crate::i18n::t;
+use crate::workspace::{RunCommand, VaultState};
 
 /// Whether the application menu bar should be the OS's own: `nativeMenus`
 /// in `appearance.json`, off by default as Obsidian has it.

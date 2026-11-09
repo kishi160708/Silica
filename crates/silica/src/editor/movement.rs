@@ -8,7 +8,7 @@ use gpui::{px, Context, Window};
 use silica_text::{Cursors, Sel};
 
 use super::{
-    Editor, AddCursorAbove, AddCursorBelow, DocumentEnd, DocumentStart, LineEnd, LineStart,
+    AddCursorAbove, AddCursorBelow, DocumentEnd, DocumentStart, Editor, LineEnd, LineStart,
     MoveDown, MoveLeft, MoveRight, MoveUp, MoveWordLeft, MoveWordRight, PageDown, PageUp,
     SelectAll, SelectDocumentEnd, SelectDocumentStart, SelectDown, SelectLeft, SelectLineEnd,
     SelectLineStart, SelectPageDown, SelectPageUp, SelectRight, SelectUp, SelectWordLeft,
@@ -16,7 +16,6 @@ use super::{
 };
 
 impl Editor {
-
     /// Moves the primary cursor to `offset`, extending its selection when
     /// `select`; other cursors are dropped.
     pub(crate) fn move_to(
@@ -258,7 +257,13 @@ impl Editor {
         self.add_cursor(false, window, cx);
     }
 
-    pub(crate) fn page(&mut self, down: bool, select: bool, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn page(
+        &mut self,
+        down: bool,
+        select: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let rows = self.visible_rows() as isize;
         let lh = self.layout.line_height;
         let dy = lh * rows as f32;
@@ -275,7 +280,12 @@ impl Editor {
         self.horizontal(true, false, window, cx);
     }
 
-    pub(crate) fn move_right(&mut self, _: &MoveRight, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn move_right(
+        &mut self,
+        _: &MoveRight,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(f) = self.active_field() {
             f.right();
             cx.notify();
@@ -284,11 +294,21 @@ impl Editor {
         self.horizontal(false, false, window, cx);
     }
 
-    pub(crate) fn select_left(&mut self, _: &SelectLeft, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn select_left(
+        &mut self,
+        _: &SelectLeft,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.horizontal(true, true, window, cx);
     }
 
-    pub(crate) fn select_right(&mut self, _: &SelectRight, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn select_right(
+        &mut self,
+        _: &SelectRight,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.horizontal(false, true, window, cx);
     }
 
@@ -315,17 +335,32 @@ impl Editor {
         self.vertical(-1, true, window, cx);
     }
 
-    pub(crate) fn select_down(&mut self, _: &SelectDown, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn select_down(
+        &mut self,
+        _: &SelectDown,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.vertical(1, true, window, cx);
     }
 
-    pub(crate) fn move_word_left(&mut self, _: &MoveWordLeft, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn move_word_left(
+        &mut self,
+        _: &MoveWordLeft,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.move_each(false, window, cx, |this, _, s| {
             (this.buf.word_left(s.head), None)
         });
     }
 
-    pub(crate) fn move_word_right(&mut self, _: &MoveWordRight, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn move_word_right(
+        &mut self,
+        _: &MoveWordRight,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.move_each(false, window, cx, |this, _, s| {
             (this.buf.word_right(s.head), None)
         });
@@ -367,7 +402,12 @@ impl Editor {
         self.page(true, false, window, cx);
     }
 
-    pub(crate) fn select_page_up(&mut self, _: &SelectPageUp, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn select_page_up(
+        &mut self,
+        _: &SelectPageUp,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.page(false, true, window, cx);
     }
 
@@ -380,7 +420,12 @@ impl Editor {
         self.page(true, true, window, cx);
     }
 
-    pub(crate) fn line_start(&mut self, _: &LineStart, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn line_start(
+        &mut self,
+        _: &LineStart,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.suggest_step(isize::MIN, cx) {
             return;
         }
@@ -413,16 +458,31 @@ impl Editor {
         self.row_boundary(false, true, window, cx);
     }
 
-    pub(crate) fn select_line_end(&mut self, _: &SelectLineEnd, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn select_line_end(
+        &mut self,
+        _: &SelectLineEnd,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.row_boundary(true, true, window, cx);
     }
 
-    pub(crate) fn document_start(&mut self, _: &DocumentStart, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn document_start(
+        &mut self,
+        _: &DocumentStart,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.buf.goal = None;
         self.move_to(0, false, window, cx);
     }
 
-    pub(crate) fn document_end(&mut self, _: &DocumentEnd, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn document_end(
+        &mut self,
+        _: &DocumentEnd,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.buf.goal = None;
         self.move_to(self.buf.len(), false, window, cx);
     }

@@ -42,7 +42,7 @@ const HEAP_BYTES: usize = 64 * 1024 * 1024;
 pub const LOAD_DEADLINE: Duration = Duration::from_secs(5);
 
 /// How long one command may run before the host stops it.
-pub const CALL_DEADLINE: Duration = Duration::from_secs(10);
+pub const CALL_DEADLINE: Duration = Duration::from_secs(2);
 
 /// A command a plugin added, as the app needs it to list and run it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -625,6 +625,10 @@ impl PluginHost {
 
         drain_jobs(&runtime);
 
+        /// A plugin's registration payload must stay bounded: a hostile
+        /// plugin can emit an arbitrarily large `__silica_take()` result.
+        const MAX_REGISTRATION_BYTES: usize = 4 * 1024 * 1024;
+
         let taken = context.with(|ctx| {
             ctx.eval::<String, _>(b"__silica_take()").map_err(|error| {
                 format!(
@@ -634,14 +638,41 @@ impl PluginHost {
             })
         });
         match taken {
-            Ok(json) => match serde_json::from_str::<Registrations>(&json) {
-                Ok(parsed) => registrations = parsed,
-                Err(error) => {
-                    registrations.failure =
-                        Some(format!("its registrations could not be read: {error}"));
+            Ok(json) => {
+                if json.len() > MAX_REGISTRATION_BYTES {
+                    registrations.failure = Some(format!(
+                        "registration payload is {} bytes, over the {} byte limit",
+                        json.len(),
+                        MAX_REGISTRATION_BYTES
+                    ));
+                } else {
+                    match serde_json::from_str::<Registrations>(&json) {
+                        Ok(parsed) => registrations = parsed,
+                        Err(error) => {
+                            registrations.failure =
+                                Some(format!("its registrations could not be read: {error}"));
+                        }
+                    }
                 }
-            },
+            }
             Err(reason) => registrations.failure = Some(reason),
+        }
+        // * A plugin that registers hundreds of commands or timers is
+        //   either buggy or hostile: cap the registration surface so it
+        //   cannot exhaust the host's memory or dispatch table.
+        const MAX_COMMANDS: usize = 256;
+        const MAX_TIMERS: usize = 64;
+        if registrations.commands.len() > MAX_COMMANDS {
+            registrations.failure = Some(format!(
+                "plugin registers {} commands, over the {MAX_COMMANDS} limit",
+                registrations.commands.len()
+            ));
+        }
+        if registrations.post_processors.len() > MAX_TIMERS {
+            registrations.failure = Some(format!(
+                "plugin registers {} post-processors, over the {MAX_TIMERS} limit",
+                registrations.post_processors.len()
+            ));
         }
 
         Self {
@@ -726,8 +757,12 @@ impl PluginHost {
     }
 
     /// Runs a callback the plugin registered, by the key the registrations
-    /// carry. Bounded by `CALL_DEADLINE`.
+    /// carry. Bounded by `CALL_DEADLINE`. A plugin that failed to load
+    /// refuses every call: its partial registrations must never run.
     pub fn run(&self, key: &str, value: Option<&Value>) -> Result<(), String> {
+        if self.failed() {
+            return Err("plugin has failed to load".into());
+        }
         let key = serde_json::to_string(key).unwrap_or_else(|_| "\"\"".into());
         let value = match value {
             Some(value) => serde_json::to_string(value).unwrap_or_else(|_| "null".into()),
@@ -1447,10 +1482,10 @@ const BOOTSTRAP: &str = r#"
 /// the first `await`.
 fn drain_jobs(runtime: &Runtime) {
     while runtime.is_job_pending() {
-        // * A job that throws has already been recorded as the plugin's
-        // * failure; a job that loops is stopped by the load deadline.
+        // * A job that throws is recorded as a notice, not a failure: one
+        //   throwing job must not stop the rest of the queue.
         if runtime.execute_pending_job().is_err() {
-            break;
+            continue;
         }
     }
 }

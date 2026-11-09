@@ -23,7 +23,9 @@ enum Effect {
     Code,
     Kbd,
     Mark,
+    /// Superscript: raised above the baseline with reduced size.
     Sup,
+    /// Subscript: lowered below the baseline with reduced size.
     Sub,
     /// A heading, which the reading view can only show as bold: one run of
     /// text carries one size, and a heading inside raw HTML is inline here.

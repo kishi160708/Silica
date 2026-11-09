@@ -27,6 +27,20 @@ use std::sync::{Arc, Mutex, PoisonError};
 /// are let go. An A4 page at 2x is about 8 MB; this is a few dozen of them.
 pub const PAGE_CACHE_BYTES: usize = 256 << 20;
 
+/// A PDF larger than this is refused before it is read into memory, so a
+/// huge or sparse file cannot allocate the whole thing just to be parsed.
+pub const MAX_PDF_BYTES: u64 = 512 << 20;
+
+/// Checks a file's metadata before it is read, returning an error when the
+/// file is larger than `MAX_PDF_BYTES`.
+fn check_pdf_size(meta: &std::fs::Metadata) -> Result<(), String> {
+    let size = meta.len();
+    if size > MAX_PDF_BYTES {
+        return Err(format!("the file is too large ({size} bytes)"));
+    }
+    Ok(())
+}
+
 /// A parsed file and what every drawing reads off it before any page is
 /// rendered: the page sizes for layout, the outline for the sidebar, the
 /// title.
@@ -292,7 +306,10 @@ pub fn page_source(absolute: PathBuf, page: usize, scale: f32) -> ImageSource {
 }
 
 fn load(path: &Path) -> DocState {
-    let bytes = match std::fs::read(path) {
+    let bytes = match std::fs::metadata(path)
+        .and_then(|m| check_pdf_size(&m).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))
+        .and_then(|_| std::fs::read(path))
+    {
         Ok(bytes) => bytes,
         Err(err) => return DocState::Failed(err.to_string()),
     };
@@ -420,5 +437,31 @@ mod tests {
         assert_eq!(PageKey::new(path, 0, 1.0004), PageKey::new(path, 0, 1.0));
         assert_ne!(PageKey::new(path, 0, 1.001), PageKey::new(path, 0, 1.0));
         assert_eq!(PageKey::new(path, 0, 0.0).scale(), 0.001);
+    }
+
+    /// A file larger than MAX_PDF_BYTES is refused before it is read.
+    #[test]
+    fn an_oversized_pdf_is_refused_before_read() {
+        use std::fs::metadata;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.pdf");
+
+        // * A file over the cap is refused.
+        let over = MAX_PDF_BYTES + 1;
+        {
+            let f = std::fs::File::create(&path).unwrap();
+            f.set_len(over).unwrap();
+        }
+        let meta = metadata(&path).unwrap();
+        assert!(check_pdf_size(&meta).is_err());
+
+        // * A file at the cap is accepted.
+        {
+            let f = std::fs::File::create(&path).unwrap();
+            f.set_len(MAX_PDF_BYTES).unwrap();
+        }
+        let meta = metadata(&path).unwrap();
+        assert!(check_pdf_size(&meta).is_ok());
     }
 }

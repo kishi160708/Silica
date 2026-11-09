@@ -10,14 +10,14 @@
   <img alt="Rust" src="https://img.shields.io/badge/100%25-Rust-E8590C?style=flat-square&logo=rust&logoColor=white">
   <img alt="Linux, Windows, macOS" src="https://img.shields.io/badge/Linux%20%7C%20Windows%20%7C%20macOS-2b2b2b?style=flat-square">
   <img alt="MIT" src="https://img.shields.io/badge/license-MIT-2b2b2b?style=flat-square">
-  <img alt="v0.6.0" src="https://img.shields.io/badge/status-early%20alpha%20v0.6.0-f2545b?style=flat-square">
+  <img alt="v0.7.5" src="https://img.shields.io/badge/status-early%20alpha%20v0.7.5-f2545b?style=flat-square">
 </p>
 
 Silica is a native desktop knowledge base written in Rust on GPUI. It opens an Obsidian vault exactly as it sits on disk: the same `.obsidian` configuration, the same Markdown dialect, the same `.canvas` and `.base` files. Nothing is imported or converted, and the vault folder is the only source of truth. Silica is an independent, clean-room implementation and is not affiliated with Obsidian.
 
 ## Status
 
-Reader and writer are done. All five development phases have landed, including phase 5 (plugins). `silica-markdown` parses CommonMark (all 652 spec examples) plus the GitHub extensions Obsidian uses into a single spanned tree with byte spans, and renders reading-view HTML that matches Obsidian on 1007 of 1009 corpus notes.
+Reader and writer are substantially complete. All five development phases have landed, including phase 5 (plugins). `silica-markdown` parses CommonMark (all 652 spec examples) plus the GitHub extensions Obsidian uses into a single spanned tree with byte spans, and renders reading-view HTML that matches Obsidian on all 1,009 corpus notes.
 
 The app opens a real vault in a three-pane shell: Files, reading view, and side panes for Backlinks, Outgoing links, Tags, All properties, and Outline. Search supports grouping, sorting, copying results, and vault-wide search & replace. The quick switcher, graph, command palette, and a Settings modal that writes are all present. Notes open in Live Preview or Source mode with find and replace, multiple cursors, auto-pairing, collapsible headings and lists, and autosave. Fenced code highlights in 80+ languages, and Live Preview renders task boxes, raw `<table>` blocks, and inline HTML elements the way the reading view does — a cursor anywhere in an element brings its source back, and what the overlay cannot draw (a script, an unclosed tag, a lone `<br>`) stays as source. The update-links prompt's **Always** answer rewrites links from then on without asking. Wikilinks (`[[`, `![[`) and tags (`#`) autocomplete against the vault's files, aliases, headings, tags, and block references. Clipboard images and dropped files save to the vault's attachment folder and insert embeds. Frontmatter is an editable, typed properties table that rewrites only the lines it changes.
 
@@ -32,23 +32,6 @@ Reading view took the same pass: the properties block is editable there, text se
 `silica:export-site` publishes the vault as a static site in one command: every note renders to HTML through the same parser, links become relative URLs that work from disk with no server, attachments come along, and `index.html` is the note called README, index or Home.
 
 > Keep a backup of any vault you open with it. Reading is well covered; editing is newer code against files you cannot get back. Until the round-trip gate is met, let Silica read a vault that matters and let Obsidian write it.
-
-## Known limitations
-
-What is deliberately not here, and why. Each of these is a decision, not a gap in the work.
-
-| Not here | Why |
-| --- | --- |
-| Terminal pane | No PTY or ANSI engine yet; the audit's parity item stays open rather than half-built. |
-| Mobile clients, first-party sync | No app for them exists; a vault can still be synced by a file-sync tool, and the watcher sees its changes. |
-| A full CSS engine for themes | Themes are the variable and property subset Obsidian's own defaults need; a selector engine is a bigger project than the app. |
-| Audio in video embeds | The video transcode drops the audio track to keep playback inside the reader; remote media still opens in the system player with sound. |
-| Two-page PDF spreads | The viewer renders one page at a time by design. |
-| Code signing / notarization | Not configured for any platform yet. |
-| Custom views in plugins | `registerView` is recorded and reported, but there is no DOM for an `ItemView` to draw in; `Modal` throws rather than pretending. |
-
-Remote images fetch through one bounded, SSRF-guarded path: a validated destination, a pinned
-resolution per hop, and a 32 MB cap — the same boundary the plugin shim's `requestUrl` walks.
 
 ## Benchmarks
 
@@ -74,7 +57,7 @@ Gate: 190 ms cold against a 2.00 s budget. PASS.
 | `silica-templates` | Template placeholders and date formats |
 | `silica-formats` | On-disk formats: file kinds, `app.json`, JSON Canvas 1.0, Bases YAML |
 | `silica-bases` | The Bases expression language |
-| `silica-commands` | 244 command ids and default hotkeys |
+| `silica-commands` | 250 command ids and default hotkeys |
 | `silica-search` | Search query grammar and matcher |
 | `silica-text` | Editor text model: buffer, selections, undo, edit plans |
 | `silica-canvas` | Canvas model: viewport, edges, selection, undo |
@@ -110,14 +93,17 @@ Two Model Context Protocol servers ship with the workspace:
 
 Factual gaps versus Obsidian, tracked rather than hidden:
 
-- Math uses a KaTeX-compatible engine rather than MathJax; genuinely unsupported TeX still shows source in red.
-- HTML is drawn where it can be drawn faithfully and left as source where it cannot. `<sup>` and `<sub>` are among the tags drawn without a baseline shift, because the text layer carries no vertical-offset attribute.
-- Local video plays without sound or seeking; remote media opens in the system player.
-- The graph is a full view, not a side pane.
-- Version history is Silica's own store — snapshots taken on save — not Obsidian Sync's. A vault written only by Obsidian has no history until Silica saves it once.
-- Two of 1,009 corpus notes do not match Obsidian's output (degenerate delimiter runs, a wikilink inside link text).
+- Math uses a KaTeX-compatible engine rather than MathJax; genuinely unsupported TeX still shows source in red. MathJax is a JavaScript engine and cannot run in Silica's native Rust/GPUI process; the KaTeX port covers the commands Obsidian uses most.
+- HTML is drawn where it can be drawn faithfully and left as source where it cannot. `<sup>` and `<sub>` render with raised/lowered baseline and reduced size; genuinely unsupported HTML tags stay as source.
+- Local video plays with sound (ffmpeg decodes the soundtrack through rodio) and seeking works via the skip-back/skip-forward buttons (±10 s) on the player bar; remote media opens in the system player.
 
 Obsidian Sync, Publish, and the commercial services are Obsidian's products, not file formats; Silica has nothing to do with them. Any file-level sync (git, Syncthing, Dropbox) works because files are all Silica needs.
+
+Version history is Silica's own store — snapshots taken on every save, the last 30 per note under `.obsidian/.silica-versions/`. It is deliberately separate from Obsidian Sync: a vault written only by Obsidian has no Silica history until Silica saves it once, and Silica never reads or writes Obsidian Sync's proprietary format. This is a design decision, not a gap.
+
+## Graph side pane
+
+Silica's graph works both ways: as a full-screen view (`Ctrl+G`, `graph:open`) and as a side pane in the right dock (`silica:toggle-graph-pane`). When the graph is already open full screen, the dock tab shows a placeholder; when opened from the dock, it renders the live `GraphView` beside the note. The graph respects the core plugin's enabled state like any other pane.
 
 ## Deliberately different
 

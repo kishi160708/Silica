@@ -397,6 +397,7 @@ impl SearchPane {
         let re = regex_for_query(&query, self.matching_case);
 
         let mut modified = Vec::new();
+        let mut failed: Vec<String> = Vec::new();
         for file in &self.results {
             if let Some(target) = target_path {
                 if file.path != target {
@@ -406,24 +407,40 @@ impl SearchPane {
             if file.hits.is_empty() {
                 continue;
             }
-            let orig_text = match state.texts().get(&file.path) {
-                Some(t) => t.to_string(),
-                None => match std::fs::read_to_string(state.vault().absolute(&file.path)) {
-                    Ok(t) => t,
-                    Err(_) => continue,
-                },
+            // Always read fresh from disk: the index text may be stale (up to
+            // a watcher tick behind an external edit), and applying stale byte
+            // offsets to a changed file would corrupt it.
+            let disk_path = state.vault().absolute(&file.path);
+            let Ok(disk_text) = std::fs::read_to_string(&disk_path) else {
+                failed.push(format!("{}: cannot read from disk", file.path));
+                continue;
             };
-            let new_text = apply_replacements(&orig_text, &file.hits, re.as_ref(), &replacement);
-            if new_text != orig_text
-                && state
-                    .vault()
-                    .write_bytes(&file.path, new_text.as_bytes())
-                    .is_ok()
-            {
-                modified.push(FileChange::Modified(file.path.clone()));
+            // The hit offsets were computed against the indexed text. If the
+            // file changed on disk since the last absorb, refuse to clobber it.
+            if let Some(indexed_text) = state.texts().get(&file.path) {
+                if indexed_text.as_str() != disk_text.as_str() {
+                    failed.push(format!(
+                        "{}: changed on disk since indexing; re-run search",
+                        file.path
+                    ));
+                    continue;
+                }
+            }
+            let new_text = apply_replacements(&disk_text, &file.hits, re.as_ref(), &replacement);
+            if new_text == disk_text {
+                continue;
+            }
+            match state.vault().write_bytes(&file.path, new_text.as_bytes()) {
+                Ok(()) => modified.push(FileChange::Modified(file.path.clone())),
+                Err(err) => failed.push(format!("{0}: {err}", file.path)),
             }
         }
 
+        if !failed.is_empty() {
+            self.error = Some(failed.join("\n").into());
+        } else {
+            self.error = None;
+        }
         if !modified.is_empty() {
             let changes = state.absorb(modified);
             cx.emit(SearchEvent::FilesChanged(changes));
@@ -1906,14 +1923,43 @@ pub fn run_search(search: &Search, state: &VaultState) -> Vec<FileResult> {
         .map(|f| (f.path.clone(), (f.mtime, f.ctime)))
         .collect();
     let files: Vec<(&str, &CachedMetadata)> = cache.files().collect();
+
+    // * Term index: narrow the candidate set before the full matcher.
+    //   Only simple AND queries over content terms use it; anything with
+    //   `OR`, `NOT`, field scoping, or regex falls back to the full scan.
+    let candidates: Option<HashSet<String>> = index_terms(search.query()).map(|terms| {
+        let set: HashSet<String> = state
+            .index
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .candidates(&terms.iter().map(|s| s.as_str()).collect::<Vec<&str>>())
+            .into_iter()
+            .collect();
+        set
+    });
+
+    let files: Vec<(&str, &CachedMetadata)> = match &candidates {
+        Some(paths) => files
+            .into_iter()
+            .filter(|(p, _)| paths.contains(*p))
+            .collect(),
+        None => files,
+    };
     let mut results: Vec<FileResult> = files
         .par_iter()
         .filter_map(|(path, meta)| {
-            let text = texts.get(*path)?;
-            let (tags, blocks, sections, tasks) = inputs(meta, text);
+            let text: Arc<String> = match texts.get(*path).cloned() {
+                Some(t) => t,
+                None => match std::fs::read_to_string(state.root.join(path)) {
+                    Ok(t) => Arc::new(t),
+                    Err(_) => return None,
+                },
+            };
+            let text_ref: &str = &text;
+            let (tags, blocks, sections, tasks) = inputs(meta, text_ref);
             let file = SearchFile {
                 path,
-                content: text,
+                content: text_ref,
                 tags: &tags,
                 frontmatter: meta.frontmatter.as_ref(),
                 blocks: &blocks,
@@ -1932,8 +1978,8 @@ pub fn run_search(search: &Search, state: &VaultState) -> Vec<FileResult> {
                 path: path.to_string(),
                 name: name.to_string(),
                 name_ranges: clamp(&hits.name, name.len()),
-                preview: preview_of(text),
-                matches: match_lines(text, &hits.content),
+                preview: preview_of(&text),
+                matches: match_lines(text_ref, &hits.content),
                 hits: hits.content.clone(),
                 mtime,
                 ctime,
@@ -1942,6 +1988,31 @@ pub fn run_search(search: &Search, state: &VaultState) -> Vec<FileResult> {
         .collect();
     sort_results(&mut results, SortOrder::Alphabetical);
     results
+}
+
+/// Extract content search terms from a query if it's safe to use AND
+/// semantics over the term index. Returns `None` when the query has `OR`,
+/// `NOT`, field scoping, or regex — those fall back to a full scan.
+///
+/// `All` of bare `Text`/`Exact` terms is safe: a file must contain every
+/// term, so intersecting posting lists is a correct superset filter. The
+/// full matcher still runs on every candidate, so false positives are
+/// harmless; false negatives are the only risk, avoided by refusing
+/// complex queries.
+fn index_terms(query: &Query) -> Option<Vec<String>> {
+    match query {
+        Query::Text(s) | Query::Exact(s) => Some(vec![s.clone()]),
+        Query::All(children) => {
+            let mut terms = Vec::new();
+            for c in children {
+                let t = index_terms(c)?;
+                terms.extend(t);
+            }
+            Some(terms)
+        }
+        Query::Not(_) | Query::Any(_) | Query::Field(_, _) => None,
+        _ => Some(Vec::new()),
+    }
 }
 
 /// Puts results in `order`. The name orders are Obsidian's alphabetical

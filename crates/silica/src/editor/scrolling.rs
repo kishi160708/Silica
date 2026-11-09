@@ -8,7 +8,6 @@ use gpui::{px, Context, Pixels, Point, Window};
 use super::Editor;
 
 impl Editor {
-
     /// Brings `scroll_px` back inside `scroll_line`'s rows.
     pub(crate) fn normalize_scroll(&mut self, window: &mut Window) {
         let lh = self.layout.line_height;

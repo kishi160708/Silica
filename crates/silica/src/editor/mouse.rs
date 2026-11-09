@@ -10,23 +10,22 @@ use std::sync::Arc;
 
 use gpui::{point, px, Context, MouseDownEvent, Pixels, Point, Window};
 
-use silica_formats::properties as props;
 use crate::reading::model::LinkTarget;
 use crate::workspace::VaultState;
+use silica_formats::properties as props;
 use silica_suggest::blocks::{self, IdInsertion, Placement};
 use silica_suggest::{self as suggest, Accept, BlockId, Suggestion};
 
 use super::{newline_of, CellEdit, Editor, EditorEvent, Hit, SuggestState};
 use crate::preview;
-use silica_markdown::highlight::HighlightKind;
 use crate::properties::{self, Field, Part, PillStep, Target};
 use crate::reading::view::{PropertyAction, TableAction};
 use crate::suggest::Anchor;
+use silica_markdown::highlight::HighlightKind;
 use silica_text::table;
 use silica_text::{Cursors, EditKind, Sel};
 
 impl Editor {
-
     /// The visible line under a window point, shaped as painted, and the
     /// display byte nearest the point.
     /// Reopens, refreshes or closes the autocompletion popup for the text
@@ -70,7 +69,11 @@ impl Editor {
     }
 
     /// The rows the vault offers for `t`, read under its locks.
-    pub(crate) fn offer(&self, state: &Arc<VaultState>, t: &suggest::Triggered<'_>) -> Vec<Suggestion> {
+    pub(crate) fn offer(
+        &self,
+        state: &Arc<VaultState>,
+        t: &suggest::Triggered<'_>,
+    ) -> Vec<Suggestion> {
         let vault = state.vault();
         let cache = state.cache();
         let show_unsupported = state.app().show_unsupported_files.unwrap_or(false);
@@ -397,7 +400,11 @@ impl Editor {
     }
 
     /// The buffer offset under a window point, using the last frame's layout.
-    pub(crate) fn offset_at_point(&self, window: &mut Window, position: Point<Pixels>) -> Option<usize> {
+    pub(crate) fn offset_at_point(
+        &self,
+        window: &mut Window,
+        position: Point<Pixels>,
+    ) -> Option<usize> {
         let hit = self.display_hit(window, position)?;
         let col = self
             .buf
@@ -408,7 +415,12 @@ impl Editor {
     /// The link under source byte `col` of `line`. With `rendered_only`,
     /// only a link Live Preview shows rendered counts (a revealed one is
     /// being edited).
-    pub(crate) fn link_at(&self, line: usize, col: usize, rendered_only: bool) -> Option<LinkTarget> {
+    pub(crate) fn link_at(
+        &self,
+        line: usize,
+        col: usize,
+        rendered_only: bool,
+    ) -> Option<LinkTarget> {
         let spans = self.highlights.get(line)?;
         let touch = self.touches_on_line(line);
         let text = self.buf.line_text(line);
@@ -739,7 +751,12 @@ impl Editor {
 
     /// A click on a table cell: commit whatever field was open, then take
     /// this cell's text into a new one.
-    pub(crate) fn table_action(&mut self, action: TableAction, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn table_action(
+        &mut self,
+        action: TableAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let TableAction::Edit { span } = action;
         self.commit_property_field(Some(window), cx);
         // * The click arrives in the coordinates the widget was built from,
@@ -986,7 +1003,12 @@ impl Editor {
         true
     }
 
-    pub(crate) fn mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         window.focus(&self.focus_handle, cx);
         if self.scrollbar_mouse_down(event.position, window, cx) {
             return;
@@ -1052,7 +1074,12 @@ impl Editor {
         cx.notify();
     }
 
-    pub(crate) fn mouse_drag(&mut self, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn mouse_drag(
+        &mut self,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.thumb_drag.is_some() {
             self.scrollbar_drag(position, window, cx);
             return;

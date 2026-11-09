@@ -32,7 +32,6 @@ use crate::reading::model::{
 use crate::reading::view::{LinkHandler, PropertiesHost, ReadingView, Renderer, ToggleHandler};
 use crate::reading::view::{TableAction, TableHost};
 
-use silica_suggest::{self as suggest};
 use crate::suggest::SuggestState;
 use crate::text_input::{InputEvent, TextInput};
 use crate::theme::Theme;
@@ -42,19 +41,20 @@ use gpui::{
     Bounds, ClipboardItem, Context, CursorStyle, DispatchPhase, Element, ElementId,
     ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable, Font,
     FontStyle, FontWeight, GlobalElementId, Hitbox, HitboxBehavior, Hsla, InspectorElementId,
-    KeyBinding, KeyDownEvent, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, PaintQuad, PathBuilder, Pixels, Point, ScrollWheelEvent, SharedString,
-    StrikethroughStyle, Style, Subscription, Task, TextAlign, TextRun, TextStyle, UTF16Selection,
-    UnderlineStyle, WeakEntity, Window, WrappedLine,
+    KeyBinding, KeyDownEvent, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    PaintQuad, PathBuilder, Pixels, Point, ScrollWheelEvent, SharedString, StrikethroughStyle,
+    Style, Subscription, Task, TextAlign, TextRun, TextStyle, UTF16Selection, UnderlineStyle,
+    WeakEntity, Window, WrappedLine,
 };
 use silica_formats::config::PropertyTypes;
 use silica_formats::properties::{self as props, PropertiesInDocument};
 use silica_markdown::highlight::{flatten, highlight_lines, HighlightKind, HighlightSpan};
 use silica_markdown::{Block, BlockKind, Document};
+use silica_suggest::{self as suggest};
 use silica_text::table::{self, TableCommand};
 use silica_text::{
-    autopair, find, wrap, BlockInsert, Cursor, EditKind, LinePrefix, LinkSyntax, Sel,
-    SpellChecker, TextBuffer,
+    autopair, find, wrap, BlockInsert, Cursor, EditKind, LinePrefix, LinkSyntax, Sel, SpellChecker,
+    TextBuffer,
 };
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
@@ -62,12 +62,12 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
-mod search;
-mod movement;
 mod actions;
 mod folding;
-mod scrolling;
 mod mouse;
+mod movement;
+mod scrolling;
+mod search;
 
 actions!(
     editor,
@@ -1630,8 +1630,6 @@ impl Editor {
         display
     }
 
-
-
     // ----- editing -------------------------------------------------------------
 
     /// Replaces `range` with `insert` at the primary cursor as one undo
@@ -1859,8 +1857,6 @@ impl Editor {
             .ok();
         }));
     }
-
-
 
     // ----- utf-16 helpers for the input handler (cursor line only) -----------
 
@@ -2382,11 +2378,19 @@ impl Editor {
         items.push(item(t("Select all"), "select-all", E::SelectAll));
         items.push(item(t("Toggle bold"), "bold", E::ToggleBold));
         items.push(item(t("Toggle italic"), "italic", E::ToggleItalic));
-        items.push(item(t("Toggle highlight"), "highlighter", E::ToggleHighlight));
+        items.push(item(
+            t("Toggle highlight"),
+            "highlighter",
+            E::ToggleHighlight,
+        ));
         items.push(item(t("Insert link"), "link", E::InsertLink));
         items.push(item(t("Insert wikilink"), "link-2", E::InsertWikilink));
         items.push(item(t("Insert embed"), "image", E::InsertEmbed));
-        items.push(item(t("Toggle checkbox"), "check-square", E::ToggleCheckbox));
+        items.push(item(
+            t("Toggle checkbox"),
+            "check-square",
+            E::ToggleCheckbox,
+        ));
         items.push(item(t("Heading 1"), "type", E::SetHeading1));
         items.push(item(t("Heading 2"), "type", E::SetHeading2));
         items.push(item(t("Bullet list"), "list", E::ToggleBullet));

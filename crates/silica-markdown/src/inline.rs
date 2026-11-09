@@ -48,7 +48,12 @@ struct Delim {
     /// Text positions of the (remaining) delimiter run.
     text_start: usize,
     text_end: usize,
+    /// Original delimiter count before any shrinking from matching.
     orig_count: usize,
+    /// The original run length before `double_delimiter` split a longer run
+    /// (e.g. `===` -> `==` + `=` has orig_run=3 for the `==` part). Used to
+    /// prevent `==` from a split run matching `==` from an exact `==` run.
+    orig_run: usize,
     can_open: bool,
     can_close: bool,
     prev: Option<usize>,
@@ -531,7 +536,7 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
         (left, right, before_punct, after_punct)
     }
 
-    fn push_delim(&mut self, ch: u8, start: usize, end: usize, can_open: bool, can_close: bool) {
+    fn push_delim(&mut self, ch: u8, start: usize, end: usize, orig_run: usize, can_open: bool, can_close: bool) {
         self.push_text(start, end);
         let node = self.nodes.len() - 1;
         let idx = self.delims.len();
@@ -541,6 +546,7 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
             text_start: start,
             text_end: end,
             orig_count: end - start,
+            orig_run,
             can_open,
             can_close,
             prev: self.delim_top,
@@ -586,7 +592,7 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
         } else {
             (left, right)
         };
-        self.push_delim(ch, start, end, can_open, can_close);
+        self.push_delim(ch, start, end, n, can_open, can_close);
         self.pos = end;
     }
 
@@ -606,7 +612,7 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
         }
         let end = start + 2;
         let (left, right, _, _) = self.flanking(start, end);
-        self.push_delim(ch, start, end, left, right);
+        self.push_delim(ch, start, end, n, left, right);
         self.pos = end;
         true
     }
@@ -666,6 +672,12 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
             let bottom = *openers_bottom.entry(key).or_insert(stack_bottom);
             let mut opener = self.delims[c].prev;
             let mut found = None;
+            // * `==` and `~~` runs longer than 2 are split into adjacent
+            //   delimiter pairs (e.g. `====` -> `==` + `==`). Those adjacent
+            //   pairs must not match each other, or they'd produce empty
+            //   highlights. Obsidian treats the first char(s) as literal text
+            //   and only the final pair as a delimiter.
+            let is_double = ch == b'~' || ch == b'=';
             while let Some(o) = opener {
                 if Some(o) == stack_bottom || Some(o) == bottom {
                     break;
@@ -674,7 +686,19 @@ impl<'a, 'o, 'c> Parser<'a, 'o, 'c> {
                 let odd_match = (c_open || od.can_close)
                     && c_orig % 3 != 0
                     && (od.orig_count + c_orig) % 3 == 0;
-                if od.ch == ch && od.can_open && !odd_match {
+                let adjacent_nodes = self.delims[o].node + 1 == self.delims[c].node;
+                // * `==` and `~~` delimiters only match delimiters from the
+                //   same original run length: `==` from `==` matches `==` from
+                //   `==`, `==` from `===` matches `==` from `===`. Cross-length
+                //   matching would produce wrong highlights like
+                //   `==x===y==` eating the wrong characters.
+                let same_run = !is_double || od.orig_run == self.delims[c].orig_run;
+                if od.ch == ch
+                    && od.can_open
+                    && !odd_match
+                    && !(is_double && adjacent_nodes)
+                    && same_run
+                {
                     found = Some(o);
                     break;
                 }

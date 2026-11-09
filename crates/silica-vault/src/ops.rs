@@ -18,7 +18,7 @@
 //! and `/` and `""` both mean the root ([`attachment_path`], observed on
 //! 1.14.5).
 
-use crate::{FileChange, Vault};
+use crate::{create_dir_all_at, FileChange, Vault};
 use silica_formats::validate_file_name;
 use std::path::{Path, PathBuf};
 
@@ -101,7 +101,11 @@ fn why(err: &std::io::Error) -> &'static str {
     }
 }
 
-fn io<'p>(action: &'static str, path: &'p Path) -> impl FnOnce(std::io::Error) -> OpError + 'p {
+pub fn io_error(action: &'static str, path: PathBuf, source: std::io::Error) -> OpError {
+    OpError::Io { action, path, source }
+}
+
+pub fn io<'p>(action: &'static str, path: &'p Path) -> impl FnOnce(std::io::Error) -> OpError + 'p {
     move |source| OpError::Io {
         action,
         path: path.to_path_buf(),
@@ -191,6 +195,14 @@ pub fn backup_vault(root: &Path, backups: &Path, keep: usize) -> Result<BackupRe
         ..Default::default()
     };
     copy_backup_tree(root, root, &dest, backups, &mut report)?;
+    // * Mark the backup complete only after every file copied: a torn run
+    //   (crash, power loss, drive unmounted mid-copy) leaves no marker, so
+    //   prune can tell a useless half-copy from a good one.
+    std::fs::File::create(dest.join(".complete"))
+        .map_err(io("create completion marker", &dest))?;
+    // fsync the directory so the marker and its entries are durable.
+    let dir = std::fs::File::open(&dest).map_err(io("open backup dir", &dest))?;
+    dir.sync_all().map_err(io("sync backup dir", &dest))?;
     let keep = keep.max(1);
     prune_backups(backups, keep);
     Ok(report)
@@ -285,29 +297,51 @@ fn copy_backup_tree(
     Ok(())
 }
 
-/// Deletes every backup folder but the newest `keep`, by name: the timestamp
-/// prefix is fixed width, so the sort is chronological.
+/// Deletes every incomplete backup (torn: no completion marker) and then all
+/// but the newest `keep` complete backups, by name: the timestamp prefix is
+/// fixed width, so the sort is chronological. An incomplete backup is worse
+/// than no backup — it promises safety a half-copied vault cannot deliver —
+/// so incomplete folders are always removed, never counted toward `keep`.
 fn prune_backups(backups: &Path, keep: usize) {
     let Ok(entries) = std::fs::read_dir(backups) else {
         return;
     };
-    let mut dirs: Vec<PathBuf> = entries
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| {
-            p.is_dir()
-                && p.file_name()
-                    .and_then(|n| n.to_str())
-                    .is_some_and(|n| n.starts_with("vault-"))
-        })
-        .collect();
-    dirs.sort();
-    if dirs.len() <= keep {
+    let mut complete: Vec<PathBuf> = Vec::new();
+    let mut incomplete: Vec<PathBuf> = Vec::new();
+    for e in entries.filter_map(|e| e.ok()).map(|e| e.path()) {
+        if !e.is_dir() {
+            continue;
+        }
+        let Some(name) = e.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !name.starts_with("vault-") {
+            continue;
+        }
+        if is_complete(&e) {
+            complete.push(e);
+        } else {
+            incomplete.push(e);
+        }
+    }
+    // * A torn backup (crash mid-copy, no completion marker) is deleted first
+    //   and never counts toward `keep`.
+    for stale in incomplete {
+        let _ = std::fs::remove_dir_all(&stale);
+    }
+    complete.sort();
+    if complete.len() <= keep {
         return;
     }
-    for stale in &dirs[..dirs.len() - keep] {
+    for stale in &complete[..complete.len() - keep] {
         let _ = std::fs::remove_dir_all(stale);
     }
+}
+
+/// True once `backup_vault` has finished copying every file and written its
+/// completion marker; a folder without it is a torn run and is not trusted.
+fn is_complete(dir: &Path) -> bool {
+    dir.join(".complete").is_file()
 }
 
 /// Checks every segment of a new path the way Obsidian's rename does.
@@ -403,9 +437,7 @@ impl Vault {
             return Err(OpError::Exists);
         }
         let abs = self.write_path(path)?;
-        if let Some(parent) = abs.parent() {
-            std::fs::create_dir_all(parent).map_err(io("create folder", parent))?;
-        }
+        self.create_parent_dirs_secure(&abs)?;
         crate::write_no_follow(&abs, text.as_bytes()).map_err(io("create", &abs))?;
         Ok(self.refresh_path(&abs))
     }
@@ -418,9 +450,7 @@ impl Vault {
     ) -> Result<Vec<FileChange>, OpError> {
         validate_path(path)?;
         let abs = self.write_path(path)?;
-        if let Some(parent) = abs.parent() {
-            std::fs::create_dir_all(parent).map_err(io("create folder", parent))?;
-        }
+        self.create_parent_dirs_secure(&abs)?;
         crate::write_no_follow(&abs, bytes).map_err(io("create attachment", &abs))?;
         Ok(self.refresh_path(&abs))
     }
@@ -432,6 +462,7 @@ impl Vault {
             return Err(OpError::Exists);
         }
         let abs = self.write_path(path)?;
+        self.create_parent_dirs_secure(&abs)?;
         std::fs::create_dir_all(&abs).map_err(io("create folder", &abs))?;
         self.refresh_path(&abs);
         Ok(())
@@ -511,8 +542,8 @@ impl Vault {
         if to.starts_with(&format!("{from}/")) {
             return Err(OpError::InvalidName("Cannot move a folder into itself."));
         }
-        if let Some(parent) = to_abs.parent() {
-            std::fs::create_dir_all(parent).map_err(io("create folder", parent))?;
+        if let Some(parent) = Path::new(to).parent() {
+            create_dir_all_at(&self.root, parent).map_err(io("create folder", &self.root.join(parent)))?;
         }
         let moved = self.rename_plan(from, to);
         std::fs::rename(&from_abs, &to_abs).map_err(io("rename", &from_abs))?;
@@ -579,15 +610,13 @@ impl Vault {
         };
         let target = self.numbered_path(".trash", stem, ext, 2);
         let target_abs = self.entry_path(&target)?;
-        std::fs::rename(&abs, &target_abs).map_err(io("move to .trash", &abs))?;
-        // * The flat `.trash` throws away which folder the entry came from,
-        // * so say it beside it: a restore would otherwise put a note from
-        // * Sub/ at the vault root and every relative link in it would
-        // * point somewhere else. Best effort — a record that fails to write
-        // * costs the note its old folder, not its bytes.
+        // * Write the origin sidecar before the move: a crash between the
+        //   two leaves at most an orphan sidecar (harmless), never a
+        //   trashed note with no record of where it came from.
         if let Some((folder, _)) = path.rsplit_once('/') {
             let _ = std::fs::write(trash.join(format!(".{name}.origin")), folder);
         }
+        std::fs::rename(&abs, &target_abs).map_err(io("move to .trash", &abs))?;
         Ok(())
     }
 
@@ -649,9 +678,7 @@ impl Vault {
         if dst.exists() {
             return Err(OpError::DestinationExists);
         }
-        if let Some(parent) = dst.parent() {
-            std::fs::create_dir_all(parent).map_err(io("create folder", parent))?;
-        }
+        self.create_parent_dirs_secure(&dst)?;
         std::fs::rename(&src, &dst).map_err(io("restore from trash", &src))?;
         // * Its record has said everything it has to say; a stale one for a
         // * name that no longer exists is never read, so this is only tidy-up.
@@ -745,7 +772,15 @@ fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
         return Ok(());
     }
     if meta.is_dir() {
-        std::fs::create_dir_all(to)?;
+        // copy_tree destination is an internal copy target; create parents
+        // securely so no symlink component can redirect the copy.
+        if let Some(parent) = to.parent() {
+            // copy_tree destination is an internal copy target; create parents
+            // securely so no symlink component can redirect the copy.
+            std::fs::create_dir_all(parent).map_err(|e| {
+                std::io::Error::other(format!("create folder {}: {e}", parent.display()))
+            })?;
+        }
         for entry in std::fs::read_dir(from)? {
             let entry = entry?;
             copy_tree(&entry.path(), &to.join(entry.file_name()))?;
@@ -1780,6 +1815,40 @@ mod tests {
 
         assert!(report.dir.exists());
         assert_eq!(report.files, 3);
+    }
+
+    // * A torn run (crash mid-copy, no completion marker) is worse than no
+    //   backup: prune deletes every incomplete folder and never counts it
+    //   toward `keep`, so complete backups survive instead of being eaten by
+    //   a useless half-copy that sorts newest.
+    #[test]
+    fn prune_deletes_torn_backups_and_keeps_only_complete_newest() {
+        let (_dir, root) = plain_vault();
+        let backups = root.join(".silica").join("backups");
+        fs::create_dir_all(&backups).unwrap();
+
+        // Oldest complete backup.
+        let old_complete = backups.join("vault-100");
+        fs::create_dir_all(&old_complete).unwrap();
+        fs::write(old_complete.join(".complete"), "").unwrap();
+        fs::write(old_complete.join("A.md"), "aa").unwrap();
+
+        // Torn backup that sorts newest: copied partway, never finished.
+        let torn = backups.join("vault-200");
+        fs::create_dir_all(&torn).unwrap();
+        fs::write(torn.join("A.md"), "half").unwrap(); // no .complete marker
+
+        // Newest complete backup.
+        let new_complete = backups.join("vault-300");
+        fs::create_dir_all(&new_complete).unwrap();
+        fs::write(new_complete.join(".complete"), "").unwrap();
+        fs::write(new_complete.join("A.md"), "aa").unwrap();
+
+        super::prune_backups(&backups, 1);
+
+        assert!(!torn.exists(), "torn backup should be deleted");
+        assert!(!old_complete.exists(), "oldest complete should be pruned");
+        assert!(new_complete.exists(), "newest complete should survive");
     }
 }
 

@@ -595,7 +595,6 @@ impl BasesView {
             .unwrap_or_default()
     }
 
-
     // ----- the widgets --------------------------------------------------------
 
     /// A labelled row of the Configure view and results panels.

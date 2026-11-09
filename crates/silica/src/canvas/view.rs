@@ -18,8 +18,8 @@ use crate::assets::icon;
 use crate::canvas::cards::{Cards, TaskOrigin};
 use crate::canvas::menu::{self, IconItem, ListItem};
 use crate::editor::{Editor, EditorEvent};
-use crate::reading::TaskMarker;
 use crate::i18n::t;
+use crate::reading::TaskMarker;
 use crate::theme::Theme;
 use crate::workspace::VaultState;
 use gpui::{
@@ -29,6 +29,7 @@ use gpui::{
     KeyUpEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, PinchEvent,
     Pixels, Render, ScrollWheelEvent, SharedString, Subscription, TextAlign, Window,
 };
+use render::*;
 use serde_json::{json, Value};
 use silica_canvas::{
     anchor, arrow_head, edge_ends, edge_path_points, edge_stub, facing_side, hit_edge, hit_handle,
@@ -38,7 +39,6 @@ use silica_canvas::{
 };
 use silica_formats::canvas::{Canvas, Edge, Node, NodeType, Side};
 use std::sync::Arc;
-use render::*;
 
 mod render;
 
@@ -2475,7 +2475,6 @@ impl CanvasView {
         })
     }
 }
-
 
 #[cfg(test)]
 mod tests {

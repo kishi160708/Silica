@@ -8,10 +8,9 @@ use std::ops::Range;
 use gpui::{Context, Focusable, Window};
 use silica_text::{find, shifted, Cursors, EditKind, Sel};
 
-use super::{Editor, FindAll, FindNext, FindPrevious, CloseFind, FocusOtherField};
+use super::{CloseFind, Editor, FindAll, FindNext, FindPrevious, FocusOtherField};
 
 impl Editor {
-
     /// Opens the panel (Ctrl+F, or Ctrl+H with the replace row). The
     /// selection, when it sits on one line, becomes the query; an explicit
     /// `query` wins; otherwise the previous query stays.
@@ -75,7 +74,12 @@ impl Editor {
 
     /// Escape: closes the autocompletion popup first, then abandons an open
     /// field, then drops extra cursors, then closes the panel.
-    pub(crate) fn close_find(&mut self, _: &CloseFind, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn close_find(
+        &mut self,
+        _: &CloseFind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.suggest.is_some() {
             self.close_suggest(cx);
         } else if self.cancel_table_field(cx) || self.cancel_property_field(cx) {
@@ -166,7 +170,12 @@ impl Editor {
         self.find_step(true, cx);
     }
 
-    pub(crate) fn find_previous(&mut self, _: &FindPrevious, _: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn find_previous(
+        &mut self,
+        _: &FindPrevious,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.find_step(false, cx);
     }
 
