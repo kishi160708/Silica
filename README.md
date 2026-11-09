@@ -10,7 +10,7 @@
   <img alt="Rust" src="https://img.shields.io/badge/100%25-Rust-E8590C?style=flat-square&logo=rust&logoColor=white">
   <img alt="Linux, Windows, macOS" src="https://img.shields.io/badge/Linux%20%7C%20Windows%20%7C%20macOS-2b2b2b?style=flat-square">
   <img alt="MIT" src="https://img.shields.io/badge/license-MIT-2b2b2b?style=flat-square">
-  <img alt="v0.7.5" src="https://img.shields.io/badge/status-early%20alpha%20v0.7.5-f2545b?style=flat-square">
+  <img alt="v0.7.6" src="https://img.shields.io/badge/status-early%20alpha%20v0.7.6-f2545b?style=flat-square">
 </p>
 
 Silica is a native desktop knowledge base written in Rust on GPUI. It opens an Obsidian vault exactly as it sits on disk: the same `.obsidian` configuration, the same Markdown dialect, the same `.canvas` and `.base` files. Nothing is imported or converted, and the vault folder is the only source of truth. Silica is an independent, clean-room implementation and is not affiliated with Obsidian.
@@ -37,13 +37,53 @@ Reading view took the same pass: the properties block is editable there, text se
 
 Measured on a Lenovo Legion 5 (CachyOS, AMD Ryzen 5 4600H, 12 threads) with `crates/silica-bench` on a synthetic vault of 20,000 notes, 2,000 attachments, and 35.3 MB of Markdown.
 
-|| run | Scan | Read | Index | Resolve | Total |
-| --- | --- | --- | --- | --- | --- |
-| 1 (cold) | 46 ms | 18 ms | 78 ms | 49 ms | 192 ms |
-| 2 | 45 ms | 11 ms | 73 ms | 45 ms | 174 ms |
-| 3 | 45 ms | 11 ms | 71 ms | 42 ms | 169 ms |
+### Vault indexing
 
-Gate: 192 ms in run 1 against a 2.00 s budget -> PASS (best run 169 ms)
+| run | Scan | Read | Index | Resolve | Total |
+| --- | --- | --- | --- | --- | --- |
+| 1 (cold) | 125 ms | 19 ms | 381 ms | 237 ms | 762 ms |
+| 2 | 122 ms | 13 ms | 373 ms | 229 ms | 737 ms |
+| 3 | 122 ms | 13 ms | 371 ms | 229 ms | 736 ms |
+
+Gate: 762 ms vs 2.00 s budget → **PASS** (best run 736 ms)
+
+### Search
+
+Query: `note` (matches 19,550 of 20,000 notes)
+
+| run | Parse | Match | Total |
+| --- | --- | --- | --- |
+| 1 | <1 ms | 2.90 s | 2.90 s |
+| 2 | <1 ms | 2.89 s | 2.89 s |
+| 3 | <1 ms | 2.89 s | 2.89 s |
+
+Avg: match 2.89 s over 20,000 notes (~0.14 ms per note)
+
+### Markdown parsing
+
+| run | Total | Per note |
+| --- | --- | --- |
+| 1 | 393 ms | ~20 µs |
+| 2 | 395 ms | ~20 µs |
+| 3 | 394 ms | ~20 µs |
+
+Avg: 394 ms total (~20 µs per note)
+
+### Export (HTML)
+
+| Metric | Value |
+| --- | --- |
+| Total | 3.34 s |
+| Notes exported | 20,000 |
+| Throughput | ~5,992 notes/sec |
+
+### Plugins
+
+| Metric | Value |
+| --- | --- |
+| Native plugins | 0 (test vault has none installed) |
+| Community plugins | 0 |
+
 
 ## Crates
 

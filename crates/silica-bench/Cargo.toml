@@ -10,6 +10,9 @@ publish.workspace = true
 
 [dependencies]
 silica-cache.workspace = true
+silica-markdown.workspace = true
+silica-plugins.workspace = true
+silica-search.workspace = true
 silica-vault.workspace = true
 rayon.workspace = true
 

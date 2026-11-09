@@ -6191,6 +6191,9 @@ version = "0.7.5"
 dependencies = [
  "rayon",
  "silica-cache",
+ "silica-markdown",
+ "silica-plugins",
+ "silica-search",
  "silica-vault",
  "tempfile",
 ]
