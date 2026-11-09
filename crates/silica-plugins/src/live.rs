@@ -558,7 +558,8 @@ module.exports = W;
             current_note: Box::new(|| None),
         };
 
-        let (outcome, _) = run("vault-doctor:run", None, &ctx).expect("the native plugin owns it");
+        let (outcome, _) =
+            run("silica:vault-doctor", None, &ctx).expect("the native plugin owns it");
         outcome.expect("the command ran");
 
         let report = fs::read_to_string(root.join("Vault doctor.md")).expect("the report");
