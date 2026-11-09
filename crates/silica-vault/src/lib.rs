@@ -479,11 +479,15 @@ pub fn write_at(root: &Path, relative: &Path, bytes: &[u8]) -> std::io::Result<(
         )));
     }
     // Temporary file beside the target, unique per write so concurrent saves
-    // of one note cannot share a scratch file.
+    // of one note cannot share a scratch file. The pid alone is not enough:
+    // two saves of the same note in the same process would collide.
+    static TMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let counter = TMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let temp_name = format!(
-        ".{}.{}.silica-tmp",
+        ".{}.{}.{}.silica-tmp",
         file_name.to_string_lossy(),
-        std::process::id()
+        std::process::id(),
+        counter
     );
     let temp_c = name(std::ffi::OsStr::new(&temp_name))?;
     // * Preserve the existing file's permission bits so a 0600 note is not
@@ -1344,7 +1348,6 @@ fn same_config_value(old: &serde_json::Value, new: &serde_json::Value) -> bool {
 mod tests {
     use super::*;
     use std::fs;
-
     /// A configuration that cannot be read must not be replaced.
     ///
     /// The bytes are made unreadable — not deleted — so the read fails with
@@ -2411,5 +2414,43 @@ mod tests {
         );
         assert_eq!(fs::read_to_string(&path).unwrap(), "updated
 ");
+    }
+
+    /// * Concurrent saves of the same note cannot collide: the temp-file name
+    ///   includes a per-process counter, so two saves of one note in the same
+    ///   process never share a scratch file and neither fails with EEXIST.
+    #[cfg(unix)]
+    #[test]
+    fn write_at_concurrent_saves_do_not_collide() {
+
+        let dir = sample_vault();
+        let vault_path = dir.path().to_path_buf();
+        let note_path = vault_path.join("Note.md");
+        fs::write(&note_path, "original
+").unwrap();
+
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let mut handles = Vec::new();
+        for i in 0..8u64 {
+            let vault_path = vault_path.clone();
+            let barrier = std::sync::Arc::clone(&barrier);
+            handles.push(std::thread::spawn(move || {
+                barrier.wait();
+                write_at(&vault_path, Path::new("Note.md"), format!("write {i}
+").as_bytes())
+            }));
+        }
+        for h in handles {
+            let result = h.join().unwrap();
+            assert!(result.is_ok(), "concurrent write failed: {result:?}");
+        }
+
+        // * Every write completed and the file holds one of the written values.
+        let final_text = fs::read_to_string(&note_path).unwrap();
+        assert!(
+            (0..8u64).any(|i| final_text == format!("write {i}
+")),
+            "unexpected final content: {final_text:?}",
+        );
     }
 }
