@@ -1340,6 +1340,14 @@ impl reading::EmbedSource for VaultState {
         self.vault().absolute(path)
     }
 
+    /// An image whose file is gone resolves as a missing attachment rather
+    /// than as a blank the reader cannot explain, so the reading model asks
+    /// whether the path is still there. The read never follows a link out
+    /// of the vault, which `absolute` guarantees by joining only.
+    fn exists(&self, path: &str) -> bool {
+        self.vault().absolute(path).is_file()
+    }
+
     /// An embedded `![[x.base]]`: the file resolved against this vault, on
     /// its first view. The whole index and cache are behind it, which is why
     /// the reading model asks for this rather than for the bytes.

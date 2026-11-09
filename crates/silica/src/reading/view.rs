@@ -241,6 +241,33 @@ pub(crate) fn missing_canvas(path: &str, _w: f32, _h: f32) -> AnyElement {
         .into_any_element()
 }
 
+/// A local image the vault holds no file for: a card naming it, the way
+/// every other missing attachment reads. gpui paints nothing at all for a
+/// source it cannot read — no image, no error — which leaves a blank the
+/// reader cannot explain, so the fallback names the file instead.
+pub(crate) fn missing_image(path: &std::path::Path) -> AnyElement {
+    let label = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string());
+    div()
+        .id(SharedString::from(format!("image-embed-{label}")))
+        .my_1()
+        .px_3()
+        .py_2()
+        .rounded_md()
+        .border_1()
+        .border_color(gpui::Hsla {
+            h: 0.0,
+            s: 0.0,
+            l: 0.0,
+            a: 0.12,
+        })
+        .cursor_pointer()
+        .child(SharedString::from(label))
+        .into_any_element()
+}
+
 /// A click on a video embed: the file, and `Some(share)` when the click was
 /// on the position bar (a seek) rather than the picture or the button.
 pub type VideoHandler = Rc<dyn Fn(&std::path::Path, Option<f32>, &mut Window, &mut App)>;
@@ -1686,7 +1713,6 @@ impl ReadingView {
         cx.notify();
     }
 }
-
 
 #[cfg(test)]
 mod tests {
