@@ -240,6 +240,7 @@ silica:export-pdf	Export active note to PDF
 silica:palette-verify	Verify the command palette
 silica:reminder-add	Reminder: add for the task at the cursor
 silica:template-gallery	Open the template gallery
+silica:voice-note	Voice note: Record audio and insert it into the active note
 quick-capture:open	Quick Capture: New note
 task-dashboard:open	Task Dashboard: Open
 silica:insert-image	Insert image

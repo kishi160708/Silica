@@ -742,8 +742,10 @@ impl Default for AudioRecorder {
         Self {
             state: Arc::new(Mutex::new(RecorderState {
                 recording: false,
+                voice_note: false,
                 writer: None,
                 output_path: None,
+                output_name: None,
             })),
             stream: Mutex::new(None),
         }
@@ -752,8 +754,14 @@ impl Default for AudioRecorder {
 
 struct RecorderState {
     recording: bool,
+    /// True when the recording was started by `silica:voice-note`, so only
+    /// that command stops it and embeds the result in the active note.
+    voice_note: bool,
     writer: Option<hound::WavWriter<BufWriter<std::fs::File>>>,
     output_path: Option<PathBuf>,
+    /// Vault-relative path of the recording, e.g. `.obsidian/attachments/recording-20260101-000000.wav`,
+    /// stored so `silica:voice-note` can embed `![[name]]` without reconstructing it.
+    output_name: Option<String>,
 }
 
 impl Plugin for AudioRecorder {
@@ -775,6 +783,10 @@ impl Plugin for AudioRecorder {
                 id: "audio-recorder:stop".into(),
                 name: "Stop recording audio".into(),
             },
+            NativeCommand {
+                id: "silica:voice-note".into(),
+                name: "Voice note".into(),
+            },
         ]
     }
 
@@ -787,6 +799,7 @@ impl Plugin for AudioRecorder {
         match id {
             "audio-recorder:start" => self.start_recording(ctx),
             "audio-recorder:stop" => self.stop_recording(ctx),
+            "silica:voice-note" => self.voice_note(ctx),
             _ => Err(format!("'{id}' is not a command this plugin registered")),
         }
     }
@@ -804,6 +817,7 @@ impl AudioRecorder {
         let vault_root = ctx.vault_root;
         let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
         let file_name = format!("recording-{timestamp}.wav");
+        let output_name = format!(".obsidian/attachments/{file_name}");
         let output_path = vault_root
             .join(".obsidian")
             .join("attachments")
@@ -858,12 +872,14 @@ impl AudioRecorder {
             .map_err(|e| format!("Cannot start stream: {e}"))?;
 
         state.recording = true;
+        state.voice_note = false;
         *self
             .stream
             .lock()
             .map_err(|e| format!("the recorder\u{2019}s stream lock failed: {e}"))? = Some(stream);
         state.writer = Some(writer);
         state.output_path = Some(output_path);
+        state.output_name = Some(output_name);
 
         (ctx.notify)(&format!(
             "Recording started: {}",
@@ -873,7 +889,10 @@ impl AudioRecorder {
         Ok(())
     }
 
-    fn stop_recording(&self, ctx: &PluginContext<'_>) -> Result<(), String> {
+    /// Pauses the stream, finalizes the WAV file, and returns its vault path.
+    /// `stop_recording` and `silica:voice-note` share this so a recording is
+    /// finalized exactly once, whichever command stops it.
+    fn finish_recording(&self) -> Result<PathBuf, String> {
         let state = self.state.lock().map_err(|e| format!("{e}"))?;
 
         if !state.recording {
@@ -904,9 +923,50 @@ impl AudioRecorder {
         let output_path = state.output_path.take().unwrap();
         state.recording = false;
 
-        (ctx.notify)(&format!("Recording saved: {}", output_path.display()));
+        Ok(output_path)
+    }
 
+    fn stop_recording(&self, ctx: &PluginContext<'_>) -> Result<(), String> {
+        let output_path = self.finish_recording()?;
+        (ctx.notify)(&format!("Recording saved: {}", output_path.display()));
         Ok(())
+    }
+
+    /// Voice note: the first run starts the recording; the next run stops it
+    /// and inserts `![[path]]` at the cursor of the active note. Only a
+    /// recording this command itself started may be stopped by it.
+    fn voice_note(&self, ctx: &PluginContext<'_>) -> Result<(), String> {
+        let state = self.state.lock().map_err(|e| format!("{e}"))?;
+        if state.recording {
+            let mine = state.voice_note;
+            drop(state);
+            if !mine {
+                return Err(
+                    "A recording started by audio-recorder:start is in progress; \
+stop it with audio-recorder:stop first."
+                        .to_string(),
+                );
+            }
+            let output_path = self.finish_recording()?;
+            let relative = output_path
+                .strip_prefix(ctx.vault_root)
+                .map(|path| path.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_else(|_| output_path.to_string_lossy().replace('\\', "/"));
+            let embed = format!("![[{relative}]]");
+            (ctx.insert_text)(&embed)?;
+            (ctx.notify)(&format!("Voice note inserted: {embed}"));
+            Ok(())
+        } else {
+            drop(state);
+            self.start_recording(ctx)?;
+            let mut state = self.state.lock().map_err(|e| format!("{e}"))?;
+            state.voice_note = true;
+            drop(state);
+            (ctx.notify)(
+                "Voice note recording started; run this again to stop and insert the embed.",
+            );
+            Ok(())
+        }
     }
 }
 
@@ -1456,6 +1516,7 @@ mod report_tests {
                 open_note: Box::new(|_| Ok(())),
                 current_note: Box::new(move || Some(current.clone())),
                 notify: Box::new(move |line: &str| shown.borrow_mut().push(line.to_string())),
+                insert_text: Box::new(|_| Ok(())),
             };
             (Self { notices }, ctx)
         }
