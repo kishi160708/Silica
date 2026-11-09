@@ -20,6 +20,7 @@ pub mod format;
 pub mod lists;
 mod plan;
 mod spell;
+pub mod split;
 pub mod table;
 pub mod wrap;
 
@@ -31,3 +32,4 @@ pub use format::BlockInsert;
 pub use format::{LinePrefix, LinkSyntax};
 pub use plan::{indent_plan, newline_plan, shifted};
 pub use spell::SpellChecker;
+pub use split::{headings, note_name, split_at, Heading, Section, Split};

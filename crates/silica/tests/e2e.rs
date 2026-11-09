@@ -442,6 +442,118 @@ fn the_view_header_bookmark_action_prompts_for_a_title() {
     );
 }
 
+/// `silica:note-composer-split-file`: the command opens a chooser over the
+/// open note's headings; picking one cuts the note there, leaves the text
+/// above the cut behind, makes one note per heading of that level named
+/// after its heading, and repoints the links that pointed at a heading
+/// which has moved out.
+#[test]
+fn splitting_a_note_at_a_heading_makes_one_note_per_section() {
+    if !e2e_enabled() {
+        eprintln!("skipped: no display available for the graphical end-to-end tests");
+        return;
+    }
+    let _serial = serial();
+    let vault = Vault::new();
+    fs::write(
+        vault.root.join("Big.md"),
+        "# Top\n\nintro with [[Big#Two]] inside\n\n## Two\n\nbody two\n\n## Three\n\nbody three\n",
+    )
+    .expect("a note with sections");
+    fs::write(vault.root.join("Other.md"), "see [[Big#Three]]\n").expect("a second note");
+    let mut app = match App::launch(&vault.root) {
+        Some(a) => a,
+        None => {
+            eprintln!("skipped: no graphical session to launch silica in");
+            return;
+        }
+    };
+    app.settle();
+    app.call("open_path", json!({"path": "Big.md"}));
+    app.settle();
+    app.call("window", json!({"action": "activate"}));
+    app.settle();
+    app.run_command("silica:note-composer-split-file");
+    app.settle();
+
+    let modal = app
+        .call("state", json!({}))
+        .get("modal")
+        .cloned()
+        .unwrap_or(json!(null));
+    assert_eq!(
+        modal.get("kind").and_then(|k| k.as_str()),
+        Some("chooser"),
+        "the split command opened no chooser: {modal:?}"
+    );
+    let rows: Vec<String> = modal
+        .get("rows")
+        .and_then(|r| r.as_array())
+        .map(|a| {
+            a.iter()
+                .map(|row| row.as_str().unwrap_or("").to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(
+        rows.iter().any(|row| row.contains("Two")) && rows.iter().any(|row| row.contains("Three")),
+        "the chooser lists the note's headings: {rows:?}"
+    );
+
+    // Typing narrows the list to the heading to cut at, and Enter takes it.
+    app.call("type", json!({"text": "Two"}));
+    app.settle();
+    app.call("keys", json!({"keys": ["enter"]}));
+    app.settle();
+
+    let root = app.socket.parent().expect("the vault folder").to_path_buf();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if root.join("Two.md").exists() && root.join("Three.md").exists() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            let listed: Vec<String> = fs::read_dir(&root)
+                .expect("the vault folder")
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect();
+            panic!("the sections were not written as notes: {listed:?}");
+        }
+        thread::sleep(Duration::from_secs(1));
+    }
+
+    assert_eq!(
+        fs::read_to_string(root.join("Two.md")).expect("the first section"),
+        "## Two\n\nbody two\n\n",
+        "the section keeps its heading and its body"
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("Three.md")).expect("the second section"),
+        "## Three\n\nbody three\n",
+        "the next heading of the same level is a note of its own"
+    );
+    let left = fs::read_to_string(root.join("Big.md")).expect("the note that stayed");
+    assert!(
+        left.contains("intro with [[Two]] inside"),
+        "its own links moved: {left:?}"
+    );
+    assert!(
+        !left.contains("## Two") && !left.contains("body two"),
+        "the cut is gone: {left:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("Other.md")).expect("the note that linked in"),
+        "see [[Three]]\n",
+        "a link into a section that moved points at the note that took it"
+    );
+    assert_eq!(
+        app.text(),
+        "## Two\n\nbody two\n\n",
+        "the first note made from the split is the one open"
+    );
+}
+
 /// Quick Capture: the command opens the floating window, typing goes into
 /// its field, Enter saves the note to the vault, and Escape closes the
 /// window without writing anything. The window is driven through the

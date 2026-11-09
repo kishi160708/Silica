@@ -90,7 +90,7 @@ use silica_markdown::Subpath;
 use silica_plugins::native::PluginContext;
 use silica_templates as templates;
 use silica_text::table::TableCommand;
-use silica_text::{BlockInsert, LinePrefix, LinkSyntax};
+use silica_text::{split, BlockInsert, LinePrefix, LinkSyntax};
 use silica_vault::{FileChange, TrashOption, Vault, VaultError, VaultFile, VaultRegistry};
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
@@ -388,6 +388,9 @@ pub const RUNNABLE: &[&str] = &[
     "editor:toggle-italics",
     "editor:toggle-strikethrough",
     "note-composer:merge-file",
+    // * Silica's own note composer split: not an Obsidian id, so it wears
+    //   the `silica:` prefix the repo marks its native additions with.
+    "silica:note-composer-split-file",
     "editor:toggle-highlight",
     "editor:toggle-code",
     "editor:toggle-inline-math",
@@ -1837,6 +1840,9 @@ enum ChooserPurpose {
     CanvasGroup,
     /// `bases:change-view`: the showing base's views, by index.
     BasesView,
+    /// `silica:note-composer-split-file`: the open note's headings, by the
+    /// buffer line the split cuts at.
+    SplitFile,
 }
 
 /// How Obsidian names a split's axis: a `vertical` split lays its children
@@ -3534,6 +3540,18 @@ impl Workspace {
                             this.focus_main(window, cx);
                             cx.notify();
                         }
+                        ChooserPurpose::SplitFile => {
+                            this.modal = Modal::None;
+                            // * The row carries the buffer line the cut sits
+                            //   on, which is what makes two headings with
+                            //   the same text two different notes.
+                            match value.parse::<usize>() {
+                                Ok(line) => this.split_file(line, window, cx),
+                                Err(_) => this.report("No heading to split at", cx),
+                            }
+                            this.focus_main(window, cx);
+                            cx.notify();
+                        }
                     },
                     ChooserEvent::Close => {
                         this.modal = Modal::None;
@@ -4274,6 +4292,214 @@ impl Workspace {
             )
         });
         cx.notify();
+    }
+
+    /// `silica:note-composer-split-file`: a chooser over the open note's
+    /// headings, cutting at the one picked. Obsidian's split file takes a
+    /// heading the same way; here the note comes apart into one note per
+    /// heading of the picked one's level rather than into two halves.
+    fn start_split_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(source) = self.current.clone() else {
+            return;
+        };
+        let rows = split_file_rows(&self.note_text_for_split(&source, cx));
+        if rows.is_empty() {
+            self.report("This note has no heading to split at", cx);
+            return;
+        }
+        self.chooser_purpose = ChooserPurpose::SplitFile;
+        self.modal = Modal::Chooser;
+        self.chooser.update(cx, |c, cx| {
+            c.open(
+                rows,
+                "Type the heading to split at...",
+                "No headings in this note",
+                window,
+                cx,
+            )
+        });
+        cx.notify();
+    }
+
+    /// The split itself: one note per heading of the picked heading's
+    /// level, from the picked heading on. What was above the cut, and
+    /// whatever a heading shallower than it left below, stays in the note
+    /// it came from; every link that pointed at a heading which has moved
+    /// out is repointed at the note that took it in, the way a merge
+    /// repoints the links of the note it absorbs.
+    ///
+    /// The rewrites are planned against the vault as it stands, before
+    /// anything is written, so a failure half-way leaves every note
+    /// resolving the way it did.
+    fn split_file(&mut self, line: usize, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        let Some(source) = self.current.clone() else {
+            return;
+        };
+        let cut = split::split_at(&self.note_text_for_split(&source, cx), line);
+        if cut.sections.is_empty() {
+            self.report("No heading to split at", cx);
+            return;
+        }
+        // * The file's own line endings and byte order mark go back on the
+        //   text that stays, so a CRLF note keeps them through a split.
+        let (bom, crlf) = match std::fs::read_to_string(state.vault().absolute(&source)) {
+            Ok(raw) => {
+                let file = silica_text::FileText::parse(&raw);
+                (file.bom, file.crlf)
+            }
+            Err(_) => (false, false),
+        };
+        // * A new note goes where the vault puts a new note, and takes the
+        //   first free name among its heading's: two headings with the
+        //   same text must not land on one file.
+        let folder = {
+            let vault = state.vault();
+            vault.new_note_folder(
+                state.app().new_file_location.as_deref(),
+                state.app().new_file_folder_path.as_deref(),
+                Some(&source),
+            )
+        };
+        let mut taken: Vec<String> = Vec::with_capacity(cut.sections.len());
+        let mut paths: Vec<String> = Vec::with_capacity(cut.sections.len());
+        for section in &cut.sections {
+            let stem = split::note_name(&section.heading.text);
+            let mut path = state.vault().available_path(&folder, &stem, "md");
+            let mut n = 1;
+            while taken.contains(&path) {
+                path = state
+                    .vault()
+                    .available_path(&folder, &format!("{stem} {n}"), "md");
+                n += 1;
+            }
+            taken.push(path.clone());
+            paths.push(path);
+        }
+
+        // * The text the source gets back is the text that stayed, so its
+        //   own links are rewritten against what is left rather than
+        //   against what was cut out.
+        let kept = cut.kept();
+        let texts = |path: &str| -> Option<String> {
+            if path == source {
+                Some(kept.clone())
+            } else {
+                state.text_for(path).map(|text| text.to_string())
+            }
+        };
+        let cache = state.cache();
+        let mut planned: HashMap<String, silica_cache::Rewrite> = HashMap::new();
+        for (section, path) in cut.sections.iter().zip(&paths) {
+            for rw in silica_cache::links::plan_extract_rewrites(
+                &cache,
+                &source,
+                &[section.heading.text.as_str()],
+                path,
+                &texts,
+            ) {
+                // * Two headings with the same text answer the same links:
+                //   the first note made from the heading takes them, and a
+                //   second plan of the same links is dropped rather than
+                //   left to fight over the bytes.
+                planned.entry(rw.new_path.clone()).or_insert(rw);
+            }
+        }
+        drop(cache);
+
+        let mut changes = Changes::default();
+        let mut links = 0usize;
+        let mut errors: Vec<String> = Vec::new();
+        // * The note that stays is written from the rewrite of it when one
+        //   was planned, which is the kept text with its links repointed.
+        let mut source_text = kept;
+        for (path, rw) in planned {
+            links += rw.links;
+            if path == source {
+                source_text = rw.text;
+                continue;
+            }
+            let absolute = state.vault().absolute(&path);
+            let mut vault = state.vault.write().unwrap_or_else(|e| e.into_inner());
+            let written = vault.write_bytes(&path, rw.text.as_bytes());
+            let files = written.ok().map(|()| vault.refresh_path(&absolute));
+            drop(vault);
+            // * A write error on one note must not abort the rest: carry on
+            //   with the remaining rewrites and report the failure once
+            //   the split is done, so the split always completes.
+            match files {
+                Some(files) => changes.extend(state.absorb(files)),
+                None => errors.push(format!("Could not update the links in {path}")),
+            }
+        }
+        let raw = silica_text::FileText::join(bom, crlf, &source_text);
+        let absolute = state.vault().absolute(&source);
+        let mut vault = state.vault.write().unwrap_or_else(|e| e.into_inner());
+        let written = vault.write_bytes(&source, raw.as_bytes());
+        let files = written.ok().map(|()| vault.refresh_path(&absolute));
+        drop(vault);
+        match files {
+            Some(files) => changes.extend(state.absorb(files)),
+            None => errors.push(format!("Could not write {source}")),
+        }
+        let mut opened = None;
+        for (section, path) in cut.sections.iter().zip(&paths) {
+            match state.create_note(path, &section.text) {
+                Ok(made) => {
+                    changes.extend(made);
+                    if opened.is_none() {
+                        opened = Some(path.clone());
+                    }
+                }
+                Err(err) => errors.push(format!("Could not create {path}: {err}")),
+            }
+        }
+        self.after_changes(changes, cx);
+        // * The buffer is what the user is looking at, and the file has
+        //   just changed under it: reload it from what was written rather
+        //   than leave it holding the sections that moved out.
+        if self.current.as_deref() == Some(source.as_str()) {
+            self.editor.update(cx, |e, cx| e.reload(raw, cx));
+        }
+        if let Some(first) = opened {
+            self.open_file(first.to_string(), None, cx);
+        }
+        if let Some(err) = errors.into_iter().next() {
+            self.report(err, cx);
+            return;
+        }
+        let notes = cut.sections.len();
+        self.report(
+            format!(
+                "Split \"{}\" into {} note{}, {} link{} repointed",
+                basename(&source),
+                notes,
+                plural(notes),
+                links,
+                plural(links)
+            ),
+            cx,
+        );
+    }
+
+    /// The open note's text as the split sees it: the editor's buffer when
+    /// the note is the one it holds, since its unsaved edits are the text
+    /// the user is looking at, and the indexed copy otherwise.
+    fn note_text_for_split(&mut self, source: &str, cx: &mut Context<Self>) -> String {
+        let buffered = {
+            let editor = self.editor.read(cx);
+            (editor.name.as_ref() == source).then(|| editor.text().to_string())
+        };
+        buffered
+            .or_else(|| {
+                self.state
+                    .as_ref()
+                    .and_then(|state| state.text_for(source))
+                    .map(|text| text.to_string())
+            })
+            .unwrap_or_default()
     }
 
     /// `canvas:convert-to-file`: the selected text card's text becomes a
@@ -5811,6 +6037,15 @@ impl Workspace {
             "note-composer:merge-file" => {
                 if self.editing_or_report(id, window, cx) {
                     self.start_merge_current(window, cx);
+                }
+            }
+            // * Note composer's split: the note comes apart at a heading the
+            //   chooser lists, one note per heading of that level from
+            //   there on. The links are repointed as a merge's are, which
+            //   is what keeps every `[[note#heading]]` resolving.
+            "silica:note-composer-split-file" => {
+                if self.editing_or_report(id, window, cx) {
+                    self.start_split_file(window, cx);
                 }
             }
             _ => {
@@ -8096,6 +8331,22 @@ fn dock_current_view(layout: &Value, dock: &str) -> Option<String> {
     leaf.get("state")?.get("type")?.as_str().map(str::to_string)
 }
 
+/// The chooser rows a note's headings become for
+/// `silica:note-composer-split-file`: the label is the heading as it is
+/// written, so the query matches what the note says, and the value is the
+/// buffer line the split cuts at, which is what makes two headings with the
+/// same text two different cuts. Pure, so the test drives the path the
+/// chooser takes.
+fn split_file_rows(text: &str) -> Vec<ChooserRow> {
+    split::headings(text)
+        .into_iter()
+        .map(|heading| ChooserRow {
+            label: format!("{} {}", "#".repeat(heading.level as usize), heading.text),
+            value: heading.line.to_string(),
+        })
+        .collect()
+}
+
 /// A pane's filter field: Obsidian's `search-input-container`, its text
 /// 30 px in to leave room for the magnifier drawn over it.
 fn pane_filter_input(cx: &mut Context<TextInput>) -> TextInput {
@@ -9146,6 +9397,47 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::Path;
+
+    /// `silica:note-composer-split-file`: the chooser lists the note's
+    /// headings by the buffer line the cut sits on, and the cut at one of
+    /// them leaves the note's front matter behind and takes one note per
+    /// heading of that level, named after its heading.
+    #[test]
+    fn the_split_chooser_lists_headings_and_cuts_at_the_picked_one() {
+        let text = "---\naliases: a\n---\n\n# Top\n\nintro\n\n## Two\n\nbody two\n\n## Three\n\nbody three\n";
+        let rows = split_file_rows(text);
+        assert_eq!(rows.len(), 3);
+        // * A tag is not a heading, so a note with only those has no rows.
+        assert!(split_file_rows("#tag and nothing else\n").is_empty());
+        assert_eq!(rows[1].label, "## Two");
+        let line: usize = rows[1].value.parse().unwrap();
+        assert_eq!(line, 8);
+
+        let cut = split::split_at(text, line);
+        assert_eq!(cut.sections.len(), 2);
+        assert_eq!(cut.moved(), vec!["Two", "Three"]);
+        assert!(cut.kept().starts_with("---\n"), "{}", cut.kept());
+        assert!(cut.kept().ends_with("intro\n\n"), "{}", cut.kept());
+        assert_eq!(cut.sections[0].text, "## Two\n\nbody two\n\n");
+        assert_eq!(cut.sections[1].heading.text, "Three");
+        assert_eq!(cut.sections[1].heading.line, 12);
+        assert_eq!(split::note_name(&cut.sections[1].heading.text), "Three");
+    }
+
+    /// The same, for a note whose headings run one level deeper: the
+    /// deeper ones stay inside the section they were written under.
+    #[test]
+    fn a_split_keeps_a_deeper_heading_inside_its_section() {
+        let text = "## Two\n\nbody\n\n### Deep\n\ndeep body\n\n## Three\n";
+        let rows = split_file_rows(text);
+        let cut = split::split_at(text, rows[0].value.parse::<usize>().unwrap());
+        assert_eq!(cut.sections.len(), 2);
+        assert_eq!(
+            cut.sections[0].text,
+            "## Two\n\nbody\n\n### Deep\n\ndeep body\n\n"
+        );
+        assert_eq!(cut.sections[1].text, "## Three\n");
+    }
 
     #[test]
     fn stacked_group_shows_only_the_active_tab() {
