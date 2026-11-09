@@ -162,6 +162,7 @@ impl Workspace {
                 RightTab::Graph => "graph",
                 RightTab::Tags => "tags",
                 RightTab::Properties => "properties",
+                RightTab::Tasks => "tasks",
             }),
         );
         put_capped(
