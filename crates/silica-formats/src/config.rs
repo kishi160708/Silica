@@ -416,6 +416,12 @@ pub struct GraphConfig {
     pub scale: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub close: Option<bool>,
+    #[serde(
+        default,
+        rename = "nodePositions",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub node_positions: Option<Map<String, Value>>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
