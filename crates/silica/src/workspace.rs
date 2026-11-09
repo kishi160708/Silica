@@ -29,6 +29,7 @@ use crate::popout::PopoutWindow;
 use crate::prompt::{Prompt, PromptEvent, PromptSpec};
 use crate::quick_capture::QuickCaptureWindow;
 use crate::reading::{self, LinkTarget, ReadingEvent, ReadingView, TaskMarker, TaskToggled};
+use crate::reminder;
 use crate::task_dashboard::TaskDashboardWindow;
 use silica_bases::FileData;
 
@@ -491,6 +492,7 @@ pub const RUNNABLE: &[&str] = &[
     "app:increase-font-size",
     "app:decrease-font-size",
     "silica:vault-backup",
+    "silica:reminder-add",
     "silica:toggle-graph-pane",
     "workspace:copy-path",
     "workspace:copy-full-path",
@@ -3647,6 +3649,7 @@ impl Workspace {
         if let Some(root) = root {
             ws.load_vault(root, window, cx);
         }
+        ws.start_reminder_poll(cx);
         ws
     }
 
@@ -5527,6 +5530,7 @@ impl Workspace {
                 self.step_font_size(up, window, cx);
             }
             "silica:vault-backup" => self.backup_vault(window, cx),
+            "silica:reminder-add" => self.add_reminder(window, cx),
             "silica:toggle-graph-pane" => self.toggle_graph_pane(cx),
             "workspace:copy-path" => self.copy_current_path(false, cx),
             "workspace:copy-full-path" => self.copy_current_path(true, cx),
@@ -5869,6 +5873,72 @@ impl Workspace {
             ),
             Err(err) => self.report(format!("Backup failed: {err}"), cx),
         }
+    }
+
+    /// `silica:reminder-add`: the reminder for the task at the cursor.
+    /// A task line carries its date — `📅 2026-11-10` or
+    /// `[due:: 2026-11-10]` — and the command fires the reminder for
+    /// that date now rather than waiting for the next poll, which is
+    /// what makes it worth a command: the poll is a minute out, and the
+    /// user is looking at the task right now.
+    ///
+    /// The date is read off the line the way the poll reads it, so the
+    /// same task is never announced twice for the same date.
+    fn add_reminder(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            self.report("Reminder: no vault is open", cx);
+            return;
+        };
+        let Some(path) = self.current.clone() else {
+            self.report("Reminder: open a note with a task first", cx);
+            return;
+        };
+        let (line, raw) = {
+            let editor = self.editor.read(cx);
+            let line = editor.cursor().line;
+            let text = editor.text().to_string();
+            (line, text.lines().nth(line).unwrap_or("").to_string())
+        };
+        match reminder::register_line(&state, &path, line, &raw) {
+            Ok(reminder::Added::Fired(notice)) => self.report(notice, cx),
+            Ok(reminder::Added::Waiting(due)) => self.report(
+                format!("Reminder set for {due}. It fires while the app is open."),
+                cx,
+            ),
+            Ok(reminder::Added::Already) => {
+                self.report("Reminder: that task was already announced", cx)
+            }
+            Err(why) => self.report(format!("Reminder: {why}"), cx),
+        }
+    }
+
+    /// One due-task scan, on the timer the module sets. Nothing is
+    /// promised here about the app being closed: the loop runs with the
+    /// workspace, so a vault that goes overdue while Silica is shut is
+    /// noticed on the next open.
+    fn poll_reminders(&mut self, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
+            return;
+        };
+        for notice in reminder::poll(&state) {
+            self.report(notice, cx);
+        }
+    }
+
+    /// Starts the due-task poll. The loop lives as long as the
+    /// workspace does — the `update` failing is the entity going away —
+    /// and each tick is one walk of the in-memory index, so a vault
+    /// with no tasks costs a timer and nothing else.
+    fn start_reminder_poll(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |ws, cx| loop {
+            cx.background_executor()
+                .timer(reminder::POLL_INTERVAL)
+                .await;
+            if ws.update(cx, |ws, cx| ws.poll_reminders(cx)).is_err() {
+                break;
+            }
+        })
+        .detach();
     }
 
     /// Obsidian's `workspace:copy-path` and `workspace:copy-full-path`:
