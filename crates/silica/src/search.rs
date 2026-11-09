@@ -390,6 +390,7 @@ impl SearchPane {
         let re = regex_for_query(&query, self.matching_case);
 
         let mut modified = Vec::new();
+        let mut failed: Vec<String> = Vec::new();
         for file in &self.results {
             if let Some(target) = target_path {
                 if file.path != target {
@@ -399,24 +400,40 @@ impl SearchPane {
             if file.hits.is_empty() {
                 continue;
             }
-            let orig_text = match state.texts().get(&file.path) {
-                Some(t) => t.to_string(),
-                None => match std::fs::read_to_string(state.vault().absolute(&file.path)) {
-                    Ok(t) => t,
-                    Err(_) => continue,
-                },
+            // Always read fresh from disk: the index text may be stale (up to
+            // a watcher tick behind an external edit), and applying stale byte
+            // offsets to a changed file would corrupt it.
+            let disk_path = state.vault().absolute(&file.path);
+            let Ok(disk_text) = std::fs::read_to_string(&disk_path) else {
+                failed.push(format!("{}: cannot read from disk", file.path));
+                continue;
             };
-            let new_text = apply_replacements(&orig_text, &file.hits, re.as_ref(), &replacement);
-            if new_text != orig_text
-                && state
-                    .vault()
-                    .write_bytes(&file.path, new_text.as_bytes())
-                    .is_ok()
-            {
-                modified.push(FileChange::Modified(file.path.clone()));
+            // The hit offsets were computed against the indexed text. If the
+            // file changed on disk since the last absorb, refuse to clobber it.
+            if let Some(indexed_text) = state.texts().get(&file.path) {
+                if indexed_text.as_str() != disk_text.as_str() {
+                    failed.push(format!(
+                        "{}: changed on disk since indexing; re-run search",
+                        file.path
+                    ));
+                    continue;
+                }
+            }
+            let new_text = apply_replacements(&disk_text, &file.hits, re.as_ref(), &replacement);
+            if new_text == disk_text {
+                continue;
+            }
+            match state.vault().write_bytes(&file.path, new_text.as_bytes()) {
+                Ok(()) => modified.push(FileChange::Modified(file.path.clone())),
+                Err(err) => failed.push(format!("{0}: {err}", file.path)),
             }
         }
 
+        if !failed.is_empty() {
+            self.error = Some(failed.join("\n").into());
+        } else {
+            self.error = None;
+        }
         if !modified.is_empty() {
             let changes = state.absorb(modified);
             cx.emit(SearchEvent::FilesChanged(changes));
