@@ -409,16 +409,45 @@ impl App {
         let path = runtime_dir().join(format!("silica-mcp-{}.png", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let command = command.replace("{path}", &path.display().to_string());
-        let output = shell_command(&command)
+        let mut child = shell_command(&command)
             .current_dir(&self.config.repo)
             .stdin(Stdio::null())
-            .output()
+            .stderr(Stdio::piped())
+            .spawn()
             .map_err(|e| format!("could not run the screenshot command: {e}"))?;
-        if !output.status.success() {
+        // * A screenshot command that hangs (e.g. a display server that never
+        //   answers) must not block the MCP server forever. Kill it after a
+        //   short timeout.
+        let start = std::time::Instant::now();
+        let timeout = std::time::Duration::from_secs(30);
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) => {
+                    if start.elapsed() >= timeout {
+                        let _ = child.kill();
+                        return Err(format!(
+                            "screenshot command timed out after {}s: {command}",
+                            timeout.as_secs()
+                        ));
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                Err(e) => return Err(format!("could not wait for screenshot command: {e}")),
+            }
+        };
+        if !status.success() {
+            let stderr = {
+                use std::io::Read as _;
+                child.stderr.as_mut().map(|s| {
+                    let mut buf = String::new();
+                    s.read_to_string(&mut buf).ok();
+                    buf
+                }).unwrap_or_default()
+            };
             return Err(format!(
-                "screenshot command failed ({}): {command}\n{}",
-                output.status,
-                String::from_utf8_lossy(&output.stderr).trim()
+                "screenshot command failed ({}): {command}\n{stderr}",
+                status
             ));
         }
         let png = std::fs::read(&path)
