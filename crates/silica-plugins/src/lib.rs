@@ -14,6 +14,7 @@
 //!
 //! See `docs/silica/Plugins.md` for the design and the tiers.
 
+pub mod get_all_tags;
 pub mod host;
 pub mod launch;
 pub mod live;
